@@ -36,6 +36,7 @@
 
 static int   g_theme_idx   = 0;
 static float g_opacity     = 1.0f;   // 0.0 = fully transparent, 1.0 = opaque
+static bool  g_blink_text_on = true; // text blink visibility state
 
 // Active resolved palette (copied from theme on apply, so 256-colour cube still works)
 static float g_palette16[16][3];
@@ -1429,7 +1430,8 @@ static void term_render(Terminal *t, int ox, int oy) {
             }
 
             uint32_t cp = c->cp;
-            if (cp && cp != ' ') {
+            bool blink_hidden = (c->attrs & ATTR_BLINK) && !g_blink_text_on;
+            if (cp && cp != ' ' && !blink_hidden) {
                 char tmp[5] = {};
                 cp_to_utf8(cp, tmp);
                 float baseline = py + ch * 0.82f;
@@ -1700,11 +1702,12 @@ int main(int argc, char **argv) {
 
         bool needs_render = false;
 
-        // Cursor blink
+        // Cursor + text blink (same 500ms period)
         term.blink += dt;
         if (term.blink >= 0.5) {
             term.blink = 0;
-            term.cursor_on = !term.cursor_on;
+            term.cursor_on    = !term.cursor_on;
+            g_blink_text_on   = !g_blink_text_on;
             needs_render = true;
         }
 
