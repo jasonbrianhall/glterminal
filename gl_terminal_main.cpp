@@ -34,6 +34,11 @@
 #include "DejaVuMonoBoldOblique.h"
 #include "gl_terminal.h"
 
+// Additional attribute bits (extending gl_terminal.h's ATTR_* defines)
+#define ATTR_STRIKE    (1<<5)
+#define ATTR_OVERLINE  (1<<6)
+#define ATTR_DIM       (1<<7)
+
 static int   g_theme_idx   = 0;
 static float g_opacity     = 1.0f;   // 0.0 = fully transparent, 1.0 = opaque
 static bool  g_blink_text_on = true; // text blink visibility state
@@ -391,7 +396,7 @@ static float draw_text(const char *text, float x, float y, int font_px, int emoj
 }
 
 // Measure text width without drawing
-static float measure_text(const char *text, int font_px) {
+[[maybe_unused]] static float measure_text(const char *text, int font_px) {
     if (!s_ft_face || !text) return 0;
     FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)font_px);
     float w = 0;
@@ -469,6 +474,12 @@ struct Terminal {
     bool        autowrap;              // DECSET ?7 — default on
     bool        mouse_report;          // DECSET ?1000
     bool        bracketed_paste;       // DECSET ?2004
+    bool        app_cursor_keys;       // DECSET ?1 — sends \eOA instead of \e[A
+    bool        mouse_sgr;             // DECSET ?1006 — SGR mouse encoding
+    // ESC 7 / ESC 8 saved cursor
+    int         saved7_row, saved7_col;
+    TermColorVal saved7_fg, saved7_bg;
+    uint8_t     saved7_attrs;
     // Scroll region (DECSTBM) — rows are 0-based inclusive
     int         scroll_top, scroll_bot;
     // Alternate screen buffer (for ?1049h/l)
@@ -858,14 +869,20 @@ static void sgr(Terminal *t, const char *p) {
         int v = params[i];
         if      (v == 0)  { t->cur_fg=TCOLOR_PALETTE(7); t->cur_bg=TCOLOR_PALETTE(0); t->cur_attrs=0; }
         else if (v == 1)  t->cur_attrs |= ATTR_BOLD;
+        else if (v == 2)  t->cur_attrs |= ATTR_DIM;
         else if (v == 3)  t->cur_attrs |= ATTR_ITALIC;
         else if (v == 4)  t->cur_attrs |= ATTR_UNDERLINE;
         else if (v == 5)  t->cur_attrs |= ATTR_BLINK;
         else if (v == 7)  t->cur_attrs |= ATTR_REVERSE;
-        else if (v == 22) t->cur_attrs &= ~ATTR_BOLD;
+        else if (v == 9)  t->cur_attrs |= ATTR_STRIKE;
+        else if (v == 22) t->cur_attrs &= ~(ATTR_BOLD | ATTR_DIM);
         else if (v == 23) t->cur_attrs &= ~ATTR_ITALIC;
         else if (v == 24) t->cur_attrs &= ~ATTR_UNDERLINE;
+        else if (v == 25) t->cur_attrs &= ~ATTR_BLINK;
         else if (v == 27) t->cur_attrs &= ~ATTR_REVERSE;
+        else if (v == 29) t->cur_attrs &= ~ATTR_STRIKE;
+        else if (v == 53) t->cur_attrs |= ATTR_OVERLINE;
+        else if (v == 55) t->cur_attrs &= ~ATTR_OVERLINE;
         // Foreground
         else if (v>=30 && v<=37)   t->cur_fg = TCOLOR_PALETTE(v-30);
         else if (v == 38) {
@@ -986,6 +1003,9 @@ static void dispatch_csi(Terminal *t) {
                 // DECTCEM — cursor visible/hidden
                 if (!set) { t->cursor_on = false; t->cursor_blink_enabled = false; }
                 else       { t->cursor_on = true;  t->cursor_blink_enabled = true;  }
+            } else if (mode == 1) {
+                // DECCKM — application cursor keys
+                t->app_cursor_keys = set;
             } else if (mode == 12) {
                 // Cursor blink on/off
                 t->cursor_blink_enabled = set;
@@ -993,9 +1013,13 @@ static void dispatch_csi(Terminal *t) {
             } else if (mode == 7) {
                 // DECAWM — auto-wrap
                 t->autowrap = set;
-            } else if (mode == 1000) {
-                // X10/Normal mouse reporting
+            } else if (mode == 1000 || mode == 1002 || mode == 1003) {
+                // Mouse reporting (button/drag/any events)
                 t->mouse_report = set;
+                if (!set) t->mouse_sgr = false;
+            } else if (mode == 1006) {
+                // SGR mouse encoding — coordinates as decimal, handles >col 95
+                t->mouse_sgr = set;
             } else if (mode == 2004) {
                 // Bracketed paste
                 t->bracketed_paste = set;
@@ -1031,6 +1055,8 @@ static void dispatch_csi(Terminal *t) {
             t->cursor_blink_enabled = true;
             t->cursor_on        = true;
             t->mouse_report     = false;
+            t->mouse_sgr        = false;
+            t->app_cursor_keys  = false;
             t->bracketed_paste  = false;
         }
         break;
@@ -1083,10 +1109,44 @@ static void dispatch_csi(Terminal *t) {
         for(int c=t->cols-1;c>=t->cur_col+n;c--) CELL(t,t->cur_row,c)=CELL(t,t->cur_row,c-n);
         for(int c=t->cur_col;c<t->cur_col+n&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         break; }
-    // DA — Primary Device Attributes: report as VT220 with title-setting capability
+    // DA — Primary Device Attributes
     case 'c': {
         if (p[0] == '\0' || p[0] == '0')
-            term_write(t, "\x1b[?62;22c", 9); // VT220, ANSI color
+            term_write(t, "\x1b[?62;22c", 9);  // VT220, ANSI color
+        else if (p[0] == '>')
+            term_write(t, "\x1b[>0;10;1c", 10); // Secondary DA: VT100, version 10
+        break;
+    }
+    // DSR — Device Status Report / CPR
+    case 'n': {
+        int n = atoi(p);
+        if (n == 5) {
+            term_write(t, "\x1b[0n", 4); // status: OK
+        } else if (n == 6) {
+            // Cursor Position Report: row and col are 1-based
+            char buf[32];
+            int len = snprintf(buf, sizeof(buf), "\x1b[%d;%dR",
+                               t->cur_row + 1, t->cur_col + 1);
+            term_write(t, buf, len);
+        }
+        break;
+    }
+    // ANSI save cursor (CSI s)
+    case 's': {
+        t->saved7_row   = t->cur_row;
+        t->saved7_col   = t->cur_col;
+        t->saved7_fg    = t->cur_fg;
+        t->saved7_bg    = t->cur_bg;
+        t->saved7_attrs = t->cur_attrs;
+        break;
+    }
+    // ANSI restore cursor (CSI u)
+    case 'u': {
+        t->cur_row   = t->saved7_row;
+        t->cur_col   = t->saved7_col;
+        t->cur_fg    = t->saved7_fg;
+        t->cur_bg    = t->saved7_bg;
+        t->cur_attrs = t->saved7_attrs;
         break;
     }
     default: break;
@@ -1162,6 +1222,20 @@ static void term_feed(Terminal *t, const char *buf, int len) {
             } else {
                 if (ch == '=' || ch == '>') {
                     // Application/normal keypad mode — ignore
+                } else if (ch == '7') {
+                    // DECSC — save cursor
+                    t->saved7_row   = t->cur_row;
+                    t->saved7_col   = t->cur_col;
+                    t->saved7_fg    = t->cur_fg;
+                    t->saved7_bg    = t->cur_bg;
+                    t->saved7_attrs = t->cur_attrs;
+                } else if (ch == '8') {
+                    // DECRC — restore cursor
+                    t->cur_row   = t->saved7_row;
+                    t->cur_col   = t->saved7_col;
+                    t->cur_fg    = t->saved7_fg;
+                    t->cur_bg    = t->saved7_bg;
+                    t->cur_attrs = t->saved7_attrs;
                 } else if (ch == 'c') {
                     for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
                     t->cur_row=t->cur_col=0; t->cur_fg=7; t->cur_bg=0; t->cur_attrs=0;
@@ -1395,7 +1469,7 @@ static void menu_render(ContextMenu *m) {
         }
         float ih = (float)m->item_h;
         bool hov = (i == m->hovered);
-        bool is_sub = (i == MENU_ID_THEMES || i == MENU_ID_OPACITY);
+        (void)(i == MENU_ID_THEMES || i == MENU_ID_OPACITY); // sub-menu parent
         bool sub_open = (m->sub_open == i);
 
         if (hov || sub_open)
@@ -1453,7 +1527,7 @@ static void menu_render(ContextMenu *m) {
 // Spawn a new terminal window as a detached child process
 static void action_new_terminal() {
     // Re-exec ourselves
-    extern char **environ;
+    extern char **environ; (void)environ;
     char self[512] = {};
     ssize_t n = readlink("/proc/self/exe", self, sizeof(self)-1);
     if (n <= 0) return;
@@ -1505,6 +1579,8 @@ static void term_render(Terminal *t, int ox, int oy) {
             TermColor fc = tcolor_resolve(fg), bc = tcolor_resolve(bg);
             if ((c->attrs & ATTR_BOLD) && !TCOLOR_IS_RGB(fg) && TCOLOR_IDX(fg) < 8)
                 fc = tcolor_resolve(TCOLOR_PALETTE(TCOLOR_IDX(fg)+8));
+            // Dim: reduce fg brightness by 50%
+            if (c->attrs & ATTR_DIM) { fc.r *= 0.5f; fc.g *= 0.5f; fc.b *= 0.5f; }
 
             // Selection highlight (only when not scrolled — keeps it simple)
             if (!scrolled && cell_in_sel(t, row, col)) {
@@ -1527,6 +1603,10 @@ static void term_render(Terminal *t, int ox, int oy) {
 
             if ((c->attrs & ATTR_UNDERLINE) && !blink_hidden)
                 draw_rect(px, py+ch-2, cw, 2, fc.r, fc.g, fc.b, 1.f);
+            if ((c->attrs & ATTR_STRIKE) && !blink_hidden)
+                draw_rect(px, py+ch*0.45f, cw, 1, fc.r, fc.g, fc.b, 1.f);
+            if ((c->attrs & ATTR_OVERLINE) && !blink_hidden)
+                draw_rect(px, py+1, cw, 1, fc.r, fc.g, fc.b, 1.f);
         }
     }
 
@@ -1549,7 +1629,6 @@ static void term_render(Terminal *t, int ox, int oy) {
 
     // Scrollbar on right edge when scrolled
     if (scrolled && t->sb_count > 0) {
-        float total_h = (float)(ox + t->rows) * ch;
         float win_h   = t->rows * ch;
         int   total_rows = t->sb_count + t->rows;
         float bar_h   = win_h * t->rows / total_rows;
@@ -1577,6 +1656,12 @@ static void term_init(Terminal *t) {
     t->autowrap             = true;
     t->mouse_report         = false;
     t->bracketed_paste      = false;
+    t->app_cursor_keys      = false;
+    t->mouse_sgr            = false;
+    t->saved7_row = t->saved7_col = 0;
+    t->saved7_fg  = TCOLOR_PALETTE(7);
+    t->saved7_bg  = TCOLOR_PALETTE(0);
+    t->saved7_attrs = 0;
     t->osc_len              = 0;
 
     // Measure cell size from monospace '0' glyph
@@ -1693,29 +1778,79 @@ static void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h) 
 // ============================================================================
 
 static void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
+    SDL_Keymod mod = (SDL_Keymod)ks.mod;
+    bool shift = (mod & KMOD_SHIFT) != 0;
+    bool ctrl  = (mod & KMOD_CTRL)  != 0;
+    bool alt   = (mod & KMOD_ALT)   != 0;
+
+    // Ctrl+Shift shortcuts (copy/paste — handled before this function for copy,
+    // but paste lives here)
+    if (ctrl && shift) {
+        if (ks.sym == SDLK_v) { term_paste(t); return; }
+        if (ks.sym == SDLK_c) { return; } // copy handled in event loop
+    }
+
+    // Arrow keys — respect application cursor key mode and modifiers
+    // Modifier code: 1=plain,2=shift,3=alt,4=alt+shift,5=ctrl,6=ctrl+shift,7=ctrl+alt
+    auto arrow = [&](const char *normal, const char *app, char letter) {
+        if (!shift && !ctrl && !alt) {
+            term_write(t, t->app_cursor_keys ? app : normal,
+                          t->app_cursor_keys ? 3   : 3);
+        } else {
+            int m = 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0);
+            char seq[16];
+            int n = snprintf(seq, sizeof(seq), "\x1b[1;%d%c", m, letter);
+            term_write(t, seq, n);
+        }
+    };
+
     switch (ks.sym) {
-    case SDLK_RETURN:    term_write(t, "\r",     1); break;
-    case SDLK_BACKSPACE: term_write(t, "\x7f",   1); break;
-    case SDLK_TAB:       term_write(t, "\t",     1); break;
-    case SDLK_ESCAPE:    term_write(t, "\x1b",   1); break;
-    case SDLK_UP:        term_write(t, "\x1b[A", 3); break;
-    case SDLK_DOWN:      term_write(t, "\x1b[B", 3); break;
-    case SDLK_RIGHT:     term_write(t, "\x1b[C", 3); break;
-    case SDLK_LEFT:      term_write(t, "\x1b[D", 3); break;
-    case SDLK_HOME:      term_write(t, "\x1b[H", 3); break;
-    case SDLK_END:       term_write(t, "\x1b[F", 3); break;
-    case SDLK_DELETE:    term_write(t, "\x1b[3~",4); break;
-    case SDLK_PAGEUP:    term_write(t, "\x1b[5~",4); break;
-    case SDLK_PAGEDOWN:  term_write(t, "\x1b[6~",4); break;
-    case SDLK_F1:        term_write(t, "\x1bOP", 3); break;
-    case SDLK_F2:        term_write(t, "\x1bOQ", 3); break;
-    case SDLK_F3:        term_write(t, "\x1bOR", 3); break;
-    case SDLK_F4:        term_write(t, "\x1bOS", 3); break;
+    case SDLK_UP:    arrow("\x1b[A", "\x1bOA", 'A'); return;
+    case SDLK_DOWN:  arrow("\x1b[B", "\x1bOB", 'B'); return;
+    case SDLK_RIGHT: arrow("\x1b[C", "\x1bOC", 'C'); return;
+    case SDLK_LEFT:  arrow("\x1b[D", "\x1bOD", 'D'); return;
+    case SDLK_HOME:
+        term_write(t, t->app_cursor_keys ? "\x1bOH" : "\x1b[H", 3); return;
+    case SDLK_END:
+        term_write(t, t->app_cursor_keys ? "\x1bOF" : "\x1b[F", 3); return;
+    default: break;
+    }
+
+    switch (ks.sym) {
+    case SDLK_RETURN:    term_write(t, "\r",      1); break;
+    case SDLK_BACKSPACE: term_write(t, "\x7f",    1); break;
+    case SDLK_TAB:
+        if (shift) term_write(t, "\x1b[Z", 3);   // Shift+Tab = backtab
+        else       term_write(t, "\t",     1);
+        break;
+    case SDLK_ESCAPE:    term_write(t, "\x1b",    1); break;
+    case SDLK_INSERT:    term_write(t, "\x1b[2~", 4); break;
+    case SDLK_DELETE:    term_write(t, "\x1b[3~", 4); break;
+    case SDLK_PAGEUP:    term_write(t, "\x1b[5~", 4); break;
+    case SDLK_PAGEDOWN:  term_write(t, "\x1b[6~", 4); break;
+    // Function keys F1-F4 (SS3 sequences)
+    case SDLK_F1:  term_write(t, "\x1bOP",   3); break;
+    case SDLK_F2:  term_write(t, "\x1bOQ",   3); break;
+    case SDLK_F3:  term_write(t, "\x1bOR",   3); break;
+    case SDLK_F4:  term_write(t, "\x1bOS",   3); break;
+    // Function keys F5-F12 (CSI ~ sequences)
+    case SDLK_F5:  term_write(t, "\x1b[15~", 5); break;
+    case SDLK_F6:  term_write(t, "\x1b[17~", 5); break;
+    case SDLK_F7:  term_write(t, "\x1b[18~", 5); break;
+    case SDLK_F8:  term_write(t, "\x1b[19~", 5); break;
+    case SDLK_F9:  term_write(t, "\x1b[20~", 5); break;
+    case SDLK_F10: term_write(t, "\x1b[21~", 5); break;
+    case SDLK_F11: term_write(t, "\x1b[23~", 5); break;
+    case SDLK_F12: term_write(t, "\x1b[24~", 5); break;
     default:
-        // Ctrl+key
-        if ((ks.mod & KMOD_CTRL) && ks.sym >= SDLK_a && ks.sym <= SDLK_z) {
-            char ctrl[1] = { (char)(ks.sym - SDLK_a + 1) };
-            term_write(t, ctrl, 1);
+        if (ctrl && ks.sym >= SDLK_a && ks.sym <= SDLK_z) {
+            char c = (char)(ks.sym - SDLK_a + 1);
+            if (alt) { term_write(t, "\x1b", 1); } // Alt sends ESC prefix
+            term_write(t, &c, 1);
+        } else if (alt && text && text[0]) {
+            // Alt+printable = ESC prefix
+            term_write(t, "\x1b", 1);
+            term_write(t, text, (int)strlen(text));
         } else if (text && text[0]) {
             term_write(t, text, (int)strlen(text));
         }
@@ -1895,29 +2030,36 @@ int main(int argc, char **argv) {
             }
             case SDL_TEXTINPUT: {
                 SDL_Keymod mod = SDL_GetModState();
-                if (!(mod & KMOD_CTRL))
+                if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT))
                     term_write(&term, ev.text.text, (int)strlen(ev.text.text));
                 break;
             }
             // Mouse selection
-            case SDL_MOUSEBUTTONDOWN:
+            case SDL_MOUSEBUTTONDOWN: {
+                int r, c;
+                pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
+                // Report mouse if active (right-click goes to app, not our menu)
+                if (term.mouse_report && !g_menu.visible) {
+                    int btn = (ev.button.button == SDL_BUTTON_LEFT)   ? 0 :
+                              (ev.button.button == SDL_BUTTON_MIDDLE) ? 1 :
+                              (ev.button.button == SDL_BUTTON_RIGHT)  ? 2 : -1;
+                    if (btn >= 0) {
+                        char seq[32]; int slen;
+                        if (term.mouse_sgr)
+                            slen = snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%dM", btn, c+1, r+1);
+                        else
+                            slen = snprintf(seq, sizeof(seq), "\x1b[M%c%c%c",
+                                            (char)(32+btn), (char)(32+c+1), (char)(32+r+1));
+                        term_write(&term, seq, slen);
+                    }
+                    break;
+                }
                 if (ev.button.button == SDL_BUTTON_RIGHT) {
                     SDL_Log("[Menu] right-click at %d,%d win %dx%d\n", ev.button.x, ev.button.y, win_w, win_h);
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     menu_open(&g_menu, ev.button.x, ev.button.y, win_w, win_h);
                     SDL_Log("[Menu] opened at %d,%d visible=%d\n", g_menu.x, g_menu.y, g_menu.visible);
                 } else if (ev.button.button == SDL_BUTTON_LEFT) {
-                    // Mouse reporting
-                    if (term.mouse_report && !g_menu.visible) {
-                        int r, c;
-                        pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
-                        char seq[32];
-                        int btn = 0; // left=0
-                        snprintf(seq, sizeof(seq), "\x1b[M%c%c%c",
-                                 (char)(32+btn), (char)(32+c+1), (char)(32+r+1));
-                        term_write(&term, seq, (int)strlen(seq));
-                        break;
-                    }
                     if (g_menu.visible) {
                         int sub_hit = submenu_hit(&g_menu, ev.button.x, ev.button.y);
                         if (sub_hit >= 0) {
@@ -1953,8 +2095,6 @@ int main(int argc, char **argv) {
                             }
                         }
                     } else {
-                        int r, c;
-                        pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                         term.sel_start_row = term.sel_end_row = r;
                         term.sel_start_col = term.sel_end_col = c;
                         term.sel_active = true;
@@ -1965,6 +2105,7 @@ int main(int argc, char **argv) {
                     else term_paste(&term);
                 }
                 break;
+            }
             case SDL_MOUSEMOTION:
                 if (g_menu.visible) {
                     int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
@@ -2000,16 +2141,23 @@ int main(int argc, char **argv) {
                     term.sel_exists = true;
                 }
                 break;
-            case SDL_MOUSEBUTTONUP:
-                if (term.mouse_report && ev.button.button == SDL_BUTTON_LEFT && !g_menu.visible) {
-                    int r, c;
-                    pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
-                    char seq[32];
-                    snprintf(seq, sizeof(seq), "\x1b[M%c%c%c",
-                             (char)(32+3), (char)(32+c+1), (char)(32+r+1)); // btn=3 = release
-                    term_write(&term, seq, (int)strlen(seq));
-                } else
-                if (ev.button.button == SDL_BUTTON_LEFT && term.sel_active) {
+            case SDL_MOUSEBUTTONUP: {
+                int r, c;
+                pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
+                if (term.mouse_report && !g_menu.visible) {
+                    int btn = (ev.button.button == SDL_BUTTON_LEFT)   ? 0 :
+                              (ev.button.button == SDL_BUTTON_MIDDLE) ? 1 :
+                              (ev.button.button == SDL_BUTTON_RIGHT)  ? 2 : -1;
+                    if (btn >= 0) {
+                        char seq[32]; int slen;
+                        if (term.mouse_sgr)
+                            slen = snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%dm", btn, c+1, r+1); // lowercase m = release
+                        else
+                            slen = snprintf(seq, sizeof(seq), "\x1b[M%c%c%c",
+                                            (char)(32+3), (char)(32+c+1), (char)(32+r+1));
+                        term_write(&term, seq, slen);
+                    }
+                } else if (ev.button.button == SDL_BUTTON_LEFT && term.sel_active) {
                     pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2,
                                   &term.sel_end_row, &term.sel_end_col);
                     term.sel_active = false;
@@ -2020,6 +2168,7 @@ int main(int argc, char **argv) {
                     if (term.sel_exists) term_copy_selection(&term); // auto-copy on release
                 }
                 break;
+            }
             case SDL_MOUSEWHEEL: {
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
@@ -2028,6 +2177,18 @@ int main(int argc, char **argv) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     term_set_font_size(&term, g_font_size + delta, win_w, win_h);
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+                } else if (term.mouse_report) {
+                    // Send wheel as mouse buttons 64 (up) / 65 (down) in SGR or X10
+                    int r, c;
+                    pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2, &r, &c);
+                    int btn = (ev.wheel.y > 0) ? 64 : 65;
+                    char seq[32]; int slen;
+                    if (term.mouse_sgr)
+                        slen = snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%dM", btn, c+1, r+1);
+                    else
+                        slen = snprintf(seq, sizeof(seq), "\x1b[M%c%c%c",
+                                        (char)(32+btn), (char)(32+c+1), (char)(32+r+1));
+                    term_write(&term, seq, slen);
                 } else {
                     // Scroll up (y>0) = go back in history = increase offset
                     int delta = (ev.wheel.y > 0) ? 3 : -3;
