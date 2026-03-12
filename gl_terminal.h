@@ -41,6 +41,7 @@
 #define ATTR_UNDERLINE (1<<1)
 #define ATTR_REVERSE   (1<<2)
 #define ATTR_BLINK     (1<<3)
+#define ATTR_ITALIC    (1<<4)
 
 static int g_font_size = FONT_SIZE_DEFAULT;
 
@@ -188,4 +189,3 @@ struct GLState {
     float  cr, cg, cb, ca;   // current colour
 };
 static GLState G = {};
-

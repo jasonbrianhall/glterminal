@@ -27,8 +27,11 @@
 #include <string>
 
 // Pull in the embedded font
-#include "Monospace.h"
+#include "DejaVuMonoBold.h"
 #include "NotoEmoji.h"
+#include "DejaVuMono.h"
+#include "DejaVuMonoOblique.h"
+#include "DejaVuMonoBoldOblique.h"
 #include "gl_terminal.h"
 
 static int   g_theme_idx   = 0;
@@ -144,12 +147,33 @@ static void draw_rect(float x, float y, float w, float h, float r, float g, floa
 // ============================================================================
 
 static FT_Library s_ft_lib  = NULL;
-static FT_Face    s_ft_face = NULL;
-static unsigned char *s_font_buf = NULL;
+// Four faces for the monospace font family:
+// s_ft_face        = Bold        (Monospace.h — original embedded font)
+// s_ft_face_reg    = Regular     (DejaVuMono.h)
+// s_ft_face_obl    = Oblique     (DejaVuMonoOblique.h)
+// s_ft_face_bobl   = BoldOblique (DejaVuMonoBoldOblique.h)
+static FT_Face    s_ft_face      = NULL;  // Bold
+static FT_Face    s_ft_face_reg  = NULL;  // Regular
+static FT_Face    s_ft_face_obl  = NULL;  // Oblique
+static FT_Face    s_ft_face_bobl = NULL;  // BoldOblique
+static unsigned char *s_font_buf      = NULL;
+static unsigned char *s_font_buf_reg  = NULL;
+static unsigned char *s_font_buf_obl  = NULL;
+static unsigned char *s_font_buf_bobl = NULL;
 
 // Emoji fallback face — loaded from embedded NotoEmoji
 static FT_Face    s_emoji_face = NULL;
 static unsigned char *s_emoji_buf = NULL;
+
+// Select the right face for given attrs
+static FT_Face face_for_attrs(uint8_t attrs) {
+    bool bold = (attrs & ATTR_BOLD)   != 0;
+    bool ital = (attrs & ATTR_ITALIC) != 0;
+    if (bold && ital) return s_ft_face_bobl ? s_ft_face_bobl : s_ft_face;
+    if (bold)         return s_ft_face;       // Bold is the original Monospace.h
+    if (ital)         return s_ft_face_obl  ? s_ft_face_obl  : s_ft_face_reg;
+    return s_ft_face_reg ? s_ft_face_reg : s_ft_face;
+}
 
 static void ft_init(void) {
     FT_Init_FreeType(&s_ft_lib);
@@ -163,6 +187,20 @@ static void ft_init(void) {
 
     FT_New_Memory_Face(s_ft_lib, s_font_buf, (FT_Long)decoded_size, 0, &s_ft_face);
     SDL_Log("[Font] loaded: %s %s\n", s_ft_face->family_name, s_ft_face->style_name);
+
+    // Helper lambda to load an embedded variant
+    auto load_variant = [&](const char *b64, size_t b64_size,
+                            unsigned char **buf, FT_Face *face) {
+        size_t sz = 0;
+        if (base64_decode(b64, b64_size, buf, &sz) == 0 && *buf) {
+            if (FT_New_Memory_Face(s_ft_lib, *buf, (FT_Long)sz, 0, face) == 0)
+                SDL_Log("[Font] loaded: %s %s\n", (*face)->family_name, (*face)->style_name);
+            else { free(*buf); *buf = nullptr; }
+        }
+    };
+    load_variant(DEJAVU_REGULAR_FONT_B64,     DEJAVU_REGULAR_FONT_B64_SIZE,     &s_font_buf_reg,  &s_ft_face_reg);
+    load_variant(DEJAVU_OBLIQUE_FONT_B64,     DEJAVU_OBLIQUE_FONT_B64_SIZE,     &s_font_buf_obl,  &s_ft_face_obl);
+    load_variant(DEJAVU_BOLDOBLIQUE_FONT_B64, DEJAVU_BOLDOBLIQUE_FONT_B64_SIZE, &s_font_buf_bobl, &s_ft_face_bobl);
 
     // Load embedded NotoEmoji
     size_t emoji_decoded_size = 0;
@@ -308,11 +346,13 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
 
 // Draw a string at pixel position using FreeType bitmap → triangles (your technique)
 static float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
-                       float r, float g, float b, float a) {
+                       float r, float g, float b, float a, uint8_t attrs = 0) {
     if (!s_ft_face || !text || !*text) return x;
 
     static std::vector<Vertex> verts;
     verts.clear();
+
+    FT_Face base_face = face_for_attrs(attrs);
 
     float cx = x;
     const unsigned char *p = (const unsigned char *)text;
@@ -321,21 +361,23 @@ static float draw_text(const char *text, float x, float y, int font_px, int emoj
         if (!cp) continue;
         if (cp == 0xFE0F) continue;
 
-        FT_Face face = s_ft_face;
+        FT_Face face = base_face;
         if (s_emoji_face && is_emoji_codepoint(cp)) {
             if (FT_Get_Char_Index(s_emoji_face, cp)) face = s_emoji_face;
         }
 
         float adv = draw_glyph(face, cp, cx, y, font_px, emoji_px, r, g, b, a, verts);
         if (adv == 0.f) {
-            FT_Face fb = (face == s_ft_face && s_emoji_face) ? s_emoji_face : s_ft_face;
-            adv = draw_glyph(fb, cp, cx, y, font_px, emoji_px, r, g, b, a, verts);
+            // Try emoji face as fallback
+            if (face != s_emoji_face && s_emoji_face)
+                adv = draw_glyph(s_emoji_face, cp, cx, y, font_px, emoji_px, r, g, b, a, verts);
         }
         if (adv == 0.f) {
-            FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)font_px);
-            FT_UInt gi = FT_Get_Char_Index(s_ft_face, ' ');
-            if (!FT_Load_Glyph(s_ft_face, gi, FT_LOAD_DEFAULT))
-                adv = (float)(s_ft_face->glyph->advance.x >> 6);
+            // Last resort: space advance so chars don't stack
+            FT_Set_Pixel_Sizes(base_face, 0, (FT_UInt)font_px);
+            FT_UInt gi = FT_Get_Char_Index(base_face, ' ');
+            if (!FT_Load_Glyph(base_face, gi, FT_LOAD_DEFAULT))
+                adv = (float)(base_face->glyph->advance.x >> 6);
         }
         cx += adv;
     }
@@ -631,6 +673,7 @@ static void term_copy_selection_html(Terminal *t) {
                 html += ";background:";
                 append_hex_color(html, bc.r, bc.g, bc.b);
                 if (attrs & ATTR_BOLD)      html += ";font-weight:bold";
+                if (attrs & ATTR_ITALIC)    html += ";font-style:italic";
                 if (attrs & ATTR_UNDERLINE)  html += ";text-decoration:underline";
                 html += "\">";
                 span_open = true;
@@ -804,10 +847,12 @@ static void sgr(Terminal *t, const char *p) {
         int v = params[i];
         if      (v == 0)  { t->cur_fg=TCOLOR_PALETTE(7); t->cur_bg=TCOLOR_PALETTE(0); t->cur_attrs=0; }
         else if (v == 1)  t->cur_attrs |= ATTR_BOLD;
+        else if (v == 3)  t->cur_attrs |= ATTR_ITALIC;
         else if (v == 4)  t->cur_attrs |= ATTR_UNDERLINE;
         else if (v == 5)  t->cur_attrs |= ATTR_BLINK;
         else if (v == 7)  t->cur_attrs |= ATTR_REVERSE;
         else if (v == 22) t->cur_attrs &= ~ATTR_BOLD;
+        else if (v == 23) t->cur_attrs &= ~ATTR_ITALIC;
         else if (v == 24) t->cur_attrs &= ~ATTR_UNDERLINE;
         else if (v == 27) t->cur_attrs &= ~ATTR_REVERSE;
         // Foreground
@@ -1391,7 +1436,7 @@ static void term_render(Terminal *t, int ox, int oy) {
                 if (cp > 0x7F)
                     SDL_Log("[Render] cell[%d,%d] cp=U+%04X px=%.1f py=%.1f baseline=%.1f\n",
                             row, col, cp, px, py, baseline);
-                draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f);
+                draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
             }
 
             if (c->attrs & ATTR_UNDERLINE)
@@ -1899,11 +1944,17 @@ int main(int argc, char **argv) {
     SDL_DestroyWindow(window);
     SDL_Quit();
 
-    if (s_emoji_face)  FT_Done_Face(s_emoji_face);
-    if (s_ft_face)    FT_Done_Face(s_ft_face);
-    if (s_ft_lib)     FT_Done_FreeType(s_ft_lib);
-    if (s_font_buf)   free(s_font_buf);
-    if (s_emoji_buf)  free(s_emoji_buf);
+    if (s_emoji_face)    FT_Done_Face(s_emoji_face);
+    if (s_ft_face_bobl)  FT_Done_Face(s_ft_face_bobl);
+    if (s_ft_face_obl)   FT_Done_Face(s_ft_face_obl);
+    if (s_ft_face_reg)   FT_Done_Face(s_ft_face_reg);
+    if (s_ft_face)       FT_Done_Face(s_ft_face);
+    if (s_ft_lib)        FT_Done_FreeType(s_ft_lib);
+    if (s_emoji_buf)     free(s_emoji_buf);
+    if (s_font_buf_bobl) free(s_font_buf_bobl);
+    if (s_font_buf_obl)  free(s_font_buf_obl);
+    if (s_font_buf_reg)  free(s_font_buf_reg);
+    if (s_font_buf)      free(s_font_buf);
 
     return 0;
 }
