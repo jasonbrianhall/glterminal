@@ -1,5 +1,5 @@
-#ifndef MONOSPACE_H
-#define MONOSPACE_H
+#ifndef NOTOEMOJI_H
+#define NOTOEMOJI_H
 
 #include <stddef.h>
 
@@ -8,10 +8,10 @@
 // Original size: 878892 bytes
 // Base64 encoded size: 1171856 bytes
 // 
-// To decode: base64_decode(MONOSPACE_FONT_B64, MONOSPACE_FONT_B64_SIZE, &buffer, &decoded_size)
+// To decode: base64_decode(NOTOEMOJI_FONT_B64, NOTOEMOJI_FONT_B64_SIZE, &buffer, &decoded_size)
 // Then use with FreeType: FT_New_Memory_Face(library, buffer, decoded_size, 0, &face)
 
-static const char MONOSPACE_FONT_B64[] = 
+static const char NOTOEMOJI_FONT_B64[] = 
     "AAEAAAAPAIAAAwBwR1NVQnMnUMwADMn8AACQMk9TLzJguQtbAAxc2AAAAGBTVEFUeZFs3QANWjAAAAAu"
     "Y21hcG6rcggADF04AAANMGdhc3AAAAALAAzJ9AAAAAhnbHlmn1csEwAAAPwADCNPaGVhZCZete4ADEG8"
     "AAAANmhoZWERlg5RAAxctAAAACRobXR4eG62PwAMQfQAABrAbG9jYTHfHgEADCRsAAAdUG1heHAHzQs6"
@@ -14663,55 +14663,7 @@ static const char MONOSPACE_FONT_B64[] =
     "AAAAAAAAAAAAAAAB"
 ;
 
-static const size_t MONOSPACE_FONT_B64_SIZE = 1171856;
-static const unsigned int MONOSPACE_FONT_ORIGINAL_SIZE = 878892;
+static const size_t NOTOEMOJI_FONT_B64_SIZE = 1171856;
+static const unsigned int NOTOEMOJI_FONT_ORIGINAL_SIZE = 878892;
 
-// Base64 decoder function
-// Returns decoded data size, or -1 on error
-// Caller must free the decoded buffer
-static inline int base64_decode(const char *src, size_t src_len, unsigned char **out_data, size_t *out_len) {
-    // Allocate output buffer (base64 decodes to ~75% of input size)
-    size_t max_out = (src_len * 3) / 4 + 10;
-    *out_data = (unsigned char *)malloc(max_out);
-    if (!*out_data) return -1;
-    
-    static const char base64_chars[] = 
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    
-    unsigned char *dest = *out_data;
-    size_t dest_pos = 0;
-    int bits = 0;
-    int bitcount = 0;
-    
-    for (size_t i = 0; i < src_len; i++) {
-        char c = src[i];
-        
-        // Skip whitespace
-        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') continue;
-        
-        // Find value
-        int val = -1;
-        if (c >= 'A' && c <= 'Z') val = c - 'A';
-        else if (c >= 'a' && c <= 'z') val = c - 'a' + 26;
-        else if (c >= '0' && c <= '9') val = c - '0' + 52;
-        else if (c == '+') val = 62;
-        else if (c == '/') val = 63;
-        else if (c == '=') break;  // Padding
-        else continue;
-        
-        // Accumulate bits
-        bits = (bits << 6) | val;
-        bitcount += 6;
-        
-        // Output bytes when we have 8 bits
-        if (bitcount >= 8) {
-            bitcount -= 8;
-            dest[dest_pos++] = (bits >> bitcount) & 0xFF;
-        }
-    }
-    
-    *out_len = dest_pos;
-    return 0;
-}
-
-#endif // MONOSPACE_H
+#endif // NOTOEMOJI_H

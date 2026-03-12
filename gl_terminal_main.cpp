@@ -28,6 +28,7 @@
 
 // Pull in the embedded font
 #include "Monospace.h"
+#include "NotoEmoji.h"
 #include "gl_terminal.h"
 
 static int   g_theme_idx   = 0;
@@ -146,25 +147,9 @@ static FT_Library s_ft_lib  = NULL;
 static FT_Face    s_ft_face = NULL;
 static unsigned char *s_font_buf = NULL;
 
-// Emoji fallback face (loaded from system font, e.g. NotoColorEmoji)
+// Emoji fallback face — loaded from embedded NotoEmoji
 static FT_Face    s_emoji_face = NULL;
-
-// Common system emoji font paths to try, in order
-static const char *EMOJI_FONT_PATHS[] = {
-    // Fedora / RHEL — outline emoji (COLRv1 needs Skia/Cairo, skip it)
-    "/usr/share/fonts/google-noto-emoji-fonts/NotoEmoji-Regular.ttf",
-    // Debian / Ubuntu
-    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-    "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
-    // Arch
-    "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-    "/usr/share/fonts/noto-emoji/NotoEmoji-Regular.ttf",
-    // Fedora COLRv1 last resort
-    "/usr/share/fonts/google-noto-color-emoji-fonts/Noto-COLRv1.ttf",
-    // macOS
-    "/System/Library/Fonts/Apple Color Emoji.ttc",
-    nullptr
-};
+static unsigned char *s_emoji_buf = NULL;
 
 static void ft_init(void) {
     FT_Init_FreeType(&s_ft_lib);
@@ -179,45 +164,18 @@ static void ft_init(void) {
     FT_New_Memory_Face(s_ft_lib, s_font_buf, (FT_Long)decoded_size, 0, &s_ft_face);
     SDL_Log("[Font] loaded: %s %s\n", s_ft_face->family_name, s_ft_face->style_name);
 
-    // Try to load an emoji font from common system paths
-    // Try hardcoded paths first, then fall back to fc-match
-    for (int i = 0; EMOJI_FONT_PATHS[i] && !s_emoji_face; i++) {
-        FT_Error err = FT_New_Face(s_ft_lib, EMOJI_FONT_PATHS[i], 0, &s_emoji_face);
-        if (err == 0) {
-            SDL_Log("[Font] emoji font: %s\n", EMOJI_FONT_PATHS[i]);
-        } else {
-            SDL_Log("[Font] FT_New_Face('%s') failed err=0x%02x\n", EMOJI_FONT_PATHS[i], err);
-            s_emoji_face = nullptr;
+    // Load embedded NotoEmoji
+    size_t emoji_decoded_size = 0;
+    int er = base64_decode(NOTOEMOJI_FONT_B64, NOTOEMOJI_FONT_B64_SIZE, &s_emoji_buf, &emoji_decoded_size);
+    if (er == 0 && s_emoji_buf) {
+        if (FT_New_Memory_Face(s_ft_lib, s_emoji_buf, (FT_Long)emoji_decoded_size, 0, &s_emoji_face) == 0)
+            SDL_Log("[Font] emoji: %s %s\n", s_emoji_face->family_name, s_emoji_face->style_name);
+        else {
+            SDL_Log("[Font] emoji face load failed\n");
+            free(s_emoji_buf); s_emoji_buf = nullptr;
         }
-    }
-    if (!s_emoji_face) {
-        // Try fc-match as a last resort
-        FILE *fp = popen("fc-match --format='%{file}' emoji 2>/dev/null", "r");
-        if (fp) {
-            char path[512] = {};
-            if (fgets(path, sizeof(path)-1, fp)) {
-                // strip trailing newline
-                int len = strlen(path);
-                while (len > 0 && (path[len-1]=='\n'||path[len-1]=='\r')) path[--len]='\0';
-                FT_Error err = FT_New_Face(s_ft_lib, path, 0, &s_emoji_face);
-                if (err == 0)
-                    SDL_Log("[Font] emoji font (fc-match): %s\n", path);
-                else {
-                    SDL_Log("[Font] FT_New_Face('%s') failed err=0x%02x\n", path, err);
-                    s_emoji_face = nullptr;
-                }
-            }
-            pclose(fp);
-        }
-    }
-    if (!s_emoji_face)
-        SDL_Log("[Font] no emoji font found — emoji will render as boxes\n");
-    else {
-        SDL_Log("[Font] emoji face fixed sizes: %d\n", s_emoji_face->num_fixed_sizes);
-        for (int i = 0; i < s_emoji_face->num_fixed_sizes; i++)
-            SDL_Log("[Font]   strike[%d]: w=%d h=%d\n", i,
-                    s_emoji_face->available_sizes[i].width,
-                    s_emoji_face->available_sizes[i].height);
+    } else {
+        SDL_Log("[Font] emoji base64 decode failed\n");
     }
 }
 
@@ -251,24 +209,22 @@ static int cp_to_utf8(uint32_t cp, char *buf) {
 // Draw a single glyph from `face`. Handles both BGRA (color emoji) and grayscale bitmaps.
 // Returns advance width, or 0 if glyph not found in this face.
 static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
-                         int font_px, float r, float g, float b, float a,
+                         int font_px, int emoji_px, float r, float g, float b, float a,
                          std::vector<Vertex> &verts) {
-    // Color emoji fonts (e.g. NotoColorEmoji) only have fixed bitmap strikes.
-    // FT_Set_Pixel_Sizes silently fails on them; we must select the nearest
-    // fixed size and scale the resulting bitmap ourselves.
     float glyph_scale = 1.0f;
     if (face->num_fixed_sizes > 0) {
-        // Pick the strike whose pixel height is closest to font_px
         int best = 0;
-        int best_diff = abs(face->available_sizes[0].height - font_px);
+        int best_diff = abs(face->available_sizes[0].height - emoji_px);
         for (int si = 1; si < face->num_fixed_sizes; si++) {
-            int diff = abs(face->available_sizes[si].height - font_px);
+            int diff = abs(face->available_sizes[si].height - emoji_px);
             if (diff < best_diff) { best_diff = diff; best = si; }
         }
         FT_Select_Size(face, best);
-        glyph_scale = (float)font_px / (float)face->available_sizes[best].height;
+        glyph_scale = (float)emoji_px / (float)face->available_sizes[best].height;
     } else {
-        FT_Set_Pixel_Sizes(face, 0, (FT_UInt)font_px);
+        // Use emoji_px for the emoji face so outline emoji fill the cell
+        int req_px = (face == s_emoji_face) ? emoji_px : font_px;
+        FT_Set_Pixel_Sizes(face, 0, (FT_UInt)req_px);
     }
     int load_flags = FT_LOAD_RENDER;
     if (face->num_fixed_sizes > 0) load_flags |= FT_LOAD_COLOR;
@@ -297,15 +253,15 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
     // treat as not-found so the caller can try another face.
     if (bm->width == 0 || bm->rows == 0) return 0.f;
 
-    float drawn_w = bm->width * glyph_scale;
-    float drawn_h = bm->rows  * glyph_scale;
+    float render_scale = glyph_scale;
+
+    float drawn_w = bm->width * render_scale;
+    float drawn_h = bm->rows  * render_scale;
     float gx, gy;
     if (face->num_fixed_sizes > 0) {
-        // For fixed-size (emoji) faces, center the scaled bitmap on the cell
-        // rather than trusting bitmap_left/top which are relative to the
-        // unscaled strike and produce out-of-cell positions when downscaled.
+        // Fixed-size (bitmap) emoji: center scaled bitmap in cell
         gx = cx + (font_px - drawn_w) * 0.5f;
-        gy = baseline_y - drawn_h;          // sit on the baseline
+        gy = baseline_y - drawn_h;
     } else {
         gx = cx + slot->bitmap_left;
         gy = baseline_y - slot->bitmap_top;
@@ -318,9 +274,9 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
                 const unsigned char *px = bm->buffer + row * bm->pitch + col * 4;
                 float pb = px[0]/255.f, pg = px[1]/255.f, pr = px[2]/255.f, pa = px[3]/255.f * a;
                 if (pa < 0.01f) continue;
-                float ex = gx + col * glyph_scale;
-                float ey = gy + row * glyph_scale;
-                float ps = glyph_scale < 1.f ? 1.f : glyph_scale; // at least 1px
+                float ex = gx + col * render_scale;
+                float ey = gy + row * render_scale;
+                float ps = render_scale < 1.f ? 1.f : render_scale;
                 verts.push_back({ex,      ey,      pr,pg,pb,pa});
                 verts.push_back({ex+ps,   ey,      pr,pg,pb,pa});
                 verts.push_back({ex+ps,   ey+ps,   pr,pg,pb,pa});
@@ -335,26 +291,25 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
                 unsigned char pv = bm->buffer[row * bm->pitch + col];
                 if (pv < 4) continue;
                 float fa = a * (pv/255.f);
-                float ex = gx+col, ey = gy+row;
+                float ex = gx + col * render_scale;
+                float ey = gy + row * render_scale;
+                float ps = render_scale < 1.f ? 1.f : render_scale;
                 verts.push_back({ex,     ey,     r,g,b,fa});
-                verts.push_back({ex+1.f, ey,     r,g,b,fa});
-                verts.push_back({ex+1.f, ey+1.f, r,g,b,fa});
+                verts.push_back({ex+ps,  ey,     r,g,b,fa});
+                verts.push_back({ex+ps,  ey+ps,  r,g,b,fa});
                 verts.push_back({ex,     ey,     r,g,b,fa});
-                verts.push_back({ex+1.f, ey+1.f, r,g,b,fa});
-                verts.push_back({ex,     ey+1.f, r,g,b,fa});
+                verts.push_back({ex+ps,  ey+ps,  r,g,b,fa});
+                verts.push_back({ex,     ey+ps,  r,g,b,fa});
             }
         }
     }
-    return (float)(slot->advance.x >> 6) * glyph_scale;
+    return (float)(slot->advance.x >> 6) * render_scale;
 }
 
 // Draw a string at pixel position using FreeType bitmap → triangles (your technique)
-static float draw_text(const char *text, float x, float y, int font_px,
+static float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
                        float r, float g, float b, float a) {
     if (!s_ft_face || !text || !*text) return x;
-
-    // (pixel sizes are set per-glyph inside draw_glyph / measure paths)
-    // Keep this comment so the original structure is clear.
 
     static std::vector<Vertex> verts;
     verts.clear();
@@ -364,22 +319,19 @@ static float draw_text(const char *text, float x, float y, int font_px,
     while (*p) {
         uint32_t cp = next_codepoint(&p);
         if (!cp) continue;
-        if (cp == 0xFE0F) continue; // VS-16 emoji presentation selector, zero-width
+        if (cp == 0xFE0F) continue;
 
-        // Prefer emoji face for emoji codepoints
         FT_Face face = s_ft_face;
         if (s_emoji_face && is_emoji_codepoint(cp)) {
             if (FT_Get_Char_Index(s_emoji_face, cp)) face = s_emoji_face;
         }
 
-        float adv = draw_glyph(face, cp, cx, y, font_px, r, g, b, a, verts);
+        float adv = draw_glyph(face, cp, cx, y, font_px, emoji_px, r, g, b, a, verts);
         if (adv == 0.f) {
-            // Fallback to the other face
             FT_Face fb = (face == s_ft_face && s_emoji_face) ? s_emoji_face : s_ft_face;
-            adv = draw_glyph(fb, cp, cx, y, font_px, r, g, b, a, verts);
+            adv = draw_glyph(fb, cp, cx, y, font_px, emoji_px, r, g, b, a, verts);
         }
         if (adv == 0.f) {
-            // Unknown glyph: advance by a space width so chars don't stack
             FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)font_px);
             FT_UInt gi = FT_Get_Char_Index(s_ft_face, ' ');
             if (!FT_Load_Glyph(s_ft_face, gi, FT_LOAD_DEFAULT))
@@ -1323,7 +1275,7 @@ static void menu_render(ContextMenu *m) {
         float tg = (hov || sub_open) ? 1.f : 0.88f;
         float tb = (hov || sub_open) ? 1.f : 0.92f;
         draw_text(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f,
-                  g_font_size, tr, tg, tb, 1.f);
+                  g_font_size, g_font_size, tr, tg, tb, 1.f);
 
         y += ih;
     }
@@ -1356,10 +1308,10 @@ static void menu_render(ContextMenu *m) {
             float tg = hov ? 1.f : (active ? 0.9f : 0.88f);
             float tb = hov ? 1.f : (active ? 1.0f : 0.92f);
             if (active) {
-                draw_text("\xe2\x9c\x93", sx + 4, iy + ih*0.72f, g_font_size, 0.4f,0.8f,0.4f,1.f);
+                draw_text("\xe2\x9c\x93", sx + 4, iy + ih*0.72f, g_font_size, g_font_size, 0.4f,0.8f,0.4f,1.f);
             }
             draw_text(lbl, sx + m->pad_x + g_font_size, iy + ih*0.72f,
-                      g_font_size, tr, tg, tb, 1.f);
+                      g_font_size, g_font_size, tr, tg, tb, 1.f);
         }
     }
 }
@@ -1439,7 +1391,7 @@ static void term_render(Terminal *t, int ox, int oy) {
                 if (cp > 0x7F)
                     SDL_Log("[Render] cell[%d,%d] cp=U+%04X px=%.1f py=%.1f baseline=%.1f\n",
                             row, col, cp, px, py, baseline);
-                draw_text(tmp, px, baseline, g_font_size, fc.r, fc.g, fc.b, 1.f);
+                draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f);
             }
 
             if (c->attrs & ATTR_UNDERLINE)
@@ -1951,6 +1903,7 @@ int main(int argc, char **argv) {
     if (s_ft_face)    FT_Done_Face(s_ft_face);
     if (s_ft_lib)     FT_Done_FreeType(s_ft_lib);
     if (s_font_buf)   free(s_font_buf);
+    if (s_emoji_buf)  free(s_emoji_buf);
 
     return 0;
 }
