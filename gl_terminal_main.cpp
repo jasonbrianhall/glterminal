@@ -24,6 +24,7 @@
 #include <errno.h>
 #include <vector>
 #include <unordered_map>
+#include <string>
 
 // Pull in the embedded font
 #include "Monospace.h"
@@ -214,7 +215,23 @@ static int cp_to_utf8(uint32_t cp, char *buf) {
 static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
                          int font_px, float r, float g, float b, float a,
                          std::vector<Vertex> &verts) {
-    FT_Set_Pixel_Sizes(face, 0, (FT_UInt)font_px);
+    // Color emoji fonts (e.g. NotoColorEmoji) only have fixed bitmap strikes.
+    // FT_Set_Pixel_Sizes silently fails on them; we must select the nearest
+    // fixed size and scale the resulting bitmap ourselves.
+    float glyph_scale = 1.0f;
+    if (face->num_fixed_sizes > 0) {
+        // Pick the strike whose pixel height is closest to font_px
+        int best = 0;
+        int best_diff = abs(face->available_sizes[0].height - font_px);
+        for (int si = 1; si < face->num_fixed_sizes; si++) {
+            int diff = abs(face->available_sizes[si].height - font_px);
+            if (diff < best_diff) { best_diff = diff; best = si; }
+        }
+        FT_Select_Size(face, best);
+        glyph_scale = (float)font_px / (float)face->available_sizes[best].height;
+    } else {
+        FT_Set_Pixel_Sizes(face, 0, (FT_UInt)font_px);
+    }
     int load_flags = FT_LOAD_RENDER;
     if (face->num_fixed_sizes > 0) load_flags |= FT_LOAD_COLOR;
 
@@ -224,8 +241,8 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
 
     FT_GlyphSlot slot = face->glyph;
     FT_Bitmap *bm = &slot->bitmap;
-    float gx = cx + slot->bitmap_left;
-    float gy = baseline_y - slot->bitmap_top;
+    float gx = cx + slot->bitmap_left * glyph_scale;
+    float gy = baseline_y - slot->bitmap_top * glyph_scale;
 
     if (bm->pixel_mode == FT_PIXEL_MODE_BGRA) {
         // Color emoji (NotoColorEmoji etc) — 4 bytes per pixel: B, G, R, A
@@ -234,13 +251,15 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
                 const unsigned char *px = bm->buffer + row * bm->pitch + col * 4;
                 float pb = px[0]/255.f, pg = px[1]/255.f, pr = px[2]/255.f, pa = px[3]/255.f * a;
                 if (pa < 0.01f) continue;
-                float ex = gx+col, ey = gy+row;
-                verts.push_back({ex,     ey,     pr,pg,pb,pa});
-                verts.push_back({ex+1.f, ey,     pr,pg,pb,pa});
-                verts.push_back({ex+1.f, ey+1.f, pr,pg,pb,pa});
-                verts.push_back({ex,     ey,     pr,pg,pb,pa});
-                verts.push_back({ex+1.f, ey+1.f, pr,pg,pb,pa});
-                verts.push_back({ex,     ey+1.f, pr,pg,pb,pa});
+                float ex = gx + col * glyph_scale;
+                float ey = gy + row * glyph_scale;
+                float ps = glyph_scale < 1.f ? 1.f : glyph_scale; // at least 1px
+                verts.push_back({ex,      ey,      pr,pg,pb,pa});
+                verts.push_back({ex+ps,   ey,      pr,pg,pb,pa});
+                verts.push_back({ex+ps,   ey+ps,   pr,pg,pb,pa});
+                verts.push_back({ex,      ey,      pr,pg,pb,pa});
+                verts.push_back({ex+ps,   ey+ps,   pr,pg,pb,pa});
+                verts.push_back({ex,      ey+ps,   pr,pg,pb,pa});
             }
         }
     } else {
@@ -259,7 +278,7 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
             }
         }
     }
-    return (float)(slot->advance.x >> 6);
+    return (float)(slot->advance.x >> 6) * glyph_scale;
 }
 
 // Draw a string at pixel position using FreeType bitmap → triangles (your technique)
@@ -499,6 +518,117 @@ static void term_paste(Terminal *t) {
         term_write(t, text, (int)strlen(text));
     }
     SDL_free(text);
+}
+
+// Helper: append a hex colour like "#rrggbb" to a std::string
+static void append_hex_color(std::string &s, float r, float g, float b) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "#%02x%02x%02x",
+             (int)(r*255+.5f), (int)(g*255+.5f), (int)(b*255+.5f));
+    s += buf;
+}
+
+// Helper: HTML-escape a single codepoint into s
+static void append_html_char(std::string &s, uint32_t cp) {
+    if      (cp == '<')  s += "&lt;";
+    else if (cp == '>')  s += "&gt;";
+    else if (cp == '&')  s += "&amp;";
+    else if (cp == '"')  s += "&quot;";
+    else if (cp < 0x80)  s += (char)cp;
+    else if (cp < 0x800) {
+        s += (char)(0xC0|(cp>>6));
+        s += (char)(0x80|(cp&0x3F));
+    } else if (cp < 0x10000) {
+        s += (char)(0xE0|(cp>>12));
+        s += (char)(0x80|((cp>>6)&0x3F));
+        s += (char)(0x80|(cp&0x3F));
+    } else {
+        s += (char)(0xF0|(cp>>18));
+        s += (char)(0x80|((cp>>12)&0x3F));
+        s += (char)(0x80|((cp>>6)&0x3F));
+        s += (char)(0x80|(cp&0x3F));
+    }
+}
+
+// Copy selection to clipboard as an HTML <span> fragment preserving colours and bold.
+static void term_copy_selection_html(Terminal *t) {
+    if (!t->sel_exists && !t->sel_active) return;
+
+    int r0 = t->sel_start_row, c0 = t->sel_start_col;
+    int r1 = t->sel_end_row,   c1 = t->sel_end_col;
+    if (r0 > r1 || (r0 == r1 && c0 > c1)) {
+        int tr=r0,tc=c0; r0=r1;c0=c1;r1=tr;c1=tc;
+    }
+
+    // Resolve theme background for the outer div
+    const Theme &th = THEMES[g_theme_idx];
+    char bg_hex[8];
+    snprintf(bg_hex, sizeof(bg_hex), "#%02x%02x%02x",
+             (int)(th.bg_r*255+.5f), (int)(th.bg_g*255+.5f), (int)(th.bg_b*255+.5f));
+
+    std::string html;
+    html.reserve(4096);
+    html += "<div style=\"background:";
+    html += bg_hex;
+    html += ";font-family:monospace;white-space:pre;padding:4px;display:inline-block\">";
+
+    // Track the current span state so we only open/close when attributes change
+    TermColorVal last_fg = ~(TermColorVal)0, last_bg = ~(TermColorVal)0;
+    uint8_t last_attrs = 0xFF;
+    bool span_open = false;
+
+    auto close_span = [&]() {
+        if (span_open) { html += "</span>"; span_open = false; }
+    };
+
+    for (int r = r0; r <= r1; r++) {
+        int cs = (r == r0) ? c0 : 0;
+        int ce = (r == r1) ? c1 : t->cols - 1;
+
+        // Trim trailing spaces on each line
+        int last_nonspace = cs - 1;
+        for (int c = cs; c <= ce; c++) {
+            uint32_t cp = CELL(t,r,c).cp;
+            if (cp && cp != ' ') last_nonspace = c;
+        }
+
+        for (int c = cs; c <= last_nonspace; c++) {
+            Cell &cell = CELL(t,r,c);
+            uint32_t cp = cell.cp ? cell.cp : ' ';
+
+            TermColorVal fg = cell.fg, bg = cell.bg;
+            uint8_t attrs = cell.attrs;
+            if (attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
+
+            // Open a new span if any attribute changed
+            if (fg != last_fg || bg != last_bg || attrs != last_attrs) {
+                close_span();
+
+                TermColor fc = tcolor_resolve(fg);
+                TermColor bc = tcolor_resolve(bg);
+
+                html += "<span style=\"color:";
+                append_hex_color(html, fc.r, fc.g, fc.b);
+                html += ";background:";
+                append_hex_color(html, bc.r, bc.g, bc.b);
+                if (attrs & ATTR_BOLD)      html += ";font-weight:bold";
+                if (attrs & ATTR_UNDERLINE)  html += ";text-decoration:underline";
+                html += "\">";
+                span_open = true;
+
+                last_fg = fg; last_bg = bg; last_attrs = attrs;
+            }
+
+            append_html_char(html, cp);
+        }
+        close_span();
+        last_fg = ~(TermColorVal)0; // force new span on next row
+        if (r < r1) html += '\n';
+    }
+    html += "</div>";
+
+    SDL_SetClipboardText(html.c_str());
+    SDL_Log("[Term] copied %zu bytes of HTML to clipboard\n", html.size());
 }
 
 // ============================================================================
@@ -899,11 +1029,12 @@ static void term_write(Terminal *t, const char *s, int n) {
 
 #define MENU_ID_NEW_TERMINAL  0
 #define MENU_ID_COPY          2
-#define MENU_ID_PASTE         3
-#define MENU_ID_RESET         5
-#define MENU_ID_THEMES        7
-#define MENU_ID_OPACITY       8
-#define MENU_ID_QUIT         10
+#define MENU_ID_COPY_HTML     3
+#define MENU_ID_PASTE         4
+#define MENU_ID_RESET         6
+#define MENU_ID_THEMES        8
+#define MENU_ID_OPACITY       9
+#define MENU_ID_QUIT         11
 
 struct MenuItem {
     const char *label;
@@ -911,17 +1042,18 @@ struct MenuItem {
 };
 
 static const MenuItem MENU_ITEMS[] = {
-    { "New Terminal",   false },   // 0
-    { nullptr,          true  },   // 1
-    { "Copy",           false },   // 2
-    { "Paste",          false },   // 3
-    { nullptr,          true  },   // 4
-    { "Reset",          false },   // 5
-    { nullptr,          true  },   // 6
-    { "Color Theme  >", false },   // 7
-    { "Transparency  >", false },   // 8
-    { nullptr,          true  },   // 9
-    { "Quit",           false },   // 10
+    { "New Terminal",    false },   // 0
+    { nullptr,           true  },   // 1
+    { "Copy",            false },   // 2
+    { "Copy as HTML",    false },   // 3
+    { "Paste",           false },   // 4
+    { nullptr,           true  },   // 5
+    { "Reset",           false },   // 6
+    { nullptr,           true  },   // 7
+    { "Color Theme  >",  false },   // 8
+    { "Transparency  >", false },   // 9
+    { nullptr,           true  },   // 10
+    { "Quit",            false },   // 11
 };
 static const int MENU_COUNT = (int)(sizeof(MENU_ITEMS)/sizeof(MENU_ITEMS[0]));
 
@@ -1518,8 +1650,9 @@ int main(int argc, char **argv) {
                             if (!is_sub_parent) g_menu.visible = false;
                             switch (hit) {
                             case MENU_ID_NEW_TERMINAL: action_new_terminal(); break;
-                            case MENU_ID_COPY:   term_copy_selection(&term); break;
-                            case MENU_ID_PASTE:  term_paste(&term); break;
+                            case MENU_ID_COPY:      term_copy_selection(&term); break;
+                            case MENU_ID_COPY_HTML: term_copy_selection_html(&term); break;
+                            case MENU_ID_PASTE:     term_paste(&term); break;
                             case MENU_ID_RESET:
                                 for(int r=0;r<term.rows;r++)
                                     for(int c=0;c<term.cols;c++)
