@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <pty.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
 #include <errno.h>
 #include <vector>
 #include <unordered_map>
@@ -31,9 +32,11 @@
 // CONFIG
 // ============================================================================
 
-#define TERM_COLS       80
-#define TERM_ROWS       24
-#define FONT_SIZE       16
+#define TERM_COLS_DEFAULT  80
+#define TERM_ROWS_DEFAULT  24
+#define TERM_MAX_COLS      512
+#define TERM_MAX_ROWS      256
+#define FONT_SIZE          16
 #define WIN_TITLE       "GL Terminal"
 
 // ============================================================================
@@ -252,83 +255,148 @@ static float measure_text(const char *text, int font_px) {
 #define ATTR_REVERSE   (1<<2)
 #define ATTR_BLINK     (1<<3)
 
+// Color: palette index (0-255) or 24-bit RGB packed as 0x01RRGGBB
+// High byte 0x00 = palette index in low byte
+// High byte 0x01 = 24-bit RGB in low 3 bytes
+typedef uint32_t TermColorVal;
+#define TCOLOR_PALETTE(idx)    ((TermColorVal)(idx))
+#define TCOLOR_RGB(r,g,b)      ((TermColorVal)(0x01000000u | ((r)<<16) | ((g)<<8) | (b)))
+#define TCOLOR_IS_RGB(c)       (((c) & 0xFF000000u) == 0x01000000u)
+#define TCOLOR_R(c)            (((c)>>16)&0xFF)
+#define TCOLOR_G(c)            (((c)>>8)&0xFF)
+#define TCOLOR_B(c)            ((c)&0xFF)
+#define TCOLOR_IDX(c)          ((c)&0xFF)
+
 struct TermColor { float r,g,b; };
-static const TermColor PALETTE[16] = {
-    {0.f,    0.f,    0.f},    // 0 black
-    {0.8f,   0.1f,   0.1f},   // 1 red
-    {0.1f,   0.8f,   0.1f},   // 2 green
-    {0.8f,   0.8f,   0.1f},   // 3 yellow
-    {0.2f,   0.2f,   0.9f},   // 4 blue
-    {0.8f,   0.1f,   0.8f},   // 5 magenta
-    {0.1f,   0.8f,   0.8f},   // 6 cyan
-    {0.75f,  0.75f,  0.75f},  // 7 white
-    {0.4f,   0.4f,   0.4f},   // 8 bright black
-    {1.f,    0.3f,   0.3f},   // 9 bright red
-    {0.3f,   1.f,    0.3f},   // 10 bright green
-    {1.f,    1.f,    0.3f},   // 11 bright yellow
-    {0.3f,   0.4f,   1.f},    // 12 bright blue
-    {1.f,    0.3f,   1.f},    // 13 bright magenta
-    {0.3f,   1.f,    1.f},    // 14 bright cyan
-    {1.f,    1.f,    1.f},    // 15 bright white
-};
+
+// Resolve a TermColorVal to float RGB
+static TermColor tcolor_resolve(TermColorVal c) {
+    if (TCOLOR_IS_RGB(c))
+        return { TCOLOR_R(c)/255.f, TCOLOR_G(c)/255.f, TCOLOR_B(c)/255.f };
+    // 256-color palette
+    int idx = (int)TCOLOR_IDX(c);
+    // System 16
+    static const TermColor P16[16] = {
+        {0.f,    0.f,    0.f},
+        {0.8f,   0.1f,   0.1f},
+        {0.1f,   0.8f,   0.1f},
+        {0.8f,   0.8f,   0.1f},
+        {0.2f,   0.2f,   0.9f},
+        {0.8f,   0.1f,   0.8f},
+        {0.1f,   0.8f,   0.8f},
+        {0.75f,  0.75f,  0.75f},
+        {0.4f,   0.4f,   0.4f},
+        {1.f,    0.3f,   0.3f},
+        {0.3f,   1.f,    0.3f},
+        {1.f,    1.f,    0.3f},
+        {0.3f,   0.4f,   1.f},
+        {1.f,    0.3f,   1.f},
+        {0.3f,   1.f,    1.f},
+        {1.f,    1.f,    1.f},
+    };
+    if (idx < 16) return P16[idx];
+    // 216-color cube (indices 16-231)
+    if (idx < 232) {
+        int i = idx - 16;
+        int b = i % 6, g = (i/6) % 6, r = i/36;
+        auto cv = [](int v) { return v ? (55 + v*40)/255.f : 0.f; };
+        return { cv(r), cv(g), cv(b) };
+    }
+    // Grayscale ramp (indices 232-255)
+    float v = (8 + (idx-232)*10) / 255.f;
+    return { v, v, v };
+}
 
 struct Cell {
-    uint32_t cp;
-    uint8_t  fg, bg, attrs, _pad;
+    uint32_t    cp;
+    TermColorVal fg, bg;
+    uint8_t     attrs, _pad[3];
 };
 
 typedef enum { PS_NORMAL, PS_ESC, PS_CSI, PS_OSC } ParseState;
 
 struct Terminal {
-    Cell        cells[TERM_ROWS][TERM_COLS];
-    int         cur_row, cur_col;
-    uint8_t     cur_fg, cur_bg, cur_attrs;
-    ParseState  state;
-    char        csi[64];
-    int         csi_len;
-    int         pty_fd;
-    pid_t       child;
-    float       cell_w, cell_h;
+    Cell         *cells;
+    int           cols, rows;
+    int           cur_row, cur_col;
+    TermColorVal  cur_fg, cur_bg;
+    uint8_t       cur_attrs;
+    ParseState    state;
+    char          csi[64];
+    int           csi_len;
+    int           pty_fd;
+    pid_t         child;
+    float         cell_w, cell_h;
     double      blink;
     bool        cursor_on;
 };
+
+// Accessor macro - replaces CELL(t,r,c)
+#define CELL(t,r,c) ((t)->cells[(r)*(t)->cols+(c)])
 
 // ============================================================================
 // PARSER
 // ============================================================================
 
 static void scroll_up(Terminal *t) {
-    memmove(t->cells[0], t->cells[1], sizeof(Cell)*TERM_COLS*(TERM_ROWS-1));
-    for (int c = 0; c < TERM_COLS; c++) {
-        t->cells[TERM_ROWS-1][c] = {' ', t->cur_fg, t->cur_bg, 0, 0};
+    memmove(&CELL(t,0,0), &CELL(t,1,0), sizeof(Cell)*t->cols*(t->rows-1));
+    for (int c = 0; c < t->cols; c++) {
+        CELL(t,t->rows-1,c) = {' ', t->cur_fg, t->cur_bg, 0, 0};
     }
 }
 
 static void newline(Terminal *t) {
-    if (++t->cur_row >= TERM_ROWS) { t->cur_row = TERM_ROWS-1; scroll_up(t); }
+    if (++t->cur_row >= t->rows) { t->cur_row = t->rows-1; scroll_up(t); }
 }
 
 static void sgr(Terminal *t, const char *p) {
-    char buf[64]; strncpy(buf, p, 63); buf[63]='\0';
-    int  params[16]; int pc = 0;
+    char buf[128]; strncpy(buf, p, 127); buf[127]='\0';
+    int params[32]; int pc = 0;
     char *tok = strtok(buf, ";");
-    while (tok && pc < 16) { params[pc++] = atoi(tok); tok = strtok(NULL, ";"); }
+    while (tok && pc < 32) { params[pc++] = atoi(tok); tok = strtok(NULL, ";"); }
     if (!pc) { params[0]=0; pc=1; }
+
     for (int i = 0; i < pc; i++) {
         int v = params[i];
-        if      (v == 0)              { t->cur_fg=7; t->cur_bg=0; t->cur_attrs=0; }
-        else if (v == 1)              t->cur_attrs |= ATTR_BOLD;
-        else if (v == 4)              t->cur_attrs |= ATTR_UNDERLINE;
-        else if (v == 7)              t->cur_attrs |= ATTR_REVERSE;
-        else if (v == 22)             t->cur_attrs &= ~ATTR_BOLD;
-        else if (v == 24)             t->cur_attrs &= ~ATTR_UNDERLINE;
-        else if (v == 27)             t->cur_attrs &= ~ATTR_REVERSE;
-        else if (v>=30 && v<=37)      t->cur_fg = (uint8_t)(v-30);
-        else if (v == 39)             t->cur_fg = 7;
-        else if (v>=40 && v<=47)      t->cur_bg = (uint8_t)(v-40);
-        else if (v == 49)             t->cur_bg = 0;
-        else if (v>=90 && v<=97)      t->cur_fg = (uint8_t)(v-90+8);
-        else if (v>=100 && v<=107)    t->cur_bg = (uint8_t)(v-100+8);
+        if      (v == 0)  { t->cur_fg=TCOLOR_PALETTE(7); t->cur_bg=TCOLOR_PALETTE(0); t->cur_attrs=0; }
+        else if (v == 1)  t->cur_attrs |= ATTR_BOLD;
+        else if (v == 4)  t->cur_attrs |= ATTR_UNDERLINE;
+        else if (v == 5)  t->cur_attrs |= ATTR_BLINK;
+        else if (v == 7)  t->cur_attrs |= ATTR_REVERSE;
+        else if (v == 22) t->cur_attrs &= ~ATTR_BOLD;
+        else if (v == 24) t->cur_attrs &= ~ATTR_UNDERLINE;
+        else if (v == 27) t->cur_attrs &= ~ATTR_REVERSE;
+        // Foreground
+        else if (v>=30 && v<=37)   t->cur_fg = TCOLOR_PALETTE(v-30);
+        else if (v == 38) {
+            if (i+1 < pc && params[i+1] == 5 && i+2 < pc) {
+                // 256-color: 38;5;n
+                t->cur_fg = TCOLOR_PALETTE(params[i+2] & 0xFF);
+                i += 2;
+            } else if (i+1 < pc && params[i+1] == 2 && i+4 < pc) {
+                // 24-bit RGB: 38;2;r;g;b
+                t->cur_fg = TCOLOR_RGB(params[i+2], params[i+3], params[i+4]);
+                i += 4;
+            }
+        }
+        else if (v == 39)            t->cur_fg = TCOLOR_PALETTE(7);
+        // Background
+        else if (v>=40 && v<=47)   t->cur_bg = TCOLOR_PALETTE(v-40);
+        else if (v == 48) {
+            if (i+1 < pc && params[i+1] == 5 && i+2 < pc) {
+                // 256-color: 48;5;n
+                t->cur_bg = TCOLOR_PALETTE(params[i+2] & 0xFF);
+                i += 2;
+            } else if (i+1 < pc && params[i+1] == 2 && i+4 < pc) {
+                // 24-bit RGB: 48;2;r;g;b
+                t->cur_bg = TCOLOR_RGB(params[i+2], params[i+3], params[i+4]);
+                i += 4;
+            }
+        }
+        else if (v == 49)            t->cur_bg = TCOLOR_PALETTE(0);
+        // Bright fg/bg
+        else if (v>=90 && v<=97)   t->cur_fg = TCOLOR_PALETTE(v-90+8);
+        else if (v>=100 && v<=107) t->cur_bg = TCOLOR_PALETTE(v-100+8);
     }
 }
 
@@ -341,39 +409,39 @@ static void dispatch_csi(Terminal *t) {
     case 'm': sgr(t, p); break;
     case 'H': case 'f': {
         int row=1,col=1; sscanf(p,"%d;%d",&row,&col);
-        t->cur_row = SDL_clamp(row-1, 0, TERM_ROWS-1);
-        t->cur_col = SDL_clamp(col-1, 0, TERM_COLS-1);
+        t->cur_row = SDL_clamp(row-1, 0, t->rows-1);
+        t->cur_col = SDL_clamp(col-1, 0, t->cols-1);
         break;
     }
     case 'A': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_max(0,t->cur_row-n); break; }
-    case 'B': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_min(TERM_ROWS-1,t->cur_row+n); break; }
-    case 'C': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_min(TERM_COLS-1,t->cur_col+n); break; }
+    case 'B': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_min(t->rows-1,t->cur_row+n); break; }
+    case 'C': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_min(t->cols-1,t->cur_col+n); break; }
     case 'D': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_max(0,t->cur_col-n); break; }
-    case 'G': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_clamp(n-1,0,TERM_COLS-1); break; }
+    case 'G': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_clamp(n-1,0,t->cols-1); break; }
     case 'J': {
         int n=atoi(p);
         if (n==2||n==3) {
-            for(int r=0;r<TERM_ROWS;r++) for(int c=0;c<TERM_COLS;c++) t->cells[r][c]={' ',t->cur_fg,t->cur_bg,0,0};
+            for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
             t->cur_row=t->cur_col=0;
         } else if(n==1) {
-            for(int r=0;r<t->cur_row;r++) for(int c=0;c<TERM_COLS;c++) t->cells[r][c]={' ',t->cur_fg,t->cur_bg,0,0};
+            for(int r=0;r<t->cur_row;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         } else {
-            for(int r=t->cur_row;r<TERM_ROWS;r++)
-                for(int c=(r==t->cur_row?t->cur_col:0);c<TERM_COLS;c++) t->cells[r][c]={' ',t->cur_fg,t->cur_bg,0,0};
+            for(int r=t->cur_row;r<t->rows;r++)
+                for(int c=(r==t->cur_row?t->cur_col:0);c<t->cols;c++) CELL(t,r,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         }
         break;
     }
     case 'K': {
         int n=atoi(p);
-        int s=(n==1)?0:t->cur_col, e=(n==0)?TERM_COLS:t->cur_col+1;
-        for(int c=s;c<e&&c<TERM_COLS;c++) t->cells[t->cur_row][c]={' ',t->cur_fg,t->cur_bg,0,0};
+        int s=(n==1)?0:t->cur_col, e=(n==0)?t->cols:t->cur_col+1;
+        for(int c=s;c<e&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         break;
     }
     case 'P': { // DCH delete chars
         int n=atoi(p); if(n<1)n=1;
         int r=t->cur_row, c=t->cur_col;
-        memmove(&t->cells[r][c], &t->cells[r][c+n], sizeof(Cell)*(TERM_COLS-c-n));
-        for(int i=TERM_COLS-n;i<TERM_COLS;i++) t->cells[r][i]={' ',t->cur_fg,t->cur_bg,0,0};
+        memmove(&CELL(t,r,c), &CELL(t,r,c+n), sizeof(Cell)*(t->cols-c-n));
+        for(int i=t->cols-n;i<t->cols;i++) CELL(t,r,i)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         break;
     }
     case 'h': case 'l': break; // mode sets — ignore
@@ -390,12 +458,12 @@ static void term_feed(Terminal *t, const char *buf, int len) {
             else if (ch == '\r') { t->cur_col = 0; }
             else if (ch == '\n') { newline(t); }
             else if (ch == '\b') { if(t->cur_col>0) t->cur_col--; }
-            else if (ch == '\t') { t->cur_col=(t->cur_col+8)&~7; if(t->cur_col>=TERM_COLS)t->cur_col=TERM_COLS-1; }
+            else if (ch == '\t') { t->cur_col=(t->cur_col+8)&~7; if(t->cur_col>=t->cols)t->cur_col=t->cols-1; }
             else if (ch == 0x07) { /* BEL */ }
             else if (ch == 0x0e || ch == 0x0f) { /* charset shifts — ignore */ }
             else if (ch >= 0x20) {
-                if (t->cur_col >= TERM_COLS) { t->cur_col=0; newline(t); }
-                t->cells[t->cur_row][t->cur_col++] = {ch, t->cur_fg, t->cur_bg, t->cur_attrs, 0};
+                if (t->cur_col >= t->cols) { t->cur_col=0; newline(t); }
+                CELL(t,t->cur_row,t->cur_col++) = {ch, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
             }
             break;
         case PS_ESC:
@@ -410,13 +478,13 @@ static void term_feed(Terminal *t, const char *buf, int len) {
                 t->state=PS_NORMAL; // will eat next char as part of normal (harmless)
             } else {
                 if (ch == 'c') {
-                    for(int r=0;r<TERM_ROWS;r++) for(int c=0;c<TERM_COLS;c++) t->cells[r][c]={' ',7,0,0,0};
+                    for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
                     t->cur_row=t->cur_col=0; t->cur_fg=7; t->cur_bg=0; t->cur_attrs=0;
                 } else if (ch == 'M') {
                     if (t->cur_row > 0) { t->cur_row--; }
                     else {
-                        memmove(&t->cells[1], &t->cells[0], sizeof(Cell)*TERM_COLS*(TERM_ROWS-1));
-                        for(int c=0;c<TERM_COLS;c++) t->cells[0][c]={' ',t->cur_fg,t->cur_bg,0,0};
+                        memmove(&CELL(t,1,0), &CELL(t,0,0), sizeof(Cell)*t->cols*(t->rows-1));
+                        for(int c=0;c<t->cols;c++) CELL(t,0,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
                     }
                 }
                 t->state = PS_NORMAL;
@@ -447,17 +515,20 @@ static void term_feed(Terminal *t, const char *buf, int len) {
 
 static bool term_spawn(Terminal *t, const char *cmd) {
     struct winsize ws = {
-        .ws_row=(unsigned short)TERM_ROWS, .ws_col=(unsigned short)TERM_COLS,
-        .ws_xpixel=(unsigned short)(TERM_COLS*(int)t->cell_w),
-        .ws_ypixel=(unsigned short)(TERM_ROWS*(int)t->cell_h)
+        .ws_row=(unsigned short)t->rows, .ws_col=(unsigned short)t->cols,
+        .ws_xpixel=(unsigned short)(t->cols*(int)t->cell_w),
+        .ws_ypixel=(unsigned short)(t->rows*(int)t->cell_h)
     };
     int master;
     pid_t pid = forkpty(&master, NULL, NULL, &ws);
     if (pid < 0) { perror("forkpty"); return false; }
     if (pid == 0) {
-        setenv("TERM","xterm-color",1);
-        setenv("COLUMNS","80",1);
-        setenv("LINES","24",1);
+        char cols_str[16], rows_str[16];
+        snprintf(cols_str, sizeof(cols_str), "%d", t->cols);
+        snprintf(rows_str, sizeof(rows_str), "%d", t->rows);
+        setenv("TERM","xterm-256color",1);
+        setenv("COLUMNS", cols_str, 1);
+        setenv("LINES",   rows_str, 1);
         const char *argv[] = {cmd, NULL};
         execvp(argv[0], (char*const*)argv);
         _exit(1);
@@ -490,15 +561,17 @@ static void term_write(Terminal *t, const char *s, int n) {
 static void term_render(Terminal *t, int ox, int oy) {
     float cw = t->cell_w, ch = t->cell_h;
 
-    for (int row = 0; row < TERM_ROWS; row++) {
-        for (int col = 0; col < TERM_COLS; col++) {
-            Cell *c = &t->cells[row][col];
+    for (int row = 0; row < t->rows; row++) {
+        for (int col = 0; col < t->cols; col++) {
+            Cell *c = &CELL(t,row,col);
             float px = ox + col*cw, py = oy + row*ch;
 
-            uint8_t fg = c->fg, bg = c->bg;
-            if (c->attrs & ATTR_REVERSE) { uint8_t tmp=fg; fg=bg; bg=tmp; }
-            TermColor fc = PALETTE[fg&15], bc = PALETTE[bg&15];
-            if ((c->attrs & ATTR_BOLD) && fg < 8) fc = PALETTE[fg+8];
+            TermColorVal fg = c->fg, bg = c->bg;
+            if (c->attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
+            TermColor fc = tcolor_resolve(fg), bc = tcolor_resolve(bg);
+            // Bold on low palette colors -> use bright variant
+            if ((c->attrs & ATTR_BOLD) && !TCOLOR_IS_RGB(fg) && TCOLOR_IDX(fg) < 8)
+                fc = tcolor_resolve(TCOLOR_PALETTE(TCOLOR_IDX(fg)+8));
 
             // Background
             draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, 1.f);
@@ -531,14 +604,13 @@ static void term_render(Terminal *t, int ox, int oy) {
 
 static void term_init(Terminal *t) {
     memset(t, 0, sizeof(*t));
-    t->cur_fg   = 7;
-    t->cur_bg   = 0;
-    t->pty_fd   = -1;
-    t->child    = -1;
-    t->state    = PS_NORMAL;
+    t->cur_fg    = 7;
+    t->pty_fd    = -1;
+    t->child     = -1;
+    t->state     = PS_NORMAL;
     t->cursor_on = true;
 
-    // Measure monospace cell from '0'
+    // Measure cell size from monospace '0' glyph
     if (s_ft_face) {
         FT_Set_Pixel_Sizes(s_ft_face, 0, FONT_SIZE);
         FT_UInt gi = FT_Get_Char_Index(s_ft_face, '0');
@@ -550,11 +622,58 @@ static void term_init(Terminal *t) {
     if (t->cell_w < 1) t->cell_w = 10;
     if (t->cell_h < 1) t->cell_h = 20;
 
-    SDL_Log("[Term] cell size: %.0fx%.0f\n", t->cell_w, t->cell_h);
+    // Allocate initial grid
+    t->cols  = TERM_COLS_DEFAULT;
+    t->rows  = TERM_ROWS_DEFAULT;
+    t->cells = (Cell*)malloc(sizeof(Cell) * t->cols * t->rows);
+    for (int i = 0; i < t->cols * t->rows; i++)
+        t->cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
 
-    for (int r=0;r<TERM_ROWS;r++)
-        for (int c=0;c<TERM_COLS;c++)
-            t->cells[r][c] = {' ', 7, 0, 0, 0};
+    SDL_Log("[Term] init: %dx%d cells %.0fx%.0f px\n", t->cols, t->rows, t->cell_w, t->cell_h);
+}
+
+// Resize terminal: reallocate grid, notify PTY
+static void term_resize(Terminal *t, int win_w, int win_h) {
+    int new_cols = (int)((win_w - 4) / t->cell_w);
+    int new_rows = (int)((win_h - 4) / t->cell_h);
+    if (new_cols < 2)  new_cols = 2;
+    if (new_rows < 2)  new_rows = 2;
+    if (new_cols > TERM_MAX_COLS) new_cols = TERM_MAX_COLS;
+    if (new_rows > TERM_MAX_ROWS) new_rows = TERM_MAX_ROWS;
+    if (new_cols == t->cols && new_rows == t->rows) return;
+
+    // Allocate new grid and copy as much content as fits
+    Cell *new_cells = (Cell*)malloc(sizeof(Cell) * new_cols * new_rows);
+    for (int i = 0; i < new_cols * new_rows; i++)
+        new_cells[i] = {' ', t->cur_fg, t->cur_bg, 0, 0};
+
+    int copy_rows = (t->rows < new_rows) ? t->rows : new_rows;
+    int copy_cols = (t->cols < new_cols) ? t->cols : new_cols;
+    for (int r = 0; r < copy_rows; r++)
+        for (int c = 0; c < copy_cols; c++)
+            new_cells[r * new_cols + c] = CELL(t, r, c);
+
+    free(t->cells);
+    t->cells = new_cells;
+    t->cols  = new_cols;
+    t->rows  = new_rows;
+
+    // Clamp cursor
+    if (t->cur_row >= t->rows) t->cur_row = t->rows - 1;
+    if (t->cur_col >= t->cols) t->cur_col = t->cols - 1;
+
+    // Tell the PTY about the new size
+    if (t->pty_fd >= 0) {
+        struct winsize ws = {
+            .ws_row    = (unsigned short)new_rows,
+            .ws_col    = (unsigned short)new_cols,
+            .ws_xpixel = (unsigned short)(new_cols * (int)t->cell_w),
+            .ws_ypixel = (unsigned short)(new_rows * (int)t->cell_h),
+        };
+        ioctl(t->pty_fd, TIOCSWINSZ, &ws);
+    }
+
+    SDL_Log("[Term] resized to %dx%d\n", new_cols, new_rows);
 }
 
 // ============================================================================
@@ -625,14 +744,17 @@ int main(int argc, char **argv) {
     Terminal term;
     term_init(&term);
 
-    // Resize window to exact terminal size BEFORE init_renderer so projection is correct
-    win_w = (int)(term.cell_w * TERM_COLS) + 4;
-    win_h = (int)(term.cell_h * TERM_ROWS) + 4;
+    // Use a sensible default window size (80x24 at cell size)
+    win_w = (int)(term.cell_w * term.cols) + 4;
+    win_h = (int)(term.cell_h * term.rows) + 4;
     SDL_SetWindowSize(window, win_w, win_h);
     SDL_GetWindowSize(window, &win_w, &win_h);
 
     gl_init_renderer(win_w, win_h);
     glViewport(0, 0, win_w, win_h);
+
+    // Sync grid to actual window size immediately (in case WM overrode our size)
+    term_resize(&term, win_w, win_h);
 
     if (!term_spawn(&term, shell)) {
         SDL_Log("[Term] Failed to spawn shell. Exiting.\n");
@@ -680,11 +802,12 @@ int main(int argc, char **argv) {
                 break;
             }
             case SDL_WINDOWEVENT:
-                if (ev.window.event == SDL_WINDOWEVENT_RESIZED) {
-                    win_w = ev.window.data1;
-                    win_h = ev.window.data2;
+                if (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
+                    ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
                     glViewport(0, 0, win_w, win_h);
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+                    term_resize(&term, win_w, win_h);
                 }
                 break;
             }
