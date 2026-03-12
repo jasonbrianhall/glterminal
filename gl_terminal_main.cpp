@@ -271,8 +271,10 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
         int req_px = (face == s_emoji_face) ? emoji_px : font_px;
         FT_Set_Pixel_Sizes(face, 0, (FT_UInt)req_px);
     }
+    // Always request FT_LOAD_COLOR for the emoji face — NotoEmoji-Regular uses
+    // COLRv0 outlines which render as BGRA (not grayscale) and require this flag.
     int load_flags = FT_LOAD_RENDER;
-    if (face->num_fixed_sizes > 0) load_flags |= FT_LOAD_COLOR;
+    if (face->num_fixed_sizes > 0 || face == s_emoji_face) load_flags |= FT_LOAD_COLOR;
 
     FT_UInt gi = FT_Get_Char_Index(face, cp);
     if (!gi) {
@@ -288,11 +290,6 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
     FT_GlyphSlot slot = face->glyph;
     FT_Bitmap *bm = &slot->bitmap;
 
-    if (cp > 0x7F)
-        SDL_Log("[Glyph] cp=U+%04X face='%s' scale=%.3f bm=%dx%d pixel_mode=%d gx=%.1f gy=%.1f adv=%d\n",
-                cp, face->family_name, glyph_scale,
-                bm->width, bm->rows, bm->pixel_mode,
-                cx, baseline_y, (int)(slot->advance.x >> 6));
 
     // COLRv1 / SVG glyphs load successfully but produce an empty bitmap —
     // treat as not-found so the caller can try another face.
@@ -334,8 +331,10 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
         for (int row = 0; row < (int)bm->rows; row++) {
             for (int col = 0; col < (int)bm->width; col++) {
                 unsigned char pv = bm->buffer[row * bm->pitch + col];
-                if (pv < 4) continue;
-                float fa = a * (pv/255.f);
+                if (pv < 1) continue;
+                // Use pv as alpha — but boost faint antialiased pixels so they
+                // are actually visible. Gamma-expand: fa = (pv/255)^0.5
+                float fa = a * sqrtf(pv / 255.f);
                 float ex = gx + col * render_scale;
                 float ey = gy + row * render_scale;
                 float ps = render_scale < 1.f ? 1.f : render_scale;
@@ -373,11 +372,18 @@ static float draw_text(const char *text, float x, float y, int font_px, int emoj
             if (FT_Get_Char_Index(s_emoji_face, cp)) face = s_emoji_face;
         }
 
-        float adv = draw_glyph(face, cp, cx, y, font_px, emoji_px, r, g, b, a, verts);
+        // For grayscale emoji (outline faces, num_fixed_sizes==0), force white so
+        // they're visible on dark backgrounds. BGRA color emoji ignore r,g,b anyway.
+        bool is_grayscale_emoji = (face == s_emoji_face && face->num_fixed_sizes == 0);
+        float er = is_grayscale_emoji ? 1.f : r;
+        float eg = is_grayscale_emoji ? 1.f : g;
+        float eb = is_grayscale_emoji ? 1.f : b;
+
+        float adv = draw_glyph(face, cp, cx, y, font_px, emoji_px, er, eg, eb, a, verts);
         if (adv == 0.f) {
             // Try emoji face as fallback
             if (face != s_emoji_face && s_emoji_face)
-                adv = draw_glyph(s_emoji_face, cp, cx, y, font_px, emoji_px, r, g, b, a, verts);
+                adv = draw_glyph(s_emoji_face, cp, cx, y, font_px, emoji_px, 1.f, 1.f, 1.f, a, verts);
         }
         if (adv == 0.f) {
             // Last resort: space advance so chars don't stack
@@ -1549,45 +1555,48 @@ static void term_render(Terminal *t, int ox, int oy) {
     float cw = t->cell_w, ch = t->cell_h;
     bool scrolled = (t->sb_offset > 0);
 
+    // Helper to resolve a cell pointer for a given row/col
+    Cell blank = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+    auto resolve_cell = [&](int row, int col) -> Cell* {
+        if (scrolled) {
+            int sb_row_idx = t->sb_count - t->sb_offset + row;
+            if (sb_row_idx < 0) return &blank;
+            if (sb_row_idx < t->sb_count) return sb_row(t, sb_row_idx) + col;
+            int live_row = sb_row_idx - t->sb_count;
+            return (live_row < t->rows) ? &CELL(t, live_row, col) : &blank;
+        }
+        return &CELL(t, row, col);
+    };
+
+    // Pass 1: draw all backgrounds first so no bg rect can paint over a glyph
+    // that spills outside its cell (e.g. wide emoji).
     for (int row = 0; row < t->rows; row++) {
         for (int col = 0; col < t->cols; col++) {
             float px = ox + col*cw, py = oy + row*ch;
-
-            // Resolve which cell to draw: scrollback or live grid
-            Cell *c;
-            Cell blank = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
-            if (scrolled) {
-                // sb_offset rows back from bottom of scrollback+screen
-                // Total virtual rows = sb_count + rows
-                // We're viewing from: (sb_count + rows - sb_offset) - rows .. +rows
-                int sb_row_idx = t->sb_count - t->sb_offset + row;
-                if (sb_row_idx < 0) {
-                    c = &blank;
-                } else if (sb_row_idx < t->sb_count) {
-                    c = sb_row(t, sb_row_idx) + col;
-                } else {
-                    // Into live screen
-                    int live_row = sb_row_idx - t->sb_count;
-                    c = (live_row < t->rows) ? &CELL(t, live_row, col) : &blank;
-                }
-            } else {
-                c = &CELL(t, row, col);
-            }
-
+            Cell *c = resolve_cell(row, col);
             TermColorVal fg = c->fg, bg = c->bg;
             if (c->attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
-            TermColor fc = tcolor_resolve(fg), bc = tcolor_resolve(bg);
-            if ((c->attrs & ATTR_BOLD) && !TCOLOR_IS_RGB(fg) && TCOLOR_IDX(fg) < 8)
-                fc = tcolor_resolve(TCOLOR_PALETTE(TCOLOR_IDX(fg)+8));
-            // Dim: reduce fg brightness by 50%
-            if (c->attrs & ATTR_DIM) { fc.r *= 0.5f; fc.g *= 0.5f; fc.b *= 0.5f; }
-
-            // Selection highlight (only when not scrolled — keeps it simple)
+            TermColor bc = tcolor_resolve(bg);
             if (!scrolled && cell_in_sel(t, row, col)) {
                 draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
             } else {
                 draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, 1.f);
             }
+        }
+    }
+
+    // Pass 2: draw all glyphs and decorations on top
+    for (int row = 0; row < t->rows; row++) {
+        for (int col = 0; col < t->cols; col++) {
+            float px = ox + col*cw, py = oy + row*ch;
+            Cell *c = resolve_cell(row, col);
+
+            TermColorVal fg = c->fg, bg = c->bg;
+            if (c->attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
+            TermColor fc = tcolor_resolve(fg);
+            if ((c->attrs & ATTR_BOLD) && !TCOLOR_IS_RGB(fg) && TCOLOR_IDX(fg) < 8)
+                fc = tcolor_resolve(TCOLOR_PALETTE(TCOLOR_IDX(fg)+8));
+            if (c->attrs & ATTR_DIM) { fc.r *= 0.5f; fc.g *= 0.5f; fc.b *= 0.5f; }
 
             uint32_t cp = c->cp;
             bool blink_hidden = (c->attrs & ATTR_BLINK) && !g_blink_text_on;
@@ -1595,9 +1604,6 @@ static void term_render(Terminal *t, int ox, int oy) {
                 char tmp[5] = {};
                 cp_to_utf8(cp, tmp);
                 float baseline = py + ch * 0.82f;
-                if (cp > 0x7F)
-                    SDL_Log("[Render] cell[%d,%d] cp=U+%04X px=%.1f py=%.1f baseline=%.1f\n",
-                            row, col, cp, px, py, baseline);
                 draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
             }
 
