@@ -631,9 +631,95 @@ static void term_copy_selection_html(Terminal *t) {
     SDL_Log("[Term] copied %zu bytes of HTML to clipboard\n", html.size());
 }
 
-// ============================================================================
-// PARSER
-// ============================================================================
+// Copy selection as plain text with ANSI escape codes preserving colours and bold.
+static void term_copy_selection_ansi(Terminal *t) {
+    if (!t->sel_exists && !t->sel_active) return;
+
+    int r0 = t->sel_start_row, c0 = t->sel_start_col;
+    int r1 = t->sel_end_row,   c1 = t->sel_end_col;
+    if (r0 > r1 || (r0 == r1 && c0 > c1)) {
+        int tr=r0,tc=c0; r0=r1;c0=c1;r1=tr;c1=tc;
+    }
+
+    std::string out;
+    out.reserve(4096);
+
+    TermColorVal last_fg = ~(TermColorVal)0, last_bg = ~(TermColorVal)0;
+    uint8_t last_attrs = 0xFF;
+
+    auto emit_sgr = [&](TermColorVal fg, TermColorVal bg, uint8_t attrs) {
+        out += "\x1b[0"; // always reset first
+        if (attrs & ATTR_BOLD)      out += ";1";
+        if (attrs & ATTR_UNDERLINE) out += ";4";
+        if (attrs & ATTR_BLINK)     out += ";5";
+
+        // Foreground
+        if (TCOLOR_IS_RGB(fg)) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), ";38;2;%d;%d;%d",
+                     (int)TCOLOR_R(fg), (int)TCOLOR_G(fg), (int)TCOLOR_B(fg));
+            out += buf;
+        } else {
+            int idx = (int)TCOLOR_IDX(fg);
+            if (idx < 8)        { char b[8]; snprintf(b,sizeof(b),";3%d",idx);     out+=b; }
+            else if (idx < 16)  { char b[8]; snprintf(b,sizeof(b),";9%d",idx-8);   out+=b; }
+            else                { char b[16]; snprintf(b,sizeof(b),";38;5;%d",idx); out+=b; }
+        }
+
+        // Background
+        if (TCOLOR_IS_RGB(bg)) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), ";48;2;%d;%d;%d",
+                     (int)TCOLOR_R(bg), (int)TCOLOR_G(bg), (int)TCOLOR_B(bg));
+            out += buf;
+        } else {
+            int idx = (int)TCOLOR_IDX(bg);
+            if (idx < 8)        { char b[8]; snprintf(b,sizeof(b),";4%d",idx);      out+=b; }
+            else if (idx < 16)  { char b[8]; snprintf(b,sizeof(b),";10%d",idx-8);   out+=b; }
+            else                { char b[16]; snprintf(b,sizeof(b),";48;5;%d",idx);  out+=b; }
+        }
+
+        out += 'm';
+        last_fg = fg; last_bg = bg; last_attrs = attrs;
+    };
+
+    for (int r = r0; r <= r1; r++) {
+        int cs = (r == r0) ? c0 : 0;
+        int ce = (r == r1) ? c1 : t->cols - 1;
+
+        int last_nonspace = cs - 1;
+        for (int c = cs; c <= ce; c++) {
+            uint32_t cp = CELL(t,r,c).cp;
+            if (cp && cp != ' ') last_nonspace = c;
+        }
+
+        for (int c = cs; c <= last_nonspace; c++) {
+            Cell &cell = CELL(t,r,c);
+            uint32_t cp = cell.cp ? cell.cp : ' ';
+
+            TermColorVal fg = cell.fg, bg = cell.bg;
+            uint8_t attrs = cell.attrs;
+            if (attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
+
+            if (fg != last_fg || bg != last_bg || attrs != last_attrs)
+                emit_sgr(fg, bg, attrs);
+
+            // UTF-8 encode
+            if (cp < 0x80)      out += (char)cp;
+            else if (cp < 0x800){ out+=(char)(0xC0|(cp>>6)); out+=(char)(0x80|(cp&0x3F)); }
+            else if (cp < 0x10000){ out+=(char)(0xE0|(cp>>12)); out+=(char)(0x80|((cp>>6)&0x3F)); out+=(char)(0x80|(cp&0x3F)); }
+            else { out+=(char)(0xF0|(cp>>18)); out+=(char)(0x80|((cp>>12)&0x3F)); out+=(char)(0x80|((cp>>6)&0x3F)); out+=(char)(0x80|(cp&0x3F)); }
+        }
+
+        // Reset at end of each line then newline
+        out += "\x1b[0m";
+        last_fg = ~(TermColorVal)0;
+        if (r < r1) out += '\n';
+    }
+
+    SDL_SetClipboardText(out.c_str());
+    SDL_Log("[Term] copied %zu bytes of ANSI to clipboard\n", out.size());
+}
 
 // Push one row into the scrollback ring buffer
 static void sb_push(Terminal *t, int row) {
@@ -1030,11 +1116,12 @@ static void term_write(Terminal *t, const char *s, int n) {
 #define MENU_ID_NEW_TERMINAL  0
 #define MENU_ID_COPY          2
 #define MENU_ID_COPY_HTML     3
-#define MENU_ID_PASTE         4
-#define MENU_ID_RESET         6
-#define MENU_ID_THEMES        8
-#define MENU_ID_OPACITY       9
-#define MENU_ID_QUIT         11
+#define MENU_ID_COPY_ANSI     4
+#define MENU_ID_PASTE         5
+#define MENU_ID_RESET         7
+#define MENU_ID_THEMES        9
+#define MENU_ID_OPACITY      10
+#define MENU_ID_QUIT         12
 
 struct MenuItem {
     const char *label;
@@ -1046,14 +1133,15 @@ static const MenuItem MENU_ITEMS[] = {
     { nullptr,           true  },   // 1
     { "Copy",            false },   // 2
     { "Copy as HTML",    false },   // 3
-    { "Paste",           false },   // 4
-    { nullptr,           true  },   // 5
-    { "Reset",           false },   // 6
-    { nullptr,           true  },   // 7
-    { "Color Theme  >",  false },   // 8
-    { "Transparency  >", false },   // 9
-    { nullptr,           true  },   // 10
-    { "Quit",            false },   // 11
+    { "Copy as ANSI",    false },   // 4
+    { "Paste",           false },   // 5
+    { nullptr,           true  },   // 6
+    { "Reset",           false },   // 7
+    { nullptr,           true  },   // 8
+    { "Color Theme  >",  false },   // 9
+    { "Transparency  >", false },   // 10
+    { nullptr,           true  },   // 11
+    { "Quit",            false },   // 12
 };
 static const int MENU_COUNT = (int)(sizeof(MENU_ITEMS)/sizeof(MENU_ITEMS[0]));
 
@@ -1652,6 +1740,7 @@ int main(int argc, char **argv) {
                             case MENU_ID_NEW_TERMINAL: action_new_terminal(); break;
                             case MENU_ID_COPY:      term_copy_selection(&term); break;
                             case MENU_ID_COPY_HTML: term_copy_selection_html(&term); break;
+                            case MENU_ID_COPY_ANSI: term_copy_selection_ansi(&term); break;
                             case MENU_ID_PASTE:     term_paste(&term); break;
                             case MENU_ID_RESET:
                                 for(int r=0;r<term.rows;r++)
