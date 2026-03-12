@@ -588,6 +588,8 @@ static void term_paste(Terminal *t) {
 
 // Push one row into the scrollback ring buffer
 static void sb_push(Terminal *t, int row) {
+    SDL_Log("[Scroll] sb_push called: sb_buf=%p sb_cap=%d scroll_top=%d scroll_bot=%d rows=%d\n",
+        (void*)t->sb_buf, t->sb_cap, t->scroll_top, t->scroll_bot, t->rows);
     if (!t->sb_buf || t->sb_cap == 0) return;
     // Only push when scroll region is full screen (not inside apps like vim)
     if (t->scroll_top != 0 || t->scroll_bot != t->rows - 1) return;
@@ -599,6 +601,8 @@ static void sb_push(Terminal *t, int row) {
         // Buffer full — advance head (oldest row evicted)
         t->sb_head = (t->sb_head + 1) % t->sb_cap;
     }
+    if (t->sb_count <= 5 || t->sb_count % 50 == 0)
+        SDL_Log("[Scroll] sb_push: sb_count now %d\n", t->sb_count);
 }
 
 // Get a scrollback row by logical index (0 = oldest, sb_count-1 = newest)
@@ -611,6 +615,7 @@ static void scroll_up(Terminal *t) {
     int top = t->scroll_top;
     int bot = SDL_min(t->scroll_bot, t->rows - 1);
     // Save the row being scrolled off into scrollback
+    SDL_Log("[Scroll] scroll_up: top=%d bot=%d rows=%d\n", top, bot, t->rows);
     if (top == 0) sb_push(t, top);
     if (bot > top)
         memmove(&CELL(t,top,0), &CELL(t,top+1,0), sizeof(Cell)*t->cols*(bot-top));
@@ -1242,9 +1247,14 @@ static void term_init(Terminal *t) {
     if (t->cell_w < 1) t->cell_w = 10;
     if (t->cell_h < 1) t->cell_h = 20;
 
+    t->sb_cap = SCROLLBACK_LINES;
+    t->cols   = TERM_COLS_DEFAULT;
+    t->rows   = TERM_ROWS_DEFAULT;
+
+    // Allocate scrollback buffer
+    t->sb_buf = (Cell*)calloc(t->sb_cap * t->cols, sizeof(Cell));
+
     // Allocate initial grid
-    t->cols  = TERM_COLS_DEFAULT;
-    t->rows  = TERM_ROWS_DEFAULT;
     t->cells = (Cell*)malloc(sizeof(Cell) * t->cols * t->rows);
     for (int i = 0; i < t->cols * t->rows; i++)
         t->cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
@@ -1415,6 +1425,8 @@ int main(int argc, char **argv) {
 
     // Sync grid to actual window size immediately (in case WM overrode our size)
     term_resize(&term, win_w, win_h);
+    SDL_Log("[Scroll] after resize: sb_cap=%d sb_buf=%p sb_count=%d\n",
+        term.sb_cap, (void*)term.sb_buf, term.sb_count);
 
     if (!term_spawn(&term, shell)) {
         SDL_Log("[Term] Failed to spawn shell. Exiting.\n");
@@ -1457,13 +1469,17 @@ int main(int argc, char **argv) {
         // Read PTY (clears selection if output arrives)
         {
             bool had_sel = term.sel_exists || term.sel_active;
-            int old_row = term.cur_row, old_col = term.cur_col;
+            int old_sb_count = term.sb_count;
             bool got_data = term_read(&term);
             if (got_data) {
                 needs_render = true;
-                bool got_output = (term.cur_row != old_row || term.cur_col != old_col);
-                if (got_output) {
-                    // Snap back to live view when new output arrives
+                // Only snap back to live view if new lines were actually pushed to
+                // scrollback (i.e. real output scrolled the terminal), not just
+                // cursor movement or in-place redraws (e.g. prompt, vim, etc.)
+                bool new_lines = (term.sb_count != old_sb_count);
+                if (new_lines) {
+                    if (term.sb_offset != 0)
+                        SDL_Log("[Scroll] PTY new_lines reset sb_offset %d->0\n", term.sb_offset);
                     term.sb_offset = 0;
                     if (had_sel) { term.sel_exists = false; term.sel_active = false; }
                 }
@@ -1486,14 +1502,20 @@ int main(int argc, char **argv) {
             case SDL_KEYDOWN: {
                 if (g_menu.visible) { g_menu.visible = false; break; }
                 SDL_Keymod mod = SDL_GetModState();
-                // Scrollback navigation (Shift+PageUp/Down/arrows)
-                if (mod & KMOD_SHIFT) {
+                // Scrollback navigation: PageUp/Down (plain or Shift)
+                {
                     int page = term.rows - 1;
                     if (ev.key.keysym.sym == SDLK_PAGEUP) {
+                        SDL_Log("[Scroll] PageUp: sb_count=%d sb_offset %d->%d\n",
+                            term.sb_count, term.sb_offset,
+                            SDL_min(term.sb_offset + page, term.sb_count));
                         term.sb_offset = SDL_min(term.sb_offset + page, term.sb_count);
                         break;
                     }
                     if (ev.key.keysym.sym == SDLK_PAGEDOWN) {
+                        SDL_Log("[Scroll] PageDown: sb_count=%d sb_offset %d->%d\n",
+                            term.sb_count, term.sb_offset,
+                            SDL_max(term.sb_offset - page, 0));
                         term.sb_offset = SDL_max(term.sb_offset - page, 0);
                         break;
                     }
@@ -1633,7 +1655,10 @@ int main(int argc, char **argv) {
                 } else {
                     // Scroll up (y>0) = go back in history = increase offset
                     int delta = (ev.wheel.y > 0) ? 3 : -3;
-                    term.sb_offset = SDL_clamp(term.sb_offset + delta, 0, term.sb_count);
+                    int new_off = SDL_clamp(term.sb_offset + delta, 0, term.sb_count);
+                    SDL_Log("[Scroll] MouseWheel y=%d delta=%d sb_count=%d sb_offset %d->%d\n",
+                        ev.wheel.y, delta, term.sb_count, term.sb_offset, new_off);
+                    term.sb_offset = new_off;
                 }
                 break;
             }
