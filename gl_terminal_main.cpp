@@ -37,6 +37,7 @@
 static int   g_theme_idx   = 0;
 static float g_opacity     = 1.0f;   // 0.0 = fully transparent, 1.0 = opaque
 static bool  g_blink_text_on = true; // text blink visibility state
+static SDL_Window *g_sdl_window = nullptr;  // set in main(), used by OSC title handler
 
 // Active resolved palette (copied from theme on apply, so 256-colour cube still works)
 static float g_palette16[16][3];
@@ -1082,6 +1083,12 @@ static void dispatch_csi(Terminal *t) {
         for(int c=t->cols-1;c>=t->cur_col+n;c--) CELL(t,t->cur_row,c)=CELL(t,t->cur_row,c-n);
         for(int c=t->cur_col;c<t->cur_col+n&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         break; }
+    // DA — Primary Device Attributes: report as VT220 with title-setting capability
+    case 'c': {
+        if (p[0] == '\0' || p[0] == '0')
+            term_write(t, "\x1b[?62;22c", 9); // VT220, ANSI color
+        break;
+    }
     default: break;
     }
 }
@@ -1190,9 +1197,8 @@ static void term_feed(Terminal *t, const char *buf, int len) {
                 const char *semi = strchr(t->osc, ';');
                 if (semi) {
                     int ps = atoi(t->osc);
+                    SDL_Log("[OSC] ps=%d title='%s'\n", ps, semi + 1);
                     if (ps == 0 || ps == 2) {
-                        // Set window title
-                        extern SDL_Window *g_sdl_window;
                         if (g_sdl_window)
                             SDL_SetWindowTitle(g_sdl_window, semi + 1);
                     }
@@ -1721,8 +1727,6 @@ static void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
 // MAIN
 // ============================================================================
 
-SDL_Window *g_sdl_window = nullptr;  // exposed for OSC window title
-
 int main(int argc, char **argv) {
     const char *shell = (argc > 1) ? argv[1] : "/bin/bash";
 
@@ -1853,18 +1857,18 @@ int main(int argc, char **argv) {
             case SDL_KEYDOWN: {
                 if (g_menu.visible) { g_menu.visible = false; break; }
                 SDL_Keymod mod = SDL_GetModState();
-                // Scrollback navigation: PageUp/Down (plain or Shift)
+                // Scrollback navigation: Shift+PageUp/Down only
                 {
                     int page = term.rows - 1;
-                    if (ev.key.keysym.sym == SDLK_PAGEUP) {
-                        SDL_Log("[Scroll] PageUp: sb_count=%d sb_offset %d->%d\n",
+                    if (ev.key.keysym.sym == SDLK_PAGEUP && (mod & KMOD_SHIFT)) {
+                        SDL_Log("[Scroll] Shift+PageUp: sb_count=%d sb_offset %d->%d\n",
                             term.sb_count, term.sb_offset,
                             SDL_min(term.sb_offset + page, term.sb_count));
                         term.sb_offset = SDL_min(term.sb_offset + page, term.sb_count);
                         break;
                     }
-                    if (ev.key.keysym.sym == SDLK_PAGEDOWN) {
-                        SDL_Log("[Scroll] PageDown: sb_count=%d sb_offset %d->%d\n",
+                    if (ev.key.keysym.sym == SDLK_PAGEDOWN && (mod & KMOD_SHIFT)) {
+                        SDL_Log("[Scroll] Shift+PageDown: sb_count=%d sb_offset %d->%d\n",
                             term.sb_count, term.sb_offset,
                             SDL_max(term.sb_offset - page, 0));
                         term.sb_offset = SDL_max(term.sb_offset - page, 0);
