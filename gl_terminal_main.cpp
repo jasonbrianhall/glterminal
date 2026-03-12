@@ -729,6 +729,141 @@ static void term_write(Terminal *t, const char *s, int n) {
     if (t->pty_fd >= 0) { ssize_t r = write(t->pty_fd, s, n); (void)r; }
 }
 
+
+// ============================================================================
+// CONTEXT MENU
+// ============================================================================
+
+struct MenuItem {
+    const char *label;
+    bool        separator;  // if true, draw a divider line instead
+};
+
+static const MenuItem MENU_ITEMS[] = {
+    { "New Terminal",  false },
+    { nullptr,         true  },  // separator
+    { "Copy",          false },
+    { "Paste",         false },
+    { nullptr,         true  },  // separator
+    { "Reset",         false },
+    { nullptr,         true  },  // separator
+    { "Quit",          false },
+};
+static const int MENU_COUNT = (int)(sizeof(MENU_ITEMS)/sizeof(MENU_ITEMS[0]));
+
+struct ContextMenu {
+    bool  visible;
+    int   x, y;        // screen position of top-left
+    int   hovered;     // index of hovered item (-1 = none)
+    int   item_h;      // pixel height of each item row
+    int   sep_h;       // pixel height of separator
+    int   pad_x;       // horizontal text padding
+    int   width;
+};
+
+static ContextMenu g_menu = {};
+
+static void menu_layout(ContextMenu *m, int font_size) {
+    m->item_h = (int)(font_size * 1.8f);
+    m->sep_h  = 8;
+    m->pad_x  = (int)(font_size * 0.8f);
+    m->width  = (int)(font_size * 14.0f);
+}
+
+static int menu_total_height(ContextMenu *m) {
+    int h = 4; // top padding
+    for (int i = 0; i < MENU_COUNT; i++)
+        h += MENU_ITEMS[i].separator ? m->sep_h : m->item_h;
+    h += 4; // bottom padding
+    return h;
+}
+
+// Returns item index under pixel (px,py), or -1
+static int menu_hit(ContextMenu *m, int px, int py) {
+    if (!m->visible) return -1;
+    if (px < m->x || px > m->x + m->width) return -1;
+    int y = m->y + 4;
+    for (int i = 0; i < MENU_COUNT; i++) {
+        int h = MENU_ITEMS[i].separator ? m->sep_h : m->item_h;
+        if (!MENU_ITEMS[i].separator && py >= y && py < y + h) return i;
+        y += h;
+    }
+    return -1;
+}
+
+static void menu_open(ContextMenu *m, int x, int y, int win_w, int win_h) {
+    menu_layout(m, g_font_size);
+    m->visible = true;
+    m->hovered = -1;
+    // Clamp to window
+    int th = menu_total_height(m);
+    m->x = SDL_min(x, win_w - m->width - 2);
+    m->y = SDL_min(y, win_h - th - 2);
+    if (m->x < 0) m->x = 0;
+    if (m->y < 0) m->y = 0;
+}
+
+static void menu_render(ContextMenu *m) {
+    if (!m->visible) return;
+    menu_layout(m, g_font_size);
+    int th = menu_total_height(m);
+    float mx = (float)m->x, my = (float)m->y;
+    float mw = (float)m->width;
+
+    // Shadow
+    draw_rect(mx+3, my+3, mw, (float)th, 0,0,0, 0.4f);
+    // Background
+    draw_rect(mx, my, mw, (float)th, 0.13f, 0.13f, 0.16f, 0.97f);
+    // Border
+    draw_rect(mx,      my,            mw,    1, 0.35f,0.35f,0.4f, 1.f);
+    draw_rect(mx,      my+(float)th-1, mw,   1, 0.35f,0.35f,0.4f, 1.f);
+    draw_rect(mx,      my,            1, (float)th, 0.35f,0.35f,0.4f, 1.f);
+    draw_rect(mx+mw-1, my,            1, (float)th, 0.35f,0.35f,0.4f, 1.f);
+
+    float y = my + 4;
+    for (int i = 0; i < MENU_COUNT; i++) {
+        if (MENU_ITEMS[i].separator) {
+            float sy = y + m->sep_h * 0.5f;
+            draw_rect(mx+4, sy, mw-8, 1, 0.35f,0.35f,0.4f, 1.f);
+            y += m->sep_h;
+            continue;
+        }
+        float ih = (float)m->item_h;
+        // Hover highlight
+        if (i == m->hovered)
+            draw_rect(mx+2, y, mw-4, ih, 0.25f, 0.45f, 0.85f, 0.85f);
+
+        // Label
+        float text_y = y + ih * 0.72f;
+        float tr = 0.88f, tg = 0.88f, tb = 0.92f;
+        if (i == m->hovered) { tr = tg = tb = 1.f; }
+        draw_text(MENU_ITEMS[i].label, mx + m->pad_x, text_y,
+                  g_font_size, tr, tg, tb, 1.f);
+        y += ih;
+    }
+}
+
+// ============================================================================
+// MENU ACTIONS
+// ============================================================================
+
+// Spawn a new terminal window as a detached child process
+static void action_new_terminal() {
+    // Re-exec ourselves
+    extern char **environ;
+    char self[512] = {};
+    ssize_t n = readlink("/proc/self/exe", self, sizeof(self)-1);
+    if (n <= 0) return;
+    self[n] = '\0';
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        execl(self, self, nullptr);
+        _exit(1);
+    }
+    // parent continues normally; don't waitpid on this child
+}
+
 // ============================================================================
 // RENDERING
 // ============================================================================
@@ -1009,6 +1144,7 @@ int main(int argc, char **argv) {
             switch (ev.type) {
             case SDL_QUIT: running = false; break;
             case SDL_KEYDOWN: {
+                if (g_menu.visible) { g_menu.visible = false; break; }
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
                     if (ev.key.keysym.sym == SDLK_c && term.sel_exists) {
@@ -1034,20 +1170,50 @@ int main(int argc, char **argv) {
             }
             // Mouse selection
             case SDL_MOUSEBUTTONDOWN:
-                if (ev.button.button == SDL_BUTTON_LEFT) {
-                    int r, c;
-                    pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
-                    term.sel_start_row = term.sel_end_row = r;
-                    term.sel_start_col = term.sel_end_col = c;
-                    term.sel_active = true;
-                    term.sel_exists = false;
+                if (ev.button.button == SDL_BUTTON_RIGHT) {
+                    SDL_Log("[Menu] right-click at %d,%d win %dx%d\n", ev.button.x, ev.button.y, win_w, win_h);
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    menu_open(&g_menu, ev.button.x, ev.button.y, win_w, win_h);
+                    SDL_Log("[Menu] opened at %d,%d visible=%d\n", g_menu.x, g_menu.y, g_menu.visible);
+                } else if (ev.button.button == SDL_BUTTON_LEFT) {
+                    if (g_menu.visible) {
+                        // Handle menu click
+                        int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
+                        g_menu.visible = false;
+                        switch (hit) {
+                        case 0: action_new_terminal(); break;          // New Terminal
+                        case 2: term_copy_selection(&term); break;     // Copy
+                        case 3: term_paste(&term); break;              // Paste
+                        case 5: {                                       // Reset
+                            for(int r=0;r<term.rows;r++)
+                                for(int c=0;c<term.cols;c++)
+                                    CELL(&term,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
+                            term.cur_row=term.cur_col=0;
+                            term.scroll_top=0; term.scroll_bot=term.rows-1;
+                            term.state=PS_NORMAL;
+                            term_write(&term, "reset\n", 6);
+                            break;
+                        }
+                        case 7: running = false; break;                // Quit
+                        default: break;
+                        }
+                    } else {
+                        int r, c;
+                        pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
+                        term.sel_start_row = term.sel_end_row = r;
+                        term.sel_start_col = term.sel_end_col = c;
+                        term.sel_active = true;
+                        term.sel_exists = false;
+                    }
                 } else if (ev.button.button == SDL_BUTTON_MIDDLE) {
-                    // Middle-click paste
-                    term_paste(&term);
+                    if (g_menu.visible) g_menu.visible = false;
+                    else term_paste(&term);
                 }
                 break;
             case SDL_MOUSEMOTION:
-                if (term.sel_active && (ev.motion.state & SDL_BUTTON_LMASK)) {
+                if (g_menu.visible) {
+                    g_menu.hovered = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
+                } else if (term.sel_active && (ev.motion.state & SDL_BUTTON_LMASK)) {
                     pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2,
                                   &term.sel_end_row, &term.sel_end_col);
                     term.sel_exists = true;
@@ -1097,6 +1263,7 @@ int main(int argc, char **argv) {
 
         glViewport(0, 0, win_w, win_h);
         term_render(&term, 2, 2);   // 2px margin
+        menu_render(&g_menu);
 
         SDL_GL_SwapWindow(window);
     }
