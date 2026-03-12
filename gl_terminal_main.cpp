@@ -323,15 +323,6 @@ static float measure_text(const char *text, int font_px) {
     return w;
 }
 
-// ============================================================================
-// TERMINAL DATA
-// ============================================================================
-
-#define ATTR_BOLD      (1<<0)
-#define ATTR_UNDERLINE (1<<1)
-#define ATTR_REVERSE   (1<<2)
-#define ATTR_BLINK     (1<<3)
-
 // Color: palette index (0-255) or 24-bit RGB packed as 0x01RRGGBB
 // High byte 0x00 = palette index in low byte
 // High byte 0x01 = 24-bit RGB in low 3 bytes

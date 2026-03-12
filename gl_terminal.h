@@ -33,6 +33,15 @@
 #define WIN_TITLE       "GL Terminal"
 #define MAX_VERTS 400000
 
+// ============================================================================
+// TERMINAL DATA
+// ============================================================================
+
+#define ATTR_BOLD      (1<<0)
+#define ATTR_UNDERLINE (1<<1)
+#define ATTR_REVERSE   (1<<2)
+#define ATTR_BLINK     (1<<3)
+
 static int g_font_size = FONT_SIZE_DEFAULT;
 
 // ============================================================================
