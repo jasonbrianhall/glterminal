@@ -44,6 +44,150 @@
 static int g_font_size = FONT_SIZE_DEFAULT;
 
 // ============================================================================
+// THEME + TRANSPARENCY
+// ============================================================================
+
+struct Theme {
+    const char *name;
+    float bg_r, bg_g, bg_b;        // terminal background
+    // 16-colour palette overrides (NULL = use built-in defaults)
+    const float (*palette)[3];      // [16][3], or nullptr
+};
+
+static const float PAL_DEFAULT[16][3] = {
+    {0.f,    0.f,    0.f},
+    {0.8f,   0.1f,   0.1f},
+    {0.1f,   0.8f,   0.1f},
+    {0.8f,   0.8f,   0.1f},
+    {0.2f,   0.2f,   0.9f},
+    {0.8f,   0.1f,   0.8f},
+    {0.1f,   0.8f,   0.8f},
+    {0.75f,  0.75f,  0.75f},
+    {0.4f,   0.4f,   0.4f},
+    {1.f,    0.3f,   0.3f},
+    {0.3f,   1.f,    0.3f},
+    {1.f,    1.f,    0.3f},
+    {0.3f,   0.4f,   1.f},
+    {1.f,    0.3f,   1.f},
+    {0.3f,   1.f,    1.f},
+    {1.f,    1.f,    1.f},
+};
+static const float PAL_SOLARIZED[16][3] = {
+    {0.027f, 0.212f, 0.259f},  // base03  (black)
+    {0.863f, 0.196f, 0.184f},  // red
+    {0.522f, 0.600f, 0.000f},  // green
+    {0.710f, 0.537f, 0.000f},  // yellow
+    {0.149f, 0.545f, 0.824f},  // blue
+    {0.827f, 0.212f, 0.510f},  // magenta
+    {0.165f, 0.631f, 0.596f},  // cyan
+    {0.933f, 0.910f, 0.835f},  // base2 (white)
+    {0.000f, 0.169f, 0.212f},  // base02 (br black)
+    {0.796f, 0.294f, 0.086f},  // orange (br red)
+    {0.345f, 0.431f, 0.459f},  // base01 (br green)
+    {0.396f, 0.482f, 0.514f},  // base00 (br yellow)
+    {0.514f, 0.580f, 0.588f},  // base0  (br blue)
+    {0.424f, 0.443f, 0.769f},  // violet (br magenta)
+    {0.576f, 0.631f, 0.631f},  // base1  (br cyan)
+    {0.992f, 0.965f, 0.890f},  // base3  (br white)
+};
+static const float PAL_MONOKAI[16][3] = {
+    {0.117f, 0.117f, 0.117f},
+    {0.980f, 0.145f, 0.227f},
+    {0.639f, 0.878f, 0.176f},
+    {0.902f, 0.682f, 0.188f},
+    {0.396f, 0.675f, 1.000f},
+    {0.678f, 0.506f, 1.000f},
+    {0.396f, 0.835f, 0.969f},
+    {0.925f, 0.925f, 0.925f},
+    {0.498f, 0.498f, 0.498f},
+    {0.980f, 0.145f, 0.227f},
+    {0.639f, 0.878f, 0.176f},
+    {0.902f, 0.682f, 0.188f},
+    {0.396f, 0.675f, 1.000f},
+    {0.678f, 0.506f, 1.000f},
+    {0.396f, 0.835f, 0.969f},
+    {1.000f, 1.000f, 1.000f},
+};
+static const float PAL_NORD[16][3] = {
+    {0.180f, 0.204f, 0.251f},  // nord0
+    {0.749f, 0.380f, 0.416f},  // nord11 red
+    {0.639f, 0.745f, 0.549f},  // nord14 green
+    {0.922f, 0.796f, 0.545f},  // nord13 yellow
+    {0.506f, 0.631f, 0.757f},  // nord9  blue
+    {0.706f, 0.557f, 0.678f},  // nord15 magenta
+    {0.533f, 0.753f, 0.816f},  // nord8  cyan
+    {0.898f, 0.914f, 0.941f},  // nord6  white
+    {0.298f, 0.337f, 0.416f},  // nord3
+    {0.749f, 0.380f, 0.416f},
+    {0.639f, 0.745f, 0.549f},
+    {0.922f, 0.796f, 0.545f},
+    {0.506f, 0.631f, 0.757f},
+    {0.706f, 0.557f, 0.678f},
+    {0.533f, 0.753f, 0.816f},
+    {0.925f, 0.937f, 0.957f},
+};
+static const float PAL_GRUVBOX[16][3] = {
+    {0.157f, 0.157f, 0.157f},
+    {0.800f, 0.141f, 0.114f},
+    {0.596f, 0.592f, 0.102f},
+    {0.843f, 0.600f, 0.129f},
+    {0.271f, 0.522f, 0.533f},
+    {0.694f, 0.384f, 0.525f},
+    {0.408f, 0.616f, 0.416f},
+    {0.922f, 0.859f, 0.698f},
+    {0.573f, 0.514f, 0.451f},
+    {0.984f, 0.286f, 0.204f},
+    {0.722f, 0.733f, 0.149f},
+    {0.980f, 0.741f, 0.184f},
+    {0.514f, 0.647f, 0.596f},
+    {0.827f, 0.525f, 0.608f},
+    {0.557f, 0.753f, 0.486f},
+    {0.922f, 0.859f, 0.698f},
+};
+
+static const Theme THEMES[] = {
+    { "Default",         0.04f,  0.04f,  0.08f,  PAL_DEFAULT   },
+    { "Solarized Dark",  0.000f, 0.169f, 0.212f, PAL_SOLARIZED },
+    { "Monokai",         0.117f, 0.117f, 0.117f, PAL_MONOKAI   },
+    { "Nord",            0.180f, 0.204f, 0.251f, PAL_NORD      },
+    { "Gruvbox",         0.157f, 0.157f, 0.157f, PAL_GRUVBOX   },
+    { "Matrix",          0.f,    0.05f,  0.f,    nullptr       },
+    { "Ocean",           0.047f, 0.082f, 0.133f, nullptr       },
+};
+static const int THEME_COUNT = (int)(sizeof(THEMES)/sizeof(THEMES[0]));
+
+static int   g_theme_idx   = 0;
+static float g_opacity     = 1.0f;   // 0.0 = fully transparent, 1.0 = opaque
+
+// Active resolved palette (copied from theme on apply, so 256-colour cube still works)
+static float g_palette16[16][3];
+
+static void apply_theme(int idx) {
+    if (idx < 0 || idx >= THEME_COUNT) return;
+    g_theme_idx = idx;
+    const Theme &th = THEMES[idx];
+    const float (*pal)[3] = th.palette ? th.palette : PAL_DEFAULT;
+    // Special overrides for themes without a custom palette
+    if (!th.palette) {
+        if (strcmp(th.name,"Matrix")==0) {
+            memcpy(g_palette16, PAL_DEFAULT, sizeof(g_palette16));
+            // Make fg green
+            g_palette16[2][0]=0.f; g_palette16[2][1]=1.f; g_palette16[2][2]=0.f;
+            g_palette16[7][0]=0.f; g_palette16[7][1]=0.9f; g_palette16[7][2]=0.f;
+        } else if (strcmp(th.name,"Ocean")==0) {
+            memcpy(g_palette16, PAL_DEFAULT, sizeof(g_palette16));
+            g_palette16[4][0]=0.4f; g_palette16[4][1]=0.7f; g_palette16[4][2]=1.0f;
+            g_palette16[6][0]=0.4f; g_palette16[6][1]=0.9f; g_palette16[6][2]=1.0f;
+            g_palette16[7][0]=0.85f;g_palette16[7][1]=0.92f;g_palette16[7][2]=1.0f;
+        } else {
+            memcpy(g_palette16, PAL_DEFAULT, sizeof(g_palette16));
+        }
+    } else {
+        memcpy(g_palette16, pal, sizeof(g_palette16));
+    }
+}
+
+// ============================================================================
 // VERTEX / GL STATE  (same pattern as cometbuster_render_gl.cpp)
 // ============================================================================
 
@@ -279,26 +423,8 @@ static TermColor tcolor_resolve(TermColorVal c) {
         return { TCOLOR_R(c)/255.f, TCOLOR_G(c)/255.f, TCOLOR_B(c)/255.f };
     // 256-color palette
     int idx = (int)TCOLOR_IDX(c);
-    // System 16
-    static const TermColor P16[16] = {
-        {0.f,    0.f,    0.f},
-        {0.8f,   0.1f,   0.1f},
-        {0.1f,   0.8f,   0.1f},
-        {0.8f,   0.8f,   0.1f},
-        {0.2f,   0.2f,   0.9f},
-        {0.8f,   0.1f,   0.8f},
-        {0.1f,   0.8f,   0.8f},
-        {0.75f,  0.75f,  0.75f},
-        {0.4f,   0.4f,   0.4f},
-        {1.f,    0.3f,   0.3f},
-        {0.3f,   1.f,    0.3f},
-        {1.f,    1.f,    0.3f},
-        {0.3f,   0.4f,   1.f},
-        {1.f,    0.3f,   1.f},
-        {0.3f,   1.f,    1.f},
-        {1.f,    1.f,    1.f},
-    };
-    if (idx < 16) return P16[idx];
+    // System 16: resolved from g_palette16 (set by apply_theme)
+    if (idx < 16) return { g_palette16[idx][0], g_palette16[idx][1], g_palette16[idx][2] };
     // 216-color cube (indices 16-231)
     if (idx < 232) {
         int i = idx - 16;
@@ -334,12 +460,18 @@ struct Terminal {
     double      blink;
     bool        cursor_on;
     // Scroll region (DECSTBM) — rows are 0-based inclusive
-    int         scroll_top, scroll_bot;   // default: 0, rows-1
+    int         scroll_top, scroll_bot;
+    // Alternate screen buffer (for ?1049h/l)
+    Cell        *alt_cells;       // saved normal screen, nullptr if not in alt
+    int          saved_cur_row, saved_cur_col;
+    TermColorVal saved_cur_fg, saved_cur_bg;
+    uint8_t      saved_cur_attrs;
+    bool         in_alt_screen;
     // Selection
     int         sel_start_row, sel_start_col;
     int         sel_end_row,   sel_end_col;
-    bool        sel_active;    // mouse is down, selection in progress
-    bool        sel_exists;    // a completed selection exists
+    bool        sel_active;
+    bool        sel_exists;
 };
 
 // Accessor macro - replaces CELL(t,r,c)
@@ -567,7 +699,51 @@ static void dispatch_csi(Terminal *t) {
         for(int i=t->cols-n;i<t->cols;i++) CELL(t,r,i)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         break;
     }
-    case 'h': case 'l': break; // mode sets — ignore
+    case 'h': case 'l': {
+        bool set = (final == 'h');
+        // Private modes start with '?'
+        if (p[0] == '?') {
+            int mode = atoi(p + 1);
+            if (mode == 1049) {
+                if (set && !t->in_alt_screen) {
+                    // Enter alt screen: save current cells + cursor
+                    int sz = t->rows * t->cols;
+                    t->alt_cells = (Cell*)malloc(sizeof(Cell) * sz);
+                    memcpy(t->alt_cells, t->cells, sizeof(Cell) * sz);
+                    t->saved_cur_row   = t->cur_row;
+                    t->saved_cur_col   = t->cur_col;
+                    t->saved_cur_fg    = t->cur_fg;
+                    t->saved_cur_bg    = t->cur_bg;
+                    t->saved_cur_attrs = t->cur_attrs;
+                    // Clear screen for alt buffer
+                    for (int i = 0; i < sz; i++)
+                        t->cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+                    t->cur_row = t->cur_col = 0;
+                    t->scroll_top = 0; t->scroll_bot = t->rows - 1;
+                    t->in_alt_screen = true;
+                } else if (!set && t->in_alt_screen) {
+                    // Exit alt screen: restore cells + cursor
+                    int sz = t->rows * t->cols;
+                    if (t->alt_cells) {
+                        memcpy(t->cells, t->alt_cells, sizeof(Cell) * sz);
+                        free(t->alt_cells);
+                        t->alt_cells = nullptr;
+                    }
+                    t->cur_row   = t->saved_cur_row;
+                    t->cur_col   = t->saved_cur_col;
+                    t->cur_fg    = t->saved_cur_fg;
+                    t->cur_bg    = t->saved_cur_bg;
+                    t->cur_attrs = t->saved_cur_attrs;
+                    t->scroll_top = 0; t->scroll_bot = t->rows - 1;
+                    t->in_alt_screen = false;
+                }
+            }
+            // ?25h/l — cursor show/hide (we always show, just ignore)
+            // ?7h/l  — auto-wrap (always on)
+            // ?2004h/l — bracketed paste (ignore)
+        }
+        break;
+    }
     // VPA — vertical position absolute (row, 1-based)
     case 'd': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_clamp(n-1,0,t->rows-1); break; }
     // HPA — horizontal position absolute (col, 1-based) — same as G
@@ -734,31 +910,48 @@ static void term_write(Terminal *t, const char *s, int n) {
 // CONTEXT MENU
 // ============================================================================
 
+#define MENU_ID_NEW_TERMINAL  0
+#define MENU_ID_COPY          2
+#define MENU_ID_PASTE         3
+#define MENU_ID_RESET         5
+#define MENU_ID_THEMES        7
+#define MENU_ID_OPACITY       8
+#define MENU_ID_QUIT         10
+
 struct MenuItem {
     const char *label;
-    bool        separator;  // if true, draw a divider line instead
+    bool        separator;
 };
 
 static const MenuItem MENU_ITEMS[] = {
-    { "New Terminal",  false },
-    { nullptr,         true  },  // separator
-    { "Copy",          false },
-    { "Paste",         false },
-    { nullptr,         true  },  // separator
-    { "Reset",         false },
-    { nullptr,         true  },  // separator
-    { "Quit",          false },
+    { "New Terminal",   false },   // 0
+    { nullptr,          true  },   // 1
+    { "Copy",           false },   // 2
+    { "Paste",          false },   // 3
+    { nullptr,          true  },   // 4
+    { "Reset",          false },   // 5
+    { nullptr,          true  },   // 6
+    { "Color Theme  >", false },   // 7
+    { "Transparency  >", false },   // 8
+    { nullptr,          true  },   // 9
+    { "Quit",           false },   // 10
 };
 static const int MENU_COUNT = (int)(sizeof(MENU_ITEMS)/sizeof(MENU_ITEMS[0]));
 
+// Opacity presets
+static const float OPACITY_LEVELS[] = { 1.0f, 0.85f, 0.7f, 0.5f, 0.3f, 0.1f };
+static const char* OPACITY_NAMES[]  = { "100%", "85%", "70%", "50%", "30%", "10%" };
+static const int   OPACITY_COUNT    = 6;
+
 struct ContextMenu {
     bool  visible;
-    int   x, y;        // screen position of top-left
-    int   hovered;     // index of hovered item (-1 = none)
-    int   item_h;      // pixel height of each item row
-    int   sep_h;       // pixel height of separator
-    int   pad_x;       // horizontal text padding
-    int   width;
+    int   x, y;
+    int   hovered;
+    int   item_h, sep_h, pad_x, width;
+    // Submenu state
+    int   sub_open;    // MENU_ID of open submenu, -1 = none
+    int   sub_x, sub_y, sub_w, sub_h;
+    int   sub_hovered;
 };
 
 static ContextMenu g_menu = {};
@@ -793,14 +986,35 @@ static int menu_hit(ContextMenu *m, int px, int py) {
 
 static void menu_open(ContextMenu *m, int x, int y, int win_w, int win_h) {
     menu_layout(m, g_font_size);
-    m->visible = true;
-    m->hovered = -1;
-    // Clamp to window
+    m->visible   = true;
+    m->hovered   = -1;
+    m->sub_open  = -1;
+    m->sub_hovered = -1;
     int th = menu_total_height(m);
     m->x = SDL_min(x, win_w - m->width - 2);
     m->y = SDL_min(y, win_h - th - 2);
     if (m->x < 0) m->x = 0;
     if (m->y < 0) m->y = 0;
+}
+
+// Returns which sub-item is hit in the open submenu, or -1
+static int submenu_hit(ContextMenu *m, int px, int py) {
+    if (m->sub_open < 0) return -1;
+    if (px < m->sub_x || px > m->sub_x + m->sub_w) return -1;
+    if (py < m->sub_y || py > m->sub_y + m->sub_h) return -1;
+    int count = (m->sub_open == MENU_ID_THEMES) ? THEME_COUNT : OPACITY_COUNT;
+    int idx = (py - m->sub_y) / m->item_h;
+    if (idx < 0 || idx >= count) return -1;
+    return idx;
+}
+
+static void draw_menu_panel(float mx, float my, float mw, float mh) {
+    draw_rect(mx+3, my+3, mw, mh, 0,0,0, 0.35f);                          // shadow
+    draw_rect(mx, my, mw, mh, 0.13f, 0.13f, 0.16f, 0.96f);               // bg
+    draw_rect(mx, my, mw, 1, 0.35f,0.35f,0.45f, 1.f);                    // border top
+    draw_rect(mx, my+mh-1, mw, 1, 0.35f,0.35f,0.45f, 1.f);              // border bot
+    draw_rect(mx, my, 1, mh, 0.35f,0.35f,0.45f, 1.f);                   // border left
+    draw_rect(mx+mw-1, my, 1, mh, 0.35f,0.35f,0.45f, 1.f);             // border right
 }
 
 static void menu_render(ContextMenu *m) {
@@ -810,36 +1024,65 @@ static void menu_render(ContextMenu *m) {
     float mx = (float)m->x, my = (float)m->y;
     float mw = (float)m->width;
 
-    // Shadow
-    draw_rect(mx+3, my+3, mw, (float)th, 0,0,0, 0.4f);
-    // Background
-    draw_rect(mx, my, mw, (float)th, 0.13f, 0.13f, 0.16f, 0.97f);
-    // Border
-    draw_rect(mx,      my,            mw,    1, 0.35f,0.35f,0.4f, 1.f);
-    draw_rect(mx,      my+(float)th-1, mw,   1, 0.35f,0.35f,0.4f, 1.f);
-    draw_rect(mx,      my,            1, (float)th, 0.35f,0.35f,0.4f, 1.f);
-    draw_rect(mx+mw-1, my,            1, (float)th, 0.35f,0.35f,0.4f, 1.f);
+    draw_menu_panel(mx, my, mw, (float)th);
 
     float y = my + 4;
     for (int i = 0; i < MENU_COUNT; i++) {
         if (MENU_ITEMS[i].separator) {
-            float sy = y + m->sep_h * 0.5f;
-            draw_rect(mx+4, sy, mw-8, 1, 0.35f,0.35f,0.4f, 1.f);
+            draw_rect(mx+4, y + m->sep_h*0.5f, mw-8, 1, 0.35f,0.35f,0.45f, 1.f);
             y += m->sep_h;
             continue;
         }
         float ih = (float)m->item_h;
-        // Hover highlight
-        if (i == m->hovered)
+        bool hov = (i == m->hovered);
+        bool is_sub = (i == MENU_ID_THEMES || i == MENU_ID_OPACITY);
+        bool sub_open = (m->sub_open == i);
+
+        if (hov || sub_open)
             draw_rect(mx+2, y, mw-4, ih, 0.25f, 0.45f, 0.85f, 0.85f);
 
-        // Label
-        float text_y = y + ih * 0.72f;
-        float tr = 0.88f, tg = 0.88f, tb = 0.92f;
-        if (i == m->hovered) { tr = tg = tb = 1.f; }
-        draw_text(MENU_ITEMS[i].label, mx + m->pad_x, text_y,
+        float tr = (hov || sub_open) ? 1.f : 0.88f;
+        float tg = (hov || sub_open) ? 1.f : 0.88f;
+        float tb = (hov || sub_open) ? 1.f : 0.92f;
+        draw_text(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f,
                   g_font_size, tr, tg, tb, 1.f);
+
         y += ih;
+    }
+
+    // ── Draw submenu ──────────────────────────────────────────────────────────
+    if (m->sub_open == MENU_ID_THEMES || m->sub_open == MENU_ID_OPACITY) {
+        int count   = (m->sub_open == MENU_ID_THEMES) ? THEME_COUNT : OPACITY_COUNT;
+        float sw    = (float)(m->width + (int)(g_font_size * 2));
+        float sh    = (float)(count * m->item_h + 8);
+        float sx    = (float)m->sub_x;
+        float sy    = (float)m->sub_y;
+        m->sub_w    = (int)sw; m->sub_h = (int)sh;
+
+        draw_menu_panel(sx, sy, sw, sh);
+
+        for (int j = 0; j < count; j++) {
+            const char *lbl = (m->sub_open == MENU_ID_THEMES)
+                              ? THEMES[j].name : OPACITY_NAMES[j];
+            float iy = sy + 4 + j * m->item_h;
+            float ih = (float)m->item_h;
+            bool  hov = (j == m->sub_hovered);
+            bool  active = (m->sub_open == MENU_ID_THEMES)
+                           ? (j == g_theme_idx)
+                           : (fabsf(OPACITY_LEVELS[j]-g_opacity)<0.01f);
+
+            if (hov)    draw_rect(sx+2, iy, sw-4, ih, 0.25f,0.45f,0.85f, 0.85f);
+            if (active && !hov) draw_rect(sx+2, iy, sw-4, ih, 0.2f,0.35f,0.6f, 0.6f);
+
+            float tr = hov ? 1.f : (active ? 0.7f : 0.88f);
+            float tg = hov ? 1.f : (active ? 0.9f : 0.88f);
+            float tb = hov ? 1.f : (active ? 1.0f : 0.92f);
+            if (active) {
+                draw_text("\xe2\x9c\x93", sx + 4, iy + ih*0.72f, g_font_size, 0.4f,0.8f,0.4f,1.f);
+            }
+            draw_text(lbl, sx + m->pad_x + g_font_size, iy + ih*0.72f,
+                      g_font_size, tr, tg, tb, 1.f);
+        }
     }
 }
 
@@ -959,7 +1202,7 @@ static void term_resize(Terminal *t, int win_w, int win_h) {
     // Allocate new grid and copy as much content as fits
     Cell *new_cells = (Cell*)malloc(sizeof(Cell) * new_cols * new_rows);
     for (int i = 0; i < new_cols * new_rows; i++)
-        new_cells[i] = {' ', t->cur_fg, t->cur_bg, 0, 0};
+        new_cells[i] = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
 
     int copy_rows = (t->rows < new_rows) ? t->rows : new_rows;
     int copy_cols = (t->cols < new_cols) ? t->cols : new_cols;
@@ -969,6 +1212,9 @@ static void term_resize(Terminal *t, int win_w, int win_h) {
 
     free(t->cells);
     t->cells = new_cells;
+
+    // Discard alt screen buffer on resize (simpler than trying to reflow it)
+    if (t->alt_cells) { free(t->alt_cells); t->alt_cells = nullptr; t->in_alt_screen = false; }
     t->cols  = new_cols;
     t->rows  = new_rows;
 
@@ -1062,24 +1308,26 @@ int main(int argc, char **argv) {
 
     SDL_Init(SDL_INIT_VIDEO);
 
-    // We'll size the window to fit exactly 80x24 cells at our font size
-    // We calculate after ft_init, so use a placeholder first
-    int win_w = 800, win_h = 480;
+    // GL attributes MUST be set before SDL_CreateWindow
+    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
+    int win_w = 800, win_h = 480;
     SDL_Window *window = SDL_CreateWindow(
         WIN_TITLE,
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         win_w, win_h,
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
     );
-
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
     SDL_GL_MakeCurrent(window, ctx);
     SDL_GL_SetSwapInterval(1);
+
+    // Init theme (must be after globals are set up)
+    apply_theme(0);
 
     ft_init();
 
@@ -1103,8 +1351,19 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Give bash ~150ms to write its prompt before the first render
-    SDL_Delay(150);
+    // Give bash ~200ms to write its prompt
+    SDL_Delay(200);
+    term_read(&term);
+    // Clear any garbage that arrived during init (e.g. from .bashrc sequences)
+    // without sending reset to the shell — just wipe our grid and home the cursor
+    for (int i = 0; i < term.rows * term.cols; i++)
+        term.cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+    term.cur_row = term.cur_col = 0;
+    term.scroll_top = 0; term.scroll_bot = term.rows - 1;
+    term.state = PS_NORMAL;
+    // Now ask bash to redraw its prompt
+    term_write(&term, "\n", 1);
+    SDL_Delay(100);
     term_read(&term);
 
     uint32_t last_ticks = SDL_GetTicks();
@@ -1177,25 +1436,36 @@ int main(int argc, char **argv) {
                     SDL_Log("[Menu] opened at %d,%d visible=%d\n", g_menu.x, g_menu.y, g_menu.visible);
                 } else if (ev.button.button == SDL_BUTTON_LEFT) {
                     if (g_menu.visible) {
-                        // Handle menu click
-                        int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
-                        g_menu.visible = false;
-                        switch (hit) {
-                        case 0: action_new_terminal(); break;          // New Terminal
-                        case 2: term_copy_selection(&term); break;     // Copy
-                        case 3: term_paste(&term); break;              // Paste
-                        case 5: {                                       // Reset
-                            for(int r=0;r<term.rows;r++)
-                                for(int c=0;c<term.cols;c++)
-                                    CELL(&term,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
-                            term.cur_row=term.cur_col=0;
-                            term.scroll_top=0; term.scroll_bot=term.rows-1;
-                            term.state=PS_NORMAL;
-                            term_write(&term, "reset\n", 6);
-                            break;
-                        }
-                        case 7: running = false; break;                // Quit
-                        default: break;
+                        int sub_hit = submenu_hit(&g_menu, ev.button.x, ev.button.y);
+                        if (sub_hit >= 0) {
+                            if (g_menu.sub_open == MENU_ID_THEMES)       apply_theme(sub_hit);
+                            else if (g_menu.sub_open == MENU_ID_OPACITY) {
+                                g_opacity = OPACITY_LEVELS[sub_hit];
+                                SDL_SetWindowOpacity(window, g_opacity);
+                            }
+                            g_menu.visible = false;
+                        } else {
+                            int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
+                            bool is_sub_parent = (hit==MENU_ID_THEMES||hit==MENU_ID_OPACITY);
+                            if (!is_sub_parent) g_menu.visible = false;
+                            switch (hit) {
+                            case MENU_ID_NEW_TERMINAL: action_new_terminal(); break;
+                            case MENU_ID_COPY:   term_copy_selection(&term); break;
+                            case MENU_ID_PASTE:  term_paste(&term); break;
+                            case MENU_ID_RESET:
+                                for(int r=0;r<term.rows;r++)
+                                    for(int c=0;c<term.cols;c++)
+                                        CELL(&term,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
+                                term.cur_row=term.cur_col=0;
+                                term.scroll_top=0; term.scroll_bot=term.rows-1;
+                                term.state=PS_NORMAL;
+                                term_write(&term,"reset\n",6);
+                                break;
+                            case MENU_ID_QUIT: running = false; break;
+                            default:
+                                if (hit < 0) g_menu.visible = false;
+                                break;
+                            }
                         }
                     } else {
                         int r, c;
@@ -1212,7 +1482,33 @@ int main(int argc, char **argv) {
                 break;
             case SDL_MOUSEMOTION:
                 if (g_menu.visible) {
-                    g_menu.hovered = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
+                    int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
+                    if (hit >= 0) g_menu.hovered = hit;
+                    // Open submenu on hover over submenu items
+                    if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY) {
+                        if (g_menu.sub_open != hit) {
+                            g_menu.sub_open = hit;
+                            g_menu.sub_hovered = -1;
+                            // Position submenu to the right of parent
+                            g_menu.sub_x = g_menu.x + g_menu.width + 2;
+                            // Align vertically with hovered item
+                            int item_y = g_menu.y + 4;
+                            for (int i=0;i<hit;i++)
+                                item_y += MENU_ITEMS[i].separator ? g_menu.sep_h : g_menu.item_h;
+                            g_menu.sub_y = item_y;
+                            // Clamp right edge
+                            int count = (hit==MENU_ID_THEMES)?THEME_COUNT:OPACITY_COUNT;
+                            int sw = g_menu.width + g_font_size*2;
+                            int sh = count * g_menu.item_h + 8;
+                            SDL_GetWindowSize(window, &win_w, &win_h);
+                            if (g_menu.sub_x + sw > win_w) g_menu.sub_x = g_menu.x - sw - 2;
+                            if (g_menu.sub_y + sh > win_h) g_menu.sub_y = win_h - sh - 2;
+                        }
+                    } else if (hit >= 0) {
+                        g_menu.sub_open = -1;
+                    }
+                    // Track submenu hover
+                    g_menu.sub_hovered = submenu_hit(&g_menu, ev.motion.x, ev.motion.y);
                 } else if (term.sel_active && (ev.motion.state & SDL_BUTTON_LMASK)) {
                     pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2,
                                   &term.sel_end_row, &term.sel_end_col);
@@ -1258,7 +1554,11 @@ int main(int argc, char **argv) {
         }
 
         // Render
-        glClearColor(0.04f, 0.04f, 0.08f, 1.f);
+        glClearColor(
+            THEMES[g_theme_idx].bg_r,
+            THEMES[g_theme_idx].bg_g,
+            THEMES[g_theme_idx].bg_b,
+            g_opacity);
         glClear(GL_COLOR_BUFFER_BIT);
 
         glViewport(0, 0, win_w, win_h);
