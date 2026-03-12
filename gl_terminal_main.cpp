@@ -151,10 +151,17 @@ static FT_Face    s_emoji_face = NULL;
 
 // Common system emoji font paths to try, in order
 static const char *EMOJI_FONT_PATHS[] = {
+    // Fedora / RHEL — outline emoji (COLRv1 needs Skia/Cairo, skip it)
+    "/usr/share/fonts/google-noto-emoji-fonts/NotoEmoji-Regular.ttf",
+    // Debian / Ubuntu
     "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-    "/usr/share/fonts/noto/NotoColorEmoji.ttf",
     "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+    // Arch
+    "/usr/share/fonts/noto/NotoColorEmoji.ttf",
     "/usr/share/fonts/noto-emoji/NotoEmoji-Regular.ttf",
+    // Fedora COLRv1 last resort
+    "/usr/share/fonts/google-noto-color-emoji-fonts/Noto-COLRv1.ttf",
+    // macOS
     "/System/Library/Fonts/Apple Color Emoji.ttc",
     nullptr
 };
@@ -173,14 +180,45 @@ static void ft_init(void) {
     SDL_Log("[Font] loaded: %s %s\n", s_ft_face->family_name, s_ft_face->style_name);
 
     // Try to load an emoji font from common system paths
-    for (int i = 0; EMOJI_FONT_PATHS[i]; i++) {
-        if (FT_New_Face(s_ft_lib, EMOJI_FONT_PATHS[i], 0, &s_emoji_face) == 0) {
+    // Try hardcoded paths first, then fall back to fc-match
+    for (int i = 0; EMOJI_FONT_PATHS[i] && !s_emoji_face; i++) {
+        FT_Error err = FT_New_Face(s_ft_lib, EMOJI_FONT_PATHS[i], 0, &s_emoji_face);
+        if (err == 0) {
             SDL_Log("[Font] emoji font: %s\n", EMOJI_FONT_PATHS[i]);
-            break;
+        } else {
+            SDL_Log("[Font] FT_New_Face('%s') failed err=0x%02x\n", EMOJI_FONT_PATHS[i], err);
+            s_emoji_face = nullptr;
+        }
+    }
+    if (!s_emoji_face) {
+        // Try fc-match as a last resort
+        FILE *fp = popen("fc-match --format='%{file}' emoji 2>/dev/null", "r");
+        if (fp) {
+            char path[512] = {};
+            if (fgets(path, sizeof(path)-1, fp)) {
+                // strip trailing newline
+                int len = strlen(path);
+                while (len > 0 && (path[len-1]=='\n'||path[len-1]=='\r')) path[--len]='\0';
+                FT_Error err = FT_New_Face(s_ft_lib, path, 0, &s_emoji_face);
+                if (err == 0)
+                    SDL_Log("[Font] emoji font (fc-match): %s\n", path);
+                else {
+                    SDL_Log("[Font] FT_New_Face('%s') failed err=0x%02x\n", path, err);
+                    s_emoji_face = nullptr;
+                }
+            }
+            pclose(fp);
         }
     }
     if (!s_emoji_face)
         SDL_Log("[Font] no emoji font found — emoji will render as boxes\n");
+    else {
+        SDL_Log("[Font] emoji face fixed sizes: %d\n", s_emoji_face->num_fixed_sizes);
+        for (int i = 0; i < s_emoji_face->num_fixed_sizes; i++)
+            SDL_Log("[Font]   strike[%d]: w=%d h=%d\n", i,
+                    s_emoji_face->available_sizes[i].width,
+                    s_emoji_face->available_sizes[i].height);
+    }
 }
 
 // Decode a single UTF-8 sequence, return codepoint, advance *p
@@ -236,13 +274,42 @@ static float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
     if (face->num_fixed_sizes > 0) load_flags |= FT_LOAD_COLOR;
 
     FT_UInt gi = FT_Get_Char_Index(face, cp);
-    if (!gi) return 0.f;
-    if (FT_Load_Glyph(face, gi, load_flags)) return 0.f;
+    if (!gi) {
+        if (cp > 0x7F) SDL_Log("[Glyph] cp=U+%04X not in face '%s'\n", cp, face->family_name);
+        return 0.f;
+    }
+    int load_err = FT_Load_Glyph(face, gi, load_flags);
+    if (load_err) {
+        SDL_Log("[Glyph] cp=U+%04X FT_Load_Glyph failed err=%d flags=0x%x\n", cp, load_err, load_flags);
+        return 0.f;
+    }
 
     FT_GlyphSlot slot = face->glyph;
     FT_Bitmap *bm = &slot->bitmap;
-    float gx = cx + slot->bitmap_left * glyph_scale;
-    float gy = baseline_y - slot->bitmap_top * glyph_scale;
+
+    if (cp > 0x7F)
+        SDL_Log("[Glyph] cp=U+%04X face='%s' scale=%.3f bm=%dx%d pixel_mode=%d gx=%.1f gy=%.1f adv=%d\n",
+                cp, face->family_name, glyph_scale,
+                bm->width, bm->rows, bm->pixel_mode,
+                cx, baseline_y, (int)(slot->advance.x >> 6));
+
+    // COLRv1 / SVG glyphs load successfully but produce an empty bitmap —
+    // treat as not-found so the caller can try another face.
+    if (bm->width == 0 || bm->rows == 0) return 0.f;
+
+    float drawn_w = bm->width * glyph_scale;
+    float drawn_h = bm->rows  * glyph_scale;
+    float gx, gy;
+    if (face->num_fixed_sizes > 0) {
+        // For fixed-size (emoji) faces, center the scaled bitmap on the cell
+        // rather than trusting bitmap_left/top which are relative to the
+        // unscaled strike and produce out-of-cell positions when downscaled.
+        gx = cx + (font_px - drawn_w) * 0.5f;
+        gy = baseline_y - drawn_h;          // sit on the baseline
+    } else {
+        gx = cx + slot->bitmap_left;
+        gy = baseline_y - slot->bitmap_top;
+    }
 
     if (bm->pixel_mode == FT_PIXEL_MODE_BGRA) {
         // Color emoji (NotoColorEmoji etc) — 4 bytes per pixel: B, G, R, A
@@ -993,6 +1060,10 @@ static void term_feed(Terminal *t, const char *buf, int len) {
                 utf8_cp = 0; utf8_left = 0;
             }
             if (!ready_cp) continue; // wait for more bytes
+            // Full codepoint decoded — place it directly and move on
+            if (t->cur_col >= t->cols) { t->cur_col=0; newline(t); }
+            CELL(t,t->cur_row,t->cur_col++) = {ready_cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
+            continue;
         } else if (t->state == PS_NORMAL) {
             utf8_left = 0;
         }
@@ -1007,7 +1078,7 @@ static void term_feed(Terminal *t, const char *buf, int len) {
             else if (ch == 0x07) { /* BEL */ }
             else if (ch == 0x0e || ch == 0x0f) { /* charset shifts — ignore */ }
             else {
-                uint32_t cp = ready_cp ? ready_cp : (uint32_t)ch;
+                uint32_t cp = (uint32_t)ch;
                 if (cp >= 0x20) {
                     if (t->cur_col >= t->cols) { t->cur_col=0; newline(t); }
                     CELL(t,t->cur_row,t->cur_col++) = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
@@ -1365,6 +1436,9 @@ static void term_render(Terminal *t, int ox, int oy) {
                 char tmp[5] = {};
                 cp_to_utf8(cp, tmp);
                 float baseline = py + ch * 0.82f;
+                if (cp > 0x7F)
+                    SDL_Log("[Render] cell[%d,%d] cp=U+%04X px=%.1f py=%.1f baseline=%.1f\n",
+                            row, col, cp, px, py, baseline);
                 draw_text(tmp, px, baseline, g_font_size, fc.r, fc.g, fc.b, 1.f);
             }
 
