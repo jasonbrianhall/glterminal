@@ -36,8 +36,12 @@
 #define TERM_ROWS_DEFAULT  24
 #define TERM_MAX_COLS      512
 #define TERM_MAX_ROWS      256
-#define FONT_SIZE          16
+#define FONT_SIZE_DEFAULT  16
+#define FONT_SIZE_MIN      6
+#define FONT_SIZE_MAX     72
 #define WIN_TITLE       "GL Terminal"
+
+static int g_font_size = FONT_SIZE_DEFAULT;
 
 // ============================================================================
 // VERTEX / GL STATE  (same pattern as cometbuster_render_gl.cpp)
@@ -581,7 +585,7 @@ static void term_render(Terminal *t, int ox, int oy) {
             if (cp && cp != ' ') {
                 char tmp[2] = { (char)(cp & 0x7f), 0 };
                 float baseline = py + ch * 0.82f;
-                draw_text(tmp, px, baseline, FONT_SIZE, fc.r, fc.g, fc.b, 1.f);
+                draw_text(tmp, px, baseline, g_font_size, fc.r, fc.g, fc.b, 1.f);
             }
 
             // Underline
@@ -612,11 +616,11 @@ static void term_init(Terminal *t) {
 
     // Measure cell size from monospace '0' glyph
     if (s_ft_face) {
-        FT_Set_Pixel_Sizes(s_ft_face, 0, FONT_SIZE);
+        FT_Set_Pixel_Sizes(s_ft_face, 0, g_font_size);
         FT_UInt gi = FT_Get_Char_Index(s_ft_face, '0');
         if (!FT_Load_Glyph(s_ft_face, gi, FT_LOAD_DEFAULT)) {
             t->cell_w = (float)(s_ft_face->glyph->advance.x >> 6);
-            t->cell_h = (float)(int)(FONT_SIZE * 1.4f);
+            t->cell_h = (float)(int)(g_font_size * 1.4f);
         }
     }
     if (t->cell_w < 1) t->cell_w = 10;
@@ -674,6 +678,32 @@ static void term_resize(Terminal *t, int win_w, int win_h) {
     }
 
     SDL_Log("[Term] resized to %dx%d\n", new_cols, new_rows);
+}
+
+// Change font size, remeasure cells, reflow grid to fill the same window
+static void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h) {
+    if (new_size < FONT_SIZE_MIN) new_size = FONT_SIZE_MIN;
+    if (new_size > FONT_SIZE_MAX) new_size = FONT_SIZE_MAX;
+    if (new_size == g_font_size) return;
+
+    g_font_size = new_size;
+
+    // Remeasure cell from font
+    if (s_ft_face) {
+        FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)g_font_size);
+        FT_UInt gi = FT_Get_Char_Index(s_ft_face, '0');
+        if (!FT_Load_Glyph(s_ft_face, gi, FT_LOAD_DEFAULT)) {
+            t->cell_w = (float)(s_ft_face->glyph->advance.x >> 6);
+            t->cell_h = (float)(int)(g_font_size * 1.4f);
+        }
+    }
+    if (t->cell_w < 1) t->cell_w = 6;
+    if (t->cell_h < 1) t->cell_h = 8;
+
+    // Reflow grid to new cell size within same window
+    term_resize(t, win_w, win_h);
+    SDL_Log("[Term] font size %d, cell %.0fx%.0f, grid %dx%d\n",
+            g_font_size, t->cell_w, t->cell_h, t->cols, t->rows);
 }
 
 // ============================================================================
@@ -799,6 +829,20 @@ int main(int argc, char **argv) {
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL))
                     term_write(&term, ev.text.text, (int)strlen(ev.text.text));
+                break;
+            }
+            case SDL_MOUSEWHEEL: {
+                SDL_Keymod mod = SDL_GetModState();
+                if (mod & KMOD_CTRL) {
+                    // Ctrl+scroll: zoom font size
+                    int delta = (ev.wheel.y > 0) ? 1 : -1;
+                    // Shift held = bigger steps
+                    if (mod & KMOD_SHIFT) delta *= 4;
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    term_set_font_size(&term, g_font_size + delta, win_w, win_h);
+                    // Update projection in case cell count changed
+                    G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+                }
                 break;
             }
             case SDL_WINDOWEVENT:
