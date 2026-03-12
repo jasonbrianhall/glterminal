@@ -317,7 +317,7 @@ struct Cell {
     uint8_t     attrs, _pad[3];
 };
 
-typedef enum { PS_NORMAL, PS_ESC, PS_CSI, PS_OSC } ParseState;
+typedef enum { PS_NORMAL, PS_ESC, PS_CSI, PS_OSC, PS_CHARSET } ParseState;
 
 struct Terminal {
     Cell         *cells;
@@ -326,13 +326,15 @@ struct Terminal {
     TermColorVal  cur_fg, cur_bg;
     uint8_t       cur_attrs;
     ParseState    state;
-    char          csi[64];
+    char          csi[256];
     int           csi_len;
     int           pty_fd;
     pid_t         child;
     float         cell_w, cell_h;
     double      blink;
     bool        cursor_on;
+    // Scroll region (DECSTBM) — rows are 0-based inclusive
+    int         scroll_top, scroll_bot;   // default: 0, rows-1
     // Selection
     int         sel_start_row, sel_start_col;
     int         sel_end_row,   sel_end_col;
@@ -446,14 +448,28 @@ static void term_paste(Terminal *t) {
 // ============================================================================
 
 static void scroll_up(Terminal *t) {
-    memmove(&CELL(t,0,0), &CELL(t,1,0), sizeof(Cell)*t->cols*(t->rows-1));
-    for (int c = 0; c < t->cols; c++) {
-        CELL(t,t->rows-1,c) = {' ', t->cur_fg, t->cur_bg, 0, 0};
-    }
+    int top = t->scroll_top;
+    int bot = SDL_min(t->scroll_bot, t->rows - 1);
+    if (bot > top)
+        memmove(&CELL(t,top,0), &CELL(t,top+1,0), sizeof(Cell)*t->cols*(bot-top));
+    for (int c = 0; c < t->cols; c++)
+        CELL(t,bot,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
+}
+
+static void scroll_down(Terminal *t) {
+    int top = t->scroll_top;
+    int bot = SDL_min(t->scroll_bot, t->rows - 1);
+    if (bot > top)
+        memmove(&CELL(t,top+1,0), &CELL(t,top,0), sizeof(Cell)*t->cols*(bot-top));
+    for (int c = 0; c < t->cols; c++)
+        CELL(t,top,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
 }
 
 static void newline(Terminal *t) {
-    if (++t->cur_row >= t->rows) { t->cur_row = t->rows-1; scroll_up(t); }
+    int bot = SDL_min(t->scroll_bot, t->rows - 1);
+    if (t->cur_row < bot) { t->cur_row++; return; }
+    if (t->cur_row == bot) { scroll_up(t); return; }
+    if (t->cur_row < t->rows - 1) t->cur_row++;
 }
 
 static void sgr(Terminal *t, const char *p) {
@@ -552,6 +568,54 @@ static void dispatch_csi(Terminal *t) {
         break;
     }
     case 'h': case 'l': break; // mode sets — ignore
+    // VPA — vertical position absolute (row, 1-based)
+    case 'd': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_clamp(n-1,0,t->rows-1); break; }
+    // HPA — horizontal position absolute (col, 1-based) — same as G
+    case '`': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_clamp(n-1,0,t->cols-1); break; }
+    // DECSTBM — set scroll region
+    case 'r': {
+        int top=1, bot=t->rows; sscanf(p,"%d;%d",&top,&bot);
+        t->scroll_top = SDL_clamp(top-1, 0, t->rows-1);
+        t->scroll_bot = SDL_clamp(bot-1, 0, t->rows-1);
+        if (t->scroll_top >= t->scroll_bot) { t->scroll_top=0; t->scroll_bot=t->rows-1; }
+        t->cur_row = t->scroll_top; t->cur_col = 0; // cursor goes home
+        break;
+    }
+    // IL — insert lines
+    case 'L': {
+        int n=atoi(p); if(n<1)n=1;
+        int bot=SDL_min(t->scroll_bot,t->rows-1);
+        for(int i=0;i<n;i++) {
+            if(bot>t->cur_row)
+                memmove(&CELL(t,t->cur_row+1,0),&CELL(t,t->cur_row,0),sizeof(Cell)*t->cols*(bot-t->cur_row));
+            for(int c=0;c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+        }
+        break;
+    }
+    // DL — delete lines
+    case 'M': {
+        int n=atoi(p); if(n<1)n=1;
+        int bot=SDL_min(t->scroll_bot,t->rows-1);
+        for(int i=0;i<n;i++) {
+            if(bot>t->cur_row)
+                memmove(&CELL(t,t->cur_row,0),&CELL(t,t->cur_row+1,0),sizeof(Cell)*t->cols*(bot-t->cur_row));
+            for(int c=0;c<t->cols;c++) CELL(t,bot,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+        }
+        break;
+    }
+    // SU — scroll up N lines
+    case 'S': { int n=atoi(p); if(n<1)n=1; for(int i=0;i<n;i++) scroll_up(t); break; }
+    // SD — scroll down N lines
+    case 'T': { int n=atoi(p); if(n<1)n=1; for(int i=0;i<n;i++) scroll_down(t); break; }
+    // ECH — erase N chars at cursor
+    case 'X': { int n=atoi(p); if(n<1)n=1;
+        for(int c=t->cur_col;c<t->cur_col+n&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+        break; }
+    // ICH — insert N blank chars
+    case '@': { int n=atoi(p); if(n<1)n=1;
+        for(int c=t->cols-1;c>=t->cur_col+n;c--) CELL(t,t->cur_row,c)=CELL(t,t->cur_row,c-n);
+        for(int c=t->cur_col;c<t->cur_col+n&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+        break; }
     default: break;
     }
 }
@@ -578,34 +642,38 @@ static void term_feed(Terminal *t, const char *buf, int len) {
                 t->state=PS_CSI; t->csi_len=0; memset(t->csi,0,sizeof(t->csi));
             } else if (ch == ']') {
                 t->state=PS_OSC;
-            } else if (ch == '(' || ch == ')') {
-                // charset designator - consume one more byte then back to normal
-                // simplest: just go to a skip-one state; we reuse OSC for now
-                // Actually just skip: next byte is charset code, eat it via a flag
-                t->state=PS_NORMAL; // will eat next char as part of normal (harmless)
+            } else if (ch == '(' || ch == ')' || ch == '*' || ch == '+') {
+                // charset designator ESC ( X — skip the next byte (charset code)
+                t->state = PS_CHARSET;
             } else {
-                if (ch == 'c') {
+                if (ch == '=' || ch == '>') {
+                    // Application/normal keypad mode — ignore
+                } else if (ch == 'c') {
                     for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
                     t->cur_row=t->cur_col=0; t->cur_fg=7; t->cur_bg=0; t->cur_attrs=0;
                 } else if (ch == 'M') {
-                    if (t->cur_row > 0) { t->cur_row--; }
-                    else {
-                        memmove(&CELL(t,1,0), &CELL(t,0,0), sizeof(Cell)*t->cols*(t->rows-1));
-                        for(int c=0;c<t->cols;c++) CELL(t,0,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
-                    }
+                    // Reverse index — scroll down if at top of scroll region
+                    if (t->cur_row > t->scroll_top) { t->cur_row--; }
+                    else { scroll_down(t); }
                 }
                 t->state = PS_NORMAL;
             }
             break;
         case PS_CSI:
             if (ch >= 0x40 && ch <= 0x7e) {
-                if (t->csi_len < 62) t->csi[t->csi_len++] = (char)ch;
+                if (t->csi_len < (int)sizeof(t->csi)-1) t->csi[t->csi_len++] = (char)ch;
                 t->csi[t->csi_len] = '\0';
                 dispatch_csi(t);
                 t->state = PS_NORMAL; t->csi_len = 0;
+            } else if (ch >= 0x20 && ch < 0x40) {
+                if (t->csi_len < (int)sizeof(t->csi)-1) t->csi[t->csi_len++] = (char)ch;
             } else {
-                if (t->csi_len < 62) t->csi[t->csi_len++] = (char)ch;
+                t->state = PS_NORMAL; t->csi_len = 0;
             }
+            break;
+        case PS_CHARSET:
+            // Eat the charset code byte and return to normal
+            t->state = PS_NORMAL;
             break;
         case PS_OSC:
             // Consume everything until BEL (0x07) or ESC \ (ST)
@@ -784,6 +852,8 @@ static void term_resize(Terminal *t, int win_w, int win_h) {
         ioctl(t->pty_fd, TIOCSWINSZ, &ws);
     }
 
+    t->scroll_top = 0;
+    t->scroll_bot = new_rows - 1;
     SDL_Log("[Term] resized to %dx%d\n", new_cols, new_rows);
 }
 
