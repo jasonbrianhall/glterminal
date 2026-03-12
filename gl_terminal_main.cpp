@@ -333,10 +333,113 @@ struct Terminal {
     float         cell_w, cell_h;
     double      blink;
     bool        cursor_on;
+    // Selection
+    int         sel_start_row, sel_start_col;
+    int         sel_end_row,   sel_end_col;
+    bool        sel_active;    // mouse is down, selection in progress
+    bool        sel_exists;    // a completed selection exists
 };
 
 // Accessor macro - replaces CELL(t,r,c)
 #define CELL(t,r,c) ((t)->cells[(r)*(t)->cols+(c)])
+
+// Forward declaration for term_paste
+static void term_write(Terminal *t, const char *s, int n);
+
+// ============================================================================
+// SELECTION HELPERS
+// ============================================================================
+
+// Convert pixel coords to cell row/col, clamped to grid
+static void pixel_to_cell(Terminal *t, int px, int py, int ox, int oy,
+                           int *row, int *col) {
+    *col = (int)((px - ox) / t->cell_w);
+    *row = (int)((py - oy) / t->cell_h);
+    if (*col < 0) *col = 0;
+    if (*row < 0) *row = 0;
+    if (*col >= t->cols) *col = t->cols - 1;
+    if (*row >= t->rows) *row = t->rows - 1;
+}
+
+// Is cell (r,c) inside the current selection? (order-independent)
+static bool cell_in_sel(Terminal *t, int r, int c) {
+    if (!t->sel_exists && !t->sel_active) return false;
+    int r0 = t->sel_start_row, c0 = t->sel_start_col;
+    int r1 = t->sel_end_row,   c1 = t->sel_end_col;
+    // Normalise so r0,c0 <= r1,c1
+    if (r0 > r1 || (r0 == r1 && c0 > c1)) {
+        int tr=r0,tc=c0; r0=r1;c0=c1;r1=tr;c1=tc;
+    }
+    if (r < r0 || r > r1) return false;
+    if (r == r0 && c < c0) return false;
+    if (r == r1 && c > c1) return false;
+    return true;
+}
+
+// Copy selection to clipboard
+static void term_copy_selection(Terminal *t) {
+    if (!t->sel_exists && !t->sel_active) return;
+
+    int r0 = t->sel_start_row, c0 = t->sel_start_col;
+    int r1 = t->sel_end_row,   c1 = t->sel_end_col;
+    if (r0 > r1 || (r0 == r1 && c0 > c1)) {
+        int tr=r0,tc=c0; r0=r1;c0=c1;r1=tr;c1=tc;
+    }
+
+    // Worst case: every cell is one UTF-8 char + newline per row
+    int bufsize = (r1 - r0 + 1) * (t->cols + 1) + 1;
+    char *buf = (char*)malloc(bufsize);
+    int pos = 0;
+
+    for (int r = r0; r <= r1; r++) {
+        int cs = (r == r0) ? c0 : 0;
+        int ce = (r == r1) ? c1 : t->cols - 1;
+
+        // Find last non-space on this line segment for trimming
+        int last_nonspace = cs - 1;
+        for (int c = cs; c <= ce; c++) {
+            uint32_t cp = CELL(t,r,c).cp;
+            if (cp && cp != ' ') last_nonspace = c;
+        }
+
+        for (int c = cs; c <= last_nonspace; c++) {
+            uint32_t cp = CELL(t,r,c).cp;
+            if (!cp) cp = ' ';
+            // Encode as UTF-8
+            if (cp < 0x80) {
+                buf[pos++] = (char)cp;
+            } else if (cp < 0x800) {
+                buf[pos++] = (char)(0xC0 | (cp>>6));
+                buf[pos++] = (char)(0x80 | (cp&0x3F));
+            } else if (cp < 0x10000) {
+                buf[pos++] = (char)(0xE0 | (cp>>12));
+                buf[pos++] = (char)(0x80 | ((cp>>6)&0x3F));
+                buf[pos++] = (char)(0x80 | (cp&0x3F));
+            } else {
+                buf[pos++] = (char)(0xF0 | (cp>>18));
+                buf[pos++] = (char)(0x80 | ((cp>>12)&0x3F));
+                buf[pos++] = (char)(0x80 | ((cp>>6)&0x3F));
+                buf[pos++] = (char)(0x80 | (cp&0x3F));
+            }
+        }
+        if (r < r1) buf[pos++] = '\n';
+    }
+    buf[pos] = '\0';
+    SDL_SetClipboardText(buf);
+    free(buf);
+    SDL_Log("[Term] copied %d chars to clipboard\n", pos);
+}
+
+// Paste clipboard contents to PTY
+static void term_paste(Terminal *t) {
+    if (!SDL_HasClipboardText()) return;
+    char *text = SDL_GetClipboardText();
+    if (text && text[0]) {
+        // Send bracketed paste if we wanted to, but plain paste is fine for VT100
+        term_write(t, text, (int)strlen(text));
+    }
+    SDL_free(text);
+}
 
 // ============================================================================
 // PARSER
@@ -577,8 +680,12 @@ static void term_render(Terminal *t, int ox, int oy) {
             if ((c->attrs & ATTR_BOLD) && !TCOLOR_IS_RGB(fg) && TCOLOR_IDX(fg) < 8)
                 fc = tcolor_resolve(TCOLOR_PALETTE(TCOLOR_IDX(fg)+8));
 
-            // Background
-            draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, 1.f);
+            // Background (highlight if selected)
+            if (cell_in_sel(t, row, col)) {
+                draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
+            } else {
+                draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, 1.f);
+            }
 
             // Glyph
             uint32_t cp = c->cp;
@@ -807,8 +914,17 @@ int main(int argc, char **argv) {
         term.blink += dt;
         if (term.blink >= 0.5) { term.blink = 0; term.cursor_on = !term.cursor_on; }
 
-        // Read PTY
-        term_read(&term);
+        // Read PTY (clears selection if output arrives)
+        {
+            bool had_sel = term.sel_exists || term.sel_active;
+            int old_row = term.cur_row, old_col = term.cur_col;
+            term_read(&term);
+            // If cursor moved, new output arrived — clear selection
+            if (had_sel && (term.cur_row != old_row || term.cur_col != old_col)) {
+                term.sel_exists = false;
+                term.sel_active = false;
+            }
+        }
 
         // Check if child exited
         int status;
@@ -822,15 +938,63 @@ int main(int argc, char **argv) {
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
             case SDL_QUIT: running = false; break;
-            case SDL_KEYDOWN:
+            case SDL_KEYDOWN: {
+                SDL_Keymod mod = SDL_GetModState();
+                if (mod & KMOD_CTRL) {
+                    if (ev.key.keysym.sym == SDLK_c && term.sel_exists) {
+                        // Ctrl+C with selection = copy (no SIGINT)
+                        term_copy_selection(&term);
+                        break;
+                    }
+                    if (ev.key.keysym.sym == SDLK_v) {
+                        term_paste(&term);
+                        break;
+                    }
+                    if (ev.key.keysym.sym == SDLK_LSHIFT ||
+                        ev.key.keysym.sym == SDLK_RSHIFT) break;
+                }
                 handle_key(&term, ev.key.keysym, NULL);
                 break;
+            }
             case SDL_TEXTINPUT: {
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL))
                     term_write(&term, ev.text.text, (int)strlen(ev.text.text));
                 break;
             }
+            // Mouse selection
+            case SDL_MOUSEBUTTONDOWN:
+                if (ev.button.button == SDL_BUTTON_LEFT) {
+                    int r, c;
+                    pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
+                    term.sel_start_row = term.sel_end_row = r;
+                    term.sel_start_col = term.sel_end_col = c;
+                    term.sel_active = true;
+                    term.sel_exists = false;
+                } else if (ev.button.button == SDL_BUTTON_MIDDLE) {
+                    // Middle-click paste
+                    term_paste(&term);
+                }
+                break;
+            case SDL_MOUSEMOTION:
+                if (term.sel_active && (ev.motion.state & SDL_BUTTON_LMASK)) {
+                    pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2,
+                                  &term.sel_end_row, &term.sel_end_col);
+                    term.sel_exists = true;
+                }
+                break;
+            case SDL_MOUSEBUTTONUP:
+                if (ev.button.button == SDL_BUTTON_LEFT && term.sel_active) {
+                    pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2,
+                                  &term.sel_end_row, &term.sel_end_col);
+                    term.sel_active = false;
+                    // Only keep selection if user actually dragged
+                    bool same = (term.sel_start_row == term.sel_end_row &&
+                                 term.sel_start_col == term.sel_end_col);
+                    term.sel_exists = !same;
+                    if (term.sel_exists) term_copy_selection(&term); // auto-copy on release
+                }
+                break;
             case SDL_MOUSEWHEEL: {
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
