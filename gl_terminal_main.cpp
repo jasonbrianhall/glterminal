@@ -455,11 +455,19 @@ struct Terminal {
     ParseState    state;
     char          csi[256];
     int           csi_len;
+    char          osc[512];
+    int           osc_len;
     int           pty_fd;
     pid_t         child;
     float         cell_w, cell_h;
     double      blink;
-    bool        cursor_on;
+    double      cursor_blink;          // independent cursor blink accumulator
+    bool        cursor_on;             // cursor blink visibility
+    bool        cursor_blink_enabled;  // false = always on
+    int         cursor_shape;          // 0=block, 1=underline bar, 2=beam
+    bool        autowrap;              // DECSET ?7 — default on
+    bool        mouse_report;          // DECSET ?1000
+    bool        bracketed_paste;       // DECSET ?2004
     // Scroll region (DECSTBM) — rows are 0-based inclusive
     int         scroll_top, scroll_bot;
     // Alternate screen buffer (for ?1049h/l)
@@ -576,8 +584,9 @@ static void term_paste(Terminal *t) {
     if (!SDL_HasClipboardText()) return;
     char *text = SDL_GetClipboardText();
     if (text && text[0]) {
-        // Send bracketed paste if we wanted to, but plain paste is fine for VT100
+        if (t->bracketed_paste) term_write(t, "\x1b[200~", 6);
         term_write(t, text, (int)strlen(text));
+        if (t->bracketed_paste) term_write(t, "\x1b[201~", 6);
     }
     SDL_free(text);
 }
@@ -972,10 +981,56 @@ static void dispatch_csi(Terminal *t) {
                     t->scroll_top = 0; t->scroll_bot = t->rows - 1;
                     t->in_alt_screen = false;
                 }
+            } else if (mode == 25) {
+                // DECTCEM — cursor visible/hidden
+                if (!set) { t->cursor_on = false; t->cursor_blink_enabled = false; }
+                else       { t->cursor_on = true;  t->cursor_blink_enabled = true;  }
+            } else if (mode == 12) {
+                // Cursor blink on/off
+                t->cursor_blink_enabled = set;
+                if (!set) t->cursor_on = true;
+            } else if (mode == 7) {
+                // DECAWM — auto-wrap
+                t->autowrap = set;
+            } else if (mode == 1000) {
+                // X10/Normal mouse reporting
+                t->mouse_report = set;
+            } else if (mode == 2004) {
+                // Bracketed paste
+                t->bracketed_paste = set;
             }
-            // ?25h/l — cursor show/hide (we always show, just ignore)
-            // ?7h/l  — auto-wrap (always on)
-            // ?2004h/l — bracketed paste (ignore)
+        }
+        break;
+    }
+    // DECSCUSR — set cursor style: CSI Ps SP q
+    // Ps: 0,1=blinking block  2=steady block  3=blinking underline
+    //     4=steady underline   5=blinking beam  6=steady beam
+    case 'q': {
+        int plen = (int)strlen(p);
+        if (plen > 0 && p[plen-1] == ' ') {
+            int ps = atoi(p);
+            t->cursor_blink_enabled = (ps == 0 || ps == 1 || ps == 3 || ps == 5);
+            if (ps == 0 || ps == 1 || ps == 2) t->cursor_shape = 0;       // block
+            else if (ps == 3 || ps == 4)        t->cursor_shape = 1;       // underline
+            else if (ps == 5 || ps == 6)        t->cursor_shape = 2;       // beam
+            if (!t->cursor_blink_enabled) t->cursor_on = true;
+        }
+        break;
+    }
+    // Soft reset: CSI ! p
+    case 'p': {
+        if (p[0] == '!') {
+            // DECSTR — soft reset
+            t->cur_attrs        = 0;
+            t->cur_fg           = TCOLOR_PALETTE(7);
+            t->cur_bg           = TCOLOR_PALETTE(0);
+            t->scroll_top       = 0;
+            t->scroll_bot       = t->rows - 1;
+            t->autowrap         = true;
+            t->cursor_blink_enabled = true;
+            t->cursor_on        = true;
+            t->mouse_report     = false;
+            t->bracketed_paste  = false;
         }
         break;
     }
@@ -1059,7 +1114,10 @@ static void term_feed(Terminal *t, const char *buf, int len) {
             }
             if (!ready_cp) continue; // wait for more bytes
             // Full codepoint decoded — place it directly and move on
-            if (t->cur_col >= t->cols) { t->cur_col=0; newline(t); }
+            if (t->cur_col >= t->cols) {
+                if (t->autowrap) { t->cur_col=0; newline(t); }
+                else t->cur_col = t->cols - 1;
+            }
             CELL(t,t->cur_row,t->cur_col++) = {ready_cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
             continue;
         } else if (t->state == PS_NORMAL) {
@@ -1078,7 +1136,10 @@ static void term_feed(Terminal *t, const char *buf, int len) {
             else {
                 uint32_t cp = (uint32_t)ch;
                 if (cp >= 0x20) {
-                    if (t->cur_col >= t->cols) { t->cur_col=0; newline(t); }
+                    if (t->cur_col >= t->cols) {
+                        if (t->autowrap) { t->cur_col=0; newline(t); }
+                        else t->cur_col = t->cols - 1;
+                    }
                     CELL(t,t->cur_row,t->cur_col++) = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
                 }
             }
@@ -1122,9 +1183,26 @@ static void term_feed(Terminal *t, const char *buf, int len) {
             t->state = PS_NORMAL;
             break;
         case PS_OSC:
-            // Consume everything until BEL (0x07) or ESC \ (ST)
-            if (ch == 0x07) { t->state = PS_NORMAL; }
-            else if (ch == 0x1b) { t->state = PS_ESC; } // ESC \ sequence
+            // Accumulate OSC payload until BEL or ST (ESC \)
+            if (ch == 0x07 || ch == 0x1b) {
+                t->osc[t->osc_len] = '\0';
+                // Parse: "Ps;Pt"  — Ps 0,1,2 = set icon+title / icon / title
+                const char *semi = strchr(t->osc, ';');
+                if (semi) {
+                    int ps = atoi(t->osc);
+                    if (ps == 0 || ps == 2) {
+                        // Set window title
+                        extern SDL_Window *g_sdl_window;
+                        if (g_sdl_window)
+                            SDL_SetWindowTitle(g_sdl_window, semi + 1);
+                    }
+                }
+                t->osc_len = 0;
+                t->state = (ch == 0x1b) ? PS_ESC : PS_NORMAL;
+            } else {
+                if (t->osc_len < (int)sizeof(t->osc) - 1)
+                    t->osc[t->osc_len++] = (char)ch;
+            }
             break;
         }
     }
@@ -1441,7 +1519,7 @@ static void term_render(Terminal *t, int ox, int oy) {
                 draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
             }
 
-            if (c->attrs & ATTR_UNDERLINE)
+            if ((c->attrs & ATTR_UNDERLINE) && !blink_hidden)
                 draw_rect(px, py+ch-2, cw, 2, fc.r, fc.g, fc.b, 1.f);
         }
     }
@@ -1450,7 +1528,17 @@ static void term_render(Terminal *t, int ox, int oy) {
     if (!scrolled && t->cursor_on) {
         float cx = ox + t->cur_col * cw;
         float cy = oy + t->cur_row * ch;
-        draw_rect(cx, cy+ch-3, cw, 3, 1,1,1, 0.85f);
+        switch (t->cursor_shape) {
+        case 0: // block
+            draw_rect(cx, cy, cw, ch, 1,1,1, 0.3f);
+            break;
+        case 2: // beam (1px left edge)
+            draw_rect(cx, cy, 2, ch, 1,1,1, 0.85f);
+            break;
+        default: // 1 = underline bar (original)
+            draw_rect(cx, cy+ch-3, cw, 3, 1,1,1, 0.85f);
+            break;
+        }
     }
 
     // Scrollbar on right edge when scrolled
@@ -1477,7 +1565,13 @@ static void term_init(Terminal *t) {
     t->pty_fd    = -1;
     t->child     = -1;
     t->state     = PS_NORMAL;
-    t->cursor_on = true;
+    t->cursor_on            = true;
+    t->cursor_blink_enabled = true;
+    t->cursor_shape         = 1;   // underline bar (original behaviour)
+    t->autowrap             = true;
+    t->mouse_report         = false;
+    t->bracketed_paste      = false;
+    t->osc_len              = 0;
 
     // Measure cell size from monospace '0' glyph
     if (s_ft_face) {
@@ -1627,6 +1721,8 @@ static void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
 // MAIN
 // ============================================================================
 
+SDL_Window *g_sdl_window = nullptr;  // exposed for OSC window title
+
 int main(int argc, char **argv) {
     const char *shell = (argc > 1) ? argv[1] : "/bin/bash";
 
@@ -1646,6 +1742,7 @@ int main(int argc, char **argv) {
         win_w, win_h,
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
     );
+    g_sdl_window = window;
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
     SDL_GL_MakeCurrent(window, ctx);
     SDL_GL_SetSwapInterval(1);
@@ -1702,13 +1799,22 @@ int main(int argc, char **argv) {
 
         bool needs_render = false;
 
-        // Cursor + text blink (same 500ms period)
+        // Text blink (500ms)
         term.blink += dt;
         if (term.blink >= 0.5) {
             term.blink = 0;
-            term.cursor_on    = !term.cursor_on;
-            g_blink_text_on   = !g_blink_text_on;
+            g_blink_text_on = !g_blink_text_on;
             needs_render = true;
+        }
+
+        // Cursor blink (independent 600ms period)
+        if (term.cursor_blink_enabled) {
+            term.cursor_blink += dt;
+            if (term.cursor_blink >= 0.6) {
+                term.cursor_blink = 0;
+                term.cursor_on    = !term.cursor_on;
+                needs_render = true;
+            }
         }
 
         // Read PTY (clears selection if output arrives)
@@ -1797,6 +1903,17 @@ int main(int argc, char **argv) {
                     menu_open(&g_menu, ev.button.x, ev.button.y, win_w, win_h);
                     SDL_Log("[Menu] opened at %d,%d visible=%d\n", g_menu.x, g_menu.y, g_menu.visible);
                 } else if (ev.button.button == SDL_BUTTON_LEFT) {
+                    // Mouse reporting
+                    if (term.mouse_report && !g_menu.visible) {
+                        int r, c;
+                        pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
+                        char seq[32];
+                        int btn = 0; // left=0
+                        snprintf(seq, sizeof(seq), "\x1b[M%c%c%c",
+                                 (char)(32+btn), (char)(32+c+1), (char)(32+r+1));
+                        term_write(&term, seq, (int)strlen(seq));
+                        break;
+                    }
                     if (g_menu.visible) {
                         int sub_hit = submenu_hit(&g_menu, ev.button.x, ev.button.y);
                         if (sub_hit >= 0) {
@@ -1880,6 +1997,14 @@ int main(int argc, char **argv) {
                 }
                 break;
             case SDL_MOUSEBUTTONUP:
+                if (term.mouse_report && ev.button.button == SDL_BUTTON_LEFT && !g_menu.visible) {
+                    int r, c;
+                    pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
+                    char seq[32];
+                    snprintf(seq, sizeof(seq), "\x1b[M%c%c%c",
+                             (char)(32+3), (char)(32+c+1), (char)(32+r+1)); // btn=3 = release
+                    term_write(&term, seq, (int)strlen(seq));
+                } else
                 if (ev.button.button == SDL_BUTTON_LEFT && term.sel_active) {
                     pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2,
                                   &term.sel_end_row, &term.sel_end_col);
