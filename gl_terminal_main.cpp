@@ -510,6 +510,9 @@ struct Terminal {
 // Accessor macro - replaces CELL(t,r,c)
 #define CELL(t,r,c) ((t)->cells[(r)*(t)->cols+(c)])
 
+// Forward declarations
+static Cell* sb_row(Terminal *t, int idx);
+static Cell* vcell(Terminal *t, int vrow, int col);
 // Forward declaration for term_paste
 static void term_write(Terminal *t, const char *s, int n);
 
@@ -526,6 +529,9 @@ static void pixel_to_cell(Terminal *t, int px, int py, int ox, int oy,
     if (*row < 0) *row = 0;
     if (*col >= t->cols) *col = t->cols - 1;
     if (*row >= t->rows) *row = t->rows - 1;
+    // Convert screen row to virtual row (scrollback + screen space)
+    // Virtual row 0 = oldest scrollback row visible; sb_count = top of live screen
+    *row += t->sb_count - t->sb_offset;
 }
 
 // Is cell (r,c) inside the current selection? (order-independent)
@@ -565,12 +571,12 @@ static void term_copy_selection(Terminal *t) {
         // Find last non-space on this line segment for trimming
         int last_nonspace = cs - 1;
         for (int c = cs; c <= ce; c++) {
-            uint32_t cp = CELL(t,r,c).cp;
+            uint32_t cp = vcell(t,r,c)->cp;
             if (cp && cp != ' ') last_nonspace = c;
         }
 
         for (int c = cs; c <= last_nonspace; c++) {
-            uint32_t cp = CELL(t,r,c).cp;
+            uint32_t cp = vcell(t,r,c)->cp;
             if (!cp) cp = ' ';
             // Encode as UTF-8
             if (cp < 0x80) {
@@ -677,16 +683,16 @@ static void term_copy_selection_html(Terminal *t) {
         // Trim trailing spaces on each line
         int last_nonspace = cs - 1;
         for (int c = cs; c <= ce; c++) {
-            uint32_t cp = CELL(t,r,c).cp;
+            uint32_t cp = vcell(t,r,c)->cp;
             if (cp && cp != ' ') last_nonspace = c;
         }
 
         for (int c = cs; c <= last_nonspace; c++) {
-            Cell &cell = CELL(t,r,c);
-            uint32_t cp = cell.cp ? cell.cp : ' ';
+            Cell *cellp = vcell(t,r,c);
+            uint32_t cp = cellp->cp ? cellp->cp : ' ';
 
-            TermColorVal fg = cell.fg, bg = cell.bg;
-            uint8_t attrs = cell.attrs;
+            TermColorVal fg = cellp->fg, bg = cellp->bg;
+            uint8_t attrs = cellp->attrs;
             if (attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
 
             // Open a new span if any attribute changed
@@ -779,16 +785,16 @@ static void term_copy_selection_ansi(Terminal *t) {
 
         int last_nonspace = cs - 1;
         for (int c = cs; c <= ce; c++) {
-            uint32_t cp = CELL(t,r,c).cp;
+            uint32_t cp = vcell(t,r,c)->cp;
             if (cp && cp != ' ') last_nonspace = c;
         }
 
         for (int c = cs; c <= last_nonspace; c++) {
-            Cell &cell = CELL(t,r,c);
-            uint32_t cp = cell.cp ? cell.cp : ' ';
+            Cell *cellp = vcell(t,r,c);
+            uint32_t cp = cellp->cp ? cellp->cp : ' ';
 
-            TermColorVal fg = cell.fg, bg = cell.bg;
-            uint8_t attrs = cell.attrs;
+            TermColorVal fg = cellp->fg, bg = cellp->bg;
+            uint8_t attrs = cellp->attrs;
             if (attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
 
             if (fg != last_fg || bg != last_bg || attrs != last_attrs)
@@ -834,6 +840,17 @@ static void sb_push(Terminal *t, int row) {
 static Cell* sb_row(Terminal *t, int idx) {
     int slot = (t->sb_head + idx) % t->sb_cap;
     return t->sb_buf + slot * t->cols;
+}
+
+// Get a cell by virtual row (0 = oldest sb row, sb_count = live row 0)
+static Cell* vcell(Terminal *t, int vrow, int col) {
+    static Cell blank = {' ', 7, 0, 0, {0,0,0}};
+    if (col < 0 || col >= t->cols) return &blank;
+    if (vrow < 0) return &blank;
+    if (vrow < t->sb_count) return sb_row(t, vrow) + col;
+    int live = vrow - t->sb_count;
+    if (live < t->rows) return &CELL(t, live, col);
+    return &blank;
 }
 
 static void scroll_up(Terminal *t) {
@@ -1577,7 +1594,8 @@ static void term_render(Terminal *t, int ox, int oy) {
             TermColorVal fg = c->fg, bg = c->bg;
             if (c->attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
             TermColor bc = tcolor_resolve(bg);
-            if (!scrolled && cell_in_sel(t, row, col)) {
+            int vrow = row + t->sb_count - t->sb_offset;
+            if (cell_in_sel(t, vrow, col)) {
                 draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
             } else {
                 draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, 1.f);
