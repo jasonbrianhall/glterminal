@@ -36,6 +36,7 @@
 #define TERM_ROWS_DEFAULT  24
 #define TERM_MAX_COLS      512
 #define TERM_MAX_ROWS      256
+#define SCROLLBACK_LINES   5000
 #define FONT_SIZE_DEFAULT  16
 #define FONT_SIZE_MIN      6
 #define FONT_SIZE_MAX     72
@@ -467,6 +468,12 @@ struct Terminal {
     TermColorVal saved_cur_fg, saved_cur_bg;
     uint8_t      saved_cur_attrs;
     bool         in_alt_screen;
+    // Scrollback buffer — ring buffer of rows
+    Cell        *sb_buf;        // flat: [sb_cap * cols]
+    int          sb_cap;        // max rows in scrollback (e.g. 5000)
+    int          sb_head;       // index of oldest row (ring head)
+    int          sb_count;      // number of rows stored (0..sb_cap)
+    int          sb_offset;     // viewport offset: 0=live, N=N rows back
     // Selection
     int         sel_start_row, sel_start_col;
     int         sel_end_row,   sel_end_col;
@@ -579,9 +586,32 @@ static void term_paste(Terminal *t) {
 // PARSER
 // ============================================================================
 
+// Push one row into the scrollback ring buffer
+static void sb_push(Terminal *t, int row) {
+    if (!t->sb_buf || t->sb_cap == 0) return;
+    // Only push when scroll region is full screen (not inside apps like vim)
+    if (t->scroll_top != 0 || t->scroll_bot != t->rows - 1) return;
+    int slot = (t->sb_head + t->sb_count) % t->sb_cap;
+    memcpy(t->sb_buf + slot * t->cols, &CELL(t, row, 0), sizeof(Cell) * t->cols);
+    if (t->sb_count < t->sb_cap) {
+        t->sb_count++;
+    } else {
+        // Buffer full — advance head (oldest row evicted)
+        t->sb_head = (t->sb_head + 1) % t->sb_cap;
+    }
+}
+
+// Get a scrollback row by logical index (0 = oldest, sb_count-1 = newest)
+static Cell* sb_row(Terminal *t, int idx) {
+    int slot = (t->sb_head + idx) % t->sb_cap;
+    return t->sb_buf + slot * t->cols;
+}
+
 static void scroll_up(Terminal *t) {
     int top = t->scroll_top;
     int bot = SDL_min(t->scroll_bot, t->rows - 1);
+    // Save the row being scrolled off into scrollback
+    if (top == 0) sb_push(t, top);
     if (bot > top)
         memmove(&CELL(t,top,0), &CELL(t,top+1,0), sizeof(Cell)*t->cols*(bot-top));
     for (int c = 0; c < t->cols; c++)
@@ -1113,27 +1143,46 @@ static void action_new_terminal() {
 
 static void term_render(Terminal *t, int ox, int oy) {
     float cw = t->cell_w, ch = t->cell_h;
+    bool scrolled = (t->sb_offset > 0);
 
     for (int row = 0; row < t->rows; row++) {
         for (int col = 0; col < t->cols; col++) {
-            Cell *c = &CELL(t,row,col);
             float px = ox + col*cw, py = oy + row*ch;
+
+            // Resolve which cell to draw: scrollback or live grid
+            Cell *c;
+            Cell blank = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+            if (scrolled) {
+                // sb_offset rows back from bottom of scrollback+screen
+                // Total virtual rows = sb_count + rows
+                // We're viewing from: (sb_count + rows - sb_offset) - rows .. +rows
+                int sb_row_idx = t->sb_count - t->sb_offset + row;
+                if (sb_row_idx < 0) {
+                    c = &blank;
+                } else if (sb_row_idx < t->sb_count) {
+                    c = sb_row(t, sb_row_idx) + col;
+                } else {
+                    // Into live screen
+                    int live_row = sb_row_idx - t->sb_count;
+                    c = (live_row < t->rows) ? &CELL(t, live_row, col) : &blank;
+                }
+            } else {
+                c = &CELL(t, row, col);
+            }
 
             TermColorVal fg = c->fg, bg = c->bg;
             if (c->attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
             TermColor fc = tcolor_resolve(fg), bc = tcolor_resolve(bg);
-            // Bold on low palette colors -> use bright variant
             if ((c->attrs & ATTR_BOLD) && !TCOLOR_IS_RGB(fg) && TCOLOR_IDX(fg) < 8)
                 fc = tcolor_resolve(TCOLOR_PALETTE(TCOLOR_IDX(fg)+8));
 
-            // Background (highlight if selected)
-            if (cell_in_sel(t, row, col)) {
+            // Selection highlight (only when not scrolled — keeps it simple)
+            if (!scrolled && cell_in_sel(t, row, col)) {
                 draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
             } else {
                 draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, 1.f);
             }
 
-            // Glyph
             uint32_t cp = c->cp;
             if (cp && cp != ' ') {
                 char tmp[2] = { (char)(cp & 0x7f), 0 };
@@ -1141,17 +1190,29 @@ static void term_render(Terminal *t, int ox, int oy) {
                 draw_text(tmp, px, baseline, g_font_size, fc.r, fc.g, fc.b, 1.f);
             }
 
-            // Underline
             if (c->attrs & ATTR_UNDERLINE)
                 draw_rect(px, py+ch-2, cw, 2, fc.r, fc.g, fc.b, 1.f);
         }
     }
 
-    // Cursor (blinking underline bar)
-    if (t->cursor_on) {
+    // Cursor — only when live
+    if (!scrolled && t->cursor_on) {
         float cx = ox + t->cur_col * cw;
         float cy = oy + t->cur_row * ch;
         draw_rect(cx, cy+ch-3, cw, 3, 1,1,1, 0.85f);
+    }
+
+    // Scrollbar on right edge when scrolled
+    if (scrolled && t->sb_count > 0) {
+        float total_h = (float)(ox + t->rows) * ch;
+        float win_h   = t->rows * ch;
+        int   total_rows = t->sb_count + t->rows;
+        float bar_h   = win_h * t->rows / total_rows;
+        if (bar_h < 8) bar_h = 8;
+        float bar_y   = oy + (win_h - bar_h) * (float)(total_rows - t->rows - t->sb_offset) / (total_rows - t->rows);
+        float bar_x   = ox + t->cols * cw - 4;
+        draw_rect(bar_x, oy, 4, win_h, 0,0,0, 0.3f);
+        draw_rect(bar_x, bar_y, 4, bar_h, 0.6f, 0.6f, 0.7f, 0.8f);
     }
 }
 
@@ -1215,6 +1276,13 @@ static void term_resize(Terminal *t, int win_w, int win_h) {
 
     // Discard alt screen buffer on resize (simpler than trying to reflow it)
     if (t->alt_cells) { free(t->alt_cells); t->alt_cells = nullptr; t->in_alt_screen = false; }
+
+    // Reallocate scrollback for new column count (lose content on col change — acceptable)
+    if (t->sb_buf) free(t->sb_buf);
+    t->sb_buf   = (Cell*)calloc(t->sb_cap * new_cols, sizeof(Cell));
+    t->sb_head  = 0;
+    t->sb_count = 0;
+    t->sb_offset = 0;
     t->cols  = new_cols;
     t->rows  = new_rows;
 
@@ -1383,10 +1451,11 @@ int main(int argc, char **argv) {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_row = term.cur_row, old_col = term.cur_col;
             term_read(&term);
-            // If cursor moved, new output arrived — clear selection
-            if (had_sel && (term.cur_row != old_row || term.cur_col != old_col)) {
-                term.sel_exists = false;
-                term.sel_active = false;
+            bool got_output = (term.cur_row != old_row || term.cur_col != old_col);
+            if (got_output) {
+                // Snap back to live view when new output arrives
+                term.sb_offset = 0;
+                if (had_sel) { term.sel_exists = false; term.sel_active = false; }
             }
         }
 
@@ -1405,6 +1474,20 @@ int main(int argc, char **argv) {
             case SDL_KEYDOWN: {
                 if (g_menu.visible) { g_menu.visible = false; break; }
                 SDL_Keymod mod = SDL_GetModState();
+                // Scrollback navigation (Shift+PageUp/Down/arrows)
+                if (mod & KMOD_SHIFT) {
+                    int page = term.rows - 1;
+                    if (ev.key.keysym.sym == SDLK_PAGEUP) {
+                        term.sb_offset = SDL_min(term.sb_offset + page, term.sb_count);
+                        break;
+                    }
+                    if (ev.key.keysym.sym == SDLK_PAGEDOWN) {
+                        term.sb_offset = SDL_max(term.sb_offset - page, 0);
+                        break;
+                    }
+                }
+                // Any other key snaps back to live view
+                term.sb_offset = 0;
                 if (mod & KMOD_CTRL) {
                     if (ev.key.keysym.sym == SDLK_c && term.sel_exists) {
                         // Ctrl+C with selection = copy (no SIGINT)
@@ -1530,14 +1613,15 @@ int main(int argc, char **argv) {
             case SDL_MOUSEWHEEL: {
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
-                    // Ctrl+scroll: zoom font size
                     int delta = (ev.wheel.y > 0) ? 1 : -1;
-                    // Shift held = bigger steps
                     if (mod & KMOD_SHIFT) delta *= 4;
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     term_set_font_size(&term, g_font_size + delta, win_w, win_h);
-                    // Update projection in case cell count changed
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+                } else {
+                    // Scroll up (y>0) = go back in history = increase offset
+                    int delta = (ev.wheel.y > 0) ? 3 : -3;
+                    term.sb_offset = SDL_clamp(term.sb_offset + delta, 0, term.sb_count);
                 }
                 break;
             }
@@ -1566,6 +1650,11 @@ int main(int argc, char **argv) {
         menu_render(&g_menu);
 
         SDL_GL_SwapWindow(window);
+
+        // Frame cap: sleep any remaining time to target ~60fps
+        // (vsync may not work on all platforms/virtual displays)
+        uint32_t frame_ms = SDL_GetTicks() - now;
+        if (frame_ms < 16) SDL_Delay(16 - frame_ms);
     }
 
     SDL_GL_DeleteContext(ctx);
