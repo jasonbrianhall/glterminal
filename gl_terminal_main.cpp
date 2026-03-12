@@ -922,13 +922,15 @@ static bool term_spawn(Terminal *t, const char *cmd) {
     return true;
 }
 
-static void term_read(Terminal *t) {
+static bool term_read(Terminal *t) {
     char buf[4096];
+    bool got_data = false;
     for(;;) {
         ssize_t n = read(t->pty_fd, buf, sizeof(buf));
-        if (n > 0) term_feed(t, buf, (int)n);
+        if (n > 0) { term_feed(t, buf, (int)n); got_data = true; }
         else break;
     }
+    return got_data;
 }
 
 static void term_write(Terminal *t, const char *s, int n) {
@@ -1442,20 +1444,29 @@ int main(int argc, char **argv) {
         double dt = (now - last_ticks) / 1000.0;
         last_ticks = now;
 
+        bool needs_render = false;
+
         // Cursor blink
         term.blink += dt;
-        if (term.blink >= 0.5) { term.blink = 0; term.cursor_on = !term.cursor_on; }
+        if (term.blink >= 0.5) {
+            term.blink = 0;
+            term.cursor_on = !term.cursor_on;
+            needs_render = true;
+        }
 
         // Read PTY (clears selection if output arrives)
         {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_row = term.cur_row, old_col = term.cur_col;
-            term_read(&term);
-            bool got_output = (term.cur_row != old_row || term.cur_col != old_col);
-            if (got_output) {
-                // Snap back to live view when new output arrives
-                term.sb_offset = 0;
-                if (had_sel) { term.sel_exists = false; term.sel_active = false; }
+            bool got_data = term_read(&term);
+            if (got_data) {
+                needs_render = true;
+                bool got_output = (term.cur_row != old_row || term.cur_col != old_col);
+                if (got_output) {
+                    // Snap back to live view when new output arrives
+                    term.sb_offset = 0;
+                    if (had_sel) { term.sel_exists = false; term.sel_active = false; }
+                }
             }
         }
 
@@ -1469,6 +1480,7 @@ int main(int argc, char **argv) {
         // Events
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
+            needs_render = true;
             switch (ev.type) {
             case SDL_QUIT: running = false; break;
             case SDL_KEYDOWN: {
@@ -1637,19 +1649,21 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Render
-        glClearColor(
-            THEMES[g_theme_idx].bg_r,
-            THEMES[g_theme_idx].bg_g,
-            THEMES[g_theme_idx].bg_b,
-            g_opacity);
-        glClear(GL_COLOR_BUFFER_BIT);
+        // Render only when something changed
+        if (needs_render) {
+            glClearColor(
+                THEMES[g_theme_idx].bg_r,
+                THEMES[g_theme_idx].bg_g,
+                THEMES[g_theme_idx].bg_b,
+                g_opacity);
+            glClear(GL_COLOR_BUFFER_BIT);
 
-        glViewport(0, 0, win_w, win_h);
-        term_render(&term, 2, 2);   // 2px margin
-        menu_render(&g_menu);
+            glViewport(0, 0, win_w, win_h);
+            term_render(&term, 2, 2);   // 2px margin
+            menu_render(&g_menu);
 
-        SDL_GL_SwapWindow(window);
+            SDL_GL_SwapWindow(window);
+        }
 
         // Frame cap: sleep any remaining time to target ~60fps
         // (vsync may not work on all platforms/virtual displays)
