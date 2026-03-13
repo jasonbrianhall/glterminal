@@ -1,22 +1,42 @@
-CXX     = g++
-CXXFLAGS = -std=c++17 -O2 -Wall \
-           $(shell pkg-config --cflags sdl2 freetype2 glew)
+CXX      := g++
+CXXFLAGS := -std=c++17 -O2 -Wall -Wextra \
+            $(shell pkg-config --cflags freetype2 sdl2 glew)
+LDFLAGS  := $(shell pkg-config --libs freetype2 sdl2 glew) -lGL
 
-LIBS    = $(shell pkg-config --libs sdl2 freetype2 glew) \
-          -lGL -lutil
+TARGET   := gl_terminal
 
-TARGET  = gl_terminal
-SRC     = gl_terminal_main.cpp
+SRCS     := gl_terminal_main.cpp \
+             gl_renderer.cpp     \
+             ft_font.cpp         \
+             term_color.cpp      \
+             terminal.cpp        \
+             term_pty.cpp        \
+             term_ui.cpp
 
-# Monospace.h must be in the same directory (copy from your project)
-# If it's elsewhere: make MONOSPACE_DIR=/path/to/dir
+OBJS     := $(SRCS:.cpp=.o)
 
-MONOSPACE_DIR ?= .
+.PHONY: all clean
 
-$(TARGET): $(SRC)
-	$(CXX) $(CXXFLAGS) -I$(MONOSPACE_DIR) -o $@ $< $(LIBS)
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+# Header dependencies (explicit — avoids makedepend)
+gl_terminal_main.o: gl_terminal_main.cpp gl_terminal.h gl_renderer.h ft_font.h \
+                    term_color.h terminal.h term_pty.h term_ui.h
+gl_renderer.o:      gl_renderer.cpp gl_renderer.h gl_terminal.h
+ft_font.o:          ft_font.cpp ft_font.h gl_renderer.h gl_terminal.h \
+                    DejaVuMonoBold.h DejaVuMono.h DejaVuMonoOblique.h \
+                    DejaVuMonoBoldOblique.h NotoEmoji.h
+term_color.o:       term_color.cpp term_color.h
+terminal.o:         terminal.cpp terminal.h ft_font.h gl_terminal.h
+term_pty.o:         term_pty.cpp term_pty.h terminal.h
+term_ui.o:          term_ui.cpp term_ui.h term_pty.h ft_font.h \
+                    gl_renderer.h term_color.h gl_terminal.h
 
 clean:
-	rm -f $(TARGET)
-
-.PHONY: clean
+	rm -f $(OBJS) $(TARGET)
