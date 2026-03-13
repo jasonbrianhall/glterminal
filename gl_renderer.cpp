@@ -455,14 +455,68 @@ void gl_resize_fbo(int w, int h) {
 }
 
 // ============================================================================
+// VERTEX ACCUMULATOR — one draw call per frame
+// ============================================================================
+
+static Vertex s_accum[MAX_VERTS];
+static int    s_accum_n = 0;
+
+void gl_flush_verts(void) {
+    if (s_accum_n == 0) return;
+    glUseProgram(G.prog);
+    glUniformMatrix4fv(G.proj_loc, 1, GL_FALSE, G.proj.m);
+    glBindBuffer(GL_ARRAY_BUFFER, G.vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, s_accum_n * sizeof(Vertex), s_accum);
+    glBindVertexArray(G.vao);
+    glDrawArrays(GL_TRIANGLES, 0, s_accum_n);
+    s_accum_n = 0;
+}
+
+// Accumulates vertices; flushes automatically when the buffer is nearly full.
+void draw_verts(Vertex *v, int n, GLenum /*mode*/) {
+    if (n <= 0) return;
+    if (s_accum_n + n > MAX_VERTS) {
+        gl_flush_verts();
+        if (n > MAX_VERTS) {
+            glUseProgram(G.prog);
+            glUniformMatrix4fv(G.proj_loc, 1, GL_FALSE, G.proj.m);
+            glBindBuffer(GL_ARRAY_BUFFER, G.vbo);
+            int drawn = 0;
+            while (drawn < n) {
+                int chunk = (n - drawn < MAX_VERTS) ? (n - drawn) : MAX_VERTS;
+                glBufferSubData(GL_ARRAY_BUFFER, 0, chunk * sizeof(Vertex), v + drawn);
+                glBindVertexArray(G.vao);
+                glDrawArrays(GL_TRIANGLES, 0, chunk);
+                drawn += chunk;
+            }
+            return;
+        }
+    }
+    memcpy(s_accum + s_accum_n, v, n * sizeof(Vertex));
+    s_accum_n += n;
+}
+
+void draw_rect(float x, float y, float w, float h, float r, float g, float b, float a) {
+    Vertex v[6] = {
+        {x,   y,   r,g,b,a}, {x+w, y,   r,g,b,a}, {x+w, y+h, r,g,b,a},
+        {x,   y,   r,g,b,a}, {x+w, y+h, r,g,b,a}, {x,   y+h, r,g,b,a},
+    };
+    draw_verts(v, 6, GL_TRIANGLES);
+}
+
+// ============================================================================
 // FRAME
 // ============================================================================
 
 void gl_begin_frame(void) {
+    s_accum_n = 0;   // discard any leftover from a previous (incomplete) frame
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
 }
 
 void gl_end_frame(float time, int win_w, int win_h) {
+    // Flush all accumulated geometry into the FBO in one draw call.
+    gl_flush_verts();
+
     // Unbind FBO — render to screen
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, win_w, win_h);
@@ -489,26 +543,4 @@ void gl_end_frame(float time, int win_w, int win_h) {
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-}
-
-
-// ============================================================================
-// DRAW CALLS (unchanged interface)
-// ============================================================================
-
-void draw_verts(Vertex *v, int n, GLenum mode) {
-    glUseProgram(G.prog);
-    glUniformMatrix4fv(G.proj_loc, 1, GL_FALSE, G.proj.m);
-    glBindBuffer(GL_ARRAY_BUFFER, G.vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, n * sizeof(Vertex), v);
-    glBindVertexArray(G.vao);
-    glDrawArrays(mode, 0, n);
-}
-
-void draw_rect(float x, float y, float w, float h, float r, float g, float b, float a) {
-    Vertex v[6] = {
-        {x,   y,   r,g,b,a}, {x+w, y,   r,g,b,a}, {x+w, y+h, r,g,b,a},
-        {x,   y,   r,g,b,a}, {x+w, y+h, r,g,b,a}, {x,   y+h, r,g,b,a},
-    };
-    draw_verts(v, 6, GL_TRIANGLES);
 }

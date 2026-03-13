@@ -423,6 +423,14 @@ int main(int argc, char **argv) {
         fight_tick((float)win_w, (float)win_h);
         if (fight_get_enabled()) needs_render = true;
 
+        // Hard cap at ~60 fps using absolute deadline from start of this
+        // iteration. This prevents fight mode and animated render modes from
+        // spinning the CPU at 100% regardless of how long the render took.
+        {
+            uint32_t elapsed = SDL_GetTicks() - now;
+            if (elapsed < 16) SDL_Delay(16 - elapsed);
+        }
+
         if (needs_render) {
             // Render terminal into FBO (post-process applies here, menu does NOT go in here)
             gl_begin_frame();
@@ -446,9 +454,6 @@ int main(int argc, char **argv) {
 
             SDL_GL_SwapWindow(window);
         }
-
-        uint32_t elapsed = SDL_GetTicks() - now;
-        if (elapsed < 16) SDL_Delay(16 - elapsed);
     }
 
     SDL_FreeCursor(cursor_hand);

@@ -1329,6 +1329,10 @@ void menu_render(ContextMenu *m) {
             draw_text(lbl, sx + m->pad_x + g_font_size, iy+ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
         }
     }
+
+    // Menu is drawn after gl_end_frame (to stay outside post-process), so we
+    // must flush the accumulator ourselves — there's no automatic flush after this.
+    gl_flush_verts();
 }
 
 // ============================================================================
