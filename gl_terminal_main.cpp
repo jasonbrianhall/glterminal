@@ -137,7 +137,13 @@ int main(int argc, char **argv) {
             case SDL_QUIT: running = false; break;
 
             case SDL_KEYDOWN: {
-                if (ev.key.repeat) break;  // ignore SDL key repeat — SDL_TEXTINPUT handles characters
+                if (ev.key.repeat) {
+                    // Block repeat for printable keys — SDL_TEXTINPUT handles those.
+                    // Arrow keys, backspace, delete, etc. still need repeat.
+                    SDL_Keycode sym = ev.key.keysym.sym;
+                    if (sym >= SDLK_SPACE && sym < SDLK_DELETE)
+                        break;
+                }
                 if (g_menu.visible) { g_menu.visible = false; break; }
                 SDL_Keymod mod = SDL_GetModState();
                 int page = term.rows - 1;
