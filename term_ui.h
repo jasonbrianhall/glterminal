@@ -51,7 +51,8 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_RESET         7
 #define MENU_ID_THEMES        9
 #define MENU_ID_OPACITY      10
-#define MENU_ID_QUIT         12
+#define MENU_ID_RENDER_MODE  11
+#define MENU_ID_QUIT         13
 
 struct MenuItem {
     const char *label;

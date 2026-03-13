@@ -258,11 +258,13 @@ int main(int argc, char **argv) {
                             else if (g_menu.sub_open == MENU_ID_OPACITY) {
                                 g_opacity = ((float[]){1.0f,0.85f,0.7f,0.5f,0.3f,0.1f})[sub_hit];
                                 SDL_SetWindowOpacity(window, g_opacity);
+                            } else if (g_menu.sub_open == MENU_ID_RENDER_MODE) {
+                                g_render_mode = sub_hit;
                             }
                             g_menu.visible = false;
                         } else {
                             int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
-                            bool is_sub_parent = (hit==MENU_ID_THEMES || hit==MENU_ID_OPACITY);
+                            bool is_sub_parent = (hit==MENU_ID_THEMES || hit==MENU_ID_OPACITY || hit==MENU_ID_RENDER_MODE);
                             if (!is_sub_parent) g_menu.visible = false;
                             switch (hit) {
                             case MENU_ID_NEW_TERMINAL: action_new_terminal(); break;
@@ -303,7 +305,7 @@ int main(int argc, char **argv) {
                 if (g_menu.visible) {
                     int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
                     if (hit >= 0) g_menu.hovered = hit;
-                    if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY) {
+                    if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY || hit == MENU_ID_RENDER_MODE) {
                         if (g_menu.sub_open != hit) {
                             g_menu.sub_open = hit; g_menu.sub_hovered = -1;
                             g_menu.sub_x = g_menu.x + g_menu.width + 2;
@@ -311,7 +313,8 @@ int main(int argc, char **argv) {
                             for (int i=0;i<hit;i++)
                                 item_y += MENU_ITEMS[i].separator ? g_menu.sep_h : g_menu.item_h;
                             g_menu.sub_y = item_y;
-                            int count = (hit==MENU_ID_THEMES)?THEME_COUNT:6;
+                            int count = (hit==MENU_ID_THEMES) ? THEME_COUNT :
+                                        (hit==MENU_ID_RENDER_MODE) ? RENDER_MODE_COUNT : 6;
                             int sw = g_menu.width + g_font_size*2;
                             int sh = count * g_menu.item_h + 8;
                             SDL_GetWindowSize(window, &win_w, &win_h);
@@ -403,22 +406,35 @@ int main(int argc, char **argv) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     glViewport(0, 0, win_w, win_h);
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+                    gl_resize_fbo(win_w, win_h);
                     term_resize(&term, win_w, win_h);
                 }
                 break;
             }
         }
 
+        // Animated render modes (CRT flicker, VHS noise) need continuous redraw
+        if (g_render_mode == RENDER_MODE_CRT || g_render_mode == RENDER_MODE_VHS
+         || g_render_mode == RENDER_MODE_C64)
+            needs_render = true;
+
         if (needs_render) {
+            // Render terminal into FBO
+            gl_begin_frame();
+            glViewport(0, 0, win_w, win_h);
             glClearColor(
                 THEMES[g_theme_idx].bg_r,
                 THEMES[g_theme_idx].bg_g,
                 THEMES[g_theme_idx].bg_b,
-                g_opacity);
+                1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-            glViewport(0, 0, win_w, win_h);
             term_render(&term, 2, 2);
             menu_render(&g_menu);
+
+            // Apply post-process and blit to screen
+            float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
+            gl_end_frame(t_sec, win_w, win_h);
+
             SDL_GL_SwapWindow(window);
         }
 

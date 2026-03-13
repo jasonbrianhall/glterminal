@@ -132,6 +132,10 @@ static const float OPACITY_LEVELS[] = { 1.0f, 0.85f, 0.7f, 0.5f, 0.3f, 0.1f };
 static const char* OPACITY_NAMES[]  = { "100%", "85%", "70%", "50%", "30%", "10%" };
 static const int   OPACITY_COUNT    = 6;
 
+static const char* RENDER_MODE_NAMES[] = { "Normal", "CRT", "LCD", "VHS", "Focus", "Commodore 64" };
+static_assert(sizeof(RENDER_MODE_NAMES)/sizeof(RENDER_MODE_NAMES[0]) == RENDER_MODE_COUNT,
+              "RENDER_MODE_NAMES count mismatch");
+
 const MenuItem MENU_ITEMS[] = {
     { "New Terminal",    false },
     { nullptr,           true  },
@@ -144,6 +148,7 @@ const MenuItem MENU_ITEMS[] = {
     { nullptr,           true  },
     { "Color Theme  >",  false },
     { "Transparency  >", false },
+    { "Render Mode  >",  false },
     { nullptr,           true  },
     { "Quit",            false },
 };
@@ -733,7 +738,8 @@ int submenu_hit(ContextMenu *m, int px, int py) {
     if (m->sub_open < 0) return -1;
     if (px < m->sub_x || px > m->sub_x + m->sub_w) return -1;
     if (py < m->sub_y || py > m->sub_y + m->sub_h) return -1;
-    int count = (m->sub_open == MENU_ID_THEMES) ? THEME_COUNT : OPACITY_COUNT;
+    int count = (m->sub_open == MENU_ID_THEMES)      ? THEME_COUNT :
+                (m->sub_open == MENU_ID_RENDER_MODE)  ? RENDER_MODE_COUNT : OPACITY_COUNT;
     int idx = (py - m->sub_y) / m->item_h;
     if (idx < 0 || idx >= count) return -1;
     return idx;
@@ -771,21 +777,24 @@ void menu_render(ContextMenu *m) {
         y += ih;
     }
 
-    if (m->sub_open == MENU_ID_THEMES || m->sub_open == MENU_ID_OPACITY) {
-        int count = (m->sub_open == MENU_ID_THEMES) ? THEME_COUNT : OPACITY_COUNT;
+    if (m->sub_open == MENU_ID_THEMES || m->sub_open == MENU_ID_OPACITY || m->sub_open == MENU_ID_RENDER_MODE) {
+        int count = (m->sub_open == MENU_ID_THEMES)      ? THEME_COUNT :
+                    (m->sub_open == MENU_ID_RENDER_MODE)  ? RENDER_MODE_COUNT : OPACITY_COUNT;
         float sw = (float)(m->width + (int)(g_font_size * 2));
         float sh = (float)(count * m->item_h + 8);
         float sx = (float)m->sub_x, sy = (float)m->sub_y;
         m->sub_w = (int)sw; m->sub_h = (int)sh;
         draw_menu_panel(sx, sy, sw, sh);
         for (int j = 0; j < count; j++) {
-            const char *lbl = (m->sub_open == MENU_ID_THEMES) ? THEMES[j].name : OPACITY_NAMES[j];
+            const char *lbl = (m->sub_open == MENU_ID_THEMES)     ? THEMES[j].name :
+                              (m->sub_open == MENU_ID_RENDER_MODE) ? RENDER_MODE_NAMES[j] :
+                                                                     OPACITY_NAMES[j];
             float iy = sy + 4 + j * m->item_h, ih = (float)m->item_h;
             bool hov = (j == m->sub_hovered);
-            bool active = (m->sub_open == MENU_ID_THEMES)
-                          ? (j == g_theme_idx)
-                          : (fabsf(OPACITY_LEVELS[j]-g_opacity)<0.01f);
-            if (hov)         draw_rect(sx+2,iy,sw-4,ih,0.25f,0.45f,0.85f,0.85f);
+            bool active = (m->sub_open == MENU_ID_THEMES)      ? (j == g_theme_idx) :
+                          (m->sub_open == MENU_ID_RENDER_MODE)  ? (j == g_render_mode) :
+                                                                   (fabsf(OPACITY_LEVELS[j]-g_opacity)<0.01f);
+            if (hov)          draw_rect(sx+2,iy,sw-4,ih,0.25f,0.45f,0.85f,0.85f);
             if (active&&!hov) draw_rect(sx+2,iy,sw-4,ih,0.2f,0.35f,0.6f,0.6f);
             float tr=hov?1.f:(active?0.7f:0.88f), tg=hov?1.f:(active?0.9f:0.88f), tb=hov?1.f:(active?1.0f:0.92f);
             if (active) draw_text("\xe2\x9c\x93", sx+4, iy+ih*0.72f, g_font_size, g_font_size, 0.4f,0.8f,0.4f,1.f);
