@@ -11,7 +11,8 @@ SRCS     := gl_terminal_main.cpp \
              term_color.cpp      \
              terminal.cpp        \
              term_pty.cpp        \
-             term_ui.cpp
+             term_ui.cpp         \
+             gl_bouncingcircle.cpp
 
 OBJS     := $(SRCS:.cpp=.o)
 
@@ -27,7 +28,7 @@ $(TARGET): $(OBJS)
 
 # Header dependencies (explicit — avoids makedepend)
 gl_terminal_main.o: gl_terminal_main.cpp gl_terminal.h gl_renderer.h ft_font.h \
-                    term_color.h terminal.h term_pty.h term_ui.h
+                    term_color.h terminal.h term_pty.h term_ui.h gl_bouncingcircle.h
 gl_renderer.o:      gl_renderer.cpp gl_renderer.h gl_terminal.h
 ft_font.o:          ft_font.cpp ft_font.h gl_renderer.h gl_terminal.h \
                     DejaVuMonoBold.h DejaVuMono.h DejaVuMonoOblique.h \
@@ -36,7 +37,8 @@ term_color.o:       term_color.cpp term_color.h
 terminal.o:         terminal.cpp terminal.h ft_font.h gl_terminal.h
 term_pty.o:         term_pty.cpp term_pty.h terminal.h
 term_ui.o:          term_ui.cpp term_ui.h term_pty.h ft_font.h \
-                    gl_renderer.h term_color.h gl_terminal.h
+                    gl_renderer.h term_color.h gl_terminal.h gl_bouncingcircle.h
+gl_bouncingcircle.o: gl_bouncingcircle.cpp gl_bouncingcircle.h gl_renderer.h ft_font.h
 
 clean:
 	rm -f $(OBJS) $(TARGET)

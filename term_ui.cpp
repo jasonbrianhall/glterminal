@@ -4,6 +4,7 @@
 #include "gl_renderer.h"
 #include "term_color.h"
 #include "gl_terminal.h"
+#include "gl_bouncingcircle.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -669,6 +670,7 @@ const MenuItem MENU_ITEMS[] = {
     { "Transparency  >", false },
     { "Render Mode  >",  false },
     { "Fight Mode",      false },
+    { "Bouncing Circle", false },
     { nullptr,           true  },
     { "Quit",            false },
 };
@@ -1299,6 +1301,8 @@ void menu_render(ContextMenu *m) {
             static char fight_lbl[32];
             snprintf(fight_lbl, sizeof(fight_lbl), "* Fight Mode");
             draw_text(fight_lbl, mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
+        } else if (i == MENU_ID_BOUNCING_CIRCLE && bc_get_enabled()) {
+            draw_text("* Bouncing Circle", mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
         } else {
             draw_text(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
         }

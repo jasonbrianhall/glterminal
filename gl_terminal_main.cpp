@@ -1,6 +1,6 @@
 // gl_terminal_main.cpp  — entry point only
 // Build: g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
-//            terminal.cpp term_pty.cpp term_ui.cpp
+//            terminal.cpp term_pty.cpp term_ui.cpp gl_bouncingcircle.cpp
 //            -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
 
 #include "gl_terminal.h"
@@ -10,6 +10,7 @@
 #include "terminal.h"
 #include "term_pty.h"
 #include "term_ui.h"
+#include "gl_bouncingcircle.h"
 
 #include <SDL2/SDL.h>
 #include <sys/wait.h>
@@ -282,6 +283,7 @@ int main(int argc, char **argv) {
                                 term_write(&term,"reset\n",6);
                                 break;
                             case MENU_ID_FIGHT_MODE: fight_set_enabled(!fight_get_enabled()); break;
+                            case MENU_ID_BOUNCING_CIRCLE: bc_set_enabled(!bc_get_enabled()); break;
                             case MENU_ID_QUIT: running = false; break;
                             default:
                                 if (hit < 0) g_menu.visible = false;
@@ -427,6 +429,14 @@ int main(int argc, char **argv) {
         fight_tick((float)win_w, (float)win_h);
         if (fight_get_enabled()) needs_render = true;
 
+        // Bouncing circle tick every frame
+        static uint32_t s_last_bc_ticks = 0;
+        uint32_t cur_ticks = SDL_GetTicks();
+        float bc_dt = s_last_bc_ticks ? (float)(cur_ticks - s_last_bc_ticks) / 1000.f : 0.016f;
+        s_last_bc_ticks = cur_ticks;
+        bc_tick((float)win_w, (float)win_h, bc_dt);
+        if (bc_get_enabled()) needs_render = true;
+
         // Hard cap at ~60 fps: sleep until 16ms after the start of this
         // iteration so fight mode and animated modes don't busy-loop.
         {
@@ -455,6 +465,7 @@ int main(int argc, char **argv) {
             gl_begin_frame();
             glViewport(0, 0, win_w, win_h);
             fight_render((float)win_w, (float)win_h);
+            bc_render((float)win_w, (float)win_h);
 
             float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
             gl_end_frame(t_sec, win_w, win_h);
