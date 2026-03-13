@@ -5,7 +5,7 @@ A standalone OpenGL terminal emulator for Linux. Renders text using FreeType tri
 ## Features
 
 - VT100/VT220/xterm-compatible emulation
-- Full 256-colour and 24-bit RGB colour support
+- Full 256-color and 24-bit RGB color support
 - Font variants: Regular, Bold, Italic, Bold Italic (DejaVu Sans Mono)
 - Text attributes: bold, italic, underline, strikethrough, overline, dim, blink, reverse
 - Emoji rendering via embedded NotoEmoji (fallback for non-ASCII glyphs)
@@ -80,11 +80,11 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 
 - **New Terminal** — spawn a new window
 - **Copy** — copy selection as plain text
-- **Copy as HTML** — copy with colour and style markup
+- **Copy as HTML** — copy with color and style markup
 - **Copy as ANSI** — copy with ANSI escape codes
 - **Paste**
 - **Reset** — clear screen and reset cursor
-- **Themes** — submenu to switch colour themes
+- **Themes** — submenu to switch color themes
 - **Opacity** — submenu to set window transparency
 - **Quit**
 
