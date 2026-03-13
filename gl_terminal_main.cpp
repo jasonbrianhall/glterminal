@@ -65,10 +65,8 @@ int main(int argc, char **argv) {
     glViewport(0, 0, win_w, win_h);
 
     term_resize(&term, win_w, win_h);
-    //SDL_Log("[Scroll] after resize: sb_cap=%d sb_buf=%p sb_count=%d\n", term.sb_cap, (void*)term.sb_buf, term.sb_count);
 
     if (!term_spawn(&term, shell)) {
-        //SDL_Log("[Term] Failed to spawn shell. Exiting.\n");
         return 1;
     }
 
@@ -119,8 +117,6 @@ int main(int argc, char **argv) {
                 needs_render = true;
                 bool new_lines = (term.sb_count != old_sb_count);
                 if (new_lines) {
-                    if (term.sb_offset != 0)
-                        //SDL_Log("[Scroll] PTY new_lines reset sb_offset %d->0\n", term.sb_offset);
                     term.sb_offset = 0;
                     if (had_sel) { term.sel_exists = false; term.sel_active = false; }
                 }
@@ -130,7 +126,6 @@ int main(int argc, char **argv) {
         // Child exit check
         int status;
         if (waitpid(term.child, &status, WNOHANG) == term.child) {
-            //SDL_Log("[Term] Shell exited.\n");
             running = false;
         }
 
@@ -142,16 +137,15 @@ int main(int argc, char **argv) {
             case SDL_QUIT: running = false; break;
 
             case SDL_KEYDOWN: {
+                if (ev.key.repeat) break;  // ignore SDL key repeat — SDL_TEXTINPUT handles characters
                 if (g_menu.visible) { g_menu.visible = false; break; }
                 SDL_Keymod mod = SDL_GetModState();
                 int page = term.rows - 1;
                 if (ev.key.keysym.sym == SDLK_PAGEUP && (mod & KMOD_SHIFT)) {
-                    //SDL_Log("[Scroll] Shift+PageUp: sb_offset %d->%d\n", term.sb_offset, SDL_min(term.sb_offset + page, term.sb_count));
                     term.sb_offset = SDL_min(term.sb_offset + page, term.sb_count);
                     break;
                 }
                 if (ev.key.keysym.sym == SDLK_PAGEDOWN && (mod & KMOD_SHIFT)) {
-                    //SDL_Log("[Scroll] Shift+PageDown: sb_offset %d->%d\n", term.sb_offset, SDL_max(term.sb_offset - page, 0));
                     term.sb_offset = SDL_max(term.sb_offset - page, 0);
                     break;
                 }
@@ -165,13 +159,16 @@ int main(int argc, char **argv) {
                         ev.key.keysym.sym == SDLK_RSHIFT) break;
                 }
                 handle_key(&term, ev.key.keysym, NULL);
+                term_read(&term);  // drain echo immediately after writing
                 break;
             }
 
             case SDL_TEXTINPUT: {
                 SDL_Keymod mod = SDL_GetModState();
-                if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT))
+                if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
                     term_write(&term, ev.text.text, (int)strlen(ev.text.text));
+                    term_read(&term);  // drain echo immediately after writing
+                }
                 break;
             }
 
@@ -324,7 +321,6 @@ int main(int argc, char **argv) {
                 } else {
                     int delta = (ev.wheel.y > 0) ? 3 : -3;
                     int new_off = SDL_clamp(term.sb_offset + delta, 0, term.sb_count);
-                    //SDL_Log("[Scroll] MouseWheel y=%d delta=%d sb_offset %d->%d\n", ev.wheel.y, delta, term.sb_offset, new_off);
                     term.sb_offset = new_off;
                 }
                 break;
