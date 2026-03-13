@@ -279,14 +279,49 @@ void term_copy_selection_html(Terminal *t) {
     if (r0 > r1 || (r0 == r1 && c0 > c1)) { int tr=r0,tc=c0; r0=r1;c0=c1;r1=tr;c1=tc; }
 
     const Theme &th = THEMES[g_theme_idx];
-    char bg_hex[8];
+    char bg_hex[8], fg_hex[8];
     snprintf(bg_hex, sizeof(bg_hex), "#%02x%02x%02x",
              (int)(th.bg_r*255+.5f), (int)(th.bg_g*255+.5f), (int)(th.bg_b*255+.5f));
+    // Default foreground from palette index 7
+    TermColor deffg = tcolor_resolve(TCOLOR_PALETTE(7));
+    snprintf(fg_hex, sizeof(fg_hex), "#%02x%02x%02x",
+             (int)(deffg.r*255+.5f), (int)(deffg.g*255+.5f), (int)(deffg.b*255+.5f));
 
     std::string html;
-    html.reserve(4096);
-    html += "<div style=\"background:"; html += bg_hex;
-    html += ";font-family:monospace;white-space:pre;padding:4px;display:inline-block\">";
+    html.reserve(8192);
+    html += "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"UTF-8\">\n";
+    html += "<title>Terminal — "; html += th.name; html += "</title>\n";
+    html += "<style>\n";
+    html += "  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }\n";
+    html += "  body {\n";
+    html += "    background: #111;\n";
+    html += "    display: flex;\n";
+    html += "    justify-content: center;\n";
+    html += "    align-items: flex-start;\n";
+    html += "    min-height: 100vh;\n";
+    html += "    padding: 2rem;\n";
+    html += "  }\n";
+    html += "  .terminal {\n";
+    html += "    background: "; html += bg_hex; html += ";\n";
+    html += "    color: "; html += fg_hex; html += ";\n";
+    html += "    font-family: 'DejaVu Sans Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;\n";
+    html += "    font-size: 14px;\n";
+    html += "    line-height: 1.4;\n";
+    html += "    padding: 1.25rem 1.5rem;\n";
+    html += "    border-radius: 8px;\n";
+    html += "    box-shadow: 0 8px 32px rgba(0,0,0,0.6);\n";
+    html += "    white-space: pre;\n";
+    html += "    overflow-x: auto;\n";
+    html += "    max-width: 100%;\n";
+    html += "  }\n";
+    html += "  .terminal a {\n";
+    html += "    color: #6ab0f5;\n";
+    html += "    text-decoration: underline;\n";
+    html += "  }\n";
+    html += "  .terminal a:hover {\n";
+    html += "    color: #9dcfff;\n";
+    html += "  }\n";
+    html += "</style>\n</head>\n<body>\n<div class=\"terminal\">";
 
     TermColorVal last_fg = ~(TermColorVal)0, last_bg = ~(TermColorVal)0;
     uint8_t last_attrs = 0xFF;
@@ -367,7 +402,7 @@ void term_copy_selection_html(Terminal *t) {
                     if (ch == '"') html += "&quot;";
                     else           html += ch;
                 }
-                html += "\" style=\"color:#6ab0f5;text-decoration:underline\">";
+                html += "\" >";
                 link_open = true;
                 // Reset span state so colors are re-emitted inside the link
                 last_fg = ~(TermColorVal)0; last_bg = ~(TermColorVal)0; last_attrs = 0xFF;
@@ -395,9 +430,8 @@ void term_copy_selection_html(Terminal *t) {
         last_fg = ~(TermColorVal)0;
         if (r < r1) html += '\n';
     }
-    html += "</div>";
+    html += "</div>\n</body>\n</html>\n";
     SDL_SetClipboardText(html.c_str());
-    //SDL_Log("[Term] copied %zu bytes of HTML to clipboard\n", html.size());
 }
 
 void term_copy_selection_ansi(Terminal *t) {
