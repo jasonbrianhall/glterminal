@@ -29,7 +29,8 @@ extern GLState G;
 #define RENDER_MODE_VHS       3
 #define RENDER_MODE_FOCUS     4
 #define RENDER_MODE_C64       5
-#define RENDER_MODE_COUNT     6
+#define RENDER_MODE_COMPOSITE 6
+#define RENDER_MODE_COUNT     7
 
 extern int g_render_mode;
 

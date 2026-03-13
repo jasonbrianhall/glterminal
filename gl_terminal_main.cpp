@@ -415,7 +415,7 @@ int main(int argc, char **argv) {
 
         // Animated render modes (CRT flicker, VHS noise) need continuous redraw
         if (g_render_mode == RENDER_MODE_CRT || g_render_mode == RENDER_MODE_VHS
-         || g_render_mode == RENDER_MODE_C64)
+         || g_render_mode == RENDER_MODE_C64 || g_render_mode == RENDER_MODE_COMPOSITE)
             needs_render = true;
 
         if (needs_render) {

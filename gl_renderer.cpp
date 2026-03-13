@@ -183,7 +183,83 @@ static const char *POST_FS =
     "}\n"
 
     // ----------------------------------------------------------------
-    // COMMODORE 64
+    // BAD COMPOSITE — cheap composite video signal breakdown
+    // Rainbow fringing via chroma phase errors, dot crawl, ringing
+    // ----------------------------------------------------------------
+    "vec4 mode_composite(vec2 u){\n"
+
+    // --- Luma/chroma separation simulation ---
+    // Sample a horizontal strip to fake NTSC 4:1:1 chroma subsampling
+    "  float px = u.x * resolution.x;\n"
+    "  float py = u.y * resolution.y;\n"
+
+    // Chroma phase error — shift R/G/B by different amounts horizontally
+    // and modulate the shift with a sine at the chroma subcarrier frequency (~3.58MHz → ~4px period)
+    "  float subcarrier = sin(px * 0.785398 + time * 6.0);\n"  // 0.785 ≈ pi/4, 4px period
+    "  float subcarrier2 = sin(px * 0.785398 + time * 6.0 + 2.094);\n"  // +120°
+    "  float subcarrier3 = sin(px * 0.785398 + time * 6.0 + 4.189);\n"  // +240°
+
+    // Chroma bleed — sample R,G,B at horizontally offset positions
+    // The offset is modulated by the subcarrier to create phase-error rainbow
+    "  float chroma_spread = 3.5 / resolution.x;\n"
+    "  float r_off = subcarrier  * chroma_spread;\n"
+    "  float g_off = subcarrier2 * chroma_spread * 0.5;\n"
+    "  float b_off = subcarrier3 * chroma_spread;\n"
+
+    "  float r = texture(tex, vec2(u.x + r_off, u.y)).r;\n"
+    "  float g = texture(tex, vec2(u.x + g_off, u.y)).g;\n"
+    "  float b = texture(tex, vec2(u.x + b_off, u.y)).b;\n"
+    "  vec4 col = vec4(r, g, b, 1.0);\n"
+
+    // --- Dot crawl — diagonal checkerboard shimmer at color edges ---
+    // Classic NTSC artifact: color info leaks into luma channel
+    "  float base_luma = dot(texture(tex, u).rgb, vec3(0.299,0.587,0.114));\n"
+    "  float crawl = sin(px * 3.14159 + py * 3.14159 + time * 15.0) * 0.5 + 0.5;\n"
+    "  float edge = abs(base_luma - dot(texture(tex, u + vec2(1.0/resolution.x,0)).rgb, vec3(0.299,0.587,0.114)));\n"
+    "  col.rgb += crawl * edge * vec3(0.4, -0.2, 0.4) * 0.8;\n"
+
+    // --- Ringing — pre/post echo on horizontal edges (Gibbs phenomenon) ---
+    "  float ring_amt = 0.12;\n"
+    "  vec2 roff = vec2(4.0/resolution.x, 0.0);\n"
+    "  vec4 ring_pre  = texture(tex, u - roff);\n"
+    "  vec4 ring_post = texture(tex, u + roff);\n"
+    "  float luma_diff = dot(ring_post.rgb - ring_pre.rgb, vec3(0.299,0.587,0.114));\n"
+    "  col.rgb += luma_diff * ring_amt;\n"
+
+    // --- Chroma smear — low-pass filter chroma horizontally (bandwidth limit) ---
+    "  vec3 smear = vec3(0.0);\n"
+    "  for(int i=-3; i<=3; i++){\n"
+    "    vec3 s = texture(tex, u + vec2(float(i)*1.5/resolution.x, 0.0)).rgb;\n"
+    "    float lum = dot(s, vec3(0.299,0.587,0.114));\n"
+    "    smear += s - vec3(lum);\n"  // chroma only
+    "  }\n"
+    "  smear /= 7.0;\n"
+    "  float cur_luma = dot(col.rgb, vec3(0.299,0.587,0.114));\n"
+    "  col.rgb = vec3(cur_luma) + smear * 1.4;\n"  // replace chroma with smeared version
+
+    // --- Scanlines ---
+    "  float sl = sin(u.y * resolution.y * 3.14159);\n"
+    "  col.rgb *= 0.82 + 0.18 * clamp(sl, 0.0, 1.0);\n"
+
+    // --- Y/C noise — separate luma and chroma noise like bad signal ---
+    "  float lnoise = (rand(u + vec2(time * 1.3)) - 0.5) * 0.03;\n"
+    "  float cnoise_r = (rand(u + vec2(time * 2.1, 0.3)) - 0.5) * 0.06;\n"
+    "  float cnoise_b = (rand(u + vec2(time * 1.7, 0.7)) - 0.5) * 0.06;\n"
+    "  col.r += lnoise + cnoise_r;\n"
+    "  col.g += lnoise;\n"
+    "  col.b += lnoise + cnoise_b;\n"
+
+    // --- Horizontal sync jitter ---
+    "  float line = floor(u.y * resolution.y);\n"
+    "  float hsync_jitter = (rand(vec2(line, floor(time*4.0))) - 0.5) * 0.003;\n"
+    "  col = mix(col, texture(tex, vec2(u.x + hsync_jitter, u.y)), 0.3);\n"
+
+    // --- Vignette ---
+    "  vec2 vig = u - 0.5;\n"
+    "  col.rgb *= 1.0 - dot(vig,vig) * 1.1;\n"
+
+    "  return clamp(col, 0.0, 1.0);\n"
+    "}\n"
     // ----------------------------------------------------------------
     "vec4 mode_c64(vec2 u){\n"
     "  float border = 0.018;\n"
@@ -221,6 +297,7 @@ static const char *POST_FS =
     "  else if (mode==3) frag = mode_vhs(uv);\n"
     "  else if (mode==4) frag = mode_focus(uv);\n"
     "  else if (mode==5) frag = mode_c64(uv);\n"
+    "  else if (mode==6) frag = mode_composite(uv);\n"
     "  else              frag = mode_normal(uv);\n"
     "}\n";
 
