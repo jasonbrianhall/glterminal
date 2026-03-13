@@ -10,8 +10,116 @@
 #include <string.h>
 #include <math.h>
 #include <string>
+#include <vector>
+#include <functional>
 #include <unistd.h>    // readlink, setsid, execl, _exit, fork
 #include <sys/types.h> // pid_t
+
+// ============================================================================
+// URL DETECTION
+// ============================================================================
+
+struct UrlSpan {
+    int row, col_start, col_end;  // col_end is inclusive
+    std::string url;   // display text
+    std::string href;  // actual href (may prepend https:// for www. links)
+};
+
+static std::vector<UrlSpan> s_urls;
+static int s_hovered_url = -1;  // index into s_urls, or -1
+
+static bool is_url_char(char c) {
+    // Characters valid inside a URL (not terminal punctuation)
+    return (c > ' ') && c != '"' && c != '\'' && c != '<' && c != '>' && c != '`';
+}
+
+static bool starts_with(const std::string &s, const char *prefix) {
+    size_t plen = strlen(prefix);
+    return s.size() >= plen && s.compare(0, plen, prefix) == 0;
+}
+
+// Strip trailing punctuation that is likely not part of the URL
+static std::string trim_url(const std::string &s) {
+    size_t end = s.size();
+    // Strip paired closers if their opener isn't in the URL
+    while (end > 0) {
+        char c = s[end-1];
+        if (c == ')' && s.find('(') == std::string::npos) { end--; continue; }
+        if (c == ']' && s.find('[') == std::string::npos) { end--; continue; }
+        if (c == '}' && s.find('{') == std::string::npos) { end--; continue; }
+        if (c == '.' || c == ',' || c == ';' || c == ':' || c == '!' || c == '?') { end--; continue; }
+        break;
+    }
+    return s.substr(0, end);
+}
+
+// Scan the visible grid and rebuild s_urls
+static void detect_urls(Terminal *t,
+                         std::function<Cell*(int row, int col)> resolve_cell) {
+    s_urls.clear();
+    const char *prefixes[] = { "https://", "http://", "ftp://", "file://", "www.", nullptr };
+
+    for (int row = 0; row < t->rows; row++) {
+        // Build a plain-text string for this row
+        std::string line;
+        line.reserve(t->cols);
+        for (int col = 0; col < t->cols; col++) {
+            Cell *c = resolve_cell(row, col);
+            uint32_t cp = c->cp;
+            if (!cp) cp = ' ';
+            // Only handle ASCII for URL scanning simplicity
+            if (cp < 0x80) line += (char)cp;
+            else            line += '?';  // non-ASCII placeholder keeps column alignment
+        }
+
+        size_t pos = 0;
+        while (pos < (size_t)t->cols) {
+            // Find earliest prefix match from pos
+            size_t best = std::string::npos;
+            for (int pi = 0; prefixes[pi]; pi++) {
+                size_t f = line.find(prefixes[pi], pos);
+                if (f < best) best = f;
+            }
+            if (best == std::string::npos) break;
+
+            // Scan forward to end of URL
+            size_t end = best;
+            while (end < (size_t)t->cols && is_url_char(line[end])) end++;
+
+            std::string raw = line.substr(best, end - best);
+            std::string url = trim_url(raw);
+            size_t min_len = starts_with(url, "www.") ? 6 : 8; // www.x.com minimum
+            if (url.size() > min_len) {
+                UrlSpan span;
+                span.row       = row;
+                span.col_start = (int)best;
+                span.col_end   = (int)(best + url.size() - 1);
+                span.url       = url;
+                span.href      = starts_with(url, "www.") ? "https://" + url : url;
+                s_urls.push_back(span);
+            }
+            pos = end;
+        }
+    }
+}
+
+static int url_at(int row, int col) {
+    for (int i = 0; i < (int)s_urls.size(); i++) {
+        const UrlSpan &u = s_urls[i];
+        if (u.row == row && col >= u.col_start && col <= u.col_end)
+            return i;
+    }
+    return -1;
+}
+
+void open_url(const std::string &url) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        execlp("xdg-open", "xdg-open", url.c_str(), nullptr);
+        _exit(1);
+    }
+}
 
 extern int  g_font_size;
 extern bool g_blink_text_on;
@@ -70,6 +178,42 @@ bool cell_in_sel(Terminal *t, int r, int c) {
     if (r == r0 && c < c0) return false;
     if (r == r1 && c > c1) return false;
     return true;
+}
+
+// ============================================================================
+// URL HOVER / HIT TEST
+// ============================================================================
+
+static int pixel_to_render_row(Terminal *t, int py, int oy) {
+    int row = (int)((py - oy) / t->cell_h);
+    if (row < 0) row = 0;
+    if (row >= t->rows) row = t->rows - 1;
+    return row;
+}
+static int pixel_to_render_col(Terminal *t, int px, int ox) {
+    int col = (int)((px - ox) / t->cell_w);
+    if (col < 0) col = 0;
+    if (col >= t->cols) col = t->cols - 1;
+    return col;
+}
+
+bool url_update_hover(Terminal *t, int mouse_px, int mouse_py, int ox, int oy) {
+    int row = pixel_to_render_row(t, mouse_py, oy);
+    int col = pixel_to_render_col(t, mouse_px, ox);
+    int uid = url_at(row, col);
+    if (uid != s_hovered_url) {
+        s_hovered_url = uid;
+        return true;
+    }
+    return false;
+}
+
+std::string url_at_pixel(Terminal *t, int mouse_px, int mouse_py, int ox, int oy) {
+    int row = pixel_to_render_row(t, mouse_py, oy);
+    int col = pixel_to_render_col(t, mouse_px, ox);
+    int uid = url_at(row, col);
+    if (uid >= 0) return s_urls[uid].href;
+    return {};
 }
 
 // ============================================================================
@@ -149,6 +293,42 @@ void term_copy_selection_html(Terminal *t) {
     bool span_open = false;
     auto close_span = [&]() { if (span_open) { html += "</span>"; span_open = false; } };
 
+    // Build a helper to detect URLs in a row of cells (selection-relative row index)
+    auto row_url_spans = [&](int r) -> std::vector<UrlSpan> {
+        std::vector<UrlSpan> spans;
+        const char *prefixes[] = { "https://", "http://", "ftp://", "file://", "www.", nullptr };
+        std::string line;
+        line.reserve(t->cols);
+        for (int col = 0; col < t->cols; col++) {
+            uint32_t cp = vcell(t, r, col)->cp;
+            if (!cp) cp = ' ';
+            line += (cp < 0x80) ? (char)cp : '?';
+        }
+        size_t pos = 0;
+        while (pos < line.size()) {
+            size_t best = std::string::npos;
+            for (int pi = 0; prefixes[pi]; pi++) {
+                size_t f = line.find(prefixes[pi], pos);
+                if (f < best) best = f;
+            }
+            if (best == std::string::npos) break;
+            size_t end = best;
+            while (end < line.size() && is_url_char(line[end])) end++;
+            std::string raw = line.substr(best, end - best);
+            std::string url = trim_url(raw);
+            size_t min_len = starts_with(url, "www.") ? 6 : 8;
+            if (url.size() > min_len) {
+                UrlSpan sp;
+                sp.row = r; sp.col_start = (int)best; sp.col_end = (int)(best + url.size() - 1);
+                sp.url = url;
+                sp.href = starts_with(url, "www.") ? "https://" + url : url;
+                spans.push_back(sp);
+            }
+            pos = end;
+        }
+        return spans;
+    };
+
     for (int r = r0; r <= r1; r++) {
         int cs = (r == r0) ? c0 : 0;
         int ce = (r == r1) ? c1 : t->cols - 1;
@@ -157,12 +337,42 @@ void term_copy_selection_html(Terminal *t) {
             uint32_t cp = vcell(t,r,c)->cp;
             if (cp && cp != ' ') last_nonspace = c;
         }
+
+        std::vector<UrlSpan> row_urls = row_url_spans(r);
+        bool link_open = false;
+        auto close_link = [&]() { if (link_open) { html += "</a>"; link_open = false; } };
+
         for (int c = cs; c <= last_nonspace; c++) {
             Cell *cellp = vcell(t,r,c);
             uint32_t cp = cellp->cp ? cellp->cp : ' ';
             TermColorVal fg = cellp->fg, bg = cellp->bg;
             uint8_t attrs = cellp->attrs;
             if (attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
+
+            // Check if we're entering or leaving a URL span
+            int uid = -1;
+            for (int ui = 0; ui < (int)row_urls.size(); ui++) {
+                if (c >= row_urls[ui].col_start && c <= row_urls[ui].col_end) { uid = ui; break; }
+            }
+            bool in_url = (uid >= 0);
+            bool at_url_start = in_url && (c == row_urls[uid].col_start);
+            bool past_url     = link_open && !in_url;
+            if (past_url) { close_span(); close_link(); }
+            if (at_url_start) {
+                close_span();
+                close_link();
+                html += "<a href=\"";
+                // HTML-escape the href
+                for (char ch : row_urls[uid].href) {
+                    if (ch == '"') html += "&quot;";
+                    else           html += ch;
+                }
+                html += "\" style=\"color:#6ab0f5;text-decoration:underline\">";
+                link_open = true;
+                // Reset span state so colors are re-emitted inside the link
+                last_fg = ~(TermColorVal)0; last_bg = ~(TermColorVal)0; last_attrs = 0xFF;
+            }
+
             if (fg != last_fg || bg != last_bg || attrs != last_attrs) {
                 close_span();
                 TermColor fc = tcolor_resolve(fg);
@@ -181,6 +391,7 @@ void term_copy_selection_html(Terminal *t) {
             append_html_char(html, cp);
         }
         close_span();
+        close_link();
         last_fg = ~(TermColorVal)0;
         if (r < r1) html += '\n';
     }
@@ -285,6 +496,9 @@ void term_render(Terminal *t, int ox, int oy) {
         return &CELL(t, row, col);
     };
 
+    // Detect URLs in visible content
+    detect_urls(t, resolve_cell);
+
     // Pass 1: backgrounds
     for (int row = 0; row < t->rows; row++) {
         for (int col = 0; col < t->cols; col++) {
@@ -328,6 +542,17 @@ void term_render(Terminal *t, int ox, int oy) {
                 draw_rect(px, py+ch*0.45f, cw, 1, fc.r, fc.g, fc.b, 1.f);
             if ((c->attrs & ATTR_OVERLINE) && !blink_hidden)
                 draw_rect(px, py+1, cw, 1, fc.r, fc.g, fc.b, 1.f);
+
+            // URL underline
+            int uid = url_at(row, col);
+            if (uid >= 0) {
+                bool hovered = (uid == s_hovered_url);
+                float ur = hovered ? 0.4f : 0.35f;
+                float ug = hovered ? 0.8f : 0.6f;
+                float ub = hovered ? 1.0f : 0.9f;
+                float uh = hovered ? 2.f : 1.f;
+                draw_rect(px, py + ch - uh - 1, cw, uh, ur, ug, ub, 1.f);
+            }
         }
     }
 

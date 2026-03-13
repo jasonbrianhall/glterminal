@@ -81,6 +81,10 @@ int main(int argc, char **argv) {
     SDL_Delay(100);
     term_read(&term);
 
+    SDL_Cursor *cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+    SDL_Cursor *cursor_hand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
+    SDL_SetCursor(cursor_ibeam);
+
     uint32_t last_ticks = SDL_GetTicks();
     bool running = true;
 
@@ -200,6 +204,17 @@ int main(int argc, char **argv) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     menu_open(&g_menu, ev.button.x, ev.button.y, win_w, win_h);
                 } else if (ev.button.button == SDL_BUTTON_LEFT) {
+                    // Ctrl+click opens URL
+                    if (!g_menu.visible) {
+                        SDL_Keymod mod = SDL_GetModState();
+                        if (mod & KMOD_CTRL) {
+                            std::string url = url_at_pixel(&term, ev.button.x, ev.button.y, 2, 2);
+                            if (!url.empty()) {
+                                open_url(url);
+                                break;
+                            }
+                        }
+                    }
                     if (g_menu.visible) {
                         int sub_hit = submenu_hit(&g_menu, ev.button.x, ev.button.y);
                         if (sub_hit >= 0) {
@@ -274,6 +289,17 @@ int main(int argc, char **argv) {
                     pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2,
                                   &term.sel_end_row, &term.sel_end_col);
                     term.sel_exists = true;
+                } else {
+                    // Update URL hover highlight
+                    if (url_update_hover(&term, ev.motion.x, ev.motion.y, 2, 2))
+                        needs_render = true;
+                    // Show pointer cursor when over a URL (Ctrl = clickable)
+                    SDL_Keymod mod = SDL_GetModState();
+                    std::string hurl = url_at_pixel(&term, ev.motion.x, ev.motion.y, 2, 2);
+                    if (!hurl.empty() && (mod & KMOD_CTRL))
+                        SDL_SetCursor(cursor_hand);
+                    else
+                        SDL_SetCursor(cursor_ibeam);
                 }
                 break;
 
@@ -361,6 +387,8 @@ int main(int argc, char **argv) {
         if (elapsed < 16) SDL_Delay(16 - elapsed);
     }
 
+    SDL_FreeCursor(cursor_hand);
+    SDL_FreeCursor(cursor_ibeam);
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(window);
     SDL_Quit();

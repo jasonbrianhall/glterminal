@@ -1,5 +1,17 @@
 #pragma once
 #include "terminal.h"
+#include <string>
+
+// ============================================================================
+// URL DETECTION
+// ============================================================================
+
+// Update hover state based on mouse position. Returns true if hover changed (needs redraw).
+bool        url_update_hover(Terminal *t, int mouse_px, int mouse_py, int ox, int oy);
+// Returns the URL string under the given pixel, or empty string if none.
+std::string url_at_pixel(Terminal *t, int mouse_px, int mouse_py, int ox, int oy);
+// Open a URL with xdg-open.
+void        open_url(const std::string &url);
 
 // ============================================================================
 // SELECTION / CLIPBOARD
