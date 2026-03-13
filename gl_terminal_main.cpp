@@ -88,6 +88,10 @@ int main(int argc, char **argv) {
     uint32_t last_ticks = SDL_GetTicks();
     bool running = true;
 
+    // Auto-scroll state for selection drag
+    int  autoscroll_mouse_x = 0, autoscroll_mouse_y = 0;
+    double autoscroll_accum = 0.0;
+
     while (running) {
         uint32_t now = SDL_GetTicks();
         double dt = (now - last_ticks) / 1000.0;
@@ -109,6 +113,37 @@ int main(int argc, char **argv) {
                 term.cursor_blink = 0;
                 term.cursor_on = !term.cursor_on;
                 needs_render = true;
+            }
+        }
+
+        // Auto-scroll during selection drag
+        if (term.sel_active) {
+            int margin = (int)term.cell_h;  // one cell height from edge triggers scroll
+            int scroll_dir = 0;
+            if (autoscroll_mouse_y < margin)                scroll_dir =  1; // toward top → more scrollback
+            else if (autoscroll_mouse_y > win_h - margin)  scroll_dir = -1; // toward bottom → less scrollback
+            if (scroll_dir != 0) {
+                float past = (scroll_dir > 0)
+                    ? (float)(margin - autoscroll_mouse_y) / margin        // above top edge
+                    : (float)(autoscroll_mouse_y - (win_h - margin)) / margin; // below bottom edge
+                if (past < 0.f) past = 0.f;
+                double rate = 4.0 + past * 12.0;  // rows per second
+                autoscroll_accum += dt * rate;
+                int steps = (int)autoscroll_accum;
+                autoscroll_accum -= steps;
+                if (steps > 0) {
+                    int new_off = SDL_clamp(term.sb_offset + scroll_dir * steps, 0, term.sb_count);
+                    if (new_off != term.sb_offset) {
+                        term.sb_offset = new_off;
+                        // Update selection end to current mouse position
+                        pixel_to_cell(&term, autoscroll_mouse_x, autoscroll_mouse_y, 2, 2,
+                                      &term.sel_end_row, &term.sel_end_col);
+                        term.sel_exists = true;
+                        needs_render = true;
+                    }
+                }
+            } else {
+                autoscroll_accum = 0.0;
             }
         }
 
@@ -251,6 +286,8 @@ int main(int argc, char **argv) {
                             }
                         }
                     } else {
+                        autoscroll_mouse_x = ev.button.x;
+                        autoscroll_mouse_y = ev.button.y;
                         term.sel_start_row = term.sel_end_row = r;
                         term.sel_start_col = term.sel_end_col = c;
                         term.sel_active = true; term.sel_exists = false;
@@ -286,6 +323,8 @@ int main(int argc, char **argv) {
                     }
                     g_menu.sub_hovered = submenu_hit(&g_menu, ev.motion.x, ev.motion.y);
                 } else if (term.sel_active && (ev.motion.state & SDL_BUTTON_LMASK)) {
+                    autoscroll_mouse_x = ev.motion.x;
+                    autoscroll_mouse_y = ev.motion.y;
                     pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2,
                                   &term.sel_end_row, &term.sel_end_col);
                     term.sel_exists = true;
