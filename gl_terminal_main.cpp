@@ -281,6 +281,7 @@ int main(int argc, char **argv) {
                                 term.state=PS_NORMAL;
                                 term_write(&term,"reset\n",6);
                                 break;
+                            case MENU_ID_FIGHT_MODE: fight_set_enabled(!fight_get_enabled()); break;
                             case MENU_ID_QUIT: running = false; break;
                             default:
                                 if (hit < 0) g_menu.visible = false;
@@ -418,6 +419,10 @@ int main(int argc, char **argv) {
          || g_render_mode == RENDER_MODE_C64 || g_render_mode == RENDER_MODE_COMPOSITE)
             needs_render = true;
 
+        // Fight simulation tick every frame
+        fight_tick((float)win_w, (float)win_h);
+        if (fight_get_enabled()) needs_render = true;
+
         if (needs_render) {
             // Render terminal into FBO (post-process applies here, menu does NOT go in here)
             gl_begin_frame();
@@ -428,6 +433,7 @@ int main(int argc, char **argv) {
                 THEMES[g_theme_idx].bg_b,
                 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
+            fight_render((float)win_w, (float)win_h);
             term_render(&term, 2, 2);
 
             // Apply post-process and blit to screen
