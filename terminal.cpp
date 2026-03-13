@@ -17,8 +17,7 @@ extern SDL_Window *g_sdl_window;
 // ============================================================================
 
 static void sb_push(Terminal *t, int row) {
-    SDL_Log("[Scroll] sb_push called: sb_buf=%p sb_cap=%d scroll_top=%d scroll_bot=%d rows=%d\n",
-        (void*)t->sb_buf, t->sb_cap, t->scroll_top, t->scroll_bot, t->rows);
+    //SDL_Log("[Scroll] sb_push called: sb_buf=%p sb_cap=%d scroll_top=%d scroll_bot=%d rows=%d\n", (void*)t->sb_buf, t->sb_cap, t->scroll_top, t->scroll_bot, t->rows);
     if (!t->sb_buf || t->sb_cap == 0) return;
     if (t->scroll_top != 0 || t->scroll_bot != t->rows - 1) return;
     int slot = (t->sb_head + t->sb_count) % t->sb_cap;
@@ -28,8 +27,8 @@ static void sb_push(Terminal *t, int row) {
     } else {
         t->sb_head = (t->sb_head + 1) % t->sb_cap;
     }
-    if (t->sb_count <= 5 || t->sb_count % 50 == 0)
-        SDL_Log("[Scroll] sb_push: sb_count now %d\n", t->sb_count);
+    //if (t->sb_count <= 5 || t->sb_count % 50 == 0)
+        //SDL_Log("[Scroll] sb_push: sb_count now %d\n", t->sb_count);
 }
 
 Cell* sb_row(Terminal *t, int idx) {
@@ -54,7 +53,7 @@ Cell* vcell(Terminal *t, int vrow, int col) {
 static void scroll_up(Terminal *t) {
     int top = t->scroll_top;
     int bot = SDL_min(t->scroll_bot, t->rows - 1);
-    SDL_Log("[Scroll] scroll_up: top=%d bot=%d rows=%d\n", top, bot, t->rows);
+    //SDL_Log("[Scroll] scroll_up: top=%d bot=%d rows=%d\n", top, bot, t->rows);
     if (top == 0) sb_push(t, top);
     if (bot > top)
         memmove(&CELL(t,top,0), &CELL(t,top+1,0), sizeof(Cell)*t->cols*(bot-top));
@@ -407,7 +406,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
                 const char *semi = strchr(t->osc, ';');
                 if (semi) {
                     int ps = atoi(t->osc);
-                    SDL_Log("[OSC] ps=%d title='%s'\n", ps, semi + 1);
+                    //SDL_Log("[OSC] ps=%d title='%s'\n", ps, semi + 1);
                     if ((ps == 0 || ps == 2) && g_sdl_window)
                         SDL_SetWindowTitle(g_sdl_window, semi + 1);
                 }
@@ -462,7 +461,7 @@ void term_init(Terminal *t) {
     t->scroll_top = 0;
     t->scroll_bot = t->rows - 1;
 
-    SDL_Log("[Term] init: %dx%d cells %.0fx%.0f px\n", t->cols, t->rows, t->cell_w, t->cell_h);
+    //SDL_Log("[Term] init: %dx%d cells %.0fx%.0f px\n", t->cols, t->rows, t->cell_w, t->cell_h);
 }
 
 void term_resize(Terminal *t, int win_w, int win_h) {
@@ -530,6 +529,5 @@ void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h) {
     if (t->cell_h < 1) t->cell_h = 8;
 
     term_resize(t, win_w, win_h);
-    SDL_Log("[Term] font size %d, cell %.0fx%.0f, grid %dx%d\n",
-            g_font_size, t->cell_w, t->cell_h, t->cols, t->rows);
+    SDL_Log("[Term] font size %d, cell %.0fx%.0f, grid %dx%d\n", g_font_size, t->cell_w, t->cell_h, t->cols, t->rows);
 }

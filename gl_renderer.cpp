@@ -38,7 +38,7 @@ static GLuint compile_shader(const char *src, GLenum type) {
     int ok; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
     if (!ok) {
         char log[512]; glGetShaderInfoLog(s, 512, NULL, log);
-        SDL_Log("[GL] shader error: %s\n", log);
+        //SDL_Log("[GL] shader error: %s\n", log);
     }
     return s;
 }

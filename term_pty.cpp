@@ -33,7 +33,7 @@ bool term_spawn(Terminal *t, const char *cmd) {
     t->child  = pid;
     int fl = fcntl(master, F_GETFL, 0);
     fcntl(master, F_SETFL, fl | O_NONBLOCK);
-    SDL_Log("[Term] spawned shell pid=%d fd=%d\n", pid, master);
+    //SDL_Log("[Term] spawned shell pid=%d fd=%d\n", pid, master);
     return true;
 }
 

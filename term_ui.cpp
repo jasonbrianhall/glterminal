@@ -107,7 +107,7 @@ void term_copy_selection(Terminal *t) {
     buf[pos] = '\0';
     SDL_SetClipboardText(buf);
     free(buf);
-    SDL_Log("[Term] copied %d chars to clipboard\n", pos);
+    //SDL_Log("[Term] copied %d chars to clipboard\n", pos);
 }
 
 static void append_hex_color(std::string &s, float r, float g, float b) {
@@ -186,7 +186,7 @@ void term_copy_selection_html(Terminal *t) {
     }
     html += "</div>";
     SDL_SetClipboardText(html.c_str());
-    SDL_Log("[Term] copied %zu bytes of HTML to clipboard\n", html.size());
+    //SDL_Log("[Term] copied %zu bytes of HTML to clipboard\n", html.size());
 }
 
 void term_copy_selection_ansi(Terminal *t) {
@@ -251,7 +251,7 @@ void term_copy_selection_ansi(Terminal *t) {
         if (r < r1) out += '\n';
     }
     SDL_SetClipboardText(out.c_str());
-    SDL_Log("[Term] copied %zu bytes of ANSI to clipboard\n", out.size());
+    //SDL_Log("[Term] copied %zu bytes of ANSI to clipboard\n", out.size());
 }
 
 void term_paste(Terminal *t) {

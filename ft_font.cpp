@@ -42,7 +42,7 @@ void ft_init(void) {
     size_t decoded_size = 0;
     int r = base64_decode(MONOSPACE_FONT_B64, MONOSPACE_FONT_B64_SIZE, &s_font_buf, &decoded_size);
     if (r != 0 || !s_font_buf) {
-        SDL_Log("[Font] base64 decode failed\n");
+        //SDL_Log("[Font] base64 decode failed\n");
         return;
     }
 
