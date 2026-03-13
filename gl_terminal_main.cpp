@@ -427,10 +427,10 @@ int main(int argc, char **argv) {
          || g_render_mode == RENDER_MODE_C64 || g_render_mode == RENDER_MODE_COMPOSITE)
             needs_render = true;
 
-        // Notify CRT audio of mode state (fires thunk on rising edge, silences on exit)
+        // Notify audio of mode state
         static int s_prev_render_mode = -1;
         if (g_render_mode != s_prev_render_mode) {
-            crt_audio_set_mode(g_render_mode == RENDER_MODE_CRT);
+            term_audio_set_mode(g_render_mode);
             s_prev_render_mode = g_render_mode;
         }
 

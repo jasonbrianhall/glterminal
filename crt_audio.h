@@ -1,27 +1,34 @@
 #pragma once
+#include "gl_renderer.h"   // RENDER_MODE_* constants
 
 // ============================================================================
-// CRT AUDIO  — synthesized sound effects for CRT render mode
+// TERMINAL AUDIO — per-render-mode sound effects
 //
 // Call sites:
-//   gl_terminal_main.cpp (or wherever render mode toggles):
-//     crt_audio_set_mode(g_render_mode == RENDER_MODE_CRT);
+//   main(), after SDL_Init:
+//     term_audio_init();
 //
-//   term_render() bottom, each frame:
-//     crt_audio_set_activity(dirty_cells / (float)(t->cols * t->rows));
+//   main(), on shutdown:
+//     term_audio_shutdown();
 //
-//   handle_key(), cursor-movement keys:
-//     crt_audio_cursor_ping();
+//   main(), whenever g_render_mode changes (pass new value):
+//     term_audio_set_mode(g_render_mode);
+//
+//   term_render(), once per frame (pass glyph fill ratio 0..1):
+//     term_audio_set_activity(dirty_cells / (float)(cols * rows));
+//
+//   handle_key(), on arrow / Home / End:
+//     term_audio_cursor_ping();
 // ============================================================================
 
-void crt_audio_init(void);
-void crt_audio_shutdown(void);
+void term_audio_init(void);
+void term_audio_shutdown(void);
+void term_audio_set_mode(int render_mode);
+void term_audio_set_activity(float level);   // 0..1, drives CRT buzz
+void term_audio_cursor_ping(void);           // CRT mode only
 
-// Call whenever CRT mode is toggled. Fires the power-on thunk on rising edge.
-void crt_audio_set_mode(bool crt_on);
-
-// 0..1 glyph activity level — drives scanline buzz volume. Call each frame.
-void crt_audio_set_activity(float level);
-
-// Fire a short beam-sweep ping (cursor movement / keypress).
-void crt_audio_cursor_ping(void);
+// Legacy aliases so existing call sites still compile without changes
+inline void crt_audio_init(void)            { term_audio_init(); }
+inline void crt_audio_shutdown(void)        { term_audio_shutdown(); }
+inline void crt_audio_set_activity(float l) { term_audio_set_activity(l); }
+inline void crt_audio_cursor_ping(void)     { term_audio_cursor_ping(); }
