@@ -505,17 +505,17 @@ void fight_render(float ww, float wh) {
     if(!s_fight_enabled||!s_fight_inited) return;
     float alpha=0.55f;
     float bar_w=160.f,bar_h=6.f,bar_y=wh*0.82f+18.f;
-    draw_rect(20.f,bar_y,bar_w,bar_h, 0.08f,0.08f,0.08f,alpha*1.4f);
-    draw_rect(20.f,bar_y,bar_w*s_ff[0].hp,bar_h, s_ff[0].cr,s_ff[0].cg,s_ff[0].cb,alpha*2.f);
-    draw_rect(ww-20.f-bar_w,bar_y,bar_w,bar_h, 0.08f,0.08f,0.08f,alpha*1.4f);
-    draw_rect(ww-20.f-bar_w,bar_y,bar_w*s_ff[1].hp,bar_h, s_ff[1].cr,s_ff[1].cg,s_ff[1].cb,alpha*2.f);
+    draw_rect(20.f,bar_y,bar_w,bar_h, 0.08f,0.08f,0.08f,alpha*0.75f);
+    draw_rect(20.f,bar_y,bar_w*s_ff[0].hp,bar_h, s_ff[0].cr,s_ff[0].cg,s_ff[0].cb,alpha*0.85f);
+    draw_rect(ww-20.f-bar_w,bar_y,bar_w,bar_h, 0.08f,0.08f,0.08f,alpha*0.75f);
+    draw_rect(ww-20.f-bar_w,bar_y,bar_w*s_ff[1].hp,bar_h, s_ff[1].cr,s_ff[1].cg,s_ff[1].cb,alpha*0.85f);
     fight_line(0,wh*.82f,ww,wh*.82f, 0.5f,0.3f,0.1f,alpha*.6f,1.f);
     for(const auto &p:s_blood){
-        float a=(p.life/p.maxlife)*alpha*2.2f;
+        float a=(p.life/p.maxlife)*alpha*0.9f;
         fight_circle(p.x,p.y,p.r,p.cr,p.cg,p.cb,a);
     }
-    fight_draw_fighter(s_ff[0],alpha*2.f);
-    fight_draw_fighter(s_ff[1],alpha*2.f);
+    fight_draw_fighter(s_ff[0],alpha*0.85f);
+    fight_draw_fighter(s_ff[1],alpha*0.85f);
     if(s_ff[0].dead&&!s_ff[1].dead){
         float fl=(sinf(s_fight_ticks*.15f)*.5f+.5f)*0.5f;
         draw_rect(0,0,ww,4.f,s_ff[1].cr,s_ff[1].cg,s_ff[1].cb,fl);
@@ -1070,7 +1070,7 @@ void term_render(Terminal *t, int ox, int oy) {
             if (cell_in_sel(t, vrow, col)) {
                 draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
             } else {
-                float bg_alpha = fight_get_enabled() ? 0.72f : 1.f;
+                float bg_alpha = 1.f;
                 draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, bg_alpha);
             }
         }
