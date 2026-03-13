@@ -52,7 +52,8 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_THEMES        9
 #define MENU_ID_OPACITY      10
 #define MENU_ID_RENDER_MODE  11
-#define MENU_ID_QUIT         13
+#define MENU_ID_FIGHT_MODE   12
+#define MENU_ID_QUIT         14
 
 struct MenuItem {
     const char *label;
@@ -80,3 +81,9 @@ int  submenu_hit(ContextMenu *m, int px, int py);
 void menu_render(ContextMenu *m);
 
 void action_new_terminal();
+
+void fight_tick(float win_w, float win_h);
+void fight_render(float win_w, float win_h);
+void fight_set_enabled(bool en);
+bool fight_get_enabled();
+
