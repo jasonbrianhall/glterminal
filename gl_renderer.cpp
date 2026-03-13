@@ -177,7 +177,7 @@ static const char *POST_FS =
     "  vec4 col = texture(tex, u);\n"
     // fade=0 at bottom (bright), fade=1 at top (dim)
     // smoothstep(0.35, 0.65, 1.0-u.y): when u.y close to 1 (bottom), 1-u.y~0 → fade=0
-    "  float fade = smoothstep(0.35, 0.65, 1.0 - u.y);\n"
+    "  float fade = smoothstep(0.35, 0.65, u.y);\n"
     "  col.rgb *= mix(1.0, 0.15, fade);\n"
     "  return col;\n"
     "}\n"
