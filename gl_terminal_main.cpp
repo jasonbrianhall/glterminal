@@ -414,6 +414,10 @@ int main(int argc, char **argv) {
             }
         }
 
+        // Snapshot terminal dirtiness BEFORE fight mode and animated render
+        // modes force needs_render — those don't require re-walking cell data.
+        bool term_needs_render = needs_render;
+
         // Animated render modes (CRT flicker, VHS noise) need continuous redraw
         if (g_render_mode == RENDER_MODE_CRT || g_render_mode == RENDER_MODE_VHS
          || g_render_mode == RENDER_MODE_C64 || g_render_mode == RENDER_MODE_COMPOSITE)
@@ -423,32 +427,39 @@ int main(int argc, char **argv) {
         fight_tick((float)win_w, (float)win_h);
         if (fight_get_enabled()) needs_render = true;
 
-        // Hard cap at ~60 fps using absolute deadline from start of this
-        // iteration. This prevents fight mode and animated render modes from
-        // spinning the CPU at 100% regardless of how long the render took.
+        // Hard cap at ~60 fps: sleep until 16ms after the start of this
+        // iteration so fight mode and animated modes don't busy-loop.
         {
             uint32_t elapsed = SDL_GetTicks() - now;
             if (elapsed < 16) SDL_Delay(16 - elapsed);
         }
 
         if (needs_render) {
-            // Render terminal into FBO (post-process applies here, menu does NOT go in here)
+            // s_term_dirty tracks whether terminal cell content has changed.
+            // Animation-only frames (fight mode, CRT/VHS flicker) reuse the
+            // cached terminal FBO and skip the expensive term_render call.
+            static bool s_term_dirty = true;
+            if (term_needs_render) s_term_dirty = true;
+
+            if (s_term_dirty) {
+                s_term_dirty = false;
+                gl_begin_term_frame(win_w, win_h,
+                    THEMES[g_theme_idx].bg_r,
+                    THEMES[g_theme_idx].bg_g,
+                    THEMES[g_theme_idx].bg_b);
+                term_render(&term, 2, 2);
+                gl_end_term_frame();
+            }
+
+            // Composite: blit cached terminal into post-process FBO, overlay fight figures
             gl_begin_frame();
             glViewport(0, 0, win_w, win_h);
-            glClearColor(
-                THEMES[g_theme_idx].bg_r,
-                THEMES[g_theme_idx].bg_g,
-                THEMES[g_theme_idx].bg_b,
-                1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
             fight_render((float)win_w, (float)win_h);
-            term_render(&term, 2, 2);
 
-            // Apply post-process and blit to screen
             float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
             gl_end_frame(t_sec, win_w, win_h);
 
-            // Render menu directly to screen after post-process — always clean, never distorted
+            // Menu renders after post-process so it's never distorted
             glViewport(0, 0, win_w, win_h);
             menu_render(&g_menu);
 

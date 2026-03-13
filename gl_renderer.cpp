@@ -309,12 +309,17 @@ GLState G = {};
 int     g_render_mode = RENDER_MODE_NORMAL;
 
 
-// FBO state
+// FBO state — composite (post-process) FBO
 static GLuint s_fbo       = 0;
 static GLuint s_fbo_tex   = 0;
-static GLuint s_fbo_rb    = 0;  // depth/stencil renderbuffer
+static GLuint s_fbo_rb    = 0;
 static int    s_fbo_w     = 0;
 static int    s_fbo_h     = 0;
+
+// Terminal cache FBO — only redrawn when terminal content changes
+static GLuint s_term_fbo     = 0;
+static GLuint s_term_fbo_tex = 0;
+static GLuint s_term_fbo_rb  = 0;
 
 // Post-process quad
 static GLuint s_quad_prog  = 0;
@@ -367,32 +372,36 @@ static GLuint link_program(const char *vs_src, const char *fs_src) {
 // FBO
 // ============================================================================
 
-static void create_fbo(int w, int h) {
-    if (s_fbo) {
-        glDeleteFramebuffers(1, &s_fbo);
-        glDeleteTextures(1, &s_fbo_tex);
-        glDeleteRenderbuffers(1, &s_fbo_rb);
+static void make_color_fbo(GLuint *fbo, GLuint *tex, GLuint *rb, int w, int h) {
+    if (*fbo) {
+        glDeleteFramebuffers(1, fbo);
+        glDeleteTextures(1, tex);
+        glDeleteRenderbuffers(1, rb);
     }
-    s_fbo_w = w; s_fbo_h = h;
+    glGenFramebuffers(1, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
 
-    glGenFramebuffers(1, &s_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
-
-    glGenTextures(1, &s_fbo_tex);
-    glBindTexture(GL_TEXTURE_2D, s_fbo_tex);
+    glGenTextures(1, tex);
+    glBindTexture(GL_TEXTURE_2D, *tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_fbo_tex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *tex, 0);
 
-    glGenRenderbuffers(1, &s_fbo_rb);
-    glBindRenderbuffer(GL_RENDERBUFFER, s_fbo_rb);
+    glGenRenderbuffers(1, rb);
+    glBindRenderbuffer(GL_RENDERBUFFER, *rb);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, s_fbo_rb);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, *rb);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+static void create_fbo(int w, int h) {
+    s_fbo_w = w; s_fbo_h = h;
+    make_color_fbo(&s_fbo,      &s_fbo_tex,      &s_fbo_rb,      w, h);
+    make_color_fbo(&s_term_fbo, &s_term_fbo_tex, &s_term_fbo_rb, w, h);
 }
 
 // ============================================================================
@@ -505,11 +514,36 @@ void draw_rect(float x, float y, float w, float h, float r, float g, float b, fl
 }
 
 // ============================================================================
-// FRAME
+// TERM FRAME — render terminal into its own cached FBO
+// ============================================================================
+
+void gl_begin_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b) {
+    s_accum_n = 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, s_term_fbo);
+    glViewport(0, 0, win_w, win_h);
+    glClearColor(bg_r, bg_g, bg_b, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+}
+
+void gl_end_term_frame(void) {
+    gl_flush_verts();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ============================================================================
+// FRAME — composite term cache + fight figures into post-process FBO
 // ============================================================================
 
 void gl_begin_frame(void) {
-    s_accum_n = 0;   // discard any leftover from a previous (incomplete) frame
+    s_accum_n = 0;
+    // Bind the composite FBO and blit the cached terminal content into it
+    glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
+    // Blit term FBO → composite FBO (no shader, just a pixel copy)
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_term_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fbo);
+    glBlitFramebuffer(0, 0, s_fbo_w, s_fbo_h,
+                      0, 0, s_fbo_w, s_fbo_h,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
 }
 
@@ -544,3 +578,4 @@ void gl_end_frame(float time, int win_w, int win_h) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
+
