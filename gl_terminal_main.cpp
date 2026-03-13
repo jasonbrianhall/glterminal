@@ -419,7 +419,7 @@ int main(int argc, char **argv) {
             needs_render = true;
 
         if (needs_render) {
-            // Render terminal into FBO
+            // Render terminal into FBO (post-process applies here, menu does NOT go in here)
             gl_begin_frame();
             glViewport(0, 0, win_w, win_h);
             glClearColor(
@@ -429,11 +429,14 @@ int main(int argc, char **argv) {
                 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             term_render(&term, 2, 2);
-            menu_render(&g_menu);
 
             // Apply post-process and blit to screen
             float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
             gl_end_frame(t_sec, win_w, win_h);
+
+            // Render menu directly to screen after post-process — always clean, never distorted
+            glViewport(0, 0, win_w, win_h);
+            menu_render(&g_menu);
 
             SDL_GL_SwapWindow(window);
         }
