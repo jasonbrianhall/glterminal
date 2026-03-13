@@ -1,7 +1,8 @@
 #include "gl_bouncingcircle.h"
-#include "gl_renderer.h"   // Vertex, draw_verts, draw_rect
-#include "ft_font.h"       // draw_text, measure_text
-#include "term_color.h"    // g_palette16 (unused but available)
+#include "gl_renderer.h"
+#include "ft_font.h"
+#include "term_color.h"
+#include "crt_audio.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -188,6 +189,10 @@ void bc_tick(float win_w, float win_h, float dt) {
         st.bounce_counter++;
         st.total_bounces++;
         st.radius += st.current_growth_rate;
+
+        // Sound: pitch drops as ball grows
+        float radius_frac = (float)(st.radius / (container_r * BC_RESET_THRESHOLD));
+        bc_audio_bounce(radius_frac);
 
         // Subtle size-based velocity nudge to keep ball lively
         double sf = 1.0 + (st.radius / (container_r * BC_RESET_THRESHOLD)) * 0.08;

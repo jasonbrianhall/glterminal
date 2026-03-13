@@ -1,5 +1,6 @@
 #include "fight_mode.h"
 #include "gl_renderer.h"
+#include "crt_audio.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -259,6 +260,7 @@ static void fight_fire_hadouken(FightFighter &me, int owner_idx) {
     s_hadoukens.push_back({hx, hy, dir * 5.5f, me.cr, me.cg, me.cb, 0.f, owner_idx, false});
     // small charge burst at launch point
     fight_spawn_sparks(hx, hy, me.cr, me.cg, me.cb, 8);
+    fight_audio_hadouken_launch();
 }
 
 static void fight_do_attack(FightFighter &me, FightFighter &enemy, AttackType atk) {
@@ -314,8 +316,13 @@ static void fight_do_attack(FightFighter &me, FightFighter &enemy, AttackType at
             fight_spawn_sweat(hx,hy, 3);
             s_screen_shake += (atk==ATK_UPPERCUT||atk==ATK_KICK) ? 5.f : 2.5f;
             if (s_screen_shake > 10.f) s_screen_shake = 10.f;
+
+            // Sound: 0=light(jab), 1=medium(cross/hook), 2=heavy(uppercut/kick/sweep)
+            int weight = (atk==ATK_JAB) ? 0 : (atk==ATK_UPPERCUT||atk==ATK_KICK||atk==ATK_SWEEP) ? 2 : 1;
+            fight_audio_hit(enemy.x, enemy.y, weight);
         } else {
             fight_spawn_sparks(enemy.x, enemy.y-50.f, 0.7f,0.7f,1.f, 3);
+            fight_audio_block();
         }
 
         me.combo_count++;
@@ -327,6 +334,7 @@ static void fight_do_attack(FightFighter &me, FightFighter &enemy, AttackType at
             enemy.dead_timer = 0.f;
             float kdir = (enemy.x > me.x) ? 1.f : -1.f;
             enemy.vx=kdir*7.f; enemy.vy=-5.f;
+            fight_audio_ko();
         }
     }
 
@@ -626,6 +634,9 @@ void fight_tick(float ww, float wh) {
                 target.state=FS_STAGGER; target.state_timer=25; target.state_dur=25;
                 fight_spawn_blood(target.x, target.y-55.f, target.cr,target.cg,target.cb, 6);
                 s_screen_shake += 4.f;
+                fight_audio_hit(target.x, target.y, 2);
+            } else {
+                fight_audio_block();
             }
             // big explosion of sparks at impact
             fight_spawn_sparks(h.x, h.y, h.cr, h.cg, h.cb, 14);
@@ -633,6 +644,7 @@ void fight_tick(float ww, float wh) {
                 target.dead=true; target.state=FS_KNOCKDOWN; target.dead_timer=0.f;
                 float kdir=(target.x>h.x)?1.f:-1.f;
                 target.vx=kdir*8.f; target.vy=-6.f;
+                fight_audio_ko();
             }
         }
     }
@@ -648,6 +660,7 @@ void fight_tick(float ww, float wh) {
         if (f1d&&!f0d)      s_ff[0].rounds_won++;
         else if (f0d&&!f1d) s_ff[1].rounds_won++;
         s_intermission=true; s_inter_timer=0;
+        fight_audio_cheer();
     }
 }
 
