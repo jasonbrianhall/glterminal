@@ -18,6 +18,7 @@
 #include <sys/types.h> // pid_t
 
 #include "fight_mode.h"
+#include "crt_audio.h"
 
 // ============================================================================
 // URL DETECTION
@@ -563,6 +564,7 @@ void term_render(Terminal *t, int ox, int oy) {
     }
 
     // Pass 2: glyphs and decorations
+    int dirty_cells = 0;
     for (int row = 0; row < t->rows; row++) {
         for (int col = 0; col < t->cols; col++) {
             float px = ox + col*cw, py = oy + row*ch;
@@ -581,6 +583,7 @@ void term_render(Terminal *t, int ox, int oy) {
                 cp_to_utf8(cp, tmp);
                 float baseline = py + ch * 0.82f;
                 draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
+                dirty_cells++;
             }
             if ((c->attrs & ATTR_UNDERLINE) && !blink_hidden)
                 draw_rect(px, py+ch-2, cw, 2, fc.r, fc.g, fc.b, 1.f);
@@ -601,6 +604,9 @@ void term_render(Terminal *t, int ox, int oy) {
             }
         }
     }
+
+    // Feed glyph activity to CRT audio buzz
+    crt_audio_set_activity((float)dirty_cells / (float)(t->cols * t->rows));
 
     // Cursor
     if (!scrolled && t->cursor_on) {
@@ -653,12 +659,12 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
     };
 
     switch (ks.sym) {
-    case SDLK_UP:    arrow("\x1b[A", "\x1bOA", 'A'); return;
-    case SDLK_DOWN:  arrow("\x1b[B", "\x1bOB", 'B'); return;
-    case SDLK_RIGHT: arrow("\x1b[C", "\x1bOC", 'C'); return;
-    case SDLK_LEFT:  arrow("\x1b[D", "\x1bOD", 'D'); return;
-    case SDLK_HOME:  term_write(t, t->app_cursor_keys ? "\x1bOH" : "\x1b[H", 3); return;
-    case SDLK_END:   term_write(t, t->app_cursor_keys ? "\x1bOF" : "\x1b[F", 3); return;
+    case SDLK_UP:    arrow("\x1b[A", "\x1bOA", 'A'); crt_audio_cursor_ping(); return;
+    case SDLK_DOWN:  arrow("\x1b[B", "\x1bOB", 'B'); crt_audio_cursor_ping(); return;
+    case SDLK_RIGHT: arrow("\x1b[C", "\x1bOC", 'C'); crt_audio_cursor_ping(); return;
+    case SDLK_LEFT:  arrow("\x1b[D", "\x1bOD", 'D'); crt_audio_cursor_ping(); return;
+    case SDLK_HOME:  term_write(t, t->app_cursor_keys ? "\x1bOH" : "\x1b[H", 3); crt_audio_cursor_ping(); return;
+    case SDLK_END:   term_write(t, t->app_cursor_keys ? "\x1bOF" : "\x1b[F", 3); crt_audio_cursor_ping(); return;
     default: break;
     }
 

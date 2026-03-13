@@ -11,6 +11,7 @@
 #include "term_pty.h"
 #include "term_ui.h"
 #include "gl_bouncingcircle.h"
+#include "crt_audio.h"
 
 #include <SDL2/SDL.h>
 #include <sys/wait.h>
@@ -31,7 +32,7 @@ SDL_Window *g_sdl_window  = nullptr;
 int main(int argc, char **argv) {
     const char *shell = (argc > 1) ? argv[1] : "/bin/bash";
 
-    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
 
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -53,6 +54,7 @@ int main(int argc, char **argv) {
 
     apply_theme(0);
     ft_init();
+    crt_audio_init();
 
     Terminal term;
     term_init(&term);
@@ -425,6 +427,13 @@ int main(int argc, char **argv) {
          || g_render_mode == RENDER_MODE_C64 || g_render_mode == RENDER_MODE_COMPOSITE)
             needs_render = true;
 
+        // Notify CRT audio of mode state (fires thunk on rising edge, silences on exit)
+        static int s_prev_render_mode = -1;
+        if (g_render_mode != s_prev_render_mode) {
+            crt_audio_set_mode(g_render_mode == RENDER_MODE_CRT);
+            s_prev_render_mode = g_render_mode;
+        }
+
         // Fight simulation tick every frame
         fight_tick((float)win_w, (float)win_h);
         if (fight_get_enabled()) needs_render = true;
@@ -482,6 +491,7 @@ int main(int argc, char **argv) {
     SDL_FreeCursor(cursor_ibeam);
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(window);
+    crt_audio_shutdown();
     SDL_Quit();
     ft_shutdown();
 
