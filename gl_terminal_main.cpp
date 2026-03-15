@@ -14,7 +14,9 @@
 #include "crt_audio.h"
 
 #include <SDL2/SDL.h>
-#include <sys/wait.h>
+#ifndef _WIN32
+#  include <sys/wait.h>
+#endif
 
 // ============================================================================
 // GLOBALS referenced across modules
@@ -109,14 +111,13 @@ int main(int argc, char **argv) {
             needs_render = true;
         }
 
-        // Cursor blink (600ms) — only triggers redraw when cursor is visible
+        // Cursor blink (600ms)
         if (term.cursor_blink_enabled) {
             term.cursor_blink += dt;
             if (term.cursor_blink >= 0.6) {
                 term.cursor_blink = 0;
                 term.cursor_on = !term.cursor_on;
-                if (term.sb_offset == 0)  // cursor not visible when scrolled back
-                    needs_render = true;
+                needs_render = true;
             }
         }
 
@@ -167,22 +168,22 @@ int main(int argc, char **argv) {
         }
 
         // Child exit check
-        int status;
-        if (waitpid(term.child, &status, WNOHANG) == term.child) {
-            running = false;
-        }
+#ifdef _WIN32
+        if (term_child_exited()) running = false;
+#else
+        { int status;
+          if (waitpid(term.child, &status, WNOHANG) == term.child)
+              running = false; }
+#endif
 
         // Event loop
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
-            // NOTE: do NOT set needs_render = true here unconditionally.
-            // Mouse motion is high-frequency and only needs a redraw when
-            // hover state actually changes (handled inside SDL_MOUSEMOTION).
-            // All other events dirty the frame below.
+            needs_render = true;
             switch (ev.type) {
             case SDL_QUIT: running = false; break;
 
-            case SDL_KEYDOWN: { needs_render = true;
+            case SDL_KEYDOWN: {
                 if (ev.key.repeat) {
                     // Block repeat for printable keys — SDL_TEXTINPUT handles those.
                     // Arrow keys, backspace, delete, etc. still need repeat.
@@ -215,7 +216,7 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            case SDL_TEXTINPUT: { needs_render = true;
+            case SDL_TEXTINPUT: {
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
                     term_write(&term, ev.text.text, (int)strlen(ev.text.text));
@@ -224,7 +225,7 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            case SDL_MOUSEBUTTONDOWN: { needs_render = true;
+            case SDL_MOUSEBUTTONDOWN: {
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -334,28 +335,27 @@ int main(int argc, char **argv) {
                         g_menu.sub_open = -1;
                     }
                     g_menu.sub_hovered = submenu_hit(&g_menu, ev.motion.x, ev.motion.y);
-                    needs_render = true;  // menu highlight changed
                 } else if (term.sel_active && (ev.motion.state & SDL_BUTTON_LMASK)) {
                     autoscroll_mouse_x = ev.motion.x;
                     autoscroll_mouse_y = ev.motion.y;
                     pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2,
                                   &term.sel_end_row, &term.sel_end_col);
                     term.sel_exists = true;
-                    needs_render = true;  // selection region changed
                 } else {
                     // Update URL hover highlight
                     if (url_update_hover(&term, ev.motion.x, ev.motion.y, 2, 2))
                         needs_render = true;
-                    // Show hand cursor when hovering a URL with Ctrl held
+                    // Show pointer cursor when over a URL (Ctrl = clickable)
                     SDL_Keymod mod = SDL_GetModState();
-                    if (term_hovered_url_index() >= 0 && (mod & KMOD_CTRL))
+                    std::string hurl = url_at_pixel(&term, ev.motion.x, ev.motion.y, 2, 2);
+                    if (!hurl.empty() && (mod & KMOD_CTRL))
                         SDL_SetCursor(cursor_hand);
                     else
                         SDL_SetCursor(cursor_ibeam);
                 }
                 break;
 
-            case SDL_MOUSEBUTTONUP: { needs_render = true;
+            case SDL_MOUSEBUTTONUP: {
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -383,7 +383,7 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            case SDL_MOUSEWHEEL: { needs_render = true;
+            case SDL_MOUSEWHEEL: {
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
                     int delta = (ev.wheel.y > 0) ? 1 : -1;
@@ -410,7 +410,7 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            case SDL_WINDOWEVENT: needs_render = true;
+            case SDL_WINDOWEVENT:
                 if (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
                     ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
@@ -439,21 +439,17 @@ int main(int argc, char **argv) {
             s_prev_render_mode = g_render_mode;
         }
 
-        // Fight simulation tick — only when enabled
-        if (fight_get_enabled()) {
-            fight_tick((float)win_w, (float)win_h);
-            needs_render = true;
-        }
+        // Fight simulation tick every frame
+        fight_tick((float)win_w, (float)win_h);
+        if (fight_get_enabled()) needs_render = true;
 
-        // Bouncing circle tick — only when enabled
-        if (bc_get_enabled()) {
-            static uint32_t s_last_bc_ticks = 0;
-            uint32_t cur_ticks = SDL_GetTicks();
-            float bc_dt = s_last_bc_ticks ? (float)(cur_ticks - s_last_bc_ticks) / 1000.f : 0.016f;
-            s_last_bc_ticks = cur_ticks;
-            bc_tick((float)win_w, (float)win_h, bc_dt);
-            needs_render = true;
-        }
+        // Bouncing circle tick every frame
+        static uint32_t s_last_bc_ticks = 0;
+        uint32_t cur_ticks = SDL_GetTicks();
+        float bc_dt = s_last_bc_ticks ? (float)(cur_ticks - s_last_bc_ticks) / 1000.f : 0.016f;
+        s_last_bc_ticks = cur_ticks;
+        bc_tick((float)win_w, (float)win_h, bc_dt);
+        if (bc_get_enabled()) needs_render = true;
 
         // Hard cap at ~60 fps: sleep until 16ms after the start of this
         // iteration so fight mode and animated modes don't busy-loop.
