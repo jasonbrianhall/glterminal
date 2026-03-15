@@ -6,7 +6,9 @@
 #include <SDL2/SDL.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
+#ifndef _WIN32
+#  include <sys/ioctl.h>
+#endif
 
 extern int g_font_size;
 // g_sdl_window needed for OSC title; forward-declared here, defined in main
@@ -496,6 +498,7 @@ void term_resize(Terminal *t, int win_w, int win_h) {
     if (t->cur_row >= t->rows) t->cur_row = t->rows - 1;
     if (t->cur_col >= t->cols) t->cur_col = t->cols - 1;
 
+#ifndef _WIN32
     if (t->pty_fd >= 0) {
         struct winsize ws = {
             .ws_row    = (unsigned short)new_rows,
@@ -505,6 +508,9 @@ void term_resize(Terminal *t, int win_w, int win_h) {
         };
         ioctl(t->pty_fd, TIOCSWINSZ, &ws);
     }
+#else
+    term_pty_resize(new_cols, new_rows);
+#endif
 
     t->scroll_top = 0; t->scroll_bot = new_rows - 1;
     SDL_Log("[Term] resized to %dx%d\n", new_cols, new_rows);

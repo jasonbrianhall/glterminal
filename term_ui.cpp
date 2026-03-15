@@ -14,8 +14,13 @@
 #include <vector>
 #include <functional>
 #include <algorithm>
-#include <unistd.h>    // readlink, setsid, execl, _exit, fork
-#include <sys/types.h> // pid_t
+#ifndef _WIN32
+#  include <unistd.h>    // readlink, setsid, execl, _exit, fork
+#  include <sys/types.h> // pid_t
+#else
+#  include <windows.h>
+#  include <shellapi.h>
+#endif
 
 #include "fight_mode.h"
 #include "crt_audio.h"
@@ -121,12 +126,18 @@ static int url_at(int row, int col) {
 }
 
 void open_url(const std::string &url) {
+#ifndef _WIN32
     pid_t pid = fork();
     if (pid == 0) {
         setsid();
         execlp("xdg-open", "xdg-open", url.c_str(), nullptr);
         _exit(1);
     }
+#else
+    wchar_t wurl[2048];
+    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, wurl, 2048);
+    ShellExecuteW(nullptr, L"open", wurl, nullptr, nullptr, SW_SHOWNORMAL);
+#endif
 }
 
 extern int  g_font_size;
@@ -845,10 +856,20 @@ void menu_render(ContextMenu *m) {
 // ============================================================================
 
 void action_new_terminal() {
+#ifndef _WIN32
     char self[512] = {};
     ssize_t n = readlink("/proc/self/exe", self, sizeof(self)-1);
     if (n <= 0) return;
     self[n] = '\0';
     pid_t pid = fork();
     if (pid == 0) { setsid(); execl(self, self, nullptr); _exit(1); }
+#else
+    wchar_t self[512] = {};
+    GetModuleFileNameW(nullptr, self, 512);
+    STARTUPINFOW si = {}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    CreateProcessW(self, nullptr, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
+    if (pi.hProcess) CloseHandle(pi.hProcess);
+    if (pi.hThread)  CloseHandle(pi.hThread);
+#endif
 }
