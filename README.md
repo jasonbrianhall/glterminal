@@ -1,6 +1,6 @@
 # GL Terminal
 
-A standalone OpenGL terminal emulator for Linux. Renders text using FreeType triangles via OpenGL 3.3 — no GTK, no Qt, no desktop toolkit dependency.
+A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text using FreeType triangles via OpenGL 3.3 — no GTK, no Qt, no desktop toolkit dependency.
 
 ## Features
 
@@ -38,13 +38,12 @@ sudo apt install libsdl2-dev libglew-dev libfreetype-dev
 make
 ```
 
-Or manually:
+or for Windows (requires mingw)
 
 ```
-g++ -std=c++17 -O2 -I/usr/include/SDL2 -I/usr/include/freetype2 -I. \
-    -o gl_terminal gl_terminal_main.cpp \
-    -lSDL2 -lfreetype -lGLEW -lGL -lutil
+make windows
 ```
+
 
 The fonts are embedded as base64-encoded headers — no external font files required.
 
@@ -63,7 +62,6 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 | `Ctrl+Shift+V` | Paste |
 | `Ctrl+Scroll Up/Down` | Increase / decrease font size |
 | `Ctrl+Shift+Scroll` | Increase / decrease font size (4× step) |
-| `Scroll Up/Down` | Scroll through scrollback history |
 
 ## Mouse
 
@@ -86,6 +84,8 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 - **Reset** — clear screen and reset cursor
 - **Themes** — submenu to switch color themes
 - **Opacity** — submenu to set window transparency
+- **Fight Mode** -  Have two guys fight in your console
+- **Bouncing Cirle** -  A circle with a little ball that bounces around in your console
 - **Quit**
 
 ## Themes
