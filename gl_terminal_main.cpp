@@ -529,14 +529,18 @@ int main(int argc, char **argv) {
             }
 
             // Composite: blit cached terminal into post-process FBO, overlay fight figures
-            gl_begin_frame();
-            glViewport(0, 0, win_w, win_h);
-            fight_render((float)win_w, (float)win_h);
-            bc_render((float)win_w, (float)win_h);
-
-            float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
-            gl_end_frame(t_sec, win_w, win_h);
-
+            if (fight_get_enabled() || bc_get_enabled()) {
+                gl_begin_frame();
+                glViewport(0, 0, win_w, win_h);
+                if (fight_get_enabled()) {
+                    fight_render((float)win_w, (float)win_h);
+                }
+                if (bc_get_enabled()) {
+                    bc_render((float)win_w, (float)win_h);
+                }
+                float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
+                gl_end_frame(t_sec, win_w, win_h);
+            }
             // Menu renders after post-process so it's never distorted
             glViewport(0, 0, win_w, win_h);
             menu_render(&g_menu);
