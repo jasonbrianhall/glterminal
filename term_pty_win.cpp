@@ -114,7 +114,9 @@ bool term_spawn(Terminal *t, const char *cmd) {
 // ============================================================================
 
 bool term_read(Terminal *t) {
-    WaitForSingleObject(s_pipe_mutex, INFINITE);
+    // Non-blocking trylock — don't stall the main/render thread
+    if (WaitForSingleObject(s_pipe_mutex, 0) != WAIT_OBJECT_0)
+        return false;
     if (s_pipe_len == 0) {
         ReleaseMutex(s_pipe_mutex);
         return false;

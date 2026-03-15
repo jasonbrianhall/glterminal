@@ -771,11 +771,14 @@ int menu_hit(ContextMenu *m, int px, int py) {
 
 int submenu_hit(ContextMenu *m, int px, int py) {
     if (m->sub_open < 0) return -1;
-    if (px < m->sub_x || px > m->sub_x + m->sub_w) return -1;
-    if (py < m->sub_y || py > m->sub_y + m->sub_h) return -1;
     int count = (m->sub_open == MENU_ID_THEMES)      ? THEME_COUNT :
                 (m->sub_open == MENU_ID_RENDER_MODE)  ? RENDER_MODE_COUNT : OPACITY_COUNT;
-    int idx = (py - m->sub_y) / m->item_h;
+    // Compute dimensions directly — don't rely on sub_w/sub_h from render
+    int sw = m->width + g_font_size * 2;
+    int sh = count * m->item_h + 8;
+    if (px < m->sub_x || px > m->sub_x + sw) return -1;
+    if (py < m->sub_y || py > m->sub_y + sh) return -1;
+    int idx = (py - m->sub_y - 4) / m->item_h;
     if (idx < 0 || idx >= count) return -1;
     return idx;
 }
