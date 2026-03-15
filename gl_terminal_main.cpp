@@ -44,8 +44,6 @@ int main(int argc, char **argv) {
     const char *shell = (argc > 1) ? argv[1] : "/bin/bash";
 #endif
 
-    int framenumber=0;
-
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
 
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
@@ -525,8 +523,6 @@ int main(int argc, char **argv) {
 
             if (s_term_dirty) {
                 s_term_dirty = false;
-                printf("Frame number is %i\n", framenumber);
-                framenumber++;
                 gl_begin_term_frame(win_w, win_h, THEMES[g_theme_idx].bg_r, THEMES[g_theme_idx].bg_g, THEMES[g_theme_idx].bg_b);
                 term_render(&term, 2, 2);
                 gl_end_term_frame();
