@@ -1,4 +1,4 @@
-# GL Terminal
+# Felix Terminal
 
 A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text using FreeType triangles via OpenGL 3.3 — no GTK, no Qt, no desktop toolkit dependency.
 

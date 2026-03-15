@@ -1,4 +1,4 @@
-# gl_terminal Makefile
+# Felix Terminal Makefile
 # Cross-compile for Windows with: make windows
 # Native Linux build with:        make linux
 
@@ -104,10 +104,10 @@ OBJECTS_WIN_DEBUG   = $(addprefix $(BUILD_DIR_WIN_DEBUG)/,   $(SRCS_WIN:.cpp=.wi
 # ============================================================================
 # TARGETS / DIRS
 # ============================================================================
-EXECUTABLE_LINUX       = gl_terminal
-EXECUTABLE_LINUX_DEBUG = gl_terminal_debug
-EXECUTABLE_WIN         = gl_terminal.exe
-EXECUTABLE_WIN_DEBUG   = gl_terminal_debug.exe
+EXECUTABLE_LINUX       = flt
+EXECUTABLE_LINUX_DEBUG = flt_debug
+EXECUTABLE_WIN         = flt.exe
+EXECUTABLE_WIN_DEBUG   = flt_debug.exe
 
 BUILD_DIR             = build
 BUILD_DIR_LINUX       = $(BUILD_DIR)/linux
@@ -126,17 +126,17 @@ $(shell mkdir -p $(BUILD_DIR_LINUX) $(BUILD_DIR_LINUX_DEBUG) $(BUILD_DIR_WIN) $(
 
 all: linux
 
-linux: gl_terminal-linux
+linux: flt-linux
 
-windows: gl_terminal-windows gl_terminal-collect-dlls
+windows: flt-windows flt-collect-dlls
 
-debug: gl_terminal-linux-debug gl_terminal-windows-debug
+debug: flt-linux-debug flt-windows-debug
 
 # ============================================================================
 # LINUX BUILD
 # ============================================================================
-.PHONY: gl_terminal-linux
-gl_terminal-linux: $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX)
+.PHONY: flt-linux
+flt-linux: $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX)
 
 $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX): $(OBJECTS_LINUX)
 	@echo "Linking Linux: $@"
@@ -150,8 +150,8 @@ $(BUILD_DIR_LINUX)/%.o: %.cpp
 # ============================================================================
 # LINUX DEBUG BUILD
 # ============================================================================
-.PHONY: gl_terminal-linux-debug
-gl_terminal-linux-debug: $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG)
+.PHONY: flt-linux-debug
+flt-linux-debug: $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG)
 
 $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG): $(OBJECTS_LINUX_DEBUG)
 	@echo "Linking Linux debug: $@"
@@ -165,8 +165,8 @@ $(BUILD_DIR_LINUX_DEBUG)/%.debug.o: %.cpp
 # ============================================================================
 # WINDOWS BUILD
 # ============================================================================
-.PHONY: gl_terminal-windows
-gl_terminal-windows: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
+.PHONY: flt-windows
+flt-windows: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 
 $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN): $(OBJECTS_WIN)
 	@echo "Linking Windows: $@"
@@ -180,8 +180,8 @@ $(BUILD_DIR_WIN)/%.win.o: %.cpp
 # ============================================================================
 # WINDOWS DEBUG BUILD
 # ============================================================================
-.PHONY: gl_terminal-windows-debug
-gl_terminal-windows-debug: $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG)
+.PHONY: flt-windows-debug
+flt-windows-debug: $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG)
 
 $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG): $(OBJECTS_WIN_DEBUG)
 	@echo "Linking Windows debug: $@"
@@ -195,8 +195,8 @@ $(BUILD_DIR_WIN_DEBUG)/%.win.debug.o: %.cpp
 # ============================================================================
 # DLL COLLECTION
 # ============================================================================
-.PHONY: gl_terminal-collect-dlls
-gl_terminal-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
+.PHONY: flt-collect-dlls
+flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 	@echo "Collecting DLLs..."
 	@if [ -f collect_dlls.sh ]; then \
 		./collect_dlls.sh $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN) $(DLL_SOURCE_DIR) $(BUILD_DIR_WIN); \
@@ -239,7 +239,7 @@ clean-all:
 	rm -rf $(BUILD_DIR)
 
 help:
-	@echo "gl_terminal build targets:"
+	@echo "Felix Terminal build targets:"
 	@echo "  make              - Linux build (default)"
 	@echo "  make linux        - Linux build"
 	@echo "  make windows      - Windows cross-compile (mingw)"
