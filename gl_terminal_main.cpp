@@ -237,9 +237,7 @@ int main(int argc, char **argv) {
                 term.sb_offset = 0;
                 if (mod & KMOD_CTRL) {
                     if (ev.key.keysym.sym == SDLK_c && term.sel_exists) {
-                        if (mod & KMOD_SHIFT) term_copy_selection_html(&term);
-                        else                  term_copy_selection(&term);
-                        break;
+                        term_copy_selection(&term); break;
                     }
                     if (ev.key.keysym.sym == SDLK_v) { term_paste(&term); break; }
                     if (ev.key.keysym.sym == SDLK_LSHIFT ||
@@ -389,9 +387,8 @@ int main(int argc, char **argv) {
                                   &term.sel_end_row, &term.sel_end_col);
                     term.sel_exists = true;
                 } else {
-                    // Update URL hover highlight
-                    if (url_update_hover(&term, ev.motion.x, ev.motion.y, 2, 2))
-                        needs_render = true;
+                    // Update URL hover highlight — only redraw if hover state changed
+                    needs_render = url_update_hover(&term, ev.motion.x, ev.motion.y, 2, 2);
                     // Show pointer cursor when over a URL (Ctrl = clickable)
                     SDL_Keymod mod = SDL_GetModState();
                     std::string hurl = url_at_pixel(&term, ev.motion.x, ev.motion.y, 2, 2);
