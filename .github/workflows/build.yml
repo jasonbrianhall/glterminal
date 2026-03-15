@@ -1,0 +1,349 @@
+name: Build Felix Terminal
+
+on:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - '**.cpp'
+      - '**.h'
+      - 'Makefile'
+      - '**/Makefile'
+      - '**.yml'
+      - '**.yaml'
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - '**.cpp'
+      - '**.h'
+      - 'Makefile'
+      - '**/Makefile'
+      - '**.yml'
+      - '**.yaml'
+  workflow_dispatch:
+
+env:
+  PRODUCT_VERSION: "1.0.${{ github.run_number }}.0"
+  UPGRADE_CODE: "B3E7A1D4-2F58-47C3-9A6B-1D4E8F2C5B7A"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:43
+    outputs:
+      version: ${{ env.PRODUCT_VERSION }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        dnf -y install \
+          gcc gcc-c++ make \
+          SDL2-devel \
+          freetype-devel \
+          glew-devel \
+          pkg-config \
+          mingw64-gcc mingw64-gcc-c++ \
+          mingw64-SDL2 \
+          mingw64-freetype \
+          mingw64-glew \
+          wine \
+          zip unzip \
+          ImageMagick
+
+    - name: Build Windows Executable
+      run: |
+        make windows
+
+    - name: Convert PNG Icon to ICO Format
+      working-directory: build/windows
+      run: |
+        if [ -f "../../icon.png" ]; then
+          echo "Converting icon.png to icon.ico..."
+          convert ../../icon.png -resize 256x256 -colors 256 icon.ico
+          echo "✅ Icon converted successfully"
+          ls -lh icon.ico
+        else
+          echo "⚠️  icon.png not found at repo root"
+        fi
+
+    - name: Prepare Build Artifacts
+      working-directory: build/windows
+      run: |
+        cp ../../README.md . 2>/dev/null || true
+        cp ../../LICENSE.md . 2>/dev/null || true
+        cp ../../icon.png . 2>/dev/null || true
+
+        DLL_SOURCE="/usr/x86_64-w64-mingw32/sys-root/mingw/bin"
+
+        for dll in \
+          libgcc_s_seh-1.dll \
+          libstdc++-6.dll \
+          libwinpthread-1.dll \
+          SDL2.dll \
+          libfreetype-6.dll \
+          glew32.dll \
+          zlib1.dll \
+          libpng16-16.dll \
+          libbz2-1.dll; do
+          if [ -f "$DLL_SOURCE/$dll" ]; then
+            cp "$DLL_SOURCE/$dll" .
+          fi
+        done
+
+        zip -r ../../FelixTerminal-Portable.zip ./*
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: felix-terminal-build
+        path: FelixTerminal-Portable.zip
+        retention-days: 7
+
+  build-msi-windows:
+    needs: build-linux
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: felix-terminal-build
+        path: .
+
+    - name: Extract Build Files
+      run: |
+        Expand-Archive -Path "FelixTerminal-Portable.zip" -DestinationPath "artifacts/build/windows/" -Force
+
+    - name: Setup WiX Toolset
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip" -OutFile "wix.zip"
+        Expand-Archive -Path "wix.zip" -DestinationPath "wix"
+        echo "$env:GITHUB_WORKSPACE\wix" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Create License File
+      run: |
+        @"
+        MIT License
+
+        Copyright (c) 2025 Felix Terminal Contributors
+
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        "@ | Out-File -FilePath "artifacts\build\windows\LICENSE.txt" -Encoding UTF8
+
+    - name: Generate MSI Installer
+      working-directory: artifacts/build/windows
+      run: |
+        $version = "${{ env.PRODUCT_VERSION }}"
+        $upgradeCode = "${{ env.UPGRADE_CODE }}"
+
+        # Generate component entries for all DLLs
+        $dllComponents = Get-ChildItem -Name "*.dll" | ForEach-Object {
+          $safeId = $_ -replace '[^a-zA-Z0-9]', '_'
+          $guid = [System.Guid]::NewGuid().ToString().ToUpper()
+          @"
+              <Component Id="Comp_$safeId" Guid="$guid">
+                <File Id="$safeId" Name="$_" Source="$_" />
+              </Component>
+"@
+        }
+
+        @"
+        <?xml version="1.0" encoding="UTF-8"?>
+        <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+          <Product Id="*"
+                   Name="Felix Terminal"
+                   Language="1033"
+                   Version="$version"
+                   Manufacturer="Felix Terminal"
+                   UpgradeCode="$upgradeCode">
+
+            <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+
+            <MajorUpgrade DowngradeErrorMessage="A newer version of Felix Terminal is already installed." />
+            <MediaTemplate EmbedCab="yes" />
+
+            <Icon Id="FelixIcon" SourceFile="icon.ico" />
+            <Property Id="ARPPRODUCTICON" Value="FelixIcon" />
+            <Property Id="ARPHELPLINK" Value="https://github.com/felix-terminal" />
+
+            <WixVariable Id="WixUILicenseRtf" Value="LICENSE.txt" />
+            <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+            <Directory Id="TARGETDIR" Name="SourceDir">
+              <Directory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLFOLDER" Name="Felix Terminal">
+
+                  <Component Id="MainExecutable" Guid="*">
+                    <File Id="flt_exe" Name="flt.exe" Source="flt.exe" KeyPath="yes" />
+                  </Component>
+
+                  <Component Id="StartMenuShortcuts" Guid="*">
+                    <Shortcut Id="StartMenuShortcut"
+                              Name="Felix Terminal"
+                              Description="Felix Terminal - cmd.exe"
+                              Target="[INSTALLFOLDER]flt.exe"
+                              WorkingDirectory="INSTALLFOLDER"
+                              Icon="FelixIcon" />
+                    <Shortcut Id="StartMenuShortcutPS"
+                              Name="Felix Terminal (PowerShell)"
+                              Description="Felix Terminal - PowerShell"
+                              Target="[INSTALLFOLDER]flt.exe"
+                              Arguments="powershell.exe"
+                              WorkingDirectory="INSTALLFOLDER"
+                              Icon="FelixIcon" />
+                    <RemoveFolder Id="RemoveStartMenuFolder" On="uninstall" />
+                    <RegistryValue Root="HKCU" Key="Software\FelixTerminal" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                  </Component>
+
+                  <Component Id="DesktopShortcut" Guid="*">
+                    <Condition>DESKTOP_SHORTCUT</Condition>
+                    <Shortcut Id="DesktopShortcutMain"
+                              Name="Felix Terminal"
+                              Description="Felix Terminal - cmd.exe"
+                              Target="[INSTALLFOLDER]flt.exe"
+                              WorkingDirectory="INSTALLFOLDER"
+                              Directory="DesktopFolder"
+                              Icon="FelixIcon" />
+                    <Shortcut Id="DesktopShortcutPS"
+                              Name="Felix Terminal (PowerShell)"
+                              Description="Felix Terminal - PowerShell"
+                              Target="[INSTALLFOLDER]flt.exe"
+                              Arguments="powershell.exe"
+                              WorkingDirectory="INSTALLFOLDER"
+                              Directory="DesktopFolder"
+                              Icon="FelixIcon" />
+                    <RegistryValue Root="HKCU" Key="Software\FelixTerminal" Name="desktop" Type="integer" Value="1" KeyPath="yes" />
+                  </Component>
+
+                  $($dllComponents -join "`n")
+
+                </Directory>
+              </Directory>
+
+              <Directory Id="ProgramMenuFolder">
+                <Directory Id="ApplicationProgramsFolder" Name="Felix Terminal" />
+              </Directory>
+
+              <Directory Id="DesktopFolder" />
+            </Directory>
+
+            <Feature Id="MainFeature" Title="Felix Terminal" Level="1">
+              <ComponentRef Id="MainExecutable" />
+              <ComponentRef Id="StartMenuShortcuts" />
+              <ComponentRef Id="DesktopShortcut" />
+              $(Get-ChildItem -Name "*.dll" | ForEach-Object { $safeId = $_ -replace '[^a-zA-Z0-9]', '_'; "<ComponentRef Id=""Comp_$safeId"" />" } | Out-String)
+            </Feature>
+
+            <Property Id="DESKTOP_SHORTCUT" Value="1" />
+
+            <UIRef Id="WixUI_InstallDir" />
+
+            <InstallExecuteSequence>
+              <Custom Action="SetARPINSTALLLOCATION" After="InstallValidate" />
+            </InstallExecuteSequence>
+            <CustomAction Id="SetARPINSTALLLOCATION" Property="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" />
+
+          </Product>
+        </Wix>
+        "@ | Out-File -FilePath "felix_terminal.wxs" -Encoding UTF8
+
+        candle.exe felix_terminal.wxs -out felix_terminal.wixobj -arch x64
+        light.exe felix_terminal.wixobj -out FelixTerminal.msi -ext WixUIExtension -ext WixUtilExtension
+
+    - name: Upload MSI
+      uses: actions/upload-artifact@v4
+      with:
+        name: FelixTerminal.msi
+        path: artifacts/build/windows/FelixTerminal.msi
+        retention-days: 7
+
+  create-release:
+    needs: [build-linux, build-msi-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push'
+
+    steps:
+    - name: Download MSI Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: FelixTerminal.msi
+        path: release
+
+    - name: Download Portable Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: felix-terminal-build
+        path: release
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          release/FelixTerminal.msi
+          release/FelixTerminal-Portable.zip
+        tag_name: ${{ github.ref == 'refs/heads/main' && format('v{0}', github.run_number) || format('dev-v{0}', github.run_number) }}
+        name: ${{ github.ref == 'refs/heads/main' && format('Release v{0}', github.run_number) || format('Dev Build v{0}', github.run_number) }}
+        draft: false
+        prerelease: ${{ github.ref != 'refs/heads/main' }}
+        make_latest: ${{ github.ref == 'refs/heads/main' }}
+        body: |
+          ## ${{ github.ref == 'refs/heads/main' && 'Stable Release' || 'Development Build' }}
+
+          **Version:** ${{ needs.build-linux.outputs.version }}
+          **Commit:** ${{ github.sha }}
+          **Build:** #${{ github.run_number }}
+
+          ### 🖥️ Felix Terminal
+          A fast OpenGL-accelerated terminal emulator for Windows.
+
+          ### 📦 Downloads
+          - **FelixTerminal.msi** — Windows installer with Start Menu and optional desktop shortcuts
+          - **FelixTerminal-Portable.zip** — Portable version, no installation required
+
+          ### ✨ Installer Features
+          - ✅ Start Menu shortcuts for cmd.exe and PowerShell
+          - ✅ Optional desktop shortcuts for both launchers
+          - ✅ Custom installation directory
+          - ✅ Proper uninstall support
+          - ✅ Add/Remove Programs integration
+
+          ### 🚀 Usage
+          ```cmd
+          flt.exe              # Open with cmd.exe (default)
+          flt.exe powershell.exe  # Open with PowerShell
+          flt.exe bash         # Open with bash (WSL etc.)
+          ```
+
+          ### 🎯 Silent Installation
+          ```cmd
+          msiexec /i FelixTerminal.msi /quiet /norestart
+          msiexec /i FelixTerminal.msi /quiet /norestart DESKTOP_SHORTCUT=1
+          msiexec /x FelixTerminal.msi /quiet /norestart
+          ```
+
+          ---
+          *Built with ❤️ using GitHub Actions*
