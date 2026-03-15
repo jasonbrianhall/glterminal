@@ -164,6 +164,7 @@ const MenuItem MENU_ITEMS[] = {
     { "Render Mode  >",  false },
     { "Fight Mode",      false },
     { "Bouncing Circle", false },
+    { "Sound",           false },
     { nullptr,           true  },
     { "Select All",      false },
     { nullptr,           true  },
@@ -823,6 +824,8 @@ void menu_render(ContextMenu *m) {
             draw_text(fight_lbl, mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
         } else if (i == MENU_ID_BOUNCING_CIRCLE && bc_get_enabled()) {
             draw_text("* Bouncing Circle", mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
+        } else if (i == MENU_ID_SOUND && term_audio_get_enabled()) {
+            draw_text("* Sound", mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
         } else {
             draw_text(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
         }

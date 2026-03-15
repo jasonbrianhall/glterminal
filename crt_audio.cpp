@@ -142,6 +142,7 @@ struct BonkVoice { float phase; float freq; int samples_left, total_samples; flo
 
 static SDL_AudioDeviceID s_dev      = 0;
 static int               s_cur_mode = RENDER_MODE_NORMAL;
+static bool              s_audio_enabled = false;  // off by default
 
 // CRT
 static ThunkVoice  s_thunk = {};
@@ -374,13 +375,22 @@ void term_audio_init(void) {
     memset(&s_cheer,    0, sizeof(s_cheer));
     memset(s_bonks,     0, sizeof(s_bonks));
 
-    SDL_PauseAudioDevice(s_dev, 0);
+    SDL_PauseAudioDevice(s_dev, 1);  // start paused — enabled via settings
     SDL_Log("[Audio] init OK — freq=%d fmt=0x%x ch=%d buf=%d\n",
             got.freq, got.format, got.channels, got.samples);
 }
 
 void term_audio_shutdown(void) {
     if (s_dev) { SDL_CloseAudioDevice(s_dev); s_dev = 0; }
+}
+
+void term_audio_set_enabled(bool en) {
+    s_audio_enabled = en;
+    if (s_dev) SDL_PauseAudioDevice(s_dev, en ? 0 : 1);
+}
+
+bool term_audio_get_enabled(void) {
+    return s_audio_enabled;
 }
 
 // ============================================================================

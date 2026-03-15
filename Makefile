@@ -80,15 +80,16 @@ CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
 # SOURCES
 # ============================================================================
 # Shared across platforms (term_pty is platform-specific, excluded here)
-SRCS_COMMON = gl_terminal_main.cpp \
-              gl_renderer.cpp      \
-              ft_font.cpp          \
-              term_color.cpp       \
-              terminal.cpp         \
-              term_ui.cpp          \
+SRCS_COMMON = gl_terminal_main.cpp  \
+              gl_renderer.cpp       \
+              ft_font.cpp           \
+              term_color.cpp        \
+              terminal.cpp          \
+              term_ui.cpp           \
               gl_bouncingcircle.cpp \
-              fight_mode.cpp       \
-              crt_audio.cpp
+              fight_mode.cpp        \
+              crt_audio.cpp         \
+              felix_settings.cpp
 
 SRCS_LINUX = $(SRCS_COMMON) term_pty.cpp
 SRCS_WIN   = $(SRCS_COMMON) term_pty_win.cpp

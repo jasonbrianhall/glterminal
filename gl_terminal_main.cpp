@@ -12,6 +12,7 @@
 #include "term_ui.h"
 #include "gl_bouncingcircle.h"
 #include "crt_audio.h"
+#include "felix_settings.h"
 
 #include <SDL2/SDL.h>
 #include "icon.h"
@@ -74,6 +75,8 @@ int main(int argc, char **argv) {
 
     Terminal term;
     term_init(&term);
+
+    settings_load();  // applies font size, theme, sound — after ft_init and term_init
 
     win_w = (int)(term.cell_w * term.cols) + 4;
     win_h = (int)(term.cell_h * term.rows) + 4;
@@ -189,11 +192,13 @@ int main(int argc, char **argv) {
         // Child exit check
 #ifdef _WIN32
         if (term_child_exited()) {
+            settings_save();
             running = false;
         }
 #else
         int status;
         if (waitpid(term.child, &status, WNOHANG) == term.child) {
+            settings_save();
             running = false;
         }
 #endif
@@ -203,7 +208,7 @@ int main(int argc, char **argv) {
         while (SDL_PollEvent(&ev)) {
             needs_render = true;
             switch (ev.type) {
-            case SDL_QUIT: running = false; break;
+            case SDL_QUIT: settings_save(); running = false; break;
 
             case SDL_KEYDOWN: {
                 if (ev.key.repeat) {
@@ -212,6 +217,11 @@ int main(int argc, char **argv) {
                     SDL_Keycode sym = ev.key.keysym.sym;
                     if (sym >= SDLK_SPACE && sym < SDLK_DELETE)
                         break;
+                }
+                if (ev.key.keysym.sym == SDLK_F11) {
+                    bool is_full = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+                    SDL_SetWindowFullscreen(window, is_full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    break;
                 }
                 if (g_menu.visible) { g_menu.visible = false; break; }
                 SDL_Keymod mod = SDL_GetModState();
@@ -230,7 +240,6 @@ int main(int argc, char **argv) {
                         term_copy_selection(&term); break;
                     }
                     if (ev.key.keysym.sym == SDLK_v) { term_paste(&term); break; }
-                    if (ev.key.keysym.sym == SDLK_a) { term_select_all(&term); break; }
                     if (ev.key.keysym.sym == SDLK_LSHIFT ||
                         ev.key.keysym.sym == SDLK_RSHIFT) break;
                 }
@@ -284,9 +293,10 @@ int main(int argc, char **argv) {
                     if (g_menu.visible) {
                         int sub_hit = submenu_hit(&g_menu, ev.button.x, ev.button.y);
                         if (sub_hit >= 0) {
-                            if (g_menu.sub_open == MENU_ID_THEMES)
+                            if (g_menu.sub_open == MENU_ID_THEMES) {
                                 apply_theme(sub_hit);
-                            else if (g_menu.sub_open == MENU_ID_OPACITY) {
+                                settings_save();
+                            } else if (g_menu.sub_open == MENU_ID_OPACITY) {
                                 g_opacity = ((float[]){1.0f,0.85f,0.7f,0.5f,0.3f,0.1f})[sub_hit];
                                 SDL_SetWindowOpacity(window, g_opacity);
                             } else if (g_menu.sub_open == MENU_ID_RENDER_MODE) {
@@ -318,8 +328,12 @@ int main(int argc, char **argv) {
                                 break;
                             case MENU_ID_FIGHT_MODE: fight_set_enabled(!fight_get_enabled()); break;
                             case MENU_ID_BOUNCING_CIRCLE: bc_set_enabled(!bc_get_enabled()); break;
+                            case MENU_ID_SOUND:
+                                term_audio_set_enabled(!term_audio_get_enabled());
+                                settings_save();
+                                break;
                             case MENU_ID_SELECT_ALL: term_select_all(&term); break;
-                            case MENU_ID_QUIT: running = false; break;
+                            case MENU_ID_QUIT: settings_save(); running = false; break;
                             default:
                                 if (hit < 0) g_menu.visible = false;
                                 break;
@@ -419,6 +433,7 @@ int main(int argc, char **argv) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     term_set_font_size(&term, g_font_size + delta, win_w, win_h);
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+                    settings_save();
                 } else if (term.mouse_report) {
                     int r2, c2;
                     pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2, &r2, &c2);
