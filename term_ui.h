@@ -22,6 +22,7 @@ void        open_url(const std::string &url);
 void pixel_to_cell(Terminal *t, int px, int py, int ox, int oy, int *row, int *col);
 bool cell_in_sel(Terminal *t, int r, int c);
 
+void term_select_all(Terminal *t);
 void term_copy_selection(Terminal *t);
 void term_copy_selection_html(Terminal *t);
 void term_copy_selection_ansi(Terminal *t);
@@ -56,6 +57,7 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_RENDER_MODE  11
 #define MENU_ID_FIGHT_MODE   12
 #define MENU_ID_BOUNCING_CIRCLE 13
+#define MENU_ID_SELECT_ALL   14
 #define MENU_ID_QUIT         15
 
 struct MenuItem {

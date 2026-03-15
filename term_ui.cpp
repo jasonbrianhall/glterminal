@@ -165,6 +165,8 @@ const MenuItem MENU_ITEMS[] = {
     { "Fight Mode",      false },
     { "Bouncing Circle", false },
     { nullptr,           true  },
+    { "Select All",      false },
+    { nullptr,           true  },
     { "Quit",            false },
 };
 const int MENU_COUNT = (int)(sizeof(MENU_ITEMS)/sizeof(MENU_ITEMS[0]));
@@ -239,6 +241,15 @@ std::string url_at_pixel(Terminal *t, int mouse_px, int mouse_py, int ox, int oy
 // ============================================================================
 // CLIPBOARD
 // ============================================================================
+
+void term_select_all(Terminal *t) {
+    t->sel_start_row = 0;
+    t->sel_start_col = 0;
+    t->sel_end_row   = t->sb_count + t->rows - 1;
+    t->sel_end_col   = t->cols - 1;
+    t->sel_active    = false;
+    t->sel_exists    = true;
+}
 
 void term_copy_selection(Terminal *t) {
     if (!t->sel_exists && !t->sel_active) return;
@@ -654,6 +665,8 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
         if (ks.sym == SDLK_v) { term_paste(t); return; }
         if (ks.sym == SDLK_c) { return; }
     }
+
+    if (ctrl && ks.sym == SDLK_a) { term_select_all(t); return; }
 
     auto arrow = [&](const char *normal, const char *app, char letter) {
         if (!shift && !ctrl && !alt) {

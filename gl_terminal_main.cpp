@@ -230,6 +230,7 @@ int main(int argc, char **argv) {
                         term_copy_selection(&term); break;
                     }
                     if (ev.key.keysym.sym == SDLK_v) { term_paste(&term); break; }
+                    if (ev.key.keysym.sym == SDLK_a) { term_select_all(&term); break; }
                     if (ev.key.keysym.sym == SDLK_LSHIFT ||
                         ev.key.keysym.sym == SDLK_RSHIFT) break;
                 }
@@ -317,6 +318,7 @@ int main(int argc, char **argv) {
                                 break;
                             case MENU_ID_FIGHT_MODE: fight_set_enabled(!fight_get_enabled()); break;
                             case MENU_ID_BOUNCING_CIRCLE: bc_set_enabled(!bc_get_enabled()); break;
+                            case MENU_ID_SELECT_ALL: term_select_all(&term); break;
                             case MENU_ID_QUIT: running = false; break;
                             default:
                                 if (hit < 0) g_menu.visible = false;
