@@ -14,6 +14,7 @@
 #include "crt_audio.h"
 
 #include <SDL2/SDL.h>
+#include "icon.h"
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -53,6 +54,16 @@ int main(int argc, char **argv) {
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
     );
     g_sdl_window = window;
+
+    // Set embedded window icon
+    SDL_Surface *icon_surf = SDL_CreateRGBSurfaceFrom(
+        (void*)icon_pixels, icon_w, icon_h, 32, icon_w * 4,
+        0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+    if (icon_surf) {
+        SDL_SetWindowIcon(window, icon_surf);
+        SDL_FreeSurface(icon_surf);
+    }
+
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
     SDL_GL_MakeCurrent(window, ctx);
     SDL_GL_SetSwapInterval(1);
@@ -298,7 +309,11 @@ int main(int argc, char **argv) {
                                 term.cur_row=term.cur_col=0;
                                 term.scroll_top=0; term.scroll_bot=term.rows-1;
                                 term.state=PS_NORMAL;
+#ifdef WIN32
+                                term_write(&term,"cls\r\n",5);
+#else
                                 term_write(&term,"reset\n",6);
+#endif
                                 break;
                             case MENU_ID_FIGHT_MODE: fight_set_enabled(!fight_get_enabled()); break;
                             case MENU_ID_BOUNCING_CIRCLE: bc_set_enabled(!bc_get_enabled()); break;
