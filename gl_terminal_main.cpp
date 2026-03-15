@@ -237,7 +237,9 @@ int main(int argc, char **argv) {
                 term.sb_offset = 0;
                 if (mod & KMOD_CTRL) {
                     if (ev.key.keysym.sym == SDLK_c && term.sel_exists) {
-                        term_copy_selection(&term); break;
+                        if (mod & KMOD_SHIFT) term_copy_selection_html(&term);
+                        else                  term_copy_selection(&term);
+                        break;
                     }
                     if (ev.key.keysym.sym == SDLK_v) { term_paste(&term); break; }
                     if (ev.key.keysym.sym == SDLK_LSHIFT ||
