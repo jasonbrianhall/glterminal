@@ -323,35 +323,21 @@ void term_copy_selection_html(Terminal *t) {
     html += "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"UTF-8\">\n";
     html += "<title>Terminal — "; html += th.name; html += "</title>\n";
     html += "<style>\n";
-    html += "  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }\n";
-    html += "  body {\n";
-    html += "    background: #111;\n";
-    html += "    display: flex;\n";
-    html += "    justify-content: center;\n";
-    html += "    align-items: flex-start;\n";
-    html += "    min-height: 100vh;\n";
-    html += "    padding: 2rem;\n";
-    html += "  }\n";
+    html += "  body { margin: 0; padding: 0; background: "; html += bg_hex; html += "; }\n";
     html += "  .terminal {\n";
     html += "    background: "; html += bg_hex; html += ";\n";
     html += "    color: "; html += fg_hex; html += ";\n";
     html += "    font-family: 'DejaVu Sans Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;\n";
     html += "    font-size: 14px;\n";
     html += "    line-height: 1.4;\n";
-    html += "    padding: 1.25rem 1.5rem;\n";
-    html += "    border-radius: 8px;\n";
-    html += "    box-shadow: 0 8px 32px rgba(0,0,0,0.6);\n";
     html += "    white-space: pre;\n";
     html += "    overflow-x: auto;\n";
-    html += "    max-width: 100%;\n";
     html += "  }\n";
     html += "  .terminal a {\n";
     html += "    color: #6ab0f5;\n";
     html += "    text-decoration: underline;\n";
     html += "  }\n";
-    html += "  .terminal a:hover {\n";
-    html += "    color: #9dcfff;\n";
-    html += "  }\n";
+    html += "  .terminal a:hover { color: #9dcfff; }\n";
     html += "</style>\n</head>\n<body>\n<div class=\"terminal\">";
 
     TermColorVal last_fg = ~(TermColorVal)0, last_bg = ~(TermColorVal)0;
@@ -443,15 +429,38 @@ void term_copy_selection_html(Terminal *t) {
                 close_span();
                 TermColor fc = tcolor_resolve(fg);
                 TermColor bc = tcolor_resolve(bg);
-                html += "<span style=\"color:";
-                append_hex_color(html, fc.r, fc.g, fc.b);
-                html += ";background:";
-                append_hex_color(html, bc.r, bc.g, bc.b);
-                if (attrs & ATTR_BOLD)      html += ";font-weight:bold";
-                if (attrs & ATTR_ITALIC)    html += ";font-style:italic";
-                if (attrs & ATTR_UNDERLINE) html += ";text-decoration:underline";
-                html += "\">";
-                span_open = true;
+
+                // Only emit background if it differs from the theme background
+                bool fg_is_default = !TCOLOR_IS_RGB(fg) && TCOLOR_IDX(fg) == 7;
+                bool bg_is_default = !TCOLOR_IS_RGB(bg) && TCOLOR_IDX(bg) == 0;
+                if (!bg_is_default) {
+                    bg_is_default = (fabsf(bc.r - th.bg_r) < 0.01f &&
+                                     fabsf(bc.g - th.bg_g) < 0.01f &&
+                                     fabsf(bc.b - th.bg_b) < 0.01f);
+                }
+
+                std::string style;
+                if (!fg_is_default) {
+                    char hex[8];
+                    snprintf(hex, sizeof(hex), "#%02x%02x%02x",
+                             (int)(fc.r*255+.5f), (int)(fc.g*255+.5f), (int)(fc.b*255+.5f));
+                    style += "color:"; style += hex;
+                }
+                if (!bg_is_default) {
+                    char hex[8];
+                    snprintf(hex, sizeof(hex), "#%02x%02x%02x",
+                             (int)(bc.r*255+.5f), (int)(bc.g*255+.5f), (int)(bc.b*255+.5f));
+                    if (!style.empty()) style += ";";
+                    style += "background:"; style += hex;
+                }
+                if (attrs & ATTR_BOLD)      { if (!style.empty()) style += ";"; style += "font-weight:bold"; }
+                if (attrs & ATTR_ITALIC)    { if (!style.empty()) style += ";"; style += "font-style:italic"; }
+                if (attrs & ATTR_UNDERLINE) { if (!style.empty()) style += ";"; style += "text-decoration:underline"; }
+
+                if (!style.empty()) {
+                    html += "<span style=\""; html += style; html += "\">";
+                    span_open = true;
+                }
                 last_fg = fg; last_bg = bg; last_attrs = attrs;
             }
             append_html_char(html, cp);
