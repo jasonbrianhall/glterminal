@@ -78,6 +78,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+#ifdef _WIN32
+    SDL_Delay(300);
+    term_read(&term);
+#else
     SDL_Delay(200);
     term_read(&term);
     for (int i = 0; i < term.rows * term.cols; i++)
@@ -88,6 +92,7 @@ int main(int argc, char **argv) {
     term_write(&term, "\n", 1);
     SDL_Delay(100);
     term_read(&term);
+#endif
 
     SDL_Cursor *cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
     SDL_Cursor *cursor_hand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
@@ -171,7 +176,11 @@ int main(int argc, char **argv) {
         }
 
         // Child exit check
-#ifndef _WIN32
+#ifdef _WIN32
+        if (term_child_exited()) {
+            running = false;
+        }
+#else
         int status;
         if (waitpid(term.child, &status, WNOHANG) == term.child) {
             running = false;
