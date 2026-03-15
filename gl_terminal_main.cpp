@@ -15,7 +15,7 @@
 
 #include <SDL2/SDL.h>
 #ifndef _WIN32
-#  include <sys/wait.h>
+#include <sys/wait.h>
 #endif
 
 // ============================================================================
@@ -32,12 +32,11 @@ SDL_Window *g_sdl_window  = nullptr;
 // ============================================================================
 
 int main(int argc, char **argv) {
-#ifdef _WIN32
+#ifdef WIN32    
     const char *shell = (argc > 1) ? argv[1] : "cmd.exe";
 #else
     const char *shell = (argc > 1) ? argv[1] : "/bin/bash";
 #endif
-
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
 
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
@@ -79,10 +78,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-#ifdef _WIN32
-    // ConPTY needs time to start; skip the Linux prompt-flush dance entirely.
-    SDL_Delay(500);
-#else
     SDL_Delay(200);
     term_read(&term);
     for (int i = 0; i < term.rows * term.cols; i++)
@@ -93,7 +88,6 @@ int main(int argc, char **argv) {
     term_write(&term, "\n", 1);
     SDL_Delay(100);
     term_read(&term);
-#endif
 
     SDL_Cursor *cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
     SDL_Cursor *cursor_hand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
@@ -177,12 +171,11 @@ int main(int argc, char **argv) {
         }
 
         // Child exit check
-#ifdef _WIN32
-        if (term_child_exited()) running = false;
-#else
-        { int status;
-          if (waitpid(term.child, &status, WNOHANG) == term.child)
-              running = false; }
+#ifndef _WIN32
+        int status;
+        if (waitpid(term.child, &status, WNOHANG) == term.child) {
+            running = false;
+        }
 #endif
 
         // Event loop
@@ -319,6 +312,50 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
+
+            case SDL_MOUSEMOTION:
+                if (g_menu.visible) {
+                    int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
+                    if (hit >= 0) g_menu.hovered = hit;
+                    if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY || hit == MENU_ID_RENDER_MODE) {
+                        if (g_menu.sub_open != hit) {
+                            g_menu.sub_open = hit; g_menu.sub_hovered = -1;
+                            g_menu.sub_x = g_menu.x + g_menu.width + 2;
+                            int item_y = g_menu.y + 4;
+                            for (int i=0;i<hit;i++)
+                                item_y += MENU_ITEMS[i].separator ? g_menu.sep_h : g_menu.item_h;
+                            g_menu.sub_y = item_y;
+                            int count = (hit==MENU_ID_THEMES) ? THEME_COUNT :
+                                        (hit==MENU_ID_RENDER_MODE) ? RENDER_MODE_COUNT : 6;
+                            int sw = g_menu.width + g_font_size*2;
+                            int sh = count * g_menu.item_h + 8;
+                            SDL_GetWindowSize(window, &win_w, &win_h);
+                            if (g_menu.sub_x + sw > win_w) g_menu.sub_x = g_menu.x - sw - 2;
+                            if (g_menu.sub_y + sh > win_h) g_menu.sub_y = win_h - sh - 2;
+                        }
+                    } else if (hit >= 0) {
+                        g_menu.sub_open = -1;
+                    }
+                    g_menu.sub_hovered = submenu_hit(&g_menu, ev.motion.x, ev.motion.y);
+                } else if (term.sel_active && (ev.motion.state & SDL_BUTTON_LMASK)) {
+                    autoscroll_mouse_x = ev.motion.x;
+                    autoscroll_mouse_y = ev.motion.y;
+                    pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2,
+                                  &term.sel_end_row, &term.sel_end_col);
+                    term.sel_exists = true;
+                } else {
+                    // Update URL hover highlight
+                    if (url_update_hover(&term, ev.motion.x, ev.motion.y, 2, 2))
+                        needs_render = true;
+                    // Show pointer cursor when over a URL (Ctrl = clickable)
+                    SDL_Keymod mod = SDL_GetModState();
+                    std::string hurl = url_at_pixel(&term, ev.motion.x, ev.motion.y, 2, 2);
+                    if (!hurl.empty() && (mod & KMOD_CTRL))
+                        SDL_SetCursor(cursor_hand);
+                    else
+                        SDL_SetCursor(cursor_ibeam);
+                }
+                break;
 
             case SDL_MOUSEBUTTONUP: {
                 int r, c;
