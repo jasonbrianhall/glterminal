@@ -14,13 +14,8 @@
 #include <vector>
 #include <functional>
 #include <algorithm>
-#ifndef _WIN32
-#  include <unistd.h>    // readlink, setsid, execl, _exit, fork
-#  include <sys/types.h> // pid_t
-#else
-#  include <windows.h>
-#  include <shellapi.h>
-#endif
+#include <unistd.h>    // readlink, setsid, execl, _exit, fork
+#include <sys/types.h> // pid_t
 
 #include "fight_mode.h"
 #include "crt_audio.h"
@@ -37,9 +32,6 @@ struct UrlSpan {
 
 static std::vector<UrlSpan> s_urls;
 static int s_hovered_url = -1;  // index into s_urls, or -1
-
-// Exposed so the main loop can check it without allocating a string
-int term_hovered_url_index() { return s_hovered_url; }
 
 static bool is_url_char(char c) {
     // Characters valid inside a URL (not terminal punctuation)
@@ -126,18 +118,12 @@ static int url_at(int row, int col) {
 }
 
 void open_url(const std::string &url) {
-#ifndef _WIN32
     pid_t pid = fork();
     if (pid == 0) {
         setsid();
         execlp("xdg-open", "xdg-open", url.c_str(), nullptr);
         _exit(1);
     }
-#else
-    wchar_t wurl[2048];
-    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, wurl, 2048);
-    ShellExecuteW(nullptr, L"open", wurl, nullptr, nullptr, SW_SHOWNORMAL);
-#endif
 }
 
 extern int  g_font_size;
@@ -556,16 +542,8 @@ void term_render(Terminal *t, int ox, int oy) {
         return &CELL(t, row, col);
     };
 
-    // URL detection is expensive (O(rows*cols) string scan).
-    // Re-scan only when cell content changed or scroll offset changed —
-    // NOT on every cursor-blink, hover, or animation-only redraw.
-    static int  s_url_sb_offset = -1;
-    static int  s_url_sb_count  = -1;
-    if (t->sb_offset != s_url_sb_offset || t->sb_count != s_url_sb_count) {
-        detect_urls(t, resolve_cell);
-        s_url_sb_offset = t->sb_offset;
-        s_url_sb_count  = t->sb_count;
-    }
+    // Detect URLs in visible content
+    detect_urls(t, resolve_cell);
 
     // Pass 1: backgrounds
     for (int row = 0; row < t->rows; row++) {
@@ -771,14 +749,11 @@ int menu_hit(ContextMenu *m, int px, int py) {
 
 int submenu_hit(ContextMenu *m, int px, int py) {
     if (m->sub_open < 0) return -1;
+    if (px < m->sub_x || px > m->sub_x + m->sub_w) return -1;
+    if (py < m->sub_y || py > m->sub_y + m->sub_h) return -1;
     int count = (m->sub_open == MENU_ID_THEMES)      ? THEME_COUNT :
                 (m->sub_open == MENU_ID_RENDER_MODE)  ? RENDER_MODE_COUNT : OPACITY_COUNT;
-    // Compute dimensions directly — don't rely on sub_w/sub_h from render
-    int sw = m->width + g_font_size * 2;
-    int sh = count * m->item_h + 8;
-    if (px < m->sub_x || px > m->sub_x + sw) return -1;
-    if (py < m->sub_y || py > m->sub_y + sh) return -1;
-    int idx = (py - m->sub_y - 4) / m->item_h;
+    int idx = (py - m->sub_y) / m->item_h;
     if (idx < 0 || idx >= count) return -1;
     return idx;
 }
@@ -859,20 +834,10 @@ void menu_render(ContextMenu *m) {
 // ============================================================================
 
 void action_new_terminal() {
-#ifndef _WIN32
     char self[512] = {};
     ssize_t n = readlink("/proc/self/exe", self, sizeof(self)-1);
     if (n <= 0) return;
     self[n] = '\0';
     pid_t pid = fork();
     if (pid == 0) { setsid(); execl(self, self, nullptr); _exit(1); }
-#else
-    wchar_t self[512] = {};
-    GetModuleFileNameW(nullptr, self, 512);
-    STARTUPINFOW si = {}; si.cb = sizeof(si);
-    PROCESS_INFORMATION pi = {};
-    CreateProcessW(self, nullptr, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
-    if (pi.hProcess) CloseHandle(pi.hProcess);
-    if (pi.hThread)  CloseHandle(pi.hThread);
-#endif
 }
