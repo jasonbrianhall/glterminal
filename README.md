@@ -15,6 +15,7 @@ A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text usi
 - Alternate screen buffer (used by vim, less, etc.)
 - Configurable themes and window opacity
 - Spawn additional terminal windows
+- Works with /bin/bash, cmd.exe, powershell, and many more.
 
 ## Dependencies
 
@@ -58,10 +59,13 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 | Shortcut | Action |
 |---|---|
 | `Ctrl+C` (with selection) | Copy selection |
+| `Ctrl+SHIFT+C` (with selection) | Copy selection as HTML |
 | `Ctrl+V` | Paste |
 | `Ctrl+Shift+V` | Paste |
 | `Ctrl+Scroll Up/Down` | Increase / decrease font size |
 | `Ctrl+Shift+Scroll` | Increase / decrease font size (4× step) |
+| `F11` | Toggle Full Screen |
+
 
 ## Mouse
 
@@ -84,6 +88,7 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 - **Reset** — clear screen and reset cursor
 - **Themes** — submenu to switch color themes
 - **Opacity** — submenu to set window transparency
+- **Sound** - Enables or Disables Sound
 - **Fight Mode** -  Have two guys fight in your console
 - **Bouncing Cirle** -  A circle with a little ball that bounces around in your console
 - **Quit**
