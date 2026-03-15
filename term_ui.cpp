@@ -162,9 +162,7 @@ const MenuItem MENU_ITEMS[] = {
     { "Color Theme  >",  false },
     { "Transparency  >", false },
     { "Render Mode  >",  false },
-    { "Fight Mode",      false },
-    { "Bouncing Circle", false },
-    { "Sound",           false },
+    { "Entertainment >", false },
     { nullptr,           true  },
     { "Select All",      false },
     { nullptr,           true  },
@@ -782,8 +780,10 @@ int submenu_hit(ContextMenu *m, int px, int py) {
     if (m->sub_open < 0) return -1;
     if (px < m->sub_x || px > m->sub_x + m->sub_w) return -1;
     if (py < m->sub_y || py > m->sub_y + m->sub_h) return -1;
-    int count = (m->sub_open == MENU_ID_THEMES)      ? THEME_COUNT :
-                (m->sub_open == MENU_ID_RENDER_MODE)  ? RENDER_MODE_COUNT : OPACITY_COUNT;
+    int count = (m->sub_open == MENU_ID_THEMES)        ? THEME_COUNT :
+                (m->sub_open == MENU_ID_RENDER_MODE)    ? RENDER_MODE_COUNT :
+                (m->sub_open == MENU_ID_ENTERTAINMENT)  ? ENT_COUNT :
+                                                          OPACITY_COUNT;
     int idx = (py - m->sub_y) / m->item_h;
     if (idx < 0 || idx >= count) return -1;
     return idx;
@@ -817,38 +817,44 @@ void menu_render(ContextMenu *m) {
         bool sub_open = (m->sub_open == i);
         if (hov || sub_open) draw_rect(mx+2, y, mw-4, ih, 0.25f, 0.45f, 0.85f, 0.85f);
         float tr = (hov||sub_open)?1.f:0.88f, tg=tr, tb=(hov||sub_open)?1.f:0.92f;
-        // Fight Mode shows a check indicator when enabled
-        if (i == MENU_ID_FIGHT_MODE && fight_get_enabled()) {
-            static char fight_lbl[32];
-            snprintf(fight_lbl, sizeof(fight_lbl), "* Fight Mode");
-            draw_text(fight_lbl, mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
-        } else if (i == MENU_ID_BOUNCING_CIRCLE && bc_get_enabled()) {
-            draw_text("* Bouncing Circle", mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
-        } else if (i == MENU_ID_SOUND && term_audio_get_enabled()) {
-            draw_text("* Sound", mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
-        } else {
-            draw_text(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
-        }
+        draw_text(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
         y += ih;
     }
 
-    if (m->sub_open == MENU_ID_THEMES || m->sub_open == MENU_ID_OPACITY || m->sub_open == MENU_ID_RENDER_MODE) {
-        int count = (m->sub_open == MENU_ID_THEMES)      ? THEME_COUNT :
-                    (m->sub_open == MENU_ID_RENDER_MODE)  ? RENDER_MODE_COUNT : OPACITY_COUNT;
+    if (m->sub_open == MENU_ID_THEMES || m->sub_open == MENU_ID_OPACITY ||
+        m->sub_open == MENU_ID_RENDER_MODE || m->sub_open == MENU_ID_ENTERTAINMENT) {
+        int count = (m->sub_open == MENU_ID_THEMES)       ? THEME_COUNT :
+                    (m->sub_open == MENU_ID_RENDER_MODE)   ? RENDER_MODE_COUNT :
+                    (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_COUNT :
+                                                             OPACITY_COUNT;
         float sw = (float)(m->width + (int)(g_font_size * 2));
         float sh = (float)(count * m->item_h + 8);
         float sx = (float)m->sub_x, sy = (float)m->sub_y;
         m->sub_w = (int)sw; m->sub_h = (int)sh;
         draw_menu_panel(sx, sy, sw, sh);
+
+        static const char *ENT_NAMES[] = { "Fight Mode", "Bouncing Circle", "Sound" };
+
         for (int j = 0; j < count; j++) {
-            const char *lbl = (m->sub_open == MENU_ID_THEMES)     ? THEMES[j].name :
-                              (m->sub_open == MENU_ID_RENDER_MODE) ? RENDER_MODE_NAMES[j] :
-                                                                     OPACITY_NAMES[j];
+            const char *lbl = (m->sub_open == MENU_ID_THEMES)       ? THEMES[j].name :
+                              (m->sub_open == MENU_ID_RENDER_MODE)   ? RENDER_MODE_NAMES[j] :
+                              (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_NAMES[j] :
+                                                                       OPACITY_NAMES[j];
             float iy = sy + 4 + j * m->item_h, ih = (float)m->item_h;
             bool hov = (j == m->sub_hovered);
-            bool active = (m->sub_open == MENU_ID_THEMES)      ? (j == g_theme_idx) :
-                          (m->sub_open == MENU_ID_RENDER_MODE)  ? (j == g_render_mode) :
-                                                                   (fabsf(OPACITY_LEVELS[j]-g_opacity)<0.01f);
+
+            bool active = false;
+            if (m->sub_open == MENU_ID_THEMES)
+                active = (j == g_theme_idx);
+            else if (m->sub_open == MENU_ID_RENDER_MODE)
+                active = (j == g_render_mode);
+            else if (m->sub_open == MENU_ID_OPACITY)
+                active = (fabsf(OPACITY_LEVELS[j] - g_opacity) < 0.01f);
+            else if (m->sub_open == MENU_ID_ENTERTAINMENT)
+                active = (j == ENT_IDX_FIGHT    && fight_get_enabled())   ||
+                         (j == ENT_IDX_BOUNCING  && bc_get_enabled())      ||
+                         (j == ENT_IDX_SOUND     && term_audio_get_enabled());
+
             if (hov)          draw_rect(sx+2,iy,sw-4,ih,0.25f,0.45f,0.85f,0.85f);
             if (active&&!hov) draw_rect(sx+2,iy,sw-4,ih,0.2f,0.35f,0.6f,0.6f);
             float tr=hov?1.f:(active?0.7f:0.88f), tg=hov?1.f:(active?0.9f:0.88f), tb=hov?1.f:(active?1.0f:0.92f);

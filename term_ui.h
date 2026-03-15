@@ -55,11 +55,15 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_THEMES        9
 #define MENU_ID_OPACITY      10
 #define MENU_ID_RENDER_MODE  11
-#define MENU_ID_FIGHT_MODE   12
-#define MENU_ID_BOUNCING_CIRCLE 13
-#define MENU_ID_SOUND        14
-#define MENU_ID_SELECT_ALL   15
+#define MENU_ID_ENTERTAINMENT 12
+#define MENU_ID_SELECT_ALL   14
 #define MENU_ID_QUIT         16
+
+// Entertainment submenu item indices
+#define ENT_IDX_FIGHT    0
+#define ENT_IDX_BOUNCING 1
+#define ENT_IDX_SOUND    2
+#define ENT_COUNT        3
 
 struct MenuItem {
     const char *label;
@@ -89,4 +93,3 @@ void menu_render(ContextMenu *m);
 void action_new_terminal();
 
 #include "fight_mode.h"
-

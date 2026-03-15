@@ -301,11 +301,18 @@ int main(int argc, char **argv) {
                                 SDL_SetWindowOpacity(window, g_opacity);
                             } else if (g_menu.sub_open == MENU_ID_RENDER_MODE) {
                                 g_render_mode = sub_hit;
+                            } else if (g_menu.sub_open == MENU_ID_ENTERTAINMENT) {
+                                if      (sub_hit == ENT_IDX_FIGHT)    fight_set_enabled(!fight_get_enabled());
+                                else if (sub_hit == ENT_IDX_BOUNCING) bc_set_enabled(!bc_get_enabled());
+                                else if (sub_hit == ENT_IDX_SOUND)  { term_audio_set_enabled(!term_audio_get_enabled()); settings_save(); }
+                                // keep submenu open so user can toggle multiple items
+                                break;
                             }
                             g_menu.visible = false;
                         } else {
                             int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
-                            bool is_sub_parent = (hit==MENU_ID_THEMES || hit==MENU_ID_OPACITY || hit==MENU_ID_RENDER_MODE);
+                            bool is_sub_parent = (hit==MENU_ID_THEMES || hit==MENU_ID_OPACITY ||
+                                                  hit==MENU_ID_RENDER_MODE || hit==MENU_ID_ENTERTAINMENT);
                             if (!is_sub_parent) g_menu.visible = false;
                             switch (hit) {
                             case MENU_ID_NEW_TERMINAL: action_new_terminal(); break;
@@ -325,12 +332,6 @@ int main(int argc, char **argv) {
 #else
                                 term_write(&term,"reset\n",6);
 #endif
-                                break;
-                            case MENU_ID_FIGHT_MODE: fight_set_enabled(!fight_get_enabled()); break;
-                            case MENU_ID_BOUNCING_CIRCLE: bc_set_enabled(!bc_get_enabled()); break;
-                            case MENU_ID_SOUND:
-                                term_audio_set_enabled(!term_audio_get_enabled());
-                                settings_save();
                                 break;
                             case MENU_ID_SELECT_ALL: term_select_all(&term); break;
                             case MENU_ID_QUIT: settings_save(); running = false; break;
@@ -357,7 +358,8 @@ int main(int argc, char **argv) {
                 if (g_menu.visible) {
                     int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
                     if (hit >= 0) g_menu.hovered = hit;
-                    if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY || hit == MENU_ID_RENDER_MODE) {
+                    if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY ||
+                        hit == MENU_ID_RENDER_MODE || hit == MENU_ID_ENTERTAINMENT) {
                         if (g_menu.sub_open != hit) {
                             g_menu.sub_open = hit; g_menu.sub_hovered = -1;
                             g_menu.sub_x = g_menu.x + g_menu.width + 2;
@@ -365,8 +367,9 @@ int main(int argc, char **argv) {
                             for (int i=0;i<hit;i++)
                                 item_y += MENU_ITEMS[i].separator ? g_menu.sep_h : g_menu.item_h;
                             g_menu.sub_y = item_y;
-                            int count = (hit==MENU_ID_THEMES) ? THEME_COUNT :
-                                        (hit==MENU_ID_RENDER_MODE) ? RENDER_MODE_COUNT : 6;
+                            int count = (hit==MENU_ID_THEMES)        ? THEME_COUNT :
+                                        (hit==MENU_ID_RENDER_MODE)    ? RENDER_MODE_COUNT :
+                                        (hit==MENU_ID_ENTERTAINMENT)  ? ENT_COUNT : 6;
                             int sw = g_menu.width + g_font_size*2;
                             int sh = count * g_menu.item_h + 8;
                             SDL_GetWindowSize(window, &win_w, &win_h);
