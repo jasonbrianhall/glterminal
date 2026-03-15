@@ -33,6 +33,9 @@ struct UrlSpan {
 static std::vector<UrlSpan> s_urls;
 static int s_hovered_url = -1;  // index into s_urls, or -1
 
+// Exposed so the main loop can check it without allocating a string
+int term_hovered_url_index() { return s_hovered_url; }
+
 static bool is_url_char(char c) {
     // Characters valid inside a URL (not terminal punctuation)
     return (c > ' ') && c != '"' && c != '\'' && c != '<' && c != '>' && c != '`';
@@ -542,8 +545,16 @@ void term_render(Terminal *t, int ox, int oy) {
         return &CELL(t, row, col);
     };
 
-    // Detect URLs in visible content
-    detect_urls(t, resolve_cell);
+    // URL detection is expensive (O(rows*cols) string scan).
+    // Re-scan only when cell content changed or scroll offset changed —
+    // NOT on every cursor-blink, hover, or animation-only redraw.
+    static int  s_url_sb_offset = -1;
+    static int  s_url_sb_count  = -1;
+    if (t->sb_offset != s_url_sb_offset || t->sb_count != s_url_sb_count) {
+        detect_urls(t, resolve_cell);
+        s_url_sb_offset = t->sb_offset;
+        s_url_sb_count  = t->sb_count;
+    }
 
     // Pass 1: backgrounds
     for (int row = 0; row < t->rows; row++) {
