@@ -249,7 +249,8 @@ int main(int argc, char **argv) {
                         ev.key.keysym.sym == SDLK_RSHIFT) break;
                 }
                 handle_key(&term, ev.key.keysym, NULL);
-                term_read(&term);  // drain echo immediately after writing
+                SDL_Delay(1);  // give pty a tick to echo
+                if (term_read(&term)) needs_render = true;
                 break;
             }
 
@@ -257,7 +258,8 @@ int main(int argc, char **argv) {
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
                     term_write(&term, ev.text.text, (int)strlen(ev.text.text));
-                    term_read(&term);  // drain echo immediately after writing
+                    SDL_Delay(1);  // give pty a tick to echo
+                    if (term_read(&term)) needs_render = true;
                 }
                 break;
             }
@@ -501,18 +503,9 @@ int main(int argc, char **argv) {
         bc_tick((float)win_w, (float)win_h, bc_dt);
         if (bc_get_enabled()) needs_render = true;
 
-        // Hard cap at ~60 fps: sleep until 16ms after the start of this
-        // iteration so fight mode and animated modes don't busy-loop.
-        {
-            uint32_t elapsed = SDL_GetTicks() - now;
-            if (elapsed < 16) {
-                //printf("Sleeping %i %i\n", 16-elapsed, elapsed);
-                //std::this_thread::sleep_for(std::chrono::milliseconds(16));
-                SDL_Delay(16 - elapsed);
-            }
-                
-            
-        }
+        // Hard cap at ~60 fps for animated/fight modes that don't vsync themselves.
+        // Sleep is placed AFTER rendering so input→render has no artificial delay.
+        // (vsync via SDL_GL_SetSwapInterval(1) already throttles normal frames.)
 
         if (needs_render) {
             // s_term_dirty tracks whether terminal cell content has changed.
@@ -545,6 +538,16 @@ int main(int argc, char **argv) {
             menu_render(&g_menu);
 
             SDL_GL_SwapWindow(window);
+
+            // Cap idle/animated frames at ~60 fps after swap to avoid busy-looping.
+            // Input frames are already throttled by vsync above; this only bites
+            // when needs_render was forced by fight/CRT/bouncing modes.
+            uint32_t elapsed = SDL_GetTicks() - now;
+            if (elapsed < 16) SDL_Delay(16 - elapsed);
+        } else {
+            // Nothing to render this iteration — sleep briefly to yield the CPU
+            // rather than spinning at full speed waiting for PTY data.
+            SDL_Delay(4);
         }
     }
 
