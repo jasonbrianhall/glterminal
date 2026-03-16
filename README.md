@@ -16,7 +16,8 @@ A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text usi
 - Configurable themes and window opacity
 - Spawn additional terminal windows
 - Works with /bin/bash, cmd.exe, powershell, and many more.
-- Kitty Graphics Support (static, no animation, Linux only) e.g. timg icon.png
+- Kitty Graphics Support (static, no animation) e.g. timg icon.png — Windows support untested
+- URL detection with Ctrl+Click to open in browser
 
 ## Dependencies
 
@@ -52,7 +53,14 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 ## Usage
 
 ```
-./gl_terminal
+./gl_terminal [command]
+```
+
+Optionally pass a command to run instead of the default shell, e.g.:
+
+```
+./gl_terminal htop
+./gl_terminal ssh user@host
 ```
 
 ## Keyboard Shortcuts
@@ -65,6 +73,7 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 | `Ctrl+Shift+V` | Paste |
 | `Ctrl+Scroll Up/Down` | Increase / decrease font size |
 | `Ctrl+Shift+Scroll` | Increase / decrease font size (4× step) |
+| `Ctrl+Click` | Open URL in browser |
 | `F11` | Toggle Full Screen |
 
 
@@ -89,9 +98,9 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 - **Reset** — clear screen and reset cursor
 - **Themes** — submenu to switch color themes
 - **Opacity** — submenu to set window transparency
-- **Sound** - Enables or Disables Sound
-- **Fight Mode** -  Have two guys fight in your console
-- **Bouncing Cirle** -  A circle with a little ball that bounces around in your console
+- **Sound** — enables or disables sound
+- **Fight Mode** — have two guys fight in your console
+- **Bouncing Circle** — a circle with a little ball that bounces around in your console
 - **Quit**
 
 ## Themes
@@ -108,7 +117,12 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 
 ## Configuration
 
-Defaults are defined at the top of `gl_terminal.h`:
+Runtime configuration is stored in:
+
+- **Linux:** `~/.config/FelixTerminal/`
+- **Windows:** Registry
+
+Compile-time defaults are defined at the top of `gl_terminal.h`:
 
 ```c
 #define TERM_COLS_DEFAULT  80
