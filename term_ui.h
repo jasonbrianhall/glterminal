@@ -57,7 +57,8 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_RENDER_MODE  11
 #define MENU_ID_ENTERTAINMENT 12
 #define MENU_ID_SELECT_ALL   14
-#define MENU_ID_QUIT         16
+#define MENU_ID_FONTS        16
+#define MENU_ID_QUIT         18
 
 // Entertainment submenu item indices
 #define ENT_IDX_FIGHT    0
@@ -93,3 +94,4 @@ void menu_render(ContextMenu *m);
 void action_new_terminal();
 
 #include "fight_mode.h"
+#include "font_manager.h"

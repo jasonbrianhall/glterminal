@@ -24,6 +24,7 @@
 
 #include "fight_mode.h"
 #include "crt_audio.h"
+#include "font_manager.h"
 
 // ============================================================================
 // URL DETECTION
@@ -166,6 +167,8 @@ const MenuItem MENU_ITEMS[] = {
     { "Entertainment >", false },
     { nullptr,           true  },
     { "Select All",      false },
+    { nullptr,           true  },
+    { "Font  >",         false },
     { nullptr,           true  },
     { "Quit",            false },
 };
@@ -798,6 +801,7 @@ int submenu_hit(ContextMenu *m, int px, int py) {
     int count = (m->sub_open == MENU_ID_THEMES)        ? THEME_COUNT :
                 (m->sub_open == MENU_ID_RENDER_MODE)    ? RENDER_MODE_COUNT :
                 (m->sub_open == MENU_ID_ENTERTAINMENT)  ? ENT_COUNT :
+                (m->sub_open == MENU_ID_FONTS)          ? (int)g_font_list.size() :
                                                           OPACITY_COUNT;
     int idx = (py - m->sub_y) / m->item_h;
     if (idx < 0 || idx >= count) return -1;
@@ -837,10 +841,12 @@ void menu_render(ContextMenu *m) {
     }
 
     if (m->sub_open == MENU_ID_THEMES || m->sub_open == MENU_ID_OPACITY ||
-        m->sub_open == MENU_ID_RENDER_MODE || m->sub_open == MENU_ID_ENTERTAINMENT) {
+        m->sub_open == MENU_ID_RENDER_MODE || m->sub_open == MENU_ID_ENTERTAINMENT ||
+        m->sub_open == MENU_ID_FONTS) {
         int count = (m->sub_open == MENU_ID_THEMES)       ? THEME_COUNT :
                     (m->sub_open == MENU_ID_RENDER_MODE)   ? RENDER_MODE_COUNT :
                     (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_COUNT :
+                    (m->sub_open == MENU_ID_FONTS)         ? (int)g_font_list.size() :
                                                              OPACITY_COUNT;
         float sw = (float)(m->width + (int)(g_font_size * 2));
         float sh = (float)(count * m->item_h + 8);
@@ -854,6 +860,7 @@ void menu_render(ContextMenu *m) {
             const char *lbl = (m->sub_open == MENU_ID_THEMES)       ? THEMES[j].name :
                               (m->sub_open == MENU_ID_RENDER_MODE)   ? RENDER_MODE_NAMES[j] :
                               (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_NAMES[j] :
+                              (m->sub_open == MENU_ID_FONTS)         ? g_font_list[j].display_name.c_str() :
                                                                        OPACITY_NAMES[j];
             float iy = sy + 4 + j * m->item_h, ih = (float)m->item_h;
             bool hov = (j == m->sub_hovered);
@@ -861,6 +868,8 @@ void menu_render(ContextMenu *m) {
             bool active = false;
             if (m->sub_open == MENU_ID_THEMES)
                 active = (j == g_theme_idx);
+            else if (m->sub_open == MENU_ID_FONTS)
+                active = (j == g_font_index);
             else if (m->sub_open == MENU_ID_RENDER_MODE)
                 active = (j == RENDER_MODE_NORMAL) ? (g_render_mode == 0)
                                                    : ((g_render_mode & (1u << j)) != 0);

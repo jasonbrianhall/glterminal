@@ -22,6 +22,13 @@ extern FT_Face    s_emoji_face;
 
 void    ft_init(void);
 void    ft_shutdown(void);
+void    ft_reload_embedded(void);  // restore all four embedded DejaVu faces
+
+// Font buffer pointers — non-static so font_manager can free/replace them
+extern unsigned char *s_font_buf;
+extern unsigned char *s_font_buf_reg;
+extern unsigned char *s_font_buf_obl;
+extern unsigned char *s_font_buf_bobl;
 
 // UTF-8 / codepoint utilities
 uint32_t next_codepoint(const unsigned char **p);

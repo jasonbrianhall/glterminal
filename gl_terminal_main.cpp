@@ -1,6 +1,7 @@
 // gl_terminal_main.cpp  — entry point only
 // Build: g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
 //            terminal.cpp term_pty.cpp term_ui.cpp gl_bouncingcircle.cpp
+//            font_manager.cpp
 //            -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
 
 #include "gl_terminal.h"
@@ -14,6 +15,7 @@
 #include "crt_audio.h"
 #include "felix_settings.h"
 #include "kitty_graphics.h"
+#include "font_manager.h"
 
 #include <SDL2/SDL.h>
 #include "icon.h"
@@ -33,6 +35,7 @@ int         g_font_size   = FONT_SIZE_DEFAULT;
 float       g_opacity     = 1.0f;
 bool        g_blink_text_on = true;
 SDL_Window *g_sdl_window  = nullptr;
+std::vector<FontEntry> g_font_list;
 
 // ============================================================================
 // MAIN
@@ -83,6 +86,27 @@ int main(int argc, char **argv) {
     term_init(&term);
 
     settings_load();  // applies font size, theme, sound — after ft_init and term_init
+
+    // Scan system fonts and restore saved font choice
+    SDL_Log("[Main] calling font_scan...");
+    g_font_list = font_scan();
+    SDL_Log("[Main] font_scan returned %zu entries", g_font_list.size());
+    for (int i = 0; i < (int)g_font_list.size(); i++)
+        SDL_Log("[Main]   [%d] %s  embedded=%d  path=%s",
+                i, g_font_list[i].display_name.c_str(),
+                g_font_list[i].is_embedded,
+                g_font_list[i].path.c_str());
+    {
+        std::string saved = font_load_config();
+        if (!saved.empty()) {
+            for (const auto &fe : g_font_list) {
+                if (fe.display_name == saved) {
+                    font_apply(fe, g_font_list, &term, 0, 0);
+                    break;
+                }
+            }
+        }
+    }
 
     win_w = (int)(term.cell_w * term.cols) + 4;
     win_h = (int)(term.cell_h * term.rows) + 4;
@@ -320,12 +344,19 @@ int main(int argc, char **argv) {
                                 else if (sub_hit == ENT_IDX_SOUND)  { term_audio_set_enabled(!term_audio_get_enabled()); settings_save(); }
                                 // keep submenu open so user can toggle multiple items
                                 break;
+                            } else if (g_menu.sub_open == MENU_ID_FONTS) {
+                                SDL_GetWindowSize(window, &win_w, &win_h);
+                                font_apply(g_font_list[sub_hit], g_font_list, &term, win_w, win_h);
+                                font_save_config(g_font_list[sub_hit].display_name);
+                                G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+                                settings_save();
                             }
                             g_menu.visible = false;
                         } else {
                             int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
                             bool is_sub_parent = (hit==MENU_ID_THEMES || hit==MENU_ID_OPACITY ||
-                                                  hit==MENU_ID_RENDER_MODE || hit==MENU_ID_ENTERTAINMENT);
+                                                  hit==MENU_ID_RENDER_MODE || hit==MENU_ID_ENTERTAINMENT ||
+                                                  hit==MENU_ID_FONTS);
                             if (!is_sub_parent) g_menu.visible = false;
                             switch (hit) {
                             case MENU_ID_NEW_TERMINAL: action_new_terminal(); break;
@@ -372,7 +403,8 @@ int main(int argc, char **argv) {
                     int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
                     if (hit >= 0) g_menu.hovered = hit;
                     if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY ||
-                        hit == MENU_ID_RENDER_MODE || hit == MENU_ID_ENTERTAINMENT) {
+                        hit == MENU_ID_RENDER_MODE || hit == MENU_ID_ENTERTAINMENT ||
+                        hit == MENU_ID_FONTS) {
                         if (g_menu.sub_open != hit) {
                             g_menu.sub_open = hit; g_menu.sub_hovered = -1;
                             g_menu.sub_x = g_menu.x + g_menu.width + 2;
@@ -382,7 +414,8 @@ int main(int argc, char **argv) {
                             g_menu.sub_y = item_y;
                             int count = (hit==MENU_ID_THEMES)        ? THEME_COUNT :
                                         (hit==MENU_ID_RENDER_MODE)    ? RENDER_MODE_COUNT :
-                                        (hit==MENU_ID_ENTERTAINMENT)  ? ENT_COUNT : 6;
+                                        (hit==MENU_ID_ENTERTAINMENT)  ? ENT_COUNT :
+                                        (hit==MENU_ID_FONTS)          ? (int)g_font_list.size() : 6;
                             int sw = g_menu.width + g_font_size*2;
                             int sh = count * g_menu.item_h + 8;
                             SDL_GetWindowSize(window, &win_w, &win_h);

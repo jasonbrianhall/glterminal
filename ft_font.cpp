@@ -23,10 +23,10 @@ FT_Face    s_ft_face_obl  = NULL;
 FT_Face    s_ft_face_bobl = NULL;
 FT_Face    s_emoji_face   = NULL;
 
-static unsigned char *s_font_buf      = NULL;
-static unsigned char *s_font_buf_reg  = NULL;
-static unsigned char *s_font_buf_obl  = NULL;
-static unsigned char *s_font_buf_bobl = NULL;
+unsigned char *s_font_buf      = NULL;
+unsigned char *s_font_buf_reg  = NULL;
+unsigned char *s_font_buf_obl  = NULL;
+unsigned char *s_font_buf_bobl = NULL;
 static unsigned char *s_emoji_buf     = NULL;
 
 // g_font_size is owned by app_globals.h; ft_font reads it via extern
@@ -88,6 +88,33 @@ void ft_shutdown(void) {
     if (s_font_buf_obl)  free(s_font_buf_obl);
     if (s_font_buf_reg)  free(s_font_buf_reg);
     if (s_font_buf)      free(s_font_buf);
+}
+
+void ft_reload_embedded(void) {
+    auto free_face = [](FT_Face *face, unsigned char **buf) {
+        if (*face) { FT_Done_Face(*face); *face = nullptr; }
+        if (*buf)  { free(*buf); *buf = nullptr; }
+    };
+    free_face(&s_ft_face,      &s_font_buf);
+    free_face(&s_ft_face_reg,  &s_font_buf_reg);
+    free_face(&s_ft_face_obl,  &s_font_buf_obl);
+    free_face(&s_ft_face_bobl, &s_font_buf_bobl);
+
+    size_t decoded_size = 0;
+    if (base64_decode(MONOSPACE_FONT_B64, MONOSPACE_FONT_B64_SIZE,
+                      &s_font_buf, &decoded_size) == 0 && s_font_buf)
+        FT_New_Memory_Face(s_ft_lib, s_font_buf, (FT_Long)decoded_size, 0, &s_ft_face);
+
+    auto reload = [&](const char *b64, size_t b64_size,
+                      unsigned char **buf, FT_Face *face) {
+        size_t sz = 0;
+        if (base64_decode(b64, b64_size, buf, &sz) == 0 && *buf)
+            if (FT_New_Memory_Face(s_ft_lib, *buf, (FT_Long)sz, 0, face) != 0)
+                { free(*buf); *buf = nullptr; }
+    };
+    reload(DEJAVU_REGULAR_FONT_B64,     DEJAVU_REGULAR_FONT_B64_SIZE,     &s_font_buf_reg,  &s_ft_face_reg);
+    reload(DEJAVU_OBLIQUE_FONT_B64,     DEJAVU_OBLIQUE_FONT_B64_SIZE,     &s_font_buf_obl,  &s_ft_face_obl);
+    reload(DEJAVU_BOLDOBLIQUE_FONT_B64, DEJAVU_BOLDOBLIQUE_FONT_B64_SIZE, &s_font_buf_bobl, &s_ft_face_bobl);
 }
 
 // ============================================================================
