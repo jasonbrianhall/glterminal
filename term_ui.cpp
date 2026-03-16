@@ -340,6 +340,10 @@ void term_copy_selection_html(Terminal *t) {
     html += "  .terminal a:hover { color: #9dcfff; }\n";
     html += "</style>\n</head>\n<body>\n<div class=\"terminal\">";
 
+    // Collect any kitty images that fall within the selection row range
+    std::vector<KittyHtmlImage> kimages = kitty_get_html_images(t, r0, r1);
+    int kimg_idx = 0;
+
     TermColorVal last_fg = ~(TermColorVal)0, last_bg = ~(TermColorVal)0;
     uint8_t last_attrs = 0xFF;
     bool span_open = false;
@@ -382,6 +386,13 @@ void term_copy_selection_html(Terminal *t) {
     };
 
     for (int r = r0; r <= r1; r++) {
+        // Insert any kitty images that start on this row (before the text line)
+        while (kimg_idx < (int)kimages.size() && kimages[kimg_idx].y_cell == r) {
+            close_span();
+            html += kimages[kimg_idx].img_tag;
+            kimg_idx++;
+        }
+
         int cs = (r == r0) ? c0 : 0;
         int ce = (r == r1) ? c1 : t->cols - 1;
         int last_nonspace = cs - 1;

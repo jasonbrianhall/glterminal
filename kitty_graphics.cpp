@@ -528,15 +528,24 @@ void kitty_render(Terminal *t, int ox, int oy) {
         const KittyImage &img = iit->second;
         if (!img.tex) continue;
 
-        // Pixel dimensions of display area
         float cw = t->cell_w, ch = t->cell_h;
         float disp_w = pl.cols ? pl.cols * cw : (float)img.pw;
         float disp_h = pl.rows ? pl.rows * ch : (float)img.ph;
 
-        float dx = ox + pl.x_cell * cw;
-        float dy = oy + pl.y_cell * ch;
+        // y_cell is in live-screen coordinates. When the user has scrolled
+        // back into scrollback, sb_offset rows of scrollback sit above the
+        // viewport, so the image's visual row is y_cell + sb_offset.
+        // (sb_offset==0 means live view, positive means scrolled back.)
+        float vis_row = (float)(pl.y_cell + t->sb_offset);
 
-        // Source UV region
+        // Skip images entirely outside the visible rows
+        float img_rows = disp_h / ch;
+        if (vis_row + img_rows <= 0 || vis_row >= (float)t->rows) continue;
+
+        float dx = ox + pl.x_cell * cw;
+        float dy = oy + vis_row * ch;
+
+        // If the image is partially above the viewport, clip the top
         float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
         if (img.pw > 0 && img.ph > 0) {
             int sw = pl.src_w ? pl.src_w : img.pw;
@@ -546,6 +555,24 @@ void kitty_render(Terminal *t, int ox, int oy) {
             u1 = u0 + (float)sw / img.pw;
             v1 = v0 + (float)sh / img.ph;
         }
+
+        // Clip top edge if image starts above visible area
+        if (dy < (float)oy) {
+            float clip = (float)oy - dy;
+            float frac = clip / disp_h;
+            v0 += frac * (v1 - v0);
+            dy  = (float)oy;
+            disp_h -= clip;
+        }
+        // Clip bottom edge if image extends below visible area
+        float bottom_limit = oy + t->rows * ch;
+        if (dy + disp_h > bottom_limit) {
+            float clip = (dy + disp_h) - bottom_limit;
+            float frac = clip / disp_h;
+            v1 -= frac * (v1 - v0);
+            disp_h -= clip;
+        }
+        if (disp_h <= 0) continue;
 
         // pos(2) + tc(2) = 4 floats per vertex, 6 verts = 24 floats
         float verts[24] = {
@@ -616,6 +643,174 @@ void kitty_clear(Terminal *t) {
         it->second.placements.clear();
         it->second.has_pending = false;
     }
+}
+
+// ============================================================================
+// Minimal PNG encoder — no external dependencies beyond zlib (already linked)
+// Supports RGBA 8-bit only, which is all we need.
+// ============================================================================
+#include <zlib.h>
+
+static bool encode_png(const uint8_t *rgba, int w, int h, int stride,
+                       std::vector<uint8_t> &out) {
+    // --- Filter each row (filter type 0 = None) and deflate ---
+    // Raw image data: for each row, prepend filter byte 0x00
+    std::vector<uint8_t> raw;
+    raw.reserve((size_t)(w * 4 + 1) * h);
+    for (int row = 0; row < h; row++) {
+        raw.push_back(0x00);  // filter type: None
+        raw.insert(raw.end(), rgba + row * stride, rgba + row * stride + w * 4);
+    }
+
+    // Deflate
+    uLongf comp_bound = compressBound((uLong)raw.size());
+    std::vector<uint8_t> compressed(comp_bound);
+    uLongf comp_len = comp_bound;
+    if (compress2(compressed.data(), &comp_len, raw.data(), (uLong)raw.size(), 6) != Z_OK)
+        return false;
+    compressed.resize(comp_len);
+
+    // --- PNG helpers ---
+    auto write_u32 = [&](uint32_t v) {
+        out.push_back((v >> 24) & 0xFF);
+        out.push_back((v >> 16) & 0xFF);
+        out.push_back((v >>  8) & 0xFF);
+        out.push_back((v      ) & 0xFF);
+    };
+    auto write_chunk = [&](const char type[4], const uint8_t *data, uint32_t len) {
+        write_u32(len);
+        uint32_t crc = (uint32_t)crc32(0, (const Bytef*)type, 4);
+        if (len) crc = (uint32_t)crc32(crc, data, len);
+        out.insert(out.end(), (const uint8_t*)type, (const uint8_t*)type + 4);
+        if (len) out.insert(out.end(), data, data + len);
+        write_u32(crc);
+    };
+
+    // PNG signature
+    const uint8_t sig[] = {137,80,78,71,13,10,26,10};
+    out.insert(out.end(), sig, sig + 8);
+
+    // IHDR
+    uint8_t ihdr[13] = {};
+    ihdr[0]=(w>>24)&0xFF; ihdr[1]=(w>>16)&0xFF; ihdr[2]=(w>>8)&0xFF; ihdr[3]=w&0xFF;
+    ihdr[4]=(h>>24)&0xFF; ihdr[5]=(h>>16)&0xFF; ihdr[6]=(h>>8)&0xFF; ihdr[7]=h&0xFF;
+    ihdr[8]=8;   // bit depth
+    ihdr[9]=6;   // colour type: RGBA
+    ihdr[10]=0; ihdr[11]=0; ihdr[12]=0;
+    write_chunk("IHDR", ihdr, 13);
+
+    // IDAT
+    write_chunk("IDAT", compressed.data(), (uint32_t)compressed.size());
+
+    // IEND
+    write_chunk("IEND", nullptr, 0);
+
+    return true;
+}
+
+// ============================================================================
+// BASE64 ENCODE
+// ============================================================================
+
+static const char B64CHARS[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static std::string b64_encode(const uint8_t *src, int len) {
+    std::string out;
+    out.reserve(((len + 2) / 3) * 4);
+    for (int i = 0; i < len; i += 3) {
+        uint32_t b  = (uint32_t)src[i] << 16;
+        if (i+1 < len) b |= (uint32_t)src[i+1] << 8;
+        if (i+2 < len) b |= (uint32_t)src[i+2];
+        out += B64CHARS[(b >> 18) & 0x3F];
+        out += B64CHARS[(b >> 12) & 0x3F];
+        out += (i+1 < len) ? B64CHARS[(b >>  6) & 0x3F] : '=';
+        out += (i+2 < len) ? B64CHARS[(b      ) & 0x3F] : '=';
+    }
+    return out;
+}
+
+// ============================================================================
+// kitty_get_html_images
+// ============================================================================
+
+std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, int row_end) {
+    std::vector<KittyHtmlImage> result;
+
+    auto tit = s_terms.find(t);
+    if (tit == s_terms.end()) return result;
+
+    for (const KittyPlacement &pl : tit->second.placements) {
+        if (pl.y_cell < row_start || pl.y_cell > row_end) continue;
+
+        auto iit = s_images.find(pl.image_id);
+        if (iit == s_images.end()) continue;
+        const KittyImage &img = iit->second;
+        if (!img.tex || img.pw <= 0 || img.ph <= 0) continue;
+
+        // Read texture back from GPU
+        std::vector<uint8_t> pixels(img.pw * img.ph * 4);
+        glBindTexture(GL_TEXTURE_2D, img.tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        // Apply source crop if specified
+        int sx = pl.src_x, sy = pl.src_y;
+        int sw = pl.src_w ? pl.src_w : img.pw;
+        int sh = pl.src_h ? pl.src_h : img.ph;
+        sx = SDL_clamp(sx, 0, img.pw - 1);
+        sy = SDL_clamp(sy, 0, img.ph - 1);
+        sw = SDL_min(sw, img.pw - sx);
+        sh = SDL_min(sh, img.ph - sy);
+
+        // Crop to region if needed
+        const uint8_t *src_ptr = pixels.data();
+        std::vector<uint8_t> cropped;
+        int stride = img.pw * 4;
+        if (sx != 0 || sy != 0 || sw != img.pw || sh != img.ph) {
+            cropped.resize(sw * sh * 4);
+            for (int row = 0; row < sh; row++)
+                memcpy(cropped.data() + row * sw * 4,
+                       pixels.data() + (sy + row) * stride + sx * 4,
+                       sw * 4);
+            src_ptr = cropped.data();
+            stride  = sw * 4;
+        }
+
+        // Encode to PNG in memory
+        std::vector<uint8_t> png_data;
+        png_data.reserve(sw * sh);
+        if (!encode_png(src_ptr, sw, sh, stride, png_data)) continue;
+
+        // Build <img> tag with data URI
+        // Width attribute: use cell columns if specified, else natural pixel width
+        int display_cols = pl.cols ? pl.cols : 0;
+        std::string tag = "<img src=\"data:image/png;base64,";
+        tag += b64_encode(png_data.data(), (int)png_data.size());
+        tag += "\"";
+        if (display_cols > 0) {
+            // Express width as number of 'ch' units (monospace character widths)
+            char wbuf[64];
+            snprintf(wbuf, sizeof(wbuf), " style=\"width:%dch\"", display_cols);
+            tag += wbuf;
+        } else {
+            // Natural size but cap at 100% of container
+            tag += " style=\"max-width:100%\"";
+        }
+        tag += " alt=\"[terminal image]\">";
+
+        KittyHtmlImage entry;
+        entry.y_cell  = pl.y_cell;
+        entry.cols    = display_cols;
+        entry.img_tag = std::move(tag);
+        result.push_back(std::move(entry));
+    }
+
+    // Sort by y_cell so caller gets them in order
+    std::sort(result.begin(), result.end(),
+        [](const KittyHtmlImage &a, const KittyHtmlImage &b){ return a.y_cell < b.y_cell; });
+
+    return result;
 }
 
 void kitty_scroll(Terminal *t, int lines) {
