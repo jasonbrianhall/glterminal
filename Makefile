@@ -48,7 +48,7 @@ CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
                  -DLINUX -O2 -ffunction-sections -fdata-sections -flto
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
-                 -lGL -lz -lm -pthread -lstdc++ \
+                 -lGL -lpng -lz -lm -pthread -lstdc++ \
                  -s -Wl,--gc-sections -flto
 
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
@@ -56,7 +56,7 @@ CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
                        -DLINUX -DDEBUG -g -O0
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
-                       -lGL -lz -lm -pthread -lstdc++
+                       -lGL -lpng -lz -lm -pthread -lstdc++
 
 # ============================================================================
 # WINDOWS FLAGS
@@ -69,7 +69,7 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
 # -mwindows: no console window behind the GL window
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
-               -lopengl32 -lz -lwinmm -mwindows \
+               -lopengl32 -lpng -lz -lwinmm -mwindows \
                -s -Wl,--gc-sections -flto
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \

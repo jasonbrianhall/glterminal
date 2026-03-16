@@ -27,17 +27,73 @@
 #include <algorithm>
 
 // ============================================================================
-// stb_image — header-only, PNG/JPEG/etc decode
+// PNG decode via libpng — same dependency used for encode, works on all platforms
 // ============================================================================
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_NO_STDIO
-#define STBI_ONLY_PNG
-#define STBI_ONLY_JPEG
-#define STBI_ONLY_BMP
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function"
-#include "stb_image.h"
-#pragma GCC diagnostic pop
+#include <png.h>
+
+struct PngReadCtx {
+    const uint8_t *data;
+    int            len;
+    int            pos;
+};
+
+static void png_mem_read(png_structp ps, png_bytep out, png_size_t len) {
+    auto *ctx = (PngReadCtx*)png_get_io_ptr(ps);
+    int remaining = ctx->len - ctx->pos;
+    if ((int)len > remaining) len = (png_size_t)remaining;
+    memcpy(out, ctx->data + ctx->pos, len);
+    ctx->pos += (int)len;
+}
+
+// Decode any PNG from memory into a freshly malloc'd RGBA buffer.
+// Returns nullptr on failure. Caller must free() the result.
+static uint8_t *decode_png(const uint8_t *src, int srclen, int *w_out, int *h_out) {
+    if (srclen < 8 || png_sig_cmp((png_bytep)src, 0, 8)) return nullptr;
+
+    png_structp ps = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+    if (!ps) return nullptr;
+    png_infop pi = png_create_info_struct(ps);
+    if (!pi) { png_destroy_read_struct(&ps, nullptr, nullptr); return nullptr; }
+
+    if (setjmp(png_jmpbuf(ps))) {
+        png_destroy_read_struct(&ps, &pi, nullptr);
+        return nullptr;
+    }
+
+    PngReadCtx ctx = { src, srclen, 0 };
+    png_set_read_fn(ps, &ctx, png_mem_read);
+    png_read_info(ps, pi);
+
+    int w  = (int)png_get_image_width(ps, pi);
+    int h  = (int)png_get_image_height(ps, pi);
+    int ct = png_get_color_type(ps, pi);
+    int bd = png_get_bit_depth(ps, pi);
+
+    // Normalise to 8-bit RGBA
+    if (bd == 16)                       png_set_strip_16(ps);
+    if (ct == PNG_COLOR_TYPE_PALETTE)   png_set_palette_to_rgb(ps);
+    if (ct == PNG_COLOR_TYPE_GRAY && bd < 8) png_set_expand_gray_1_2_4_to_8(ps);
+    if (png_get_valid(ps, pi, PNG_INFO_tRNS)) png_set_tRNS_to_alpha(ps);
+    if (ct == PNG_COLOR_TYPE_RGB  ||
+        ct == PNG_COLOR_TYPE_GRAY ||
+        ct == PNG_COLOR_TYPE_PALETTE)   png_set_filler(ps, 0xFF, PNG_FILLER_AFTER);
+    if (ct == PNG_COLOR_TYPE_GRAY ||
+        ct == PNG_COLOR_TYPE_GRAY_ALPHA) png_set_gray_to_rgb(ps);
+    png_read_update_info(ps, pi);
+
+    uint8_t *pixels = (uint8_t*)malloc((size_t)w * h * 4);
+    if (!pixels) { png_destroy_read_struct(&ps, &pi, nullptr); return nullptr; }
+
+    std::vector<png_bytep> rows((size_t)h);
+    for (int r = 0; r < h; r++) rows[r] = pixels + r * w * 4;
+    png_read_image(ps, rows.data());
+    png_read_end(ps, nullptr);
+    png_destroy_read_struct(&ps, &pi, nullptr);
+
+    *w_out = w; *h_out = h;
+    return pixels;
+}
+
 
 // ============================================================================
 // TEXTURED QUAD SHADER
@@ -171,15 +227,11 @@ static GLuint upload_texture(const uint8_t *pixels, int w, int h, bool has_alpha
 
 static GLuint build_image(const std::vector<uint8_t> &raw, int fmt, int pw, int ph) {
     if (fmt == 100) {
-        // PNG (or JPEG/BMP via stb_image)
-        int w, h, ch;
-        uint8_t *dec = stbi_load_from_memory(raw.data(), (int)raw.size(), &w, &h, &ch, 4);
-        if (!dec) {
-            SDL_Log("[Kitty] stb_image failed: %s\n", stbi_failure_reason());
-            return 0;
-        }
+        int w = 0, h = 0;
+        uint8_t *dec = decode_png(raw.data(), (int)raw.size(), &w, &h);
+        if (!dec) { SDL_Log("[Kitty] PNG decode failed\n"); return 0; }
         GLuint tex = upload_texture(dec, w, h, true);
-        stbi_image_free(dec);
+        free(dec);
         return tex;
     }
     if (fmt == 32) {
@@ -420,17 +472,15 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
             img.id = img_id;
 
             if (ts.pending.fmt == 100) {
-                // PNG/JPEG/BMP — decode once, store dims + upload
-                int w, h, ch;
-                uint8_t *dec = stbi_load_from_memory(
-                    ts.pending.data.data(), (int)ts.pending.data.size(),
-                    &w, &h, &ch, 4);
+                int w = 0, h = 0;
+                uint8_t *dec = decode_png(
+                    ts.pending.data.data(), (int)ts.pending.data.size(), &w, &h);
                 if (dec) {
                     img.pw  = w; img.ph = h;
                     img.tex = upload_texture(dec, w, h, true);
-                    stbi_image_free(dec);
+                    free(dec);
                 } else {
-                    SDL_Log("[Kitty] stb_image failed: %s\n", stbi_failure_reason());
+                    SDL_Log("[Kitty] PNG decode failed\n");
                 }
             } else {
                 img.pw  = ts.pending.pw;
