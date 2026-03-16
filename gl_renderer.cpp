@@ -306,7 +306,7 @@ static const char *POST_FS =
 // ============================================================================
 
 GLState G = {};
-int     g_render_mode = RENDER_MODE_NORMAL;
+uint32_t g_render_mode = 0;  // bitmask of active RENDER_BIT_* flags
 
 
 // FBO state — composite (post-process) FBO
@@ -320,6 +320,12 @@ static int    s_fbo_h     = 0;
 static GLuint s_term_fbo     = 0;
 static GLuint s_term_fbo_tex = 0;
 static GLuint s_term_fbo_rb  = 0;
+
+// Ping-pong FBO — used when more than one render mode is active so each
+// pass reads from one FBO and writes to the other without aliasing.
+static GLuint s_ping_fbo     = 0;
+static GLuint s_ping_fbo_tex = 0;
+static GLuint s_ping_fbo_rb  = 0;
 
 // Post-process quad
 static GLuint s_quad_prog  = 0;
@@ -402,6 +408,7 @@ static void create_fbo(int w, int h) {
     s_fbo_w = w; s_fbo_h = h;
     make_color_fbo(&s_fbo,      &s_fbo_tex,      &s_fbo_rb,      w, h);
     make_color_fbo(&s_term_fbo, &s_term_fbo_tex, &s_term_fbo_rb, w, h);
+    make_color_fbo(&s_ping_fbo, &s_ping_fbo_tex, &s_ping_fbo_rb, w, h);
 }
 
 // ============================================================================
@@ -551,27 +558,65 @@ void gl_end_frame(float time, int win_w, int win_h) {
     // Flush all accumulated geometry into the FBO in one draw call.
     gl_flush_verts();
 
-    // Unbind FBO — render to screen
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, win_w, win_h);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
+    // --- Multi-pass post-process ---
+    // Each set bit in g_render_mode is one post-process pass applied in order
+    // (bit 1 = CRT, bit 2 = LCD, …).  Passes ping-pong between s_fbo and
+    // s_ping_fbo so every pass reads a clean copy of the previous result.
+    //
+    // When no bits are set (NORMAL) we do exactly one "mode 0" pass which is
+    // a straight blit — identical to the old behaviour.
 
-    // Disable blending for the fullscreen blit so we get exact alpha
     glDisable(GL_BLEND);
-
     glUseProgram(s_quad_prog);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_fbo_tex);
-    glUniform1i(s_loc_tex,  0);
-    glUniform1i(s_loc_mode, g_render_mode);
     glUniform1f(s_loc_time, time);
     glUniform2f(s_loc_res,  (float)win_w, (float)win_h);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(s_loc_tex, 0);
 
-    // Focus mode: pass cursor row as 0..1 UV
+    // Build ordered list of active mode indices (1..RENDER_MODE_COUNT-1).
+    // If nothing is set, treat as a single normal (passthrough) pass.
+    int passes[RENDER_MODE_COUNT];
+    int npass = 0;
+    for (int m = 1; m < RENDER_MODE_COUNT; m++) {
+        if (g_render_mode & (1u << m))
+            passes[npass++] = m;
+    }
+    if (npass == 0) { passes[0] = RENDER_MODE_NORMAL; npass = 1; }
 
-    glBindVertexArray(s_quad_vao);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    // src starts as s_fbo (composite with fight/bc overlaid)
+    GLuint src_tex = s_fbo_tex;
+    // FBO pair for ping-pong: s_fbo ↔ s_ping_fbo
+    GLuint fbo_pair[2]     = { s_fbo,      s_ping_fbo      };
+    GLuint tex_pair[2]     = { s_fbo_tex,  s_ping_fbo_tex  };
+    int    dst_slot        = 1;  // first write goes to s_ping_fbo
+
+    for (int pi = 0; pi < npass; pi++) {
+        bool last = (pi == npass - 1);
+
+        if (last) {
+            // Final pass renders directly to screen
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, win_w, win_h);
+            glClearColor(0, 0, 0, 1);
+            glClear(GL_COLOR_BUFFER_BIT);
+        } else {
+            // Intermediate pass renders into the ping-pong FBO
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo_pair[dst_slot]);
+            glViewport(0, 0, win_w, win_h);
+        }
+
+        glBindTexture(GL_TEXTURE_2D, src_tex);
+        glUniform1i(s_loc_mode, passes[pi]);
+        glBindVertexArray(s_quad_vao);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        if (!last) {
+            // Next pass reads what we just wrote
+            src_tex  = tex_pair[dst_slot];
+            dst_slot = 1 - dst_slot;
+        }
+    }
+
     glBindVertexArray(0);
     glUseProgram(0);
 

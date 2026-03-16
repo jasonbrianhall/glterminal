@@ -140,8 +140,8 @@ struct BonkVoice { float phase; float freq; int samples_left, total_samples; flo
 // STATE
 // ============================================================================
 
-static SDL_AudioDeviceID s_dev      = 0;
-static int               s_cur_mode = RENDER_MODE_NORMAL;
+static SDL_AudioDeviceID s_dev           = 0;
+static uint32_t          s_cur_mode      = 0;
 static bool              s_audio_enabled = false;  // off by default
 
 // CRT
@@ -397,58 +397,57 @@ bool term_audio_get_enabled(void) {
 // PUBLIC API — render mode
 // ============================================================================
 
-void term_audio_set_mode(int render_mode) {
+void term_audio_set_mode(uint32_t render_mode) {
     if (!s_dev) return;
-    int prev   = s_cur_mode;
-    s_cur_mode = render_mode;
+    uint32_t prev  = s_cur_mode;
+    s_cur_mode     = render_mode;
 
-    s_buzz.target_vol = 0.f;
-    s_vhs.target_vol  = 0.f;
-    s_hum.target_vol  = 0.f;
+    // Fade out ambient voices whose mode is no longer active
+    if (!(render_mode & RENDER_BIT_CRT))       s_buzz.target_vol = 0.f;
+    if (!(render_mode & RENDER_BIT_VHS))       s_vhs.target_vol  = 0.f;
+    if (!(render_mode & RENDER_BIT_COMPOSITE)) s_hum.target_vol  = 0.f;
 
-    switch (render_mode) {
-    case RENDER_MODE_CRT:
-        if (prev != RENDER_MODE_CRT) {
-            SDL_LockAudioDevice(s_dev);
-            s_thunk.total_samples = (int)(THUNK_DURATION * SAMPLE_RATE);
-            s_thunk.samples_left  = s_thunk.total_samples;
-            s_thunk.phase  = 0.f;
-            s_thunk.volume = THUNK_VOLUME;
-            s_thunk.active = true;
-            SDL_UnlockAudioDevice(s_dev);
-        }
-        break;
-    case RENDER_MODE_VHS:
+    // Trigger one-shot sounds for newly enabled modes
+    if ((render_mode & RENDER_BIT_CRT) && !(prev & RENDER_BIT_CRT)) {
+        SDL_LockAudioDevice(s_dev);
+        s_thunk.total_samples = (int)(THUNK_DURATION * SAMPLE_RATE);
+        s_thunk.samples_left  = s_thunk.total_samples;
+        s_thunk.phase  = 0.f;
+        s_thunk.volume = THUNK_VOLUME;
+        s_thunk.active = true;
+        SDL_UnlockAudioDevice(s_dev);
+    }
+    if (render_mode & RENDER_BIT_CRT) {
+        // Buzz target_vol is driven by term_audio_set_activity(); just ensure
+        // it isn't zeroed out — leave it at whatever the activity last set.
+    }
+    if (render_mode & RENDER_BIT_VHS) {
         s_vhs.target_vol = VHS_HISS_VOL;
-        break;
-    case RENDER_MODE_C64:
-        if (prev != RENDER_MODE_C64) {
-            SDL_LockAudioDevice(s_dev);
-            s_c64.note_idx         = 0;
-            s_c64.samples_per_note = (int)(C64_NOTE_DUR * SAMPLE_RATE);
-            s_c64.samples_left     = s_c64.samples_per_note;
-            s_c64.phase            = 0.f;
-            s_c64.volume           = C64_ARP_VOL;
-            s_c64.active           = true;
-            SDL_UnlockAudioDevice(s_dev);
-        }
-        break;
-    case RENDER_MODE_COMPOSITE:
+    }
+    if ((render_mode & RENDER_BIT_C64) && !(prev & RENDER_BIT_C64)) {
+        SDL_LockAudioDevice(s_dev);
+        s_c64.note_idx         = 0;
+        s_c64.samples_per_note = (int)(C64_NOTE_DUR * SAMPLE_RATE);
+        s_c64.samples_left     = s_c64.samples_per_note;
+        s_c64.phase            = 0.f;
+        s_c64.volume           = C64_ARP_VOL;
+        s_c64.active           = true;
+        SDL_UnlockAudioDevice(s_dev);
+    }
+    if (render_mode & RENDER_BIT_COMPOSITE) {
         s_hum.target_vol = HUM_VOL;
-        break;
-    default: break;
     }
 }
 
 void term_audio_set_activity(float level) {
-    if (!s_dev || s_cur_mode != RENDER_MODE_CRT) { s_buzz.target_vol = 0.f; return; }
+    if (!s_dev || !(s_cur_mode & RENDER_BIT_CRT)) { s_buzz.target_vol = 0.f; return; }
     if (level < 0.f) level = 0.f;
     if (level > 1.f) level = 1.f;
     s_buzz.target_vol = level * BUZZ_MAX_VOL;
 }
 
 void term_audio_cursor_ping(void) {
-    if (!s_dev || s_cur_mode != RENDER_MODE_CRT) return;
+    if (!s_dev || !(s_cur_mode & RENDER_BIT_CRT)) return;
     SDL_LockAudioDevice(s_dev);
     PingVoice &pv = s_pings[s_ping_write % PING_MAX_STACK];
     s_ping_write++;

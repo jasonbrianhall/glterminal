@@ -9,7 +9,7 @@ void term_audio_init(void);
 void term_audio_shutdown(void);
 void term_audio_set_enabled(bool en);
 bool term_audio_get_enabled(void);
-void term_audio_set_mode(int render_mode);
+void term_audio_set_mode(uint32_t render_mode);
 void term_audio_set_activity(float level);   // 0..1, drives CRT buzz
 void term_audio_cursor_ping(void);           // CRT mode only
 

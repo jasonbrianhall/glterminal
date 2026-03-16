@@ -309,7 +309,11 @@ int main(int argc, char **argv) {
                                 g_opacity = ((float[]){1.0f,0.85f,0.7f,0.5f,0.3f,0.1f})[sub_hit];
                                 SDL_SetWindowOpacity(window, g_opacity);
                             } else if (g_menu.sub_open == MENU_ID_RENDER_MODE) {
-                                g_render_mode = sub_hit;
+                                if (sub_hit == RENDER_MODE_NORMAL) {
+                                    g_render_mode = 0;  // "Normal" clears all modes
+                                } else {
+                                    g_render_mode ^= (1u << sub_hit);  // toggle the bit
+                                }
                             } else if (g_menu.sub_open == MENU_ID_ENTERTAINMENT) {
                                 if      (sub_hit == ENT_IDX_FIGHT)    fight_set_enabled(!fight_get_enabled());
                                 else if (sub_hit == ENT_IDX_BOUNCING) bc_set_enabled(!bc_get_enabled());
@@ -482,12 +486,11 @@ int main(int argc, char **argv) {
         bool term_needs_render = needs_render;
 
         // Animated render modes (CRT flicker, VHS noise) need continuous redraw
-        if (g_render_mode == RENDER_MODE_CRT || g_render_mode == RENDER_MODE_VHS
-         || g_render_mode == RENDER_MODE_C64 || g_render_mode == RENDER_MODE_COMPOSITE)
+        if (g_render_mode & (RENDER_BIT_CRT | RENDER_BIT_VHS | RENDER_BIT_C64 | RENDER_BIT_COMPOSITE))
             needs_render = true;
 
         // Notify audio of mode state
-        static int s_prev_render_mode = -1;
+        static uint32_t s_prev_render_mode = ~0u;
         if (g_render_mode != s_prev_render_mode) {
             term_audio_set_mode(g_render_mode);
             s_prev_render_mode = g_render_mode;

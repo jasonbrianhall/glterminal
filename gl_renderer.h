@@ -1,6 +1,7 @@
 #pragma once
 #include <GL/glew.h>
 #include <GL/gl.h>
+#include <stdint.h>
 
 // ============================================================================
 // VERTEX / GL STATE
@@ -20,9 +21,10 @@ struct GLState {
 extern GLState G;
 
 // ============================================================================
-// RENDER MODES
+// RENDER MODES  (bitmask — multiple modes can be active simultaneously)
 // ============================================================================
 
+// Bit indices — used to index RENDER_MODE_NAMES[] and for menu display
 #define RENDER_MODE_NORMAL    0
 #define RENDER_MODE_CRT       1
 #define RENDER_MODE_LCD       2
@@ -32,7 +34,15 @@ extern GLState G;
 #define RENDER_MODE_COMPOSITE 6
 #define RENDER_MODE_COUNT     7
 
-extern int g_render_mode;
+// Bitmask constants
+#define RENDER_BIT_CRT        (1u<<RENDER_MODE_CRT)
+#define RENDER_BIT_LCD        (1u<<RENDER_MODE_LCD)
+#define RENDER_BIT_VHS        (1u<<RENDER_MODE_VHS)
+#define RENDER_BIT_FOCUS      (1u<<RENDER_MODE_FOCUS)
+#define RENDER_BIT_C64        (1u<<RENDER_MODE_C64)
+#define RENDER_BIT_COMPOSITE  (1u<<RENDER_MODE_COMPOSITE)
+
+extern uint32_t g_render_mode;  // bitmask of active RENDER_BIT_* flags
 
 // ============================================================================
 // API
