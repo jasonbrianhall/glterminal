@@ -126,32 +126,6 @@ jobs:
         Expand-Archive -Path "wix.zip" -DestinationPath "wix"
         echo "$env:GITHUB_WORKSPACE\wix" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-    - name: Create License File
-      run: |
-        @"
-        MIT License
-
-        Copyright (c) 2025 Felix Terminal Contributors
-
-        Permission is hereby granted, free of charge, to any person obtaining a copy
-        of this software and associated documentation files (the "Software"), to deal
-        in the Software without restriction, including without limitation the rights
-        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-        copies of the Software, and to permit persons to whom the Software is
-        furnished to do so, subject to the following conditions:
-
-        The above copyright notice and this permission notice shall be included in all
-        copies or substantial portions of the Software.
-
-        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-        SOFTWARE.
-        "@ | Out-File -FilePath "artifacts\build\windows\LICENSE.txt" -Encoding UTF8
-
     - name: Generate MSI Installer
       working-directory: artifacts/build/windows
       run: |
@@ -159,19 +133,15 @@ jobs:
         $upgradeCode = "${{ env.UPGRADE_CODE }}"
 
         # Generate component entries for all DLLs
-        $dllComponents = Get-ChildItem -Name "*.dll" | ForEach-Object {
+        $dllEntries = Get-ChildItem -Name "*.dll" | ForEach-Object {
           $safeId = $_ -replace '[^a-zA-Z0-9]', '_'
-          $guid = [System.Guid]::NewGuid().ToString().ToUpper()
-          @"
-              <Component Id="Comp_$safeId" Guid="$guid">
-                <File Id="$safeId" Name="$_" Source="$_" />
-              </Component>
-        "@
+          "                <File Id=`"$safeId`" Name=`"$_`" Source=`"$_`"/>"
         }
 
         @"
         <?xml version="1.0" encoding="UTF-8"?>
         <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
           <Product Id="*"
                    Name="Felix Terminal"
                    Language="1033"
@@ -179,86 +149,110 @@ jobs:
                    Manufacturer="Felix Terminal"
                    UpgradeCode="$upgradeCode">
 
-            <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+            <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+                     Description="Felix Terminal - OpenGL-accelerated terminal emulator"
+                     Manufacturer="Felix Terminal" />
 
-            <MajorUpgrade DowngradeErrorMessage="A newer version of Felix Terminal is already installed." />
-            <MediaTemplate EmbedCab="yes" />
+            <MajorUpgrade DowngradeErrorMessage="A newer version of Felix Terminal is already installed."
+                          Schedule="afterInstallInitialize" />
+            <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
             <Icon Id="FelixIcon" SourceFile="icon.ico" />
             <Property Id="ARPPRODUCTICON" Value="FelixIcon" />
             <Property Id="ARPHELPLINK" Value="https://github.com/felix-terminal" />
+            <Property Id="ARPURLINFOABOUT" Value="https://github.com/felix-terminal" />
+            <Property Id="ARPCOMMENTS" Value="A fast OpenGL-accelerated terminal emulator for Windows" />
 
-            <WixVariable Id="WixUILicenseRtf" Value="LICENSE.txt" />
+            <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
             <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+            <Property Id="DESKTOP_SHORTCUT" Value="1" />
 
             <Directory Id="TARGETDIR" Name="SourceDir">
               <Directory Id="ProgramFiles64Folder">
-                <Directory Id="INSTALLFOLDER" Name="Felix Terminal">
-
-                  <Component Id="MainExecutable" Guid="*">
-                    <File Id="flt_exe" Name="flt.exe" Source="flt.exe" KeyPath="yes" />
-                  </Component>
-
-                  <Component Id="StartMenuShortcuts" Guid="*">
-                    <Shortcut Id="StartMenuShortcut"
-                              Name="Felix Terminal"
-                              Description="Felix Terminal - cmd.exe"
-                              Target="[INSTALLFOLDER]flt.exe"
-                              WorkingDirectory="INSTALLFOLDER"
-                              Icon="FelixIcon" />
-                    <Shortcut Id="StartMenuShortcutPS"
-                              Name="Felix Terminal (PowerShell)"
-                              Description="Felix Terminal - PowerShell"
-                              Target="[INSTALLFOLDER]flt.exe"
-                              Arguments="powershell.exe"
-                              WorkingDirectory="INSTALLFOLDER"
-                              Icon="FelixIcon" />
-                    <RemoveFolder Id="RemoveStartMenuFolder" On="uninstall" />
-                    <RegistryValue Root="HKCU" Key="Software\FelixTerminal" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-                  </Component>
-
-                  <Component Id="DesktopShortcut" Guid="*">
-                    <Condition>DESKTOP_SHORTCUT</Condition>
-                    <Shortcut Id="DesktopShortcutMain"
-                              Name="Felix Terminal"
-                              Description="Felix Terminal - cmd.exe"
-                              Target="[INSTALLFOLDER]flt.exe"
-                              WorkingDirectory="INSTALLFOLDER"
-                              Directory="DesktopFolder"
-                              Icon="FelixIcon" />
-                    <Shortcut Id="DesktopShortcutPS"
-                              Name="Felix Terminal (PowerShell)"
-                              Description="Felix Terminal - PowerShell"
-                              Target="[INSTALLFOLDER]flt.exe"
-                              Arguments="powershell.exe"
-                              WorkingDirectory="INSTALLFOLDER"
-                              Directory="DesktopFolder"
-                              Icon="FelixIcon" />
-                    <RegistryValue Root="HKCU" Key="Software\FelixTerminal" Name="desktop" Type="integer" Value="1" KeyPath="yes" />
-                  </Component>
-
-                  $($dllComponents -join "`n")
-
-                </Directory>
+                <Directory Id="INSTALLFOLDER" Name="Felix Terminal" />
               </Directory>
-
               <Directory Id="ProgramMenuFolder">
                 <Directory Id="ApplicationProgramsFolder" Name="Felix Terminal" />
               </Directory>
-
               <Directory Id="DesktopFolder" />
             </Directory>
 
+            <!-- Main executable and all DLL dependencies -->
+            <DirectoryRef Id="INSTALLFOLDER">
+              <Component Id="MainExecutable" Guid="C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F" Win64="yes">
+                <File Id="flt_exe" Name="flt.exe" Source="flt.exe" />
+
+                <!-- Start Menu shortcuts (non-advertised, point at ApplicationProgramsFolder) -->
+                <Shortcut Id="StartMenuShortcut"
+                          Directory="ApplicationProgramsFolder"
+                          Name="Felix Terminal"
+                          Description="Felix Terminal - cmd.exe"
+                          Target="[INSTALLFOLDER]flt.exe"
+                          WorkingDirectory="INSTALLFOLDER"
+                          Icon="FelixIcon"
+                          IconIndex="0" />
+                <Shortcut Id="StartMenuShortcutPS"
+                          Directory="ApplicationProgramsFolder"
+                          Name="Felix Terminal (PowerShell)"
+                          Description="Felix Terminal - PowerShell"
+                          Target="[INSTALLFOLDER]flt.exe"
+                          Arguments="powershell.exe"
+                          WorkingDirectory="INSTALLFOLDER"
+                          Icon="FelixIcon"
+                          IconIndex="0" />
+
+                <!-- Registry KeyPath required for non-advertised shortcuts -->
+                <RegistryValue Root="HKCU" Key="Software\FelixTerminal" Name="installed"
+                               Type="integer" Value="1" KeyPath="yes" />
+
+                <!-- DLL dependencies -->
+                $($dllEntries -join "`r`n")
+              </Component>
+            </DirectoryRef>
+
+            <!-- Start Menu folder cleanup on uninstall (fixes ICE64) -->
+            <DirectoryRef Id="ApplicationProgramsFolder">
+              <Component Id="StartMenuFolder" Guid="D2E3F4A5-B6C7-4D8E-9F0A-1B2C3D4E5F6A" Win64="yes">
+                <RemoveFolder Id="ApplicationProgramsFolderRemove" On="uninstall" />
+                <RegistryValue Root="HKCU" Key="Software\FelixTerminal\Shortcuts" Name="StartMenu"
+                               Type="integer" Value="1" KeyPath="yes" />
+              </Component>
+            </DirectoryRef>
+
+            <!-- Desktop shortcuts (optional) -->
+            <DirectoryRef Id="DesktopFolder">
+              <Component Id="DesktopShortcut" Guid="E3F4A5B6-C7D8-4E9F-0A1B-2C3D4E5F6A7B" Win64="yes">
+                <Condition>DESKTOP_SHORTCUT=1</Condition>
+                <Shortcut Id="DesktopShortcutMain"
+                          Directory="DesktopFolder"
+                          Name="Felix Terminal"
+                          Description="Felix Terminal - cmd.exe"
+                          Target="[INSTALLFOLDER]flt.exe"
+                          WorkingDirectory="INSTALLFOLDER"
+                          Icon="FelixIcon"
+                          IconIndex="0" />
+                <Shortcut Id="DesktopShortcutPS"
+                          Directory="DesktopFolder"
+                          Name="Felix Terminal (PowerShell)"
+                          Description="Felix Terminal - PowerShell"
+                          Target="[INSTALLFOLDER]flt.exe"
+                          Arguments="powershell.exe"
+                          WorkingDirectory="INSTALLFOLDER"
+                          Icon="FelixIcon"
+                          IconIndex="0" />
+                <RegistryValue Root="HKCU" Key="Software\FelixTerminal\Shortcuts" Name="Desktop"
+                               Type="integer" Value="1" KeyPath="yes" />
+              </Component>
+            </DirectoryRef>
+
             <Feature Id="MainFeature" Title="Felix Terminal" Level="1">
               <ComponentRef Id="MainExecutable" />
-              <ComponentRef Id="StartMenuShortcuts" />
+              <ComponentRef Id="StartMenuFolder" />
               <ComponentRef Id="DesktopShortcut" />
-              $(Get-ChildItem -Name "*.dll" | ForEach-Object { $safeId = $_ -replace '[^a-zA-Z0-9]', '_'; "<ComponentRef Id=""Comp_$safeId"" />" } | Out-String)
             </Feature>
 
-            <Property Id="DESKTOP_SHORTCUT" Value="1" />
-
             <UIRef Id="WixUI_InstallDir" />
+            <UIRef Id="WixUI_ErrorProgressText" />
 
             <InstallExecuteSequence>
               <Custom Action="SetARPINSTALLLOCATION" After="InstallValidate" />
@@ -269,8 +263,38 @@ jobs:
         </Wix>
         "@ | Out-File -FilePath "felix_terminal.wxs" -Encoding UTF8
 
-        candle.exe felix_terminal.wxs -out felix_terminal.wixobj -arch x64
-        light.exe felix_terminal.wixobj -out FelixTerminal.msi -ext WixUIExtension -ext WixUtilExtension
+        # Create RTF license if not present
+        if (-not (Test-Path "License.rtf")) {
+          @"
+        {\rtf1\ansi\ansicpg1252
+        {\colortbl;\red255\green255\blue255;}
+        \margl1440\margr1440\vieww11900\viewh8605\viewkind0
+        \pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\pardirnatural\partightenfactor0
+        \f0\fs20 \cf0 MIT License\
+        \
+        Copyright (c) 2025 Felix Terminal Contributors\
+        \
+        Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\
+        \
+        The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\
+        \
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.}
+        "@ | Out-File -FilePath "License.rtf" -Encoding ASCII
+        }
+
+        Write-Host "Compiling WXS..."
+        & candle.exe -out "felix_terminal.wixobj" -arch x64 "felix_terminal.wxs"
+        if ($LASTEXITCODE -ne 0) { Write-Error "Candle failed"; exit 1 }
+
+        Write-Host "Linking MSI..."
+        & light.exe -out "FelixTerminal.msi" -ext WixUIExtension -ext WixUtilExtension "felix_terminal.wixobj"
+        if ($LASTEXITCODE -ne 0) { Write-Error "Light failed"; exit 1 }
+
+        if (Test-Path "FelixTerminal.msi") {
+          Write-Host "✅ MSI created: FelixTerminal.msi ($((Get-Item 'FelixTerminal.msi').Length) bytes)"
+        } else {
+          Write-Error "❌ MSI not created"; exit 1
+        }
 
     - name: Upload MSI
       uses: actions/upload-artifact@v4
@@ -279,8 +303,172 @@ jobs:
         path: artifacts/build/windows/FelixTerminal.msi
         retention-days: 7
 
+  build-msix-windows:
+    needs: build-linux
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: felix-terminal-build
+        path: .
+
+    - name: Extract Build Files
+      run: |
+        Expand-Archive -Path "FelixTerminal-Portable.zip" -DestinationPath "msix-source\" -Force
+
+    - name: Prepare MSIX Package Structure
+      run: |
+        New-Item -ItemType Directory -Force -Path "msix-package/Assets"
+        New-Item -ItemType Directory -Force -Path "msix-package/Files"
+
+        Copy-Item "msix-source/*" -Destination "msix-package/Files/" -Recurse -Force
+
+        if (-not (Test-Path "msix-package/Files/flt.exe")) {
+          Write-Error "flt.exe not found in package!"
+          exit 1
+        }
+
+        Write-Host "📦 MSIX package contents:"
+        Get-ChildItem "msix-package/Files/" -File | ForEach-Object { Write-Host "  - $_" }
+
+    - name: Create MSIX Store Compliant Assets
+      run: |
+        $iconPath = "msix-source/icon.png"
+
+        if (-not (Test-Path $iconPath)) {
+          Write-Error "icon.png not found - cannot create Store assets"
+          exit 1
+        }
+
+        Write-Host "Creating Microsoft Store compliant assets..."
+
+        # StoreLogo (50x50 base)
+        & magick "$iconPath" -resize 50x50   "msix-package/Assets/StoreLogo.scale-100.png"
+        & magick "$iconPath" -resize 63x63   "msix-package/Assets/StoreLogo.scale-125.png"
+        & magick "$iconPath" -resize 75x75   "msix-package/Assets/StoreLogo.scale-150.png"
+        & magick "$iconPath" -resize 100x100 "msix-package/Assets/StoreLogo.scale-200.png"
+
+        # Square 44x44 (small tile)
+        & magick "$iconPath" -resize 44x44 "msix-package/Assets/FelixTerminal44x44.scale-100.png"
+        & magick "$iconPath" -resize 55x55 "msix-package/Assets/FelixTerminal44x44.scale-125.png"
+        & magick "$iconPath" -resize 66x66 "msix-package/Assets/FelixTerminal44x44.scale-150.png"
+        & magick "$iconPath" -resize 88x88 "msix-package/Assets/FelixTerminal44x44.scale-200.png"
+
+        # Square 150x150 (main tile)
+        & magick "$iconPath" -resize 150x150 "msix-package/Assets/FelixTerminalLogo.scale-100.png"
+        & magick "$iconPath" -resize 188x188 "msix-package/Assets/FelixTerminalLogo.scale-125.png"
+        & magick "$iconPath" -resize 225x225 "msix-package/Assets/FelixTerminalLogo.scale-150.png"
+        & magick "$iconPath" -resize 300x300 "msix-package/Assets/FelixTerminalLogo.scale-200.png"
+
+        # Wide 310x150 (wide tile)
+        & magick "$iconPath" -resize 150x150 -background "#0d1117" -gravity center -extent 310x150 "msix-package/Assets/FelixTerminalWide.scale-100.png"
+        & magick "$iconPath" -resize 188x188 -background "#0d1117" -gravity center -extent 388x188 "msix-package/Assets/FelixTerminalWide.scale-125.png"
+        & magick "$iconPath" -resize 225x225 -background "#0d1117" -gravity center -extent 465x225 "msix-package/Assets/FelixTerminalWide.scale-150.png"
+        & magick "$iconPath" -resize 300x300 -background "#0d1117" -gravity center -extent 620x300 "msix-package/Assets/FelixTerminalWide.scale-200.png"
+
+        Write-Host "✅ All Microsoft Store assets created successfully"
+
+    - name: Create MSIX Manifest
+      working-directory: msix-package
+      run: |
+        @"
+        <?xml version="1.0" encoding="utf-8"?>
+        <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+                 xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+                 xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
+
+          <Identity
+            Name="FelixTerminal"
+            Publisher="CN=FelixTerminal"
+            Version="${{ needs.build-linux.outputs.version }}"
+            ProcessorArchitecture="x64" />
+
+          <Properties>
+            <DisplayName>Felix Terminal</DisplayName>
+            <PublisherDisplayName>Felix Terminal</PublisherDisplayName>
+            <Description>A fast OpenGL-accelerated terminal emulator for Windows.</Description>
+            <Logo>Assets\StoreLogo.scale-100.png</Logo>
+          </Properties>
+
+          <Dependencies>
+            <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+          </Dependencies>
+
+          <Resources>
+            <Resource Language="en-us" />
+          </Resources>
+
+          <Applications>
+            <Application Id="FelixTerminal" Executable="Files\flt.exe" EntryPoint="Windows.FullTrustApplication">
+              <uap:VisualElements DisplayName="Felix Terminal"
+                                  Description="A fast OpenGL-accelerated terminal emulator for Windows."
+                                  Square150x150Logo="Assets\FelixTerminalLogo.scale-100.png"
+                                  Square44x44Logo="Assets\FelixTerminal44x44.scale-100.png"
+                                  BackgroundColor="#0d1117">
+                <uap:DefaultTile Wide310x150Logo="Assets\FelixTerminalWide.scale-100.png"
+                                 ShortName="Felix Terminal">
+                  <uap:ShowNameOnTiles>
+                    <uap:ShowOn Tile="square150x150Logo"/>
+                    <uap:ShowOn Tile="wide310x150Logo"/>
+                  </uap:ShowNameOnTiles>
+                </uap:DefaultTile>
+                <uap:SplashScreen Image="Assets\FelixTerminalLogo.scale-100.png" />
+              </uap:VisualElements>
+            </Application>
+          </Applications>
+
+          <Capabilities>
+            <rescap:Capability Name="runFullTrust" />
+          </Capabilities>
+        </Package>
+        "@ | Out-File -FilePath "AppxManifest.xml" -Encoding UTF8
+
+    - name: Build MSIX Package
+      run: |
+        $makeAppxPath = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64\makeappx.exe"
+
+        if (-not (Test-Path $makeAppxPath)) {
+          $sdkVersions = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\" |
+            Where-Object { $_.Name -match "10\.0\.\d+\.\d+" } |
+            Sort-Object Name -Descending
+          foreach ($version in $sdkVersions) {
+            $testPath = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\$($version.Name)\x64\makeappx.exe"
+            if (Test-Path $testPath) { $makeAppxPath = $testPath; break }
+          }
+        }
+
+        if (-not (Test-Path $makeAppxPath)) {
+          Write-Error "MakeAppx.exe not found."
+          exit 1
+        }
+
+        Write-Host "Using MakeAppx at: $makeAppxPath"
+        & "$makeAppxPath" pack /d "msix-package" /p "FelixTerminal.msix" /o
+
+        if ($LASTEXITCODE -ne 0) { Write-Error "MSIX creation failed"; exit 1 }
+
+        if (Test-Path "FelixTerminal.msix") {
+          Write-Host "✅ MSIX created: FelixTerminal.msix ($((Get-Item 'FelixTerminal.msix').Length) bytes)"
+          Write-Host "Package is unsigned and ready for Microsoft Store submission"
+        } else {
+          Write-Error "❌ MSIX not created"; exit 1
+        }
+
+    - name: Upload MSIX
+      uses: actions/upload-artifact@v4
+      with:
+        name: FelixTerminal.msix
+        path: FelixTerminal.msix
+        retention-days: 7
+
   create-release:
-    needs: [build-linux, build-msi-windows]
+    needs: [build-linux, build-msi-windows, build-msix-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -291,6 +479,12 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: FelixTerminal.msi
+        path: release
+
+    - name: Download MSIX Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: FelixTerminal.msix
         path: release
 
     - name: Download Portable Artifact
@@ -304,6 +498,7 @@ jobs:
       with:
         files: |
           release/FelixTerminal.msi
+          release/FelixTerminal.msix
           release/FelixTerminal-Portable.zip
         tag_name: ${{ github.ref == 'refs/heads/main' && format('v{0}', github.run_number) || format('dev-v{0}', github.run_number) }}
         name: ${{ github.ref == 'refs/heads/main' && format('Release v{0}', github.run_number) || format('Dev Build v{0}', github.run_number) }}
@@ -322,14 +517,31 @@ jobs:
 
           ### 📦 Downloads
           - **FelixTerminal.msi** — Windows installer with Start Menu and optional desktop shortcuts
+          - **FelixTerminal.msix** — Unsigned package ready for Microsoft Store submission
           - **FelixTerminal-Portable.zip** — Portable version, no installation required
 
-          ### ✨ Installer Features
+          ### ✨ Installer Features (MSI)
           - ✅ Start Menu shortcuts for cmd.exe and PowerShell
           - ✅ Optional desktop shortcuts for both launchers
           - ✅ Custom installation directory
           - ✅ Proper uninstall support
           - ✅ Add/Remove Programs integration
+
+          ### 🏪 Microsoft Store Submission
+          The MSIX package is **unsigned** and ready for submission via Partner Center. Before uploading:
+          1. Update the `Identity Name` and `Publisher` in the manifest with your Partner Center values
+          2. Upload the unsigned MSIX — Microsoft handles signing during certification
+
+          ### 📦 Package Comparison
+          | Feature | MSI | MSIX | Portable |
+          |---------|-----|------|----------|
+          | Installation Required | Yes | Yes | No |
+          | Start Menu Integration | ✅ | ✅ | ❌ |
+          | Auto-Update Support | ❌ | ✅ | ❌ |
+          | Microsoft Store Ready | ❌ | ✅ | ❌ |
+          | Sandboxed | ❌ | ✅ | ❌ |
+          | Traditional Uninstall | ✅ | ✅ | ❌ |
+          | Code Signing Required | ✅ | Store | ❌ |
 
           ### 🚀 Usage
           ```cmd
@@ -338,7 +550,7 @@ jobs:
           flt.exe bash         # Open with bash (WSL etc.)
           ```
 
-          ### 🎯 Silent Installation
+          ### 🎯 Silent Installation (MSI)
           ```cmd
           msiexec /i FelixTerminal.msi /quiet /norestart
           msiexec /i FelixTerminal.msi /quiet /norestart DESKTOP_SHORTCUT=1
