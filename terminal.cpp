@@ -82,6 +82,9 @@ static void newline(Terminal *t) {
     if (t->cur_row < t->rows - 1) t->cur_row++;
 }
 
+// Public wrapper used by kitty_graphics to advance the cursor with proper scrolling
+void term_newline(Terminal *t) { newline(t); }
+
 // ============================================================================
 // SGR
 // ============================================================================

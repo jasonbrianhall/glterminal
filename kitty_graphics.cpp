@@ -456,11 +456,13 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
                     pl.z_index     = ts.pending.z_index;
                     ts.placements.push_back(pl);
 
-                    // Advance cursor past image rows per spec
+                    // Advance cursor past image using newline() so the scroll
+                    // region fires correctly when the image is near the bottom.
                     int rows_used = pl.rows ? pl.rows :
                         (img.ph > 0 && t->cell_h > 0) ?
                             (int)((img.ph + (int)t->cell_h - 1) / (int)t->cell_h) : 1;
-                    t->cur_row = SDL_min(t->cur_row + rows_used, t->rows - 1);
+                    for (int r = 0; r < rows_used; r++)
+                        term_newline(t);
                     t->cur_col = 0;
                 }
             } else {
@@ -484,6 +486,14 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
         pl.cols         = p.c; pl.rows  = p.r;
         pl.z_index      = p.z;
         ts.placements.push_back(pl);
+        // Advance cursor for a=p placement too
+        const KittyImage &pimg = s_images[p.i];
+        int rows_used = p.r ? p.r :
+            (pimg.ph > 0 && t->cell_h > 0) ?
+                (int)((pimg.ph + (int)t->cell_h - 1) / (int)t->cell_h) : 1;
+        for (int r = 0; r < rows_used; r++)
+            term_newline(t);
+        t->cur_col = 0;
         send_response(t, p.i, p.q, true, nullptr);
     }
 }

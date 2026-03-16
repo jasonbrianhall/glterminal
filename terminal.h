@@ -83,6 +83,7 @@ struct Terminal {
 void term_init(Terminal *t);
 void term_resize(Terminal *t, int win_w, int win_h);
 void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h);
+void term_newline(Terminal *t);  // advance cursor one line, scrolling if needed
 
 // ============================================================================
 // VT100 PARSER
