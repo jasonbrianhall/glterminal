@@ -166,7 +166,7 @@ jobs:
               <Component Id="Comp_$safeId" Guid="$guid">
                 <File Id="$safeId" Name="$_" Source="$_" />
               </Component>
-"@
+        "@
         }
 
         @"
