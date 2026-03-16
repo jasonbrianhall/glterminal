@@ -741,7 +741,12 @@ std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, in
     if (tit == s_terms.end()) return result;
 
     for (const KittyPlacement &pl : tit->second.placements) {
-        if (pl.y_cell < row_start || pl.y_cell > row_end) continue;
+        // pl.y_cell is a live-screen row (0 = top of current screen).
+        // Selection rows use virtual coordinates: 0..sb_count-1 = scrollback,
+        // sb_count..sb_count+rows-1 = live screen.
+        // Convert so we can compare against row_start/row_end.
+        int vrow = t->sb_count + pl.y_cell;
+        if (vrow < row_start || vrow > row_end) continue;
 
         auto iit = s_images.find(pl.image_id);
         if (iit == s_images.end()) continue;
@@ -800,7 +805,7 @@ std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, in
         tag += " alt=\"[terminal image]\">";
 
         KittyHtmlImage entry;
-        entry.y_cell  = pl.y_cell;
+        entry.y_cell  = vrow;
         entry.cols    = display_cols;
         entry.img_tag = std::move(tag);
         result.push_back(std::move(entry));
