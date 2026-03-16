@@ -16,6 +16,7 @@ A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text usi
 - Configurable themes and window opacity
 - Spawn additional terminal windows
 - Works with /bin/bash, cmd.exe, powershell, and many more.
+- Kitty Graphics Support
 
 ## Dependencies
 

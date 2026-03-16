@@ -22,7 +22,8 @@ bool term_spawn(Terminal *t, const char *cmd) {
         char cols_str[16], rows_str[16];
         snprintf(cols_str, sizeof(cols_str), "%d", t->cols);
         snprintf(rows_str, sizeof(rows_str), "%d", t->rows);
-        setenv("TERM",    "xterm-256color", 1);
+        setenv("TERM",      "xterm-kitty", 1);
+        setenv("COLORTERM", "truecolor",   1);
         setenv("COLUMNS", cols_str, 1);
         setenv("LINES",   rows_str, 1);
         const char *argv[] = {cmd, NULL};

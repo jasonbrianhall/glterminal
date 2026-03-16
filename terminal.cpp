@@ -2,6 +2,7 @@
 #include "term_pty.h"   // term_write, term_feed
 #include "ft_font.h"    // s_ft_face, g_font_size
 #include "gl_terminal.h" // TERM_COLS_DEFAULT etc.
+#include "kitty_graphics.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -55,12 +56,14 @@ Cell* vcell(Terminal *t, int vrow, int col) {
 static void scroll_up(Terminal *t) {
     int top = t->scroll_top;
     int bot = SDL_min(t->scroll_bot, t->rows - 1);
-    //SDL_Log("[Scroll] scroll_up: top=%d bot=%d rows=%d\n", top, bot, t->rows);
     if (top == 0) sb_push(t, top);
     if (bot > top)
         memmove(&CELL(t,top,0), &CELL(t,top+1,0), sizeof(Cell)*t->cols*(bot-top));
     for (int c = 0; c < t->cols; c++)
         CELL(t,bot,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
+    // Shift image placements up with the scroll region
+    if (top == 0 && bot == t->rows - 1)
+        kitty_scroll(t, 1);
 }
 
 static void scroll_down(Terminal *t) {
@@ -196,6 +199,7 @@ static void dispatch_csi(Terminal *t) {
                     t->cur_row = t->cur_col = 0;
                     t->scroll_top = 0; t->scroll_bot = t->rows - 1;
                     t->in_alt_screen = true;
+                    kitty_clear(t);
                 } else if (!set && t->in_alt_screen) {
                     int sz = t->rows * t->cols;
                     if (t->alt_cells) {
@@ -274,7 +278,33 @@ static void dispatch_csi(Terminal *t) {
         }
         break;
     }
-    case 'S': { int n=atoi(p); if(n<1)n=1; for(int i=0;i<n;i++) scroll_up(t); break; }
+    case 'S': {
+        // XTSMGRAPHICS: CSI ? Pi ; Pa ; Pv S  — query graphics attributes
+        // p starts with '?' if it's an XTSMGRAPHICS query, otherwise it's scroll-up
+        if (p[0] == '?') {
+            int pi = 0, pa = 0, pv = 0;
+            sscanf(p + 1, "%d;%d;%d", &pi, &pa, &pv);
+            char resp[64];
+            int rlen = 0;
+            if (pi == 1 && pa == 1) {
+                // Number of color registers — report 256
+                rlen = snprintf(resp, sizeof(resp), "\x1b[?1;0;256S");
+            } else if (pi == 2 && pa == 1) {
+                // Max image geometry — report screen pixel size
+                int pw = (int)(t->cols * t->cell_w);
+                int ph = (int)(t->rows * t->cell_h);
+                rlen = snprintf(resp, sizeof(resp), "\x1b[?2;0;%d;%dS", pw, ph);
+            } else {
+                // Unknown item — error
+                rlen = snprintf(resp, sizeof(resp), "\x1b[?%d;3S", pi);
+            }
+            if (rlen > 0) term_write(t, resp, rlen);
+        } else {
+            int n = atoi(p); if(n<1)n=1;
+            for(int i=0;i<n;i++) scroll_up(t);
+        }
+        break;
+    }
     case 'T': { int n=atoi(p); if(n<1)n=1; for(int i=0;i<n;i++) scroll_down(t); break; }
     case 'X': { int n=atoi(p); if(n<1)n=1;
         for(int c=t->cur_col;c<t->cur_col+n&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
@@ -284,7 +314,8 @@ static void dispatch_csi(Terminal *t) {
         for(int c=t->cur_col;c<t->cur_col+n&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         break; }
     case 'c': {
-        if (p[0] == '\0' || p[0] == '0') term_write(t, "\x1b[?62;22c", 9);
+        // Primary DA: advertise VT220 + graphics protocol (4) + colour (22)
+        if (p[0] == '\0' || p[0] == '0') term_write(t, "\x1b[?62;4;22c", 11);
         else if (p[0] == '>')            term_write(t, "\x1b[>0;10;1c", 10);
         break;
     }
@@ -368,6 +399,10 @@ void term_feed(Terminal *t, const char *buf, int len) {
                 t->state=PS_CSI; t->csi_len=0; memset(t->csi,0,sizeof(t->csi));
             } else if (ch == ']') {
                 t->state=PS_OSC;
+            } else if (ch == '_') {
+                // APC — Kitty graphics protocol
+                t->apc_len = 0;
+                t->state = PS_APC;
             } else if (ch == '(' || ch == ')' || ch == '*' || ch == '+') {
                 t->state = PS_CHARSET;
             } else {
@@ -380,6 +415,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
                 } else if (ch == 'c') {
                     for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
                     t->cur_row=t->cur_col=0; t->cur_fg=7; t->cur_bg=0; t->cur_attrs=0;
+                    kitty_clear(t);
                 } else if (ch == 'M') {
                     if (t->cur_row > t->scroll_top) { t->cur_row--; }
                     else { scroll_down(t); }
@@ -402,6 +438,45 @@ void term_feed(Terminal *t, const char *buf, int len) {
         case PS_CHARSET:
             t->state = PS_NORMAL;
             break;
+        case PS_APC: {
+            if (t->apc_esc_pending) {
+                t->apc_esc_pending = false;
+                if (ch == '\\') {
+                    if (t->apc_buf) {
+                        t->apc_buf[t->apc_len] = '\0';
+                        kitty_handle_apc(t, t->apc_buf, t->apc_len);
+                    }
+                    t->apc_len = 0;
+                    t->state = PS_NORMAL;
+                    break;
+                }
+                // Not ST — store the held ESC then handle ch normally below
+                if (!t->apc_buf || t->apc_len >= t->apc_cap - 1) {
+                    int new_cap = t->apc_cap ? t->apc_cap * 2 : 65536;
+                    t->apc_buf = (char*)realloc(t->apc_buf, new_cap);
+                    t->apc_cap = new_cap;
+                }
+                if (t->apc_buf) t->apc_buf[t->apc_len++] = '\x1b';
+            }
+            if (ch == 0x1b) {
+                t->apc_esc_pending = true;
+            } else if (ch == 0x07) {
+                if (t->apc_buf) {
+                    t->apc_buf[t->apc_len] = '\0';
+                    kitty_handle_apc(t, t->apc_buf, t->apc_len);
+                }
+                t->apc_len = 0;
+                t->state = PS_NORMAL;
+            } else {
+                if (!t->apc_buf || t->apc_len >= t->apc_cap - 1) {
+                    int new_cap = t->apc_cap ? t->apc_cap * 2 : 65536;
+                    t->apc_buf = (char*)realloc(t->apc_buf, new_cap);
+                    t->apc_cap = new_cap;
+                }
+                if (t->apc_buf) t->apc_buf[t->apc_len++] = (char)ch;
+            }
+            break;
+        }
         case PS_OSC:
             if (ch == 0x07 || ch == 0x1b) {
                 t->osc[t->osc_len] = '\0';
@@ -462,6 +537,11 @@ void term_init(Terminal *t) {
 
     t->scroll_top = 0;
     t->scroll_bot = t->rows - 1;
+
+    t->apc_buf         = nullptr;
+    t->apc_len         = 0;
+    t->apc_cap         = 0;
+    t->apc_esc_pending = false;
 
     //SDL_Log("[Term] init: %dx%d cells %.0fx%.0f px\n", t->cols, t->rows, t->cell_w, t->cell_h);
 }

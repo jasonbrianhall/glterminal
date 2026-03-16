@@ -13,6 +13,7 @@
 #include "gl_bouncingcircle.h"
 #include "crt_audio.h"
 #include "felix_settings.h"
+#include "kitty_graphics.h"
 
 #include <SDL2/SDL.h>
 #include "icon.h"
@@ -89,6 +90,7 @@ int main(int argc, char **argv) {
     SDL_GetWindowSize(window, &win_w, &win_h);
 
     gl_init_renderer(win_w, win_h);
+    kitty_init();
     glViewport(0, 0, win_w, win_h);
 
     term_resize(&term, win_w, win_h);
@@ -556,6 +558,7 @@ int main(int argc, char **argv) {
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(window);
     crt_audio_shutdown();
+    kitty_shutdown();
     SDL_Quit();
     ft_shutdown();
 

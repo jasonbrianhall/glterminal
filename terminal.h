@@ -20,7 +20,7 @@ struct Cell {
 // TERMINAL
 // ============================================================================
 
-typedef enum { PS_NORMAL, PS_ESC, PS_CSI, PS_OSC, PS_CHARSET } ParseState;
+typedef enum { PS_NORMAL, PS_ESC, PS_CSI, PS_OSC, PS_CHARSET, PS_APC } ParseState;
 
 struct Terminal {
     Cell         *cells;
@@ -33,6 +33,11 @@ struct Terminal {
     int           csi_len;
     char          osc[512];
     int           osc_len;
+    // APC buffer — for Kitty graphics protocol (ESC _ ... ESC \)
+    char         *apc_buf;
+    int           apc_len;
+    int           apc_cap;
+    bool          apc_esc_pending;  // saw ESC inside APC, waiting for '\' to complete ST
     int           pty_fd;
     pid_t         child;
     float         cell_w, cell_h;

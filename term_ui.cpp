@@ -5,6 +5,7 @@
 #include "term_color.h"
 #include "gl_terminal.h"
 #include "gl_bouncingcircle.h"
+#include "kitty_graphics.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -634,6 +635,9 @@ void term_render(Terminal *t, int ox, int oy) {
 
     // Feed glyph activity to CRT audio buzz
     crt_audio_set_activity((float)dirty_cells / (float)(t->cols * t->rows));
+
+    // Kitty graphics — render placed images over the glyph layer
+    kitty_render(t, ox, oy);
 
     // Cursor
     if (!scrolled && t->cursor_on) {
