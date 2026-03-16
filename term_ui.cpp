@@ -258,7 +258,7 @@ void term_copy_selection(Terminal *t) {
     if (r0 > r1 || (r0 == r1 && c0 > c1)) {
         int tr=r0,tc=c0; r0=r1;c0=c1;r1=tr;c1=tc;
     }
-    int bufsize = (r1 - r0 + 1) * (t->cols + 1) + 1;
+    int bufsize = (r1 - r0 + 1) * (t->cols * 4 + 1) + 1;
     char *buf = (char*)malloc(bufsize);
     int pos = 0;
     for (int r = r0; r <= r1; r++) {
