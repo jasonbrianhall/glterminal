@@ -88,20 +88,13 @@ int main(int argc, char **argv) {
     settings_load();  // applies font size, theme, sound — after ft_init and term_init
 
     // Scan system fonts and restore saved font choice
-    SDL_Log("[Main] calling font_scan...");
     g_font_list = font_scan();
-    SDL_Log("[Main] font_scan returned %zu entries", g_font_list.size());
-    for (int i = 0; i < (int)g_font_list.size(); i++)
-        SDL_Log("[Main]   [%d] %s  embedded=%d  path=%s",
-                i, g_font_list[i].display_name.c_str(),
-                g_font_list[i].is_embedded,
-                g_font_list[i].path.c_str());
     {
         std::string saved = font_load_config();
         if (!saved.empty()) {
             for (const auto &fe : g_font_list) {
                 if (fe.display_name == saved) {
-                    font_apply(fe, g_font_list, &term, 0, 0);
+                    font_apply(fe, g_font_list, nullptr, 0, 0);
                     break;
                 }
             }

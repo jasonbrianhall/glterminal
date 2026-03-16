@@ -5,8 +5,6 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
-#include <SDL2/SDL.h>
-
 #include <algorithm>
 #include <map>
 #include <cstring>
@@ -125,18 +123,11 @@ std::vector<FontEntry> font_scan() {
     for (const auto &dir : search_dirs)
         collect_fonts(dir, paths);
 
-    SDL_Log("[FontScan] search dirs: %zu, font files found: %zu", search_dirs.size(), paths.size());
-    for (const auto &dir : search_dirs)
-        SDL_Log("[FontScan]   dir: %s", dir.c_str());
-
     FT_Library lib = s_ft_lib;
     bool own_lib = false;
     if (!lib) {
-        SDL_Log("[FontScan] WARNING: s_ft_lib is null, creating own FT_Library");
         FT_Init_FreeType(&lib);
         own_lib = true;
-    } else {
-        SDL_Log("[FontScan] Using existing s_ft_lib=%p", (void*)lib);
     }
 
     std::sort(paths.begin(), paths.end());
@@ -145,46 +136,28 @@ std::vector<FontEntry> font_scan() {
     std::map<std::string, FamilyInfo> families;
     std::vector<std::string> seen = {"DejaVu Sans Mono"};
 
-    int checked = 0, mono_count = 0;
     for (const auto &p : paths) {
         FT_Face face = nullptr;
-        FT_Error err = FT_New_Face(lib, p.c_str(), 0, &face);
-        if (err != 0) {
-            SDL_Log("[FontScan]   SKIP (FT_New_Face err=%d): %s", err, p.c_str());
-            continue;
-        }
-        checked++;
+        if (FT_New_Face(lib, p.c_str(), 0, &face) != 0) continue;
         bool mono = FT_IS_FIXED_WIDTH(face);
         std::string family = face->family_name ? face->family_name : "";
         bool is_regular = !(face->style_flags & (FT_STYLE_FLAG_BOLD | FT_STYLE_FLAG_ITALIC));
-        SDL_Log("[FontScan]   [%s] mono=%d regular=%d  %s %s  -> %s",
-                mono ? "MONO" : "    ", mono, is_regular,
-                face->family_name ? face->family_name : "?",
-                face->style_name  ? face->style_name  : "?",
-                p.c_str());
         FT_Done_Face(face);
         if (!mono || family.empty()) continue;
-        mono_count++;
         auto &fi = families[family];
         if (fi.any_path.empty()) fi.any_path = p;
         if (is_regular && fi.regular_path.empty()) fi.regular_path = p;
     }
-
-    SDL_Log("[FontScan] checked=%d mono=%d families=%zu", checked, mono_count, families.size());
 
     std::vector<std::string> family_names;
     for (const auto &kv : families) family_names.push_back(kv.first);
     std::sort(family_names.begin(), family_names.end());
 
     for (const auto &family : family_names) {
-        if (std::find(seen.begin(), seen.end(), family) != seen.end()) {
-            SDL_Log("[FontScan]   DEDUP skip: %s", family.c_str());
-            continue;
-        }
+        if (std::find(seen.begin(), seen.end(), family) != seen.end()) continue;
         seen.push_back(family);
         const FamilyInfo &fi = families.at(family);
         std::string best_path = fi.regular_path.empty() ? fi.any_path : fi.regular_path;
-        SDL_Log("[FontScan]   ADD entry: '%s' -> %s", family.c_str(), best_path.c_str());
         FontEntry fe;
         fe.display_name = family;
         fe.path         = best_path;
@@ -192,7 +165,6 @@ std::vector<FontEntry> font_scan() {
         result.push_back(fe);
     }
 
-    SDL_Log("[FontScan] total menu entries: %zu", result.size());
     if (own_lib) FT_Done_FreeType(lib);
     return result;
 }
