@@ -48,6 +48,7 @@ jobs:
           mingw64-SDL2 \
           mingw64-freetype \
           mingw64-glew \
+          mingw64-libssh2 \
           wine \
           zip unzip \
           ImageMagick \
