@@ -417,12 +417,11 @@ int main(int argc, char **argv) {
             SDL_UnlockMutex(prompt_req.mtx);
 
             if (has_prompt) {
+                SDL_Log("[Main] detected pending prompt, switching to PROMPTING\n");
                 term_feed(&term, prompt_text.c_str(), (int)prompt_text.size());
                 ssh_field_input.clear();
                 ssh_phase = SshPhase::PROMPTING;
-            }
-
-            if (ssh_thread_done.load()) {
+            } else if (ssh_thread_done.load()) {
                 ssh_thread.join();
                 if (ssh_conn_ok) {
                     ssh_phase = SshPhase::ACTIVE;
@@ -528,6 +527,15 @@ int main(int argc, char **argv) {
                             } else {
                                 // All fields collected — start connection thread
                                 ssh_phase = SshPhase::CONNECTING;
+
+                                // Clear any SETUP prompt state so the CONNECTING
+                                // handler doesn't mistake it for a password request
+                                SDL_LockMutex(prompt_req.mtx);
+                                prompt_req.pending  = false;
+                                prompt_req.answered = false;
+                                prompt_req.response.clear();
+                                SDL_UnlockMutex(prompt_req.mtx);
+
                                 char connecting_msg[256];
                                 snprintf(connecting_msg, sizeof(connecting_msg),
                                          "Connecting to %s@%s:%d …\r\n",
@@ -698,9 +706,9 @@ int main(int argc, char **argv) {
                                 SDL_SetWindowOpacity(window, g_opacity);
                             } else if (g_menu.sub_open == MENU_ID_RENDER_MODE) {
                                 if (sub_hit == RENDER_MODE_NORMAL) {
-                                    g_render_mode = 0;  // "Normal" clears all modes
+                                    g_render_mode = 0;
                                 } else {
-                                    g_render_mode ^= (1u << sub_hit);  // toggle the bit
+                                    g_render_mode ^= (1u << sub_hit);
                                 }
                             } else if (g_menu.sub_open == MENU_ID_NEW_TERMINAL) {
                                 if      (sub_hit == NEW_TERM_IDX_LOCAL) action_new_terminal();

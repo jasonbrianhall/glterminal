@@ -344,21 +344,42 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     // Authentication: agent → key file → password (supplied or prompted by caller)
     bool authed = false;
 
-    if (!authed)
+    // Query what the server will accept — must retry on EAGAIN for non-blocking session
+    char *auth_methods = nullptr;
+    do {
+        auth_methods = libssh2_userauth_list(s_session, cfg.user.c_str(),
+                                             (unsigned int)cfg.user.size());
+        if (!auth_methods && libssh2_session_last_errno(s_session) == LIBSSH2_ERROR_EAGAIN)
+            SDL_Delay(5);
+        else
+            break;
+    } while (true);
+    SDL_Log("[SSH] server auth methods: %s\n", auth_methods ? auth_methods : "(none/error)");
+
+    if (!authed) {
+        SDL_Log("[SSH] trying agent auth for user '%s'\n", cfg.user.c_str());
         authed = auth_agent(cfg.user);
+        if (!authed) SDL_Log("[SSH] agent auth failed or no agent\n");
+    }
 
     if (!authed && !cfg.key_path.empty())
         authed = auth_key(cfg.user, cfg.key_path, cfg.key_path_pub, cfg.password);
 
     if (!authed) {
-        // Use supplied password; if empty, call the prompt callback so the
-        // application can ask the user in its own UI (e.g. the GL console).
         std::string password = cfg.password;
-        if (password.empty() && cfg.prompt_password) {
+        bool server_allows_password = !auth_methods ||
+                                      strstr(auth_methods, "password") != nullptr;
+        SDL_Log("[SSH] password auth stage: password=%s prompt_cb=%s server_allows=%s\n",
+                password.empty() ? "empty" : "set",
+                cfg.prompt_password ? "set" : "NULL",
+                server_allows_password ? "yes" : "no");
+        if (password.empty() && cfg.prompt_password && server_allows_password) {
             char prompt[256];
             snprintf(prompt, sizeof(prompt), "%s@%s's password: ",
                      cfg.user.c_str(), cfg.host.c_str());
+            SDL_Log("[SSH] calling prompt_password callback\n");
             password = cfg.prompt_password(prompt);
+            SDL_Log("[SSH] prompt_password returned: %s\n", password.empty() ? "empty" : "got password");
         }
         if (!password.empty())
             authed = auth_password(cfg.user, password);
@@ -400,7 +421,6 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     }
 
     // Environment hints (best-effort; server may reject setenv)
-    libssh2_channel_setenv(s_channel, "TERM",      "xterm-kitty");
     libssh2_channel_setenv(s_channel, "COLORTERM", "truecolor");
 
     // Route all term_write() calls (handle_key, term_paste, etc.) through SSH
