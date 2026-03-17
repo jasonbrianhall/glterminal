@@ -482,6 +482,10 @@ int main(int argc, char **argv) {
 #else
             int status;
             pid_t wp = (term.child > 0) ? waitpid(term.child, &status, WNOHANG) : 0;
+            if (wp > 0) {
+                settings_save();
+                running = false;
+            }
 #endif
         }
 

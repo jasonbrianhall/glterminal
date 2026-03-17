@@ -400,6 +400,7 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     }
 
     // Environment hints (best-effort; server may reject setenv)
+    libssh2_channel_setenv(s_channel, "TERM",      "xterm-kitty");
     libssh2_channel_setenv(s_channel, "COLORTERM", "truecolor");
 
     // Route all term_write() calls (handle_key, term_paste, etc.) through SSH
