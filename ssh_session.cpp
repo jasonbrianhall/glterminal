@@ -305,6 +305,14 @@ static void ssh_write_bridge(Terminal *t, const char *s, int n) {
 // ============================================================================
 
 bool ssh_connect(const SshConfig &cfg, Terminal *t) {
+#ifdef _WIN32
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        SDL_Log("[SSH] WSAStartup failed: %d\n", WSAGetLastError());
+        return false;
+    }
+#endif
+
     // libssh2 global init (idempotent across calls)
     if (libssh2_init(0) != 0) {
         SDL_Log("[SSH] libssh2_init failed\n");
@@ -510,6 +518,9 @@ void ssh_disconnect() {
     }
     s_active = false;
     libssh2_exit();
+#ifdef _WIN32
+    WSACleanup();
+#endif
 }
 
 bool ssh_active() { return s_active; }
