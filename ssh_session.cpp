@@ -333,6 +333,9 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     // Use non-blocking I/O; we spin with SDL_Delay to avoid busy-wait
     libssh2_session_set_blocking(s_session, 0);
 
+    // Send keepalives every 60 seconds to prevent server-side idle disconnect
+    libssh2_keepalive_config(s_session, 1, 60);
+
     // Perform SSH handshake
     int rc;
     while ((rc = libssh2_session_handshake(s_session, s_sock)) ==
@@ -451,6 +454,8 @@ bool ssh_read(Terminal *t) {
             term_feed(t, buf, (int)n);
             got_data = true;
         } else if (n == LIBSSH2_ERROR_EAGAIN) {
+            int next;
+            libssh2_keepalive_send(s_session, &next);
             break;
         } else {
             // n == 0 (EOF) or error — mark closed
