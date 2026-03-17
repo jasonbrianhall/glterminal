@@ -60,6 +60,11 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_FONTS        16
 #define MENU_ID_QUIT         18
 
+// New Terminal submenu item indices
+#define NEW_TERM_IDX_LOCAL  0
+#define NEW_TERM_IDX_SSH    1
+#define NEW_TERM_COUNT      2
+
 // Entertainment submenu item indices
 #define ENT_IDX_FIGHT    0
 #define ENT_IDX_BOUNCING 1
@@ -92,6 +97,7 @@ int  submenu_hit(ContextMenu *m, int px, int py);
 void menu_render(ContextMenu *m);
 
 void action_new_terminal();
+void action_new_ssh_session();
 
 // Free the dedicated menu font face — call before ft_shutdown().
 void menu_font_shutdown();

@@ -209,7 +209,7 @@ static_assert(sizeof(RENDER_MODE_NAMES)/sizeof(RENDER_MODE_NAMES[0]) == RENDER_M
               "RENDER_MODE_NAMES count mismatch");
 
 const MenuItem MENU_ITEMS[] = {
-    { "New Terminal",    false },
+    { "New Terminal  >", false },
     { nullptr,           true  },
     { "Copy",            false },
     { "Copy as HTML",    false },
@@ -858,6 +858,7 @@ int submenu_hit(ContextMenu *m, int px, int py) {
     int count = (m->sub_open == MENU_ID_THEMES)        ? THEME_COUNT :
                 (m->sub_open == MENU_ID_RENDER_MODE)    ? RENDER_MODE_COUNT :
                 (m->sub_open == MENU_ID_ENTERTAINMENT)  ? ENT_COUNT :
+                (m->sub_open == MENU_ID_NEW_TERMINAL)   ? NEW_TERM_COUNT :
                 (m->sub_open == MENU_ID_FONTS)          ? (int)g_font_list.size() :
                                                           OPACITY_COUNT;
     int idx = (py - m->sub_y) / m->item_h;
@@ -899,10 +900,11 @@ void menu_render(ContextMenu *m) {
 
     if (m->sub_open == MENU_ID_THEMES || m->sub_open == MENU_ID_OPACITY ||
         m->sub_open == MENU_ID_RENDER_MODE || m->sub_open == MENU_ID_ENTERTAINMENT ||
-        m->sub_open == MENU_ID_FONTS) {
+        m->sub_open == MENU_ID_NEW_TERMINAL || m->sub_open == MENU_ID_FONTS) {
         int count = (m->sub_open == MENU_ID_THEMES)       ? THEME_COUNT :
                     (m->sub_open == MENU_ID_RENDER_MODE)   ? RENDER_MODE_COUNT :
                     (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_COUNT :
+                    (m->sub_open == MENU_ID_NEW_TERMINAL)  ? NEW_TERM_COUNT :
                     (m->sub_open == MENU_ID_FONTS)         ? (int)g_font_list.size() :
                                                              OPACITY_COUNT;
         float sw = (float)(m->width + (int)(MENU_FONT_SIZE * 2));
@@ -911,14 +913,16 @@ void menu_render(ContextMenu *m) {
         m->sub_w = (int)sw; m->sub_h = (int)sh;
         draw_menu_panel(sx, sy, sw, sh);
 
-        static const char *ENT_NAMES[] = { "Fight Mode", "Bouncing Circle", "Sound" };
+        static const char *ENT_NAMES[]      = { "Fight Mode", "Bouncing Circle", "Sound" };
+        static const char *NEW_TERM_NAMES[] = { "Local Terminal", "SSH Session" };
 
         for (int j = 0; j < count; j++) {
-            const char *lbl = (m->sub_open == MENU_ID_THEMES)       ? THEMES[j].name :
-                              (m->sub_open == MENU_ID_RENDER_MODE)   ? RENDER_MODE_NAMES[j] :
-                              (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_NAMES[j] :
-                              (m->sub_open == MENU_ID_FONTS)         ? g_font_list[j].display_name.c_str() :
-                                                                       OPACITY_NAMES[j];
+            const char *lbl = (m->sub_open == MENU_ID_THEMES)        ? THEMES[j].name :
+                              (m->sub_open == MENU_ID_RENDER_MODE)    ? RENDER_MODE_NAMES[j] :
+                              (m->sub_open == MENU_ID_ENTERTAINMENT)  ? ENT_NAMES[j] :
+                              (m->sub_open == MENU_ID_NEW_TERMINAL)   ? NEW_TERM_NAMES[j] :
+                              (m->sub_open == MENU_ID_FONTS)          ? g_font_list[j].display_name.c_str() :
+                                                                        OPACITY_NAMES[j];
             float iy = sy + 4 + j * m->item_h, ih = (float)m->item_h;
             bool hov = (j == m->sub_hovered);
 
@@ -969,5 +973,25 @@ void action_new_terminal() {
     self[n] = '\0';
     pid_t pid = fork();
     if (pid == 0) { setsid(); execl(self, self, nullptr); _exit(1); }
+#endif
+}
+
+void action_new_ssh_session() {
+#ifdef _WIN32
+    char self[512] = {};
+    if (!GetModuleFileNameA(nullptr, self, sizeof(self)-1)) return;
+    char cmd[640];
+    snprintf(cmd, sizeof(cmd), "\"%s\" --ssh", self);
+    STARTUPINFOA si = {}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    CreateProcessA(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si, &pi);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+#else
+    char self[512] = {};
+    ssize_t n = readlink("/proc/self/exe", self, sizeof(self)-1);
+    if (n <= 0) return;
+    self[n] = '\0';
+    pid_t pid = fork();
+    if (pid == 0) { setsid(); execl(self, self, "--ssh", nullptr); _exit(1); }
 #endif
 }

@@ -112,8 +112,7 @@ int main(int argc, char **argv) {
             // Missing user/host will be prompted in the GL window
             continue;
         }
-        if ((strcmp(arg, "--ssh-key") == 0 || strcmp(arg, "-ssh-key") == 0 ||
-             strcmp(arg, "-i") == 0) && i + 1 < argc) {
+        if ((strcmp(arg, "--ssh-key") == 0 || strcmp(arg, "-ssh-key") == 0) && i + 1 < argc) {
             ssh_cfg.key_path = argv[++i];
             continue;
         }
@@ -142,8 +141,6 @@ int main(int argc, char **argv) {
             printf("Usage: gl_terminal [shell]\n");
 #ifdef USESSL
             printf("       gl_terminal --ssh [user@host[:port]]\n");
-            printf("                   [-i identity_file] [--ssh-key-pub pubkey]\n");
-            printf("                   [--ssh-password password]\n");
 #endif
             return 0;
         }
@@ -705,6 +702,9 @@ int main(int argc, char **argv) {
                                 } else {
                                     g_render_mode ^= (1u << sub_hit);  // toggle the bit
                                 }
+                            } else if (g_menu.sub_open == MENU_ID_NEW_TERMINAL) {
+                                if      (sub_hit == NEW_TERM_IDX_LOCAL) action_new_terminal();
+                                else if (sub_hit == NEW_TERM_IDX_SSH)   action_new_ssh_session();
                             } else if (g_menu.sub_open == MENU_ID_ENTERTAINMENT) {
                                 if      (sub_hit == ENT_IDX_FIGHT)    fight_set_enabled(!fight_get_enabled());
                                 else if (sub_hit == ENT_IDX_BOUNCING) bc_set_enabled(!bc_get_enabled());
@@ -723,10 +723,9 @@ int main(int argc, char **argv) {
                             int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
                             bool is_sub_parent = (hit==MENU_ID_THEMES || hit==MENU_ID_OPACITY ||
                                                   hit==MENU_ID_RENDER_MODE || hit==MENU_ID_ENTERTAINMENT ||
-                                                  hit==MENU_ID_FONTS);
+                                                  hit==MENU_ID_NEW_TERMINAL || hit==MENU_ID_FONTS);
                             if (!is_sub_parent) g_menu.visible = false;
                             switch (hit) {
-                            case MENU_ID_NEW_TERMINAL: action_new_terminal(); break;
                             case MENU_ID_COPY:      term_copy_selection(&term); break;
                             case MENU_ID_COPY_HTML: term_copy_selection_html(&term); break;
                             case MENU_ID_COPY_ANSI: term_copy_selection_ansi(&term); break;
@@ -771,7 +770,7 @@ int main(int argc, char **argv) {
                     if (hit >= 0) g_menu.hovered = hit;
                     if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY ||
                         hit == MENU_ID_RENDER_MODE || hit == MENU_ID_ENTERTAINMENT ||
-                        hit == MENU_ID_FONTS) {
+                        hit == MENU_ID_NEW_TERMINAL || hit == MENU_ID_FONTS) {
                         if (g_menu.sub_open != hit) {
                             g_menu.sub_open = hit; g_menu.sub_hovered = -1;
                             g_menu.sub_x = g_menu.x + g_menu.width + 2;
@@ -782,6 +781,7 @@ int main(int argc, char **argv) {
                             int count = (hit==MENU_ID_THEMES)        ? THEME_COUNT :
                                         (hit==MENU_ID_RENDER_MODE)    ? RENDER_MODE_COUNT :
                                         (hit==MENU_ID_ENTERTAINMENT)  ? ENT_COUNT :
+                                        (hit==MENU_ID_NEW_TERMINAL)   ? NEW_TERM_COUNT :
                                         (hit==MENU_ID_FONTS)          ? (int)g_font_list.size() : 6;
                             int sw = g_menu.width + g_font_size*2;
                             int sh = count * g_menu.item_h + 8;
