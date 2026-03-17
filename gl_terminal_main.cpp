@@ -426,7 +426,7 @@ int main(int argc, char **argv) {
                 ssh_thread.join();
                 if (ssh_conn_ok) {
                     ssh_phase = SshPhase::ACTIVE;
-                    SDL_StopTextInput();
+                    SDL_StartTextInput();
                 } else {
                     ssh_phase = SshPhase::FAILED;
                     const char *msg = "\r\nConnection failed. Press any key to close.\r\n";
@@ -577,7 +577,8 @@ int main(int argc, char **argv) {
                         // In SETUP, ignore Escape (keep prompting)
                     } else if (sym == SDLK_BACKSPACE && !ssh_field_input.empty()) {
                         ssh_field_input.pop_back();
-                        term_feed(&term, "\b \b", 3);
+                        if (ssh_phase != SshPhase::PROMPTING)
+                            term_feed(&term, "\b \b", 3);
                     }
                     break;
                 }
@@ -634,9 +635,8 @@ int main(int argc, char **argv) {
                     break;
                 }
                 if (use_ssh && ssh_phase == SshPhase::PROMPTING) {
-                    // Hidden echo (*) for password
+                    // No echo — don't reveal password length
                     ssh_field_input += ev.text.text;
-                    term_feed(&term, "*", 1);
                     break;
                 }
                 if (!ssh_ready) break;
