@@ -90,6 +90,30 @@ void ft_shutdown(void) {
     if (s_font_buf)      free(s_font_buf);
 }
 
+// Creates a standalone DejaVu Regular face for fixed-size UI rendering.
+// Decodes the font into its own buffer so it is unaffected by font switching.
+FT_Face ft_make_menu_face(int pixel_size) {
+    if (!s_ft_lib) return nullptr;
+    unsigned char *buf = nullptr;
+    size_t sz = 0;
+    if (base64_decode(DEJAVU_REGULAR_FONT_B64, DEJAVU_REGULAR_FONT_B64_SIZE, &buf, &sz) != 0 || !buf)
+        return nullptr;
+    FT_Face face = nullptr;
+    if (FT_New_Memory_Face(s_ft_lib, buf, (FT_Long)sz, 0, &face) != 0) {
+        free(buf);
+        return nullptr;
+    }
+    FT_Set_Pixel_Sizes(face, 0, (FT_UInt)pixel_size);
+    // Store the buffer pointer in the face's generic field so we can free it later.
+    // Caller frees via:  free(face->generic.data); FT_Done_Face(face);
+    face->generic.data      = buf;
+    face->generic.finalizer = [](void *obj) {
+        FT_Face f = (FT_Face)obj;
+        if (f->generic.data) { free(f->generic.data); f->generic.data = nullptr; }
+    };
+    return face;
+}
+
 void ft_reload_embedded(void) {
     auto free_face = [](FT_Face *face, unsigned char **buf) {
         if (*face) { FT_Done_Face(*face); *face = nullptr; }

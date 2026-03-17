@@ -93,5 +93,8 @@ void menu_render(ContextMenu *m);
 
 void action_new_terminal();
 
+// Free the dedicated menu font face — call before ft_shutdown().
+void menu_font_shutdown();
+
 #include "fight_mode.h"
 #include "font_manager.h"

@@ -140,6 +140,63 @@ extern int  g_font_size;
 extern bool g_blink_text_on;
 
 // ============================================================================
+// MENU FONT — always DejaVu Regular at a fixed size, unaffected by the user's
+// shell font choice or zoom level.
+// ============================================================================
+
+#define MENU_FONT_SIZE 14
+
+// Dedicated FreeType face for menu rendering.  Created once from the embedded
+// DejaVu Regular data via ft_make_menu_face(), so it is never affected by
+// font switching or zoom changes.
+static FT_Face s_menu_face = nullptr;
+
+static void ensure_menu_face() {
+    if (s_menu_face) return;
+    s_menu_face = ft_make_menu_face(MENU_FONT_SIZE);
+}
+
+// Call at shutdown to free the menu face's own buffer.
+void menu_font_shutdown() {
+    if (s_menu_face) {
+        // ft_make_menu_face stores the buffer in generic.data with a finalizer
+        free(s_menu_face->generic.data);
+        s_menu_face->generic.data = nullptr;
+        FT_Done_Face(s_menu_face);
+        s_menu_face = nullptr;
+    }
+}
+
+// Render menu text using the fixed DejaVu face at MENU_FONT_SIZE.
+// Temporarily swaps the global faces so draw_text() picks them up, then
+// restores everything afterwards.
+static float draw_text_menu(const char *text, float x, float y,
+                            float r, float g, float b, float a, uint8_t attrs = 0) {
+    ensure_menu_face();
+    if (!s_menu_face)
+        return draw_text(text, x, y, MENU_FONT_SIZE, MENU_FONT_SIZE, r, g, b, a, attrs);
+
+    // Swap all four shell faces for the menu face (bold/obl variants fall back
+    // to the same menu face, which is fine for a UI menu).
+    FT_Face saved      = s_ft_face;
+    FT_Face saved_reg  = s_ft_face_reg;
+    FT_Face saved_obl  = s_ft_face_obl;
+    FT_Face saved_bobl = s_ft_face_bobl;
+    s_ft_face      = s_menu_face;
+    s_ft_face_reg  = s_menu_face;
+    s_ft_face_obl  = s_menu_face;
+    s_ft_face_bobl = s_menu_face;
+
+    float ret = draw_text(text, x, y, MENU_FONT_SIZE, MENU_FONT_SIZE, r, g, b, a, attrs);
+
+    s_ft_face      = saved;
+    s_ft_face_reg  = saved_reg;
+    s_ft_face_obl  = saved_obl;
+    s_ft_face_bobl = saved_bobl;
+    return ret;
+}
+
+// ============================================================================
 // CONTEXT MENU DATA
 // ============================================================================
 
@@ -758,11 +815,11 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
 // CONTEXT MENU
 // ============================================================================
 
-static void menu_layout(ContextMenu *m, int font_size) {
-    m->item_h = (int)(font_size * 1.8f);
+static void menu_layout(ContextMenu *m, int /*font_size*/) {
+    m->item_h = (int)(MENU_FONT_SIZE * 1.8f);
     m->sep_h  = 8;
-    m->pad_x  = (int)(font_size * 0.8f);
-    m->width  = (int)(font_size * 14.0f);
+    m->pad_x  = (int)(MENU_FONT_SIZE * 0.8f);
+    m->width  = (int)(MENU_FONT_SIZE * 14.0f);
 }
 
 static int menu_total_height(ContextMenu *m) {
@@ -773,7 +830,7 @@ static int menu_total_height(ContextMenu *m) {
 }
 
 void menu_open(ContextMenu *m, int x, int y, int win_w, int win_h) {
-    menu_layout(m, g_font_size);
+    menu_layout(m, 0);
     m->visible = true; m->hovered = -1; m->sub_open = -1; m->sub_hovered = -1;
     int th = menu_total_height(m);
     m->x = SDL_min(x, win_w - m->width - 2);
@@ -819,7 +876,7 @@ static void draw_menu_panel(float mx, float my, float mw, float mh) {
 
 void menu_render(ContextMenu *m) {
     if (!m->visible) return;
-    menu_layout(m, g_font_size);
+    menu_layout(m, 0);
     int th = menu_total_height(m);
     float mx = (float)m->x, my = (float)m->y, mw = (float)m->width;
 
@@ -836,7 +893,7 @@ void menu_render(ContextMenu *m) {
         bool sub_open = (m->sub_open == i);
         if (hov || sub_open) draw_rect(mx+2, y, mw-4, ih, 0.25f, 0.45f, 0.85f, 0.85f);
         float tr = (hov||sub_open)?1.f:0.88f, tg=tr, tb=(hov||sub_open)?1.f:0.92f;
-        draw_text(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
+        draw_text_menu(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f, tr,tg,tb,1.f);
         y += ih;
     }
 
@@ -848,7 +905,7 @@ void menu_render(ContextMenu *m) {
                     (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_COUNT :
                     (m->sub_open == MENU_ID_FONTS)         ? (int)g_font_list.size() :
                                                              OPACITY_COUNT;
-        float sw = (float)(m->width + (int)(g_font_size * 2));
+        float sw = (float)(m->width + (int)(MENU_FONT_SIZE * 2));
         float sh = (float)(count * m->item_h + 8);
         float sx = (float)m->sub_x, sy = (float)m->sub_y;
         m->sub_w = (int)sw; m->sub_h = (int)sh;
@@ -883,8 +940,8 @@ void menu_render(ContextMenu *m) {
             if (hov)          draw_rect(sx+2,iy,sw-4,ih,0.25f,0.45f,0.85f,0.85f);
             if (active&&!hov) draw_rect(sx+2,iy,sw-4,ih,0.2f,0.35f,0.6f,0.6f);
             float tr=hov?1.f:(active?0.7f:0.88f), tg=hov?1.f:(active?0.9f:0.88f), tb=hov?1.f:(active?1.0f:0.92f);
-            if (active) draw_text("\xe2\x9c\x93", sx+4, iy+ih*0.72f, g_font_size, g_font_size, 0.4f,0.8f,0.4f,1.f);
-            draw_text(lbl, sx + m->pad_x + g_font_size, iy+ih*0.72f, g_font_size, g_font_size, tr,tg,tb,1.f);
+            if (active) draw_text_menu("\xe2\x9c\x93", sx+4, iy+ih*0.72f, 0.4f,0.8f,0.4f,1.f);
+            draw_text_menu(lbl, sx + m->pad_x + MENU_FONT_SIZE, iy+ih*0.72f, tr,tg,tb,1.f);
         }
     }
 

@@ -592,6 +592,7 @@ int main(int argc, char **argv) {
     SDL_DestroyWindow(window);
     crt_audio_shutdown();
     kitty_shutdown();
+    menu_font_shutdown();
     SDL_Quit();
     ft_shutdown();
 

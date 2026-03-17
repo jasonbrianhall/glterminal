@@ -24,6 +24,11 @@ void    ft_init(void);
 void    ft_shutdown(void);
 void    ft_reload_embedded(void);  // restore all four embedded DejaVu faces
 
+// Create a standalone DejaVu Regular face at a fixed pixel size for UI use.
+// The face owns its own decoded buffer; caller must FT_Done_Face() it on shutdown.
+// Returns nullptr on failure.
+FT_Face ft_make_menu_face(int pixel_size);
+
 // Font buffer pointers — non-static so font_manager can free/replace them
 extern unsigned char *s_font_buf;
 extern unsigned char *s_font_buf_reg;
