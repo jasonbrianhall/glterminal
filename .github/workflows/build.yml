@@ -54,7 +54,7 @@ jobs:
 
     - name: Build Windows Executable
       run: |
-        make windows
+        make windows SSH=1
 
     - name: Convert PNG Icon to ICO Format
       working-directory: build/windows
