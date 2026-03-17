@@ -6,7 +6,7 @@
 //       -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
 //
 // Build (with SSH support):
-//   g++ ... ssh_session.cpp ... -lssh2 -lcrypto -lssl -DUSESSL -o gl_terminal
+//   g++ ... ssh_session.cpp ... -lssh2 -lcrypto -lssl -DUSESSH -o gl_terminal
 
 #include "gl_terminal.h"
 #include "gl_renderer.h"
@@ -20,7 +20,7 @@
 #include "felix_settings.h"
 #include "kitty_graphics.h"
 #include "font_manager.h"
-#ifdef USESSL
+#ifdef USESSH
 #  include "ssh_session.h"
 #endif
 
@@ -56,7 +56,7 @@ std::vector<FontEntry> g_font_list;
 // different sources (SSH channel vs pty_fd).
 // ============================================================================
 
-#ifdef USESSL
+#ifdef USESSH
 static inline bool _term_read_dispatch(bool ssh, Terminal *t)
     { return ssh ? ssh_read(t) : term_read(t); }
 #  define TERM_READ()  _term_read_dispatch(use_ssh, &term)
@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
     const char *shell = "/bin/bash";
 #endif
 
-#ifdef USESSL
+#ifdef USESSH
     SshConfig ssh_cfg;
 #endif
     bool use_ssh = false;
@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
-#ifdef USESSL
+#ifdef USESSH
         // --ssh [user@host[:port]]  — argument is optional; missing parts are
         // prompted inside the GL window.
         if ((strcmp(arg, "--ssh") == 0 || strcmp(arg, "-ssh") == 0)) {
@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
             ssh_cfg.known_hosts_path = argv[++i];
             continue;
         }
-#endif // USESSL
+#endif // USESSH
 
         // Positional: shell command (local mode only)
         if (arg[0] != '-' && !use_ssh) {
@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
         // --help / -h
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
             printf("Usage: gl_terminal [shell]\n");
-#ifdef USESSL
+#ifdef USESSH
             printf("       gl_terminal --ssh [user@host[:port]]\n");
 #endif
             return 0;
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
     // responsive.  The password prompt is handled via a shared request/response
     // struct: the background thread posts a prompt request, the main loop
     // renders it, collects the password, and posts the response back.
-#ifdef USESSL
+#ifdef USESSH
     enum class SshPhase { IDLE, SETUP, CONNECTING, PROMPTING, ACTIVE, FAILED };
     // Start in SETUP if any required fields are missing, otherwise go straight to CONNECTING
     SshPhase ssh_phase = use_ssh
@@ -299,7 +299,7 @@ int main(int argc, char **argv) {
     }
 #endif
     // ---- local shell (non-SSH) -----------------------------------------------
-#ifdef USESSL
+#ifdef USESSH
     if (!use_ssh)
 #endif
     {
@@ -315,7 +315,7 @@ int main(int argc, char **argv) {
     SDL_Delay(300);
     TERM_READ();
 #else
-#  ifdef USESSL
+#  ifdef USESSH
     if (!use_ssh)
 #  endif
     {
@@ -404,7 +404,7 @@ int main(int argc, char **argv) {
         }
 
         // SSH connection state machine
-#ifdef USESSL
+#ifdef USESSH
         if (use_ssh && ssh_phase == SshPhase::SETUP) {
             needs_render = true;
         } else if (use_ssh && ssh_phase == SshPhase::CONNECTING) {
@@ -442,7 +442,7 @@ int main(int argc, char **argv) {
 #endif
 
         // PTY / SSH read — only when fully connected
-#ifdef USESSL
+#ifdef USESSH
         bool ssh_ready = !use_ssh || ssh_phase == SshPhase::ACTIVE;
 #else
         constexpr bool ssh_ready = true;
@@ -462,7 +462,7 @@ int main(int argc, char **argv) {
         }
 
         // Child / channel exit check
-#ifdef USESSL
+#ifdef USESSH
         if (use_ssh && ssh_phase == SshPhase::FAILED) {
             // Already showing error — running stays true until keypress (handled in events)
         } else if (use_ssh) {
@@ -494,13 +494,13 @@ int main(int argc, char **argv) {
             needs_render = true;
             switch (ev.type) {
             case SDL_QUIT: settings_save();
-#ifdef USESSL
+#ifdef USESSH
                 ssh_abort.store(true);
 #endif
                 running = false; break;
 
             case SDL_KEYDOWN: {
-#ifdef USESSL
+#ifdef USESSH
                 // SETUP: collecting host, user (with visible echo)
                 // PROMPTING: collecting password (with * echo)
                 if (use_ssh && (ssh_phase == SshPhase::SETUP ||
@@ -639,7 +639,7 @@ int main(int argc, char **argv) {
             }
 
             case SDL_TEXTINPUT: {
-#ifdef USESSL
+#ifdef USESSH
                 if (use_ssh && ssh_phase == SshPhase::SETUP) {
                     // Visible echo for host/user fields
                     ssh_field_input += ev.text.text;
@@ -884,7 +884,7 @@ int main(int argc, char **argv) {
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                     gl_resize_fbo(win_w, win_h);
                     term_resize(&term, win_w, win_h);
-#ifdef USESSL
+#ifdef USESSH
                     if (use_ssh) ssh_pty_resize(term.cols, term.rows);
 #endif
                 }
@@ -974,7 +974,7 @@ int main(int argc, char **argv) {
     crt_audio_shutdown();
     kitty_shutdown();
     menu_font_shutdown();
-#ifdef USESSL
+#ifdef USESSH
     if (use_ssh) {
         ssh_abort.store(true);
         if (ssh_thread.joinable()) ssh_thread.join();

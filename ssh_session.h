@@ -1,12 +1,12 @@
 #pragma once
 
 // ============================================================================
-// SSH SESSION  — libssh2-backed remote shell, compiled only when USESSL is
+// SSH SESSION  — libssh2-backed remote shell, compiled only when USESSH is
 // defined.  Mirrors the term_pty read/write interface so the main loop needs
 // only minimal #ifdef guards.
 //
-// Build addition (when USESSL is defined):
-//   g++ ... ssh_session.cpp ... -lssh2 -lcrypto -lssl -DUSESSL -o gl_terminal
+// Build addition (when USESSH is defined):
+//   g++ ... ssh_session.cpp ... -lssh2 -lcrypto -lssl -DUSESSH -o gl_terminal
 //
 // Typical usage:
 //   SshConfig cfg;
@@ -30,7 +30,7 @@
 //   ssh_disconnect();
 // ============================================================================
 
-#ifdef USESSL
+#ifdef USESSH
 
 #include "terminal.h"
 #include <string>
@@ -82,4 +82,4 @@ void ssh_disconnect();
 // Returns true if an SSH session is currently active.
 bool ssh_active();
 
-#endif // USESSL
+#endif // USESSH

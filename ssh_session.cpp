@@ -1,7 +1,7 @@
 // ssh_session.cpp — libssh2 SSH session for gl_terminal
-// Compiled only when USESSL is defined.
+// Compiled only when USESSH is defined.
 
-#ifdef USESSL
+#ifdef USESSH
 
 #include "ssh_session.h"
 #include "terminal.h"
@@ -514,4 +514,4 @@ void ssh_disconnect() {
 
 bool ssh_active() { return s_active; }
 
-#endif // USESSL
+#endif // USESSH

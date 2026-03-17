@@ -57,7 +57,7 @@ SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || e
 # Activate SSH support when SSH=1 is passed on the command line
 ifeq ($(SSH),1)
   SSH_SRCS         = ssh_session.cpp
-  SSH_DEFINE       = -DUSESSL
+  SSH_DEFINE       = -DUSESSH
   SSH_CFLAGS_LINUX = $(SSH2_CFLAGS_LINUX)
   SSH_LIBS_LINUX   = $(SSH2_LIBS_LINUX) -lcrypto -lssl
   SSH_CFLAGS_WIN   = $(SSH2_CFLAGS_WIN)
