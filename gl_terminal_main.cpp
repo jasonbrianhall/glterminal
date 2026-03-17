@@ -112,7 +112,8 @@ int main(int argc, char **argv) {
             // Missing user/host will be prompted in the GL window
             continue;
         }
-        if ((strcmp(arg, "--ssh-key") == 0 || strcmp(arg, "-ssh-key") == 0) && i + 1 < argc) {
+        if ((strcmp(arg, "--ssh-key") == 0 || strcmp(arg, "-ssh-key") == 0 ||
+             strcmp(arg, "-i") == 0) && i + 1 < argc) {
             ssh_cfg.key_path = argv[++i];
             continue;
         }
@@ -141,6 +142,8 @@ int main(int argc, char **argv) {
             printf("Usage: gl_terminal [shell]\n");
 #ifdef USESSL
             printf("       gl_terminal --ssh [user@host[:port]]\n");
+            printf("                   [-i identity_file] [--ssh-key-pub pubkey]\n");
+            printf("                   [--ssh-password password]\n");
 #endif
             return 0;
         }
