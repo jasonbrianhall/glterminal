@@ -166,10 +166,22 @@ static std::vector<uint8_t> b64_decode(const char *src, int slen) {
 // IMAGE STORE
 // ============================================================================
 
+// One frame of an animated image.
+struct KittyFrame {
+    GLuint tex         = 0;
+    int    pw = 0, ph  = 0;   // pixel dimensions of this frame
+    int    duration_ms = 100; // frame display duration (z= in a=f, default 100ms)
+};
+
 struct KittyImage {
     uint32_t id;
-    GLuint   tex;
-    int      pw, ph;     // pixel dimensions
+    GLuint   tex;             // frame[0] texture for non-animated images
+    int      pw, ph;          // pixel dimensions of frame 0 (base image)
+
+    // Animation frames: frame[0] is the base/background layer.
+    // For non-animated images this is empty and tex/pw/ph are used directly.
+    std::vector<KittyFrame> frames;
+    bool animated = false;
 };
 
 struct KittyPlacement {
@@ -180,6 +192,18 @@ struct KittyPlacement {
     int      src_w, src_h;     // source pixel region (0=full)
     int      cols, rows;       // display size in cells (0=auto)
     int      z_index;          // z= layering (-inf..+inf, 0=default over text)
+};
+
+// Per-image animation playback state (one per unique image_id, shared across
+// all placements showing that image — matches timg/kitty behaviour).
+enum class AnimState { STOPPED, RUNNING, ONCE };
+
+struct KittyAnimCtrl {
+    AnimState state       = AnimState::STOPPED;
+    int       cur_frame   = 0;
+    double    accum_ms    = 0.0;  // accumulated time since last frame advance
+    int       loops_left  = 0;    // 0 = infinite
+    int       gap_ms      = 0;    // override frame gap (a=a z=); 0 = use per-frame duration
 };
 
 // In-progress chunked transmission
@@ -193,6 +217,12 @@ struct KittyChunk {
     // display params from first chunk
     int x_cell, y_cell, cols, rows, z_index;
     int quiet;
+    // animation frame params (a=f)
+    int frame_number;       // r= target frame number (1-based; 0=append new frame)
+    int frame_duration_ms;  // z= duration for this frame (ms); 0 = use image default
+    int comp_x, comp_y;     // x=,y= pixel offset when compositing onto base frame
+    int comp_base_frame;    // c= frame to composite onto (0 = use background colour)
+    bool is_frame;          // true when a=f
 };
 
 // Per-terminal state pointer stored in a map keyed by Terminal*
@@ -201,6 +231,9 @@ struct KittyTermState {
     KittyChunk                  pending;   // active chunked transfer
     bool                        has_pending = false;
 };
+
+// Animation state lives globally keyed by image id so placements share it
+static std::unordered_map<uint32_t, KittyAnimCtrl> s_anim;
 
 static std::unordered_map<uint32_t, KittyImage>  s_images;   // id → image
 static std::unordered_map<Terminal*, KittyTermState> s_terms;
@@ -273,7 +306,7 @@ static void send_response(Terminal *t, uint32_t id, int quiet, bool ok, const ch
 
 // Parse "key=value,key=value,...;base64data" or "key=value,key=value"
 struct ApcParams {
-    int    a    = 0;    // action: 'T'=transmit+display, 'p'=put, 'd'=delete, 't'=transmit only, 'q'=query
+    int    a    = 0;    // action: 'T'=transmit+display,'p'=put,'d'=delete,'t'=transmit,'q'=query,'f'=frame,'c'=compose,'a'=animate
     int    f    = 32;   // format: 32=RGBA,24=RGB,100=PNG
     int    m    = 0;    // more chunks: 0=last, 1=more coming
     uint32_t i  = 0;    // image id (0=auto-assign)
@@ -281,18 +314,22 @@ struct ApcParams {
     int    s    = 0;    // pixel width
     int    v    = 0;    // pixel height
     int    S    = 0;    // data size hint (ignored)
-    int    x    = 0;    // source x pixel
-    int    y    = 0;    // source y pixel
+    int    x    = 0;    // source x pixel / composition x offset (a=f)
+    int    y    = 0;    // source y pixel / composition y offset (a=f)
     int    w    = 0;    // source pixel width
     int    h    = 0;    // source pixel height
-    int    c    = 0;    // display columns
-    int    r    = 0;    // display rows
+    int    c    = 0;    // display columns / base frame for composition (a=f)
+    int    r    = 0;    // display rows / target frame number (a=f: 1-based, 0=append)
     int    X    = 0;    // pixel x offset within cell
     int    Y    = 0;    // pixel y offset within cell
-    int    z    = 0;    // z-index
+    int    z    = 0;    // z-index / frame duration ms (a=f/a=a)
     int    q    = 0;    // quiet: 0=always respond, 1=ok silent, 2=all silent
     int    d    = 0;    // delete target: 'a'=all,'i'=image,'p'=placement,'z'=zindex,'c'/'r'=col/row
     int    t_   = 'd';  // transmission medium: 'd'=direct,'f'=file,'s'=shm
+    // Animation control (a=a)
+    int    A_s  = 0;    // s= animation state: 1=stop, 2=run (loop), 3=run once
+    int    A_v  = 0;    // v= loop count: 0=infinite, N=stop after N loops
+    int    A_c  = 0;    // c= (a=a) set current frame (1-based)
     const char *payload = nullptr;
     int    payload_len  = 0;
 };
@@ -429,8 +466,48 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
     // ---- TRANSMIT or TRANSMIT+DISPLAY ----
     bool is_transmit = (p.a == 'T' || p.a == 't' || p.a == 0);
     bool is_display  = (p.a == 'T' || p.a == 'p' || p.a == 0);
+    bool is_frame    = (p.a == 'f');   // a=f: animation frame
+    bool is_compose  = (p.a == 'c');   // a=c: compose frame
+    bool is_animate  = (p.a == 'a');   // a=a: animate control
 
-    if (is_transmit && p.payload_len > 0) {
+    // ---- ANIMATE control (a=a) — no payload required ----
+    if (is_animate) {
+        KittyAnimCtrl &ac = s_anim[p.i];
+        if (p.A_s == 1) {
+            ac.state = AnimState::STOPPED;
+        } else if (p.A_s == 2) {
+            ac.state      = AnimState::RUNNING;
+            ac.loops_left = p.A_v;
+            if (ac.loops_left < 0) ac.loops_left = 0;
+        } else if (p.A_s == 3) {
+            ac.state      = AnimState::ONCE;
+            ac.cur_frame  = 0;
+            ac.accum_ms   = 0.0;
+        }
+        if (p.z > 0) ac.gap_ms = p.z;
+        if (p.c > 0) {  // c= set current frame (1-based in spec, store 0-based)
+            auto iit = s_images.find(p.i);
+            if (iit != s_images.end() && !iit->second.frames.empty()) {
+                int fi = p.c - 1;
+                if (fi >= 0 && fi < (int)iit->second.frames.size())
+                    ac.cur_frame = fi;
+            }
+        }
+        send_response(t, p.i, p.q, true, nullptr);
+        return;
+    }
+
+    // ---- COMPOSE (a=c) — recomposite frame onto base; no pixel data needed ----
+    // We handle this lazily: the frame already has its own texture so we just
+    // note the composition. Full CPU-side compositing would be done here if needed.
+    // For timg animated GIFs the frames arrive already pre-composited, so this
+    // is mostly a no-op stub that sends a success response.
+    if (is_compose) {
+        send_response(t, p.i, p.q, true, nullptr);
+        return;
+    }
+
+    if ((is_transmit || is_frame) && p.payload_len > 0) {
         if (ts.has_pending) {
             if (p.i != 0 && p.i != ts.pending.id) {
                 // Different id — abandon previous
@@ -444,12 +521,27 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
             ts.pending.fmt          = p.f;
             ts.pending.pw           = p.s;
             ts.pending.ph           = p.v;
-            ts.pending.display_when_done = is_display;
+            ts.pending.display_when_done = is_display && !is_frame;
             ts.pending.x_cell  = t->cur_col;
             ts.pending.y_cell  = t->cur_row;
-            ts.pending.cols    = p.c;
-            ts.pending.rows    = p.r;
-            ts.pending.z_index = p.z;
+            ts.pending.is_frame = is_frame;
+            if (is_frame) {
+                // a=f: r=frame(1-based,0=append), z=duration_ms, x/y=comp offset, c=base_frame
+                ts.pending.frame_number      = p.r;
+                ts.pending.frame_duration_ms = p.z;
+                ts.pending.comp_x            = p.x;
+                ts.pending.comp_y            = p.y;
+                ts.pending.comp_base_frame   = p.c;
+                ts.pending.cols    = 0;
+                ts.pending.rows    = 0;
+                ts.pending.z_index = 0;
+            } else {
+                ts.pending.cols    = p.c;
+                ts.pending.rows    = p.r;
+                ts.pending.z_index = p.z;
+                ts.pending.frame_number      = 0;
+                ts.pending.frame_duration_ms = 100;
+            }
             ts.pending.quiet   = p.q;
             ts.has_pending     = true;
         }
@@ -461,11 +553,86 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
         if (p.m == 0) {
             // Last chunk — build texture
             uint32_t img_id = ts.pending.id;
+
+            // ---- a=f: append/replace an animation frame ----
+            if (ts.pending.is_frame) {
+                // Decode the new frame pixels
+                GLuint frame_tex = 0;
+                int fw = 0, fh = 0;
+                if (ts.pending.fmt == 100) {
+                    uint8_t *dec = decode_png(
+                        ts.pending.data.data(), (int)ts.pending.data.size(), &fw, &fh);
+                    if (dec) { frame_tex = upload_texture(dec, fw, fh, true); free(dec); }
+                    else SDL_Log("[Kitty] a=f PNG decode failed\n");
+                } else {
+                    fw = ts.pending.pw; fh = ts.pending.ph;
+                    frame_tex = build_image(ts.pending.data, ts.pending.fmt, fw, fh);
+                }
+
+                if (frame_tex) {
+                    // Find or create the KittyImage entry
+                    KittyImage &img = s_images[img_id];
+                    img.id = img_id;
+                    img.animated = true;
+
+                    // If there's no base frame yet, bootstrap one from the first frame data
+                    if (!img.tex) {
+                        img.tex = frame_tex;
+                        img.pw  = fw; img.ph = fh;
+                        // Also store as frame[0] if no frames yet
+                        if (img.frames.empty()) {
+                            KittyFrame f0;
+                            f0.tex = frame_tex;
+                            f0.pw  = fw; f0.ph = fh;
+                            f0.duration_ms = ts.pending.frame_duration_ms > 0
+                                           ? ts.pending.frame_duration_ms : 100;
+                            img.frames.push_back(f0);
+                        }
+                    } else {
+                        // Append or replace frame
+                        int fn = ts.pending.frame_number;
+                        int dur = ts.pending.frame_duration_ms > 0
+                                ? ts.pending.frame_duration_ms : 100;
+                        KittyFrame fr;
+                        fr.tex = frame_tex; fr.pw = fw; fr.ph = fh;
+                        fr.duration_ms = dur;
+                        if (fn == 0 || fn > (int)img.frames.size()) {
+                            // append
+                            img.frames.push_back(fr);
+                        } else {
+                            int idx = fn - 1;  // 1-based → 0-based
+                            if (img.frames[idx].tex && img.frames[idx].tex != img.tex)
+                                glDeleteTextures(1, &img.frames[idx].tex);
+                            img.frames[idx] = fr;
+                        }
+                    }
+
+                    // Start running automatically when the first non-base frame arrives
+                    KittyAnimCtrl &ac = s_anim[img_id];
+                    if (ac.state == AnimState::STOPPED && img.frames.size() > 1)
+                        ac.state = AnimState::RUNNING;
+
+                    send_response(t, img_id, ts.pending.quiet, true, nullptr);
+                } else {
+                    send_response(t, img_id, ts.pending.quiet, false, "frame decode failed");
+                }
+                ts.has_pending = false;
+                return;
+            }
+
+            // ---- Normal transmit: replace whole image ----
             // Delete old texture if re-using id
-            auto it = s_images.find(img_id);
-            if (it != s_images.end()) {
-                glDeleteTextures(1, &it->second.tex);
-                s_images.erase(it);
+            {
+                auto it = s_images.find(img_id);
+                if (it != s_images.end()) {
+                    // Free all frame textures
+                    for (auto &fr : it->second.frames)
+                        if (fr.tex && fr.tex != it->second.tex)
+                            glDeleteTextures(1, &fr.tex);
+                    glDeleteTextures(1, &it->second.tex);
+                    s_images.erase(it);
+                }
+                s_anim.erase(img_id);
             }
 
             KittyImage img = {};
@@ -549,6 +716,62 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
 }
 
 // ============================================================================
+// kitty_tick — advance animation timers
+// ============================================================================
+
+bool kitty_tick(double dt) {
+    bool changed = false;
+    double dt_ms = dt * 1000.0;
+
+    for (auto &kv : s_anim) {
+        KittyAnimCtrl &ac = kv.second;
+        if (ac.state == AnimState::STOPPED) continue;
+
+        auto iit = s_images.find(kv.first);
+        if (iit == s_images.end()) continue;
+        KittyImage &img = iit->second;
+        if (!img.animated || img.frames.size() < 2) continue;
+
+        ac.accum_ms += dt_ms;
+
+        // Duration for the current frame
+        int dur = ac.gap_ms > 0 ? ac.gap_ms : img.frames[ac.cur_frame].duration_ms;
+        if (dur <= 0) dur = 100;
+
+        while (ac.accum_ms >= dur) {
+            ac.accum_ms -= dur;
+            int next = ac.cur_frame + 1;
+            if (next >= (int)img.frames.size()) {
+                next = 0;
+                if (ac.state == AnimState::ONCE) {
+                    ac.state = AnimState::STOPPED;
+                    ac.cur_frame = (int)img.frames.size() - 1;
+                    changed = true;
+                    break;
+                }
+                if (ac.loops_left > 0) {
+                    ac.loops_left--;
+                    if (ac.loops_left == 0) {
+                        ac.state = AnimState::STOPPED;
+                        ac.cur_frame = (int)img.frames.size() - 1;
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if (ac.cur_frame != next) {
+                ac.cur_frame = next;
+                changed = true;
+            }
+            // recalculate duration for new frame
+            dur = ac.gap_ms > 0 ? ac.gap_ms : img.frames[ac.cur_frame].duration_ms;
+            if (dur <= 0) dur = 100;
+        }
+    }
+    return changed;
+}
+
+// ============================================================================
 // kitty_render
 // ============================================================================
 
@@ -578,35 +801,42 @@ void kitty_render(Terminal *t, int ox, int oy) {
         const KittyImage &img = iit->second;
         if (!img.tex) continue;
 
-        float cw = t->cell_w, ch = t->cell_h;
-        float disp_w = pl.cols ? pl.cols * cw : (float)img.pw;
-        float disp_h = pl.rows ? pl.rows * ch : (float)img.ph;
+        // Pick the right texture: animated images use the current frame
+        GLuint tex  = img.tex;
+        int    ipw  = img.pw;
+        int    iph  = img.ph;
+        if (img.animated && !img.frames.empty()) {
+            auto ait = s_anim.find(pl.image_id);
+            int fi = (ait != s_anim.end()) ? ait->second.cur_frame : 0;
+            if (fi < 0) fi = 0;
+            if (fi >= (int)img.frames.size()) fi = (int)img.frames.size() - 1;
+            const KittyFrame &fr = img.frames[fi];
+            if (fr.tex) { tex = fr.tex; ipw = fr.pw; iph = fr.ph; }
+        }
+        if (!tex) continue;
 
-        // y_cell is in live-screen coordinates. When the user has scrolled
-        // back into scrollback, sb_offset rows of scrollback sit above the
-        // viewport, so the image's visual row is y_cell + sb_offset.
-        // (sb_offset==0 means live view, positive means scrolled back.)
+        float cw = t->cell_w, ch = t->cell_h;
+        float disp_w = pl.cols ? pl.cols * cw : (float)ipw;
+        float disp_h = pl.rows ? pl.rows * ch : (float)iph;
+
         float vis_row = (float)(pl.y_cell + t->sb_offset);
 
-        // Skip images entirely outside the visible rows
         float img_rows = disp_h / ch;
         if (vis_row + img_rows <= 0 || vis_row >= (float)t->rows) continue;
 
         float dx = ox + pl.x_cell * cw;
         float dy = oy + vis_row * ch;
 
-        // If the image is partially above the viewport, clip the top
         float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
-        if (img.pw > 0 && img.ph > 0) {
-            int sw = pl.src_w ? pl.src_w : img.pw;
-            int sh = pl.src_h ? pl.src_h : img.ph;
-            u0 = (float)pl.src_x / img.pw;
-            v0 = (float)pl.src_y / img.ph;
-            u1 = u0 + (float)sw / img.pw;
-            v1 = v0 + (float)sh / img.ph;
+        if (ipw > 0 && iph > 0) {
+            int sw = pl.src_w ? pl.src_w : ipw;
+            int sh = pl.src_h ? pl.src_h : iph;
+            u0 = (float)pl.src_x / ipw;
+            v0 = (float)pl.src_y / iph;
+            u1 = u0 + (float)sw / ipw;
+            v1 = v0 + (float)sh / iph;
         }
 
-        // Clip top edge if image starts above visible area
         if (dy < (float)oy) {
             float clip = (float)oy - dy;
             float frac = clip / disp_h;
@@ -614,7 +844,6 @@ void kitty_render(Terminal *t, int ox, int oy) {
             dy  = (float)oy;
             disp_h -= clip;
         }
-        // Clip bottom edge if image extends below visible area
         float bottom_limit = oy + t->rows * ch;
         if (dy + disp_h > bottom_limit) {
             float clip = (dy + disp_h) - bottom_limit;
@@ -624,7 +853,6 @@ void kitty_render(Terminal *t, int ox, int oy) {
         }
         if (disp_h <= 0) continue;
 
-        // pos(2) + tc(2) = 4 floats per vertex, 6 verts = 24 floats
         float verts[24] = {
             dx,        dy,        u0, v0,
             dx+disp_w, dy,        u1, v0,
@@ -634,7 +862,7 @@ void kitty_render(Terminal *t, int ox, int oy) {
             dx,        dy+disp_h, u0, v1,
         };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
-        glBindTexture(GL_TEXTURE_2D, img.tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
@@ -882,9 +1110,14 @@ void kitty_scroll(Terminal *t, int lines) {
 }
 
 void kitty_shutdown(void) {
-    for (auto &kv : s_images)
+    for (auto &kv : s_images) {
+        for (auto &fr : kv.second.frames)
+            if (fr.tex && fr.tex != kv.second.tex)
+                glDeleteTextures(1, &fr.tex);
         glDeleteTextures(1, &kv.second.tex);
+    }
     s_images.clear();
+    s_anim.clear();
     s_terms.clear();
     if (s_img_prog) { glDeleteProgram(s_img_prog); s_img_prog = 0; }
     if (s_img_vao)  { glDeleteVertexArrays(1, &s_img_vao); s_img_vao = 0; }

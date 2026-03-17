@@ -20,6 +20,11 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len);
 // Call from term_render() after the glyph pass, before gl_flush_verts().
 void kitty_render(Terminal *t, int ox, int oy);
 
+// Advance animation timers by dt seconds.
+// Returns true if any animated image changed frame (caller should set needs_render).
+// Call once per main-loop iteration regardless of needs_render.
+bool kitty_tick(double dt);
+
 // For HTML copy: returns <img> tags for any placements whose y_cell falls
 // within [row_start, row_end] (inclusive, virtual row coordinates matching
 // the selection). Each entry is keyed by y_cell so the caller can insert

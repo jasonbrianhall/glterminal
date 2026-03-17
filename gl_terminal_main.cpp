@@ -167,6 +167,10 @@ int main(int argc, char **argv) {
             }
         }
 
+        // Kitty animation frames
+        if (kitty_tick(dt))
+            needs_render = true;
+
         // Auto-scroll during selection drag
         if (term.sel_active) {
             int margin = (int)term.cell_h;  // one cell height from edge triggers scroll
