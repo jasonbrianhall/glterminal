@@ -1,8 +1,16 @@
 // gl_terminal_main.cpp  — entry point only
-// Build: g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
-//            terminal.cpp term_pty.cpp term_ui.cpp gl_bouncingcircle.cpp
-//            font_manager.cpp
-//            -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
+// Build (local shell):
+//   g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
+//       terminal.cpp term_pty.cpp term_ui.cpp gl_bouncingcircle.cpp
+//       font_manager.cpp
+//       -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
+//
+// Build (with SSH support):
+//   g++ ... ssh_session.cpp ... -lssh2 -lcrypto -lssl -DUSESSL -o gl_terminal
+//
+// SSH usage:
+//   gl_terminal --ssh user@host[:port] [--ssh-key ~/.ssh/id_ed25519]
+//               [--ssh-password secret] [--ssh-known-hosts ~/.ssh/known_hosts]
 
 #include "gl_terminal.h"
 #include "gl_renderer.h"
@@ -16,6 +24,9 @@
 #include "felix_settings.h"
 #include "kitty_graphics.h"
 #include "font_manager.h"
+#ifdef USESSL
+#  include "ssh_session.h"
+#endif
 
 #include <SDL2/SDL.h>
 #include "icon.h"
@@ -38,15 +49,110 @@ SDL_Window *g_sdl_window  = nullptr;
 std::vector<FontEntry> g_font_list;
 
 // ============================================================================
+// SSH / PTY dispatch helpers — used throughout the main loop.
+//
+// TERM_WRITE always goes through term_write(), which internally checks
+// g_term_write_override (set by ssh_connect) to route to SSH when active.
+// This means handle_key(), term_paste() etc. also work transparently.
+//
+// TERM_READ must explicitly pick ssh_read vs term_read since they pull from
+// different sources (SSH channel vs pty_fd).
+// ============================================================================
+
+#ifdef USESSL
+static inline bool _term_read_dispatch(bool ssh, Terminal *t)
+    { return ssh ? ssh_read(t) : term_read(t); }
+#  define TERM_READ()  _term_read_dispatch(use_ssh, &term)
+#else
+#  define TERM_READ()  term_read(&term)
+#endif
+#define TERM_WRITE(buf, n)  term_write(&term, (buf), (n))
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
 int main(int argc, char **argv) {
-#ifdef WIN32    
-    const char *shell = (argc > 1) ? argv[1] : "cmd.exe";
+    // ---- Command-line parsing ----
+#ifdef WIN32
+    const char *shell = "cmd.exe";
 #else
-    const char *shell = (argc > 1) ? argv[1] : "/bin/bash";
+    const char *shell = "/bin/bash";
 #endif
+
+#ifdef USESSL
+    SshConfig ssh_cfg;
+    bool      use_ssh = false;
+#endif
+
+    for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+
+#ifdef USESSL
+        // --ssh user@host  or  --ssh user@host:port
+        if (strcmp(arg, "--ssh") == 0 && i + 1 < argc) {
+            const char *target = argv[++i];
+            // Parse user@host[:port]
+            const char *at = strchr(target, '@');
+            if (!at) {
+                SDL_Log("[SSH] --ssh requires user@host[:port]\n");
+                return 1;
+            }
+            ssh_cfg.user = std::string(target, at - target);
+            const char *host_start = at + 1;
+            const char *colon = strrchr(host_start, ':');
+            if (colon) {
+                ssh_cfg.host = std::string(host_start, colon - host_start);
+                ssh_cfg.port = atoi(colon + 1);
+                if (ssh_cfg.port <= 0 || ssh_cfg.port > 65535) ssh_cfg.port = 22;
+            } else {
+                ssh_cfg.host = host_start;
+                ssh_cfg.port = 22;
+            }
+            use_ssh = true;
+            continue;
+        }
+        // --ssh-key /path/to/private_key
+        if (strcmp(arg, "--ssh-key") == 0 && i + 1 < argc) {
+            ssh_cfg.key_path = argv[++i];
+            continue;
+        }
+        // --ssh-key-pub /path/to/public_key  (optional; defaults to key_path + ".pub")
+        if (strcmp(arg, "--ssh-key-pub") == 0 && i + 1 < argc) {
+            ssh_cfg.key_path_pub = argv[++i];
+            continue;
+        }
+        // --ssh-password secret
+        if (strcmp(arg, "--ssh-password") == 0 && i + 1 < argc) {
+            ssh_cfg.password = argv[++i];
+            continue;
+        }
+        // --ssh-known-hosts /path/to/known_hosts  ("" = skip verification)
+        if (strcmp(arg, "--ssh-known-hosts") == 0 && i + 1 < argc) {
+            ssh_cfg.known_hosts_path = argv[++i];
+            continue;
+        }
+#endif // USESSL
+
+        // Positional: shell command (local mode)
+        if (arg[0] != '-') {
+            shell = arg;
+            continue;
+        }
+
+        // --help / -h
+        if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+            printf("Usage: gl_terminal [shell]\n");
+#ifdef USESSL
+            printf("       gl_terminal --ssh user@host[:port]\n");
+            printf("                   [--ssh-key path_to_private_key]\n");
+            printf("                   [--ssh-key-pub path_to_public_key]\n");
+            printf("                   [--ssh-password password]\n");
+            printf("                   [--ssh-known-hosts path_to_known_hosts]\n");
+#endif
+            return 0;
+        }
+    }
 
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
 
@@ -112,24 +218,33 @@ int main(int argc, char **argv) {
 
     term_resize(&term, win_w, win_h);
 
+    // Connect to local shell or remote SSH session
+#ifdef USESSL
+    if (use_ssh) {
+        if (!ssh_connect(ssh_cfg, &term)) {
+            SDL_Log("[SSH] connection failed\n");
+            return 1;
+        }
+    } else
+#endif
     if (!term_spawn(&term, shell)) {
         return 1;
     }
 
 #ifdef _WIN32
     SDL_Delay(300);
-    term_read(&term);
+    TERM_READ();
 #else
     SDL_Delay(200);
-    term_read(&term);
+    TERM_READ();
     for (int i = 0; i < term.rows * term.cols; i++)
         term.cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
     term.cur_row = term.cur_col = 0;
     term.scroll_top = 0; term.scroll_bot = term.rows - 1;
     term.state = PS_NORMAL;
-    term_write(&term, "\n", 1);
+    TERM_WRITE("\n", 1);
     SDL_Delay(100);
-    term_read(&term);
+    TERM_READ();
 #endif
 
     SDL_Cursor *cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
@@ -202,11 +317,11 @@ int main(int argc, char **argv) {
             }
         }
 
-        // PTY read
+        // PTY / SSH read
         {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_sb_count = term.sb_count;
-            bool got_data = term_read(&term);
+            bool got_data = TERM_READ();
             if (got_data) {
                 needs_render = true;
                 bool new_lines = (term.sb_count != old_sb_count);
@@ -217,19 +332,29 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Child exit check
-#ifdef _WIN32
-        if (term_child_exited()) {
-            settings_save();
-            running = false;
-        }
-#else
-        int status;
-        if (waitpid(term.child, &status, WNOHANG) == term.child) {
-            settings_save();
-            running = false;
-        }
+        // Child / channel exit check
+#ifdef USESSL
+        if (use_ssh) {
+            if (ssh_channel_closed()) {
+                settings_save();
+                running = false;
+            }
+        } else
 #endif
+        {
+#ifdef _WIN32
+            if (term_child_exited()) {
+                settings_save();
+                running = false;
+            }
+#else
+            int status;
+            if (waitpid(term.child, &status, WNOHANG) == term.child) {
+                settings_save();
+                running = false;
+            }
+#endif
+        }
 
         // Event loop
         SDL_Event ev;
@@ -272,17 +397,17 @@ int main(int argc, char **argv) {
                         ev.key.keysym.sym == SDLK_RSHIFT) break;
                 }
                 handle_key(&term, ev.key.keysym, NULL);
-                SDL_Delay(1);  // give pty a tick to echo
-                if (term_read(&term)) needs_render = true;
+                SDL_Delay(1);  // give pty/ssh a tick to echo
+                if (TERM_READ()) needs_render = true;
                 break;
             }
 
             case SDL_TEXTINPUT: {
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
-                    term_write(&term, ev.text.text, (int)strlen(ev.text.text));
-                    SDL_Delay(1);  // give pty a tick to echo
-                    if (term_read(&term)) needs_render = true;
+                    TERM_WRITE(ev.text.text, (int)strlen(ev.text.text));
+                    SDL_Delay(1);  // give pty/ssh a tick to echo
+                    if (TERM_READ()) needs_render = true;
                 }
                 break;
             }
@@ -301,7 +426,7 @@ int main(int argc, char **argv) {
                         else
                             slen = snprintf(seq,sizeof(seq),"\x1b[M%c%c%c",
                                             (char)(32+btn),(char)(32+c+1),(char)(32+r+1));
-                        term_write(&term, seq, slen);
+                        TERM_WRITE(seq, slen);
                     }
                     break;
                 }
@@ -369,9 +494,9 @@ int main(int argc, char **argv) {
                                 term.scroll_top=0; term.scroll_bot=term.rows-1;
                                 term.state=PS_NORMAL;
 #ifdef WIN32
-                                term_write(&term,"cls\r\n",5);
+                                TERM_WRITE("cls\r\n",5);
 #else
-                                term_write(&term,"reset\n",6);
+                                TERM_WRITE("reset\n",6);
 #endif
                                 break;
                             case MENU_ID_SELECT_ALL: term_select_all(&term); break;
@@ -456,7 +581,7 @@ int main(int argc, char **argv) {
                         else
                             slen = snprintf(seq,sizeof(seq),"\x1b[M%c%c%c",
                                             (char)(32+3),(char)(32+c+1),(char)(32+r+1));
-                        term_write(&term, seq, slen);
+                        TERM_WRITE(seq, slen);
                     }
                 } else if (ev.button.button == SDL_BUTTON_LEFT && term.sel_active) {
                     pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2,
@@ -489,7 +614,7 @@ int main(int argc, char **argv) {
                     else
                         slen = snprintf(seq,sizeof(seq),"\x1b[M%c%c%c",
                                         (char)(32+btn),(char)(32+c2+1),(char)(32+r2+1));
-                    term_write(&term, seq, slen);
+                    TERM_WRITE(seq, slen);
                 } else {
                     int delta = (ev.wheel.y > 0) ? 3 : -3;
                     int new_off = SDL_clamp(term.sb_offset + delta, 0, term.sb_count);
@@ -506,6 +631,9 @@ int main(int argc, char **argv) {
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                     gl_resize_fbo(win_w, win_h);
                     term_resize(&term, win_w, win_h);
+#ifdef USESSL
+                    if (use_ssh) ssh_pty_resize(term.cols, term.rows);
+#endif
                 }
                 break;
             }
@@ -593,6 +721,9 @@ int main(int argc, char **argv) {
     crt_audio_shutdown();
     kitty_shutdown();
     menu_font_shutdown();
+#ifdef USESSL
+    if (use_ssh) ssh_disconnect();
+#endif
     SDL_Quit();
     ft_shutdown();
 

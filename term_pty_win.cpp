@@ -5,6 +5,9 @@
 #include <string.h>
 #include <stdlib.h>
 
+// Optional write override (set by SSH layer; nullptr = use ConPTY pipe)
+void (*g_term_write_override)(Terminal *t, const char *s, int n) = nullptr;
+
 // ============================================================================
 // STATE
 // ============================================================================
@@ -138,6 +141,7 @@ bool term_read(Terminal *t) {
 
 void term_write(Terminal *t, const char *s, int n) {
     (void)t;
+    if (g_term_write_override) { g_term_write_override(t, s, n); return; }
     DWORD written;
     WriteFile(s_hWrite, s, (DWORD)n, &written, nullptr);
 }

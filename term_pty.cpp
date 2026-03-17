@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <string.h>
 
+// Optional write override (set by SSH layer; nullptr = use pty_fd)
+void (*g_term_write_override)(Terminal *t, const char *s, int n) = nullptr;
+
 bool term_spawn(Terminal *t, const char *cmd) {
     struct winsize ws = {
         .ws_row    = (unsigned short)t->rows,
@@ -50,5 +53,6 @@ bool term_read(Terminal *t) {
 }
 
 void term_write(Terminal *t, const char *s, int n) {
+    if (g_term_write_override) { g_term_write_override(t, s, n); return; }
     if (t->pty_fd >= 0) { ssize_t r = write(t->pty_fd, s, n); (void)r; }
 }

@@ -1,6 +1,11 @@
 # Felix Terminal Makefile
 # Cross-compile for Windows with: make windows
 # Native Linux build with:        make linux
+#
+# SSH support (libssh2) — opt-in via SSH=1:
+#   make linux   SSH=1
+#   make windows SSH=1
+#   make debug   SSH=1
 
 # Compiler settings
 CXX_LINUX = g++
@@ -41,21 +46,53 @@ GLEW_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags glew 2>/dev/null || echo
 GLEW_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   glew 2>/dev/null || echo "-lglew32")
 
 # ============================================================================
+# LIBSSH2  (only pulled in when SSH=1)
+# ============================================================================
+SSH2_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags libssh2 2>/dev/null || echo "")
+SSH2_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libssh2 2>/dev/null || echo "-lssh2")
+
+SSH2_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags libssh2 2>/dev/null || echo "")
+SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || echo "-lssh2")
+
+# Activate SSH support when SSH=1 is passed on the command line
+ifeq ($(SSH),1)
+  SSH_SRCS         = ssh_session.cpp
+  SSH_DEFINE       = -DUSESSL
+  SSH_CFLAGS_LINUX = $(SSH2_CFLAGS_LINUX)
+  SSH_LIBS_LINUX   = $(SSH2_LIBS_LINUX) -lcrypto -lssl
+  SSH_CFLAGS_WIN   = $(SSH2_CFLAGS_WIN)
+  SSH_LIBS_WIN     = $(SSH2_LIBS_WIN) -lcrypto -lssl -lws2_32
+  SSH_SUFFIX       = _ssh
+else
+  SSH_SRCS         =
+  SSH_DEFINE       =
+  SSH_CFLAGS_LINUX =
+  SSH_LIBS_LINUX   =
+  SSH_CFLAGS_WIN   =
+  SSH_LIBS_WIN     =
+  SSH_SUFFIX       =
+endif
+
+# ============================================================================
 # LINUX FLAGS
 # ============================================================================
 CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
                  $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
-                 -DLINUX -O2 -ffunction-sections -fdata-sections -flto
+                 $(SSH_CFLAGS_LINUX) \
+                 -DLINUX $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
+                 $(SSH_LIBS_LINUX) \
                  -lGL -lpng -lz -lm -pthread -lstdc++ \
                  -s -Wl,--gc-sections -flto
 
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
                        $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
-                       -DLINUX -DDEBUG -g -O0
+                       $(SSH_CFLAGS_LINUX) \
+                       -DLINUX $(SSH_DEFINE) -DDEBUG -g -O0
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
+                       $(SSH_LIBS_LINUX) \
                        -lGL -lpng -lz -lm -pthread -lstdc++
 
 # ============================================================================
@@ -63,18 +100,22 @@ LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LIN
 # ============================================================================
 CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
                $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
+               $(SSH_CFLAGS_WIN) \
                -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
-               -O2 -ffunction-sections -fdata-sections -flto
+               $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
 
 # -mwindows: no console window behind the GL window
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
+               $(SSH_LIBS_WIN) \
                -lopengl32 -lpng -lz -lwinmm -mwindows \
                -s -Wl,--gc-sections -flto
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
-                     -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 -DDEBUG -g -O0
+                     $(SSH_CFLAGS_WIN) \
+                     -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
+                     $(SSH_DEFINE) -DDEBUG -g -O0
 
 # ============================================================================
 # SOURCES
@@ -85,7 +126,8 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               terminal.cpp          term_ui.cpp           \
               gl_bouncingcircle.cpp fight_mode.cpp        \
               crt_audio.cpp         felix_settings.cpp    \
-              kitty_graphics.cpp    font_manager.cpp
+              kitty_graphics.cpp    font_manager.cpp      \
+              $(SSH_SRCS)
 
 SRCS_LINUX = $(SRCS_COMMON) term_pty.cpp
 SRCS_WIN   = $(SRCS_COMMON) term_pty_win.cpp
@@ -101,10 +143,10 @@ OBJECTS_WIN_DEBUG   = $(addprefix $(BUILD_DIR_WIN_DEBUG)/,   $(SRCS_WIN:.cpp=.wi
 # ============================================================================
 # TARGETS / DIRS
 # ============================================================================
-EXECUTABLE_LINUX       = flt
-EXECUTABLE_LINUX_DEBUG = flt_debug
-EXECUTABLE_WIN         = flt.exe
-EXECUTABLE_WIN_DEBUG   = flt_debug.exe
+EXECUTABLE_LINUX       = flt$(SSH_SUFFIX)
+EXECUTABLE_LINUX_DEBUG = flt_debug$(SSH_SUFFIX)
+EXECUTABLE_WIN         = flt$(SSH_SUFFIX).exe
+EXECUTABLE_WIN_DEBUG   = flt_debug$(SSH_SUFFIX).exe
 
 BUILD_DIR             = build
 BUILD_DIR_LINUX       = $(BUILD_DIR)/linux
@@ -201,6 +243,9 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 		echo "Tip: write collect_dlls.sh or copy manually:"; \
 		echo "  SDL2.dll, glew32.dll, freetype.dll, libwinpthread-1.dll,"; \
 		echo "  libgcc_s_seh-1.dll, libstdc++-6.dll"; \
+		if [ "$(SSH)" = "1" ]; then \
+			echo "  (SSH build) libssh2.dll, libssl-*.dll, libcrypto-*.dll"; \
+		fi \
 	fi
 
 # ============================================================================
@@ -220,10 +265,12 @@ check-deps:
 	@$(PKG_CONFIG_LINUX) --exists freetype2 && echo "✓ freetype2" || echo "✗ freetype2"
 	@$(PKG_CONFIG_LINUX) --exists sdl2      && echo "✓ sdl2"      || echo "✗ sdl2"
 	@$(PKG_CONFIG_LINUX) --exists glew      && echo "✓ glew"      || echo "✗ glew"
+	@$(PKG_CONFIG_LINUX) --exists libssh2   && echo "✓ libssh2"   || echo "✗ libssh2 (optional, needed for SSH=1)"
 	@echo "=== Windows (mingw64) ==="
 	@$(PKG_CONFIG_WIN) --exists freetype2 && echo "✓ freetype2" || echo "✗ freetype2"
 	@$(PKG_CONFIG_WIN) --exists sdl2      && echo "✓ sdl2"      || echo "✗ sdl2"
 	@$(PKG_CONFIG_WIN) --exists glew      && echo "✓ glew"      || echo "✗ glew"
+	@$(PKG_CONFIG_WIN) --exists libssh2   && echo "✓ libssh2"   || echo "✗ libssh2 (optional, needed for SSH=1)"
 
 clean:
 	find $(BUILD_DIR) -type f \( -name "*.o" -o -name "*.d" \) -delete 2>/dev/null || true
@@ -245,6 +292,11 @@ help:
 	@echo "  make clean        - Remove object files and binaries"
 	@echo "  make clean-all    - Remove entire build/ directory"
 	@echo ""
+	@echo "SSH support (libssh2) — append SSH=1 to any build target:"
+	@echo "  make linux   SSH=1   - Linux build with SSH  → flt_ssh"
+	@echo "  make windows SSH=1   - Windows build with SSH → flt_ssh.exe"
+	@echo "  make debug   SSH=1   - Debug builds with SSH"
+	@echo ""
 	@echo "Windows cross-compile requires:"
 	@echo "  x86_64-w64-mingw32-g++  (mingw-w64)"
 	@echo "  mingw64-pkg-config"
@@ -252,3 +304,8 @@ help:
 	@echo "  On Fedora: sudo dnf install mingw64-SDL2 mingw64-glew mingw64-freetype"
 	@echo "  On Ubuntu: sudo apt install mingw-w64 mingw-w64-tools"
 	@echo "             (then build deps from source or use mxe.cc)"
+	@echo ""
+	@echo "SSH Linux deps:   sudo apt install libssh2-1-dev libssl-dev"
+	@echo "                  sudo dnf install libssh2-devel openssl-devel"
+	@echo "SSH Windows deps: mingw64-libssh2 mingw64-openssl (Fedora)"
+	@echo "                  or build from source via mxe.cc"
