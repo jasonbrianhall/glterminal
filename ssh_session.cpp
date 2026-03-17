@@ -413,7 +413,7 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     // Request PTY
     while ((rc = libssh2_channel_request_pty_ex(
                 s_channel,
-                "xterm-kitty", (unsigned int)strlen("xterm-kitty"),
+                "xterm-256color", (unsigned int)strlen("xterm-256color"),
                 nullptr, 0,
                 (int)t->cols, (int)t->rows,
                 0, 0)) == LIBSSH2_ERROR_EAGAIN)
