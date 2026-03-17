@@ -54,8 +54,6 @@ SSH2_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libssh2 2>/dev/null ||
 SSH2_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags libssh2 2>/dev/null || echo "")
 SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || echo "-lssh2")
 
-# Activate SSH support when SSH=1 is passed on the command line
-ifeq ($(SSH),1)
   SSH_SRCS         = ssh_session.cpp
   SSH_DEFINE       = -DUSESSH
   SSH_CFLAGS_LINUX = $(SSH2_CFLAGS_LINUX)
@@ -63,15 +61,6 @@ ifeq ($(SSH),1)
   SSH_CFLAGS_WIN   = $(SSH2_CFLAGS_WIN)
   SSH_LIBS_WIN     = $(SSH2_LIBS_WIN) -lcrypto -lssl -lws2_32
   SSH_SUFFIX       = 
-else
-  SSH_SRCS         =
-  SSH_DEFINE       =
-  SSH_CFLAGS_LINUX =
-  SSH_LIBS_LINUX   =
-  SSH_CFLAGS_WIN   =
-  SSH_LIBS_WIN     =
-  SSH_SUFFIX       =
-endif
 
 # ============================================================================
 # LINUX FLAGS
@@ -291,11 +280,6 @@ help:
 	@echo "  make check-deps   - Verify all dependencies are present"
 	@echo "  make clean        - Remove object files and binaries"
 	@echo "  make clean-all    - Remove entire build/ directory"
-	@echo ""
-	@echo "SSH support (libssh2) — append SSH=1 to any build target:"
-	@echo "  make linux   SSH=1   - Linux build with SSH  → flt_ssh"
-	@echo "  make windows SSH=1   - Windows build with SSH → flt_ssh.exe"
-	@echo "  make debug   SSH=1   - Debug builds with SSH"
 	@echo ""
 	@echo "Windows cross-compile requires:"
 	@echo "  x86_64-w64-mingw32-g++  (mingw-w64)"
