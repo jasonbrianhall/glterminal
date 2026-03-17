@@ -62,7 +62,7 @@ ifeq ($(SSH),1)
   SSH_LIBS_LINUX   = $(SSH2_LIBS_LINUX) -lcrypto -lssl
   SSH_CFLAGS_WIN   = $(SSH2_CFLAGS_WIN)
   SSH_LIBS_WIN     = $(SSH2_LIBS_WIN) -lcrypto -lssl -lws2_32
-  SSH_SUFFIX       = _ssh
+  SSH_SUFFIX       = 
 else
   SSH_SRCS         =
   SSH_DEFINE       =
