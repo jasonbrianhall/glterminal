@@ -32,7 +32,7 @@ sudo dnf install SDL2-devel glew-devel freetype-devel libssh2-devel
 
 On Debian/Ubuntu:
 ```
-sudo apt install libsdl2-dev libglew-dev libfreetype-dev
+sudo apt install libsdl2-dev libglew-dev libfreetype-dev libssh2-1-dev
 ```
 
 ## Building
