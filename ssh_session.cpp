@@ -294,7 +294,7 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
         return false;
     }
 
-    // Authentication: agent → key file → password
+    // Authentication: agent → key file → password (supplied or prompted by caller)
     bool authed = false;
 
     if (!authed)
@@ -303,8 +303,19 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     if (!authed && !cfg.key_path.empty())
         authed = auth_key(cfg.user, cfg.key_path, cfg.key_path_pub, cfg.password);
 
-    if (!authed && !cfg.password.empty())
-        authed = auth_password(cfg.user, cfg.password);
+    if (!authed) {
+        // Use supplied password; if empty, call the prompt callback so the
+        // application can ask the user in its own UI (e.g. the GL console).
+        std::string password = cfg.password;
+        if (password.empty() && cfg.prompt_password) {
+            char prompt[256];
+            snprintf(prompt, sizeof(prompt), "%s@%s's password: ",
+                     cfg.user.c_str(), cfg.host.c_str());
+            password = cfg.prompt_password(prompt);
+        }
+        if (!password.empty())
+            authed = auth_password(cfg.user, password);
+    }
 
     if (!authed) {
         SDL_Log("[SSH] authentication failed for user '%s'\n", cfg.user.c_str());

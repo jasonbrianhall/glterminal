@@ -7,10 +7,6 @@
 //
 // Build (with SSH support):
 //   g++ ... ssh_session.cpp ... -lssh2 -lcrypto -lssl -DUSESSL -o gl_terminal
-//
-// SSH usage:
-//   gl_terminal --ssh user@host[:port] [--ssh-key ~/.ssh/id_ed25519]
-//               [--ssh-password secret] [--ssh-known-hosts ~/.ssh/known_hosts]
 
 #include "gl_terminal.h"
 #include "gl_renderer.h"
@@ -37,6 +33,7 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <atomic>
 
 // ============================================================================
 // GLOBALS referenced across modules
@@ -89,45 +86,44 @@ int main(int argc, char **argv) {
         const char *arg = argv[i];
 
 #ifdef USESSL
-        // --ssh user@host  or  --ssh user@host:port
-        if (strcmp(arg, "--ssh") == 0 && i + 1 < argc) {
-            const char *target = argv[++i];
-            // Parse user@host[:port]
-            const char *at = strchr(target, '@');
-            if (!at) {
-                SDL_Log("[SSH] --ssh requires user@host[:port]\n");
-                return 1;
-            }
-            ssh_cfg.user = std::string(target, at - target);
-            const char *host_start = at + 1;
-            const char *colon = strrchr(host_start, ':');
-            if (colon) {
-                ssh_cfg.host = std::string(host_start, colon - host_start);
-                ssh_cfg.port = atoi(colon + 1);
-                if (ssh_cfg.port <= 0 || ssh_cfg.port > 65535) ssh_cfg.port = 22;
-            } else {
-                ssh_cfg.host = host_start;
-                ssh_cfg.port = 22;
-            }
+        // --ssh [user@host[:port]]  — argument is optional; missing parts are
+        // prompted inside the GL window.
+        if (strcmp(arg, "--ssh") == 0) {
             use_ssh = true;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                const char *target = argv[++i];
+                const char *at = strchr(target, '@');
+                if (at) {
+                    ssh_cfg.user = std::string(target, at - target);
+                    const char *host_start = at + 1;
+                    const char *colon = strrchr(host_start, ':');
+                    if (colon) {
+                        ssh_cfg.host = std::string(host_start, colon - host_start);
+                        ssh_cfg.port = atoi(colon + 1);
+                        if (ssh_cfg.port <= 0 || ssh_cfg.port > 65535) ssh_cfg.port = 22;
+                    } else {
+                        ssh_cfg.host = host_start;
+                    }
+                } else {
+                    // No '@' — treat entire token as host, prompt for user
+                    ssh_cfg.host = target;
+                }
+            }
+            // Missing user/host will be prompted in the GL window
             continue;
         }
-        // --ssh-key /path/to/private_key
         if (strcmp(arg, "--ssh-key") == 0 && i + 1 < argc) {
             ssh_cfg.key_path = argv[++i];
             continue;
         }
-        // --ssh-key-pub /path/to/public_key  (optional; defaults to key_path + ".pub")
         if (strcmp(arg, "--ssh-key-pub") == 0 && i + 1 < argc) {
             ssh_cfg.key_path_pub = argv[++i];
             continue;
         }
-        // --ssh-password secret
         if (strcmp(arg, "--ssh-password") == 0 && i + 1 < argc) {
             ssh_cfg.password = argv[++i];
             continue;
         }
-        // --ssh-known-hosts /path/to/known_hosts  ("" = skip verification)
         if (strcmp(arg, "--ssh-known-hosts") == 0 && i + 1 < argc) {
             ssh_cfg.known_hosts_path = argv[++i];
             continue;
@@ -144,17 +140,15 @@ int main(int argc, char **argv) {
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
             printf("Usage: gl_terminal [shell]\n");
 #ifdef USESSL
-            printf("       gl_terminal --ssh user@host[:port]\n");
-            printf("                   [--ssh-key path_to_private_key]\n");
-            printf("                   [--ssh-key-pub path_to_public_key]\n");
-            printf("                   [--ssh-password password]\n");
-            printf("                   [--ssh-known-hosts path_to_known_hosts]\n");
+            printf("       gl_terminal --ssh [user@host[:port]]\n");
 #endif
             return 0;
         }
     }
 
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+    SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
+    SDL_Log("[DEBUG] SDL_Init done\n");
 
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -183,6 +177,7 @@ int main(int argc, char **argv) {
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
     SDL_GL_MakeCurrent(window, ctx);
     SDL_GL_SetSwapInterval(1);
+    SDL_Log("[DEBUG] GL context created\n");
 
     apply_theme(0);
     ft_init();
@@ -190,8 +185,10 @@ int main(int argc, char **argv) {
 
     Terminal term;
     term_init(&term);
+    SDL_Log("[DEBUG] term_init done, child=%d\n", (int)term.child);
 
     settings_load();  // applies font size, theme, sound — after ft_init and term_init
+    SDL_Log("[DEBUG] settings_load done\n");
 
     // Scan system fonts and restore saved font choice
     g_font_list = font_scan();
@@ -218,33 +215,132 @@ int main(int argc, char **argv) {
 
     term_resize(&term, win_w, win_h);
 
-    // Connect to local shell or remote SSH session
+    // ---- SSH: async connection state ----------------------------------------
+    // ssh_connect() blocks on network I/O (DNS, TCP, SSH handshake, auth).
+    // We run it on a background thread so the GL window stays alive and
+    // responsive.  The password prompt is handled via a shared request/response
+    // struct: the background thread posts a prompt request, the main loop
+    // renders it, collects the password, and posts the response back.
 #ifdef USESSL
+    enum class SshPhase { IDLE, SETUP, CONNECTING, PROMPTING, ACTIVE, FAILED };
+    // Start in SETUP if any required fields are missing, otherwise go straight to CONNECTING
+    SshPhase ssh_phase = use_ssh
+        ? (ssh_cfg.host.empty() || ssh_cfg.user.empty()
+               ? SshPhase::SETUP : SshPhase::CONNECTING)
+        : SshPhase::IDLE;
+
+    struct PromptReq {
+        std::string prompt;
+        std::string response;
+        bool        pending  = false;
+        bool        answered = false;
+        bool        secret   = false;  // true = echo *, false = echo chars
+        SDL_mutex  *mtx      = nullptr;
+    } prompt_req;
+
+    std::thread   ssh_thread;
+    std::string   ssh_field_input;  // text being typed for any in-window prompt
+    bool          ssh_conn_ok = false;
+    std::atomic<bool> ssh_thread_done{false};
+
+    // Helper: post a prompt request from the main thread to itself (SETUP phase).
+    // SETUP prompts are driven directly by the main loop — no background thread yet.
+    // We reuse prompt_req so the event handler can feed keystrokes into ssh_field_input.
+    auto ssh_begin_prompt = [&](const char *text, bool secret) {
+        term_feed(&term, text, (int)strlen(text));
+        ssh_field_input.clear();
+        prompt_req.secret   = secret;
+        prompt_req.pending  = true;
+        prompt_req.answered = false;
+    };
+
     if (use_ssh) {
-        if (!ssh_connect(ssh_cfg, &term)) {
-            SDL_Log("[SSH] connection failed\n");
-            return 1;
+        prompt_req.mtx = SDL_CreateMutex();
+        SDL_StartTextInput();
+        SDL_Log("[DEBUG] use_ssh=true host='%s' user='%s' port=%d phase=%d\n",
+                ssh_cfg.host.c_str(), ssh_cfg.user.c_str(), ssh_cfg.port, (int)ssh_phase);
+
+        if (ssh_phase == SshPhase::SETUP) {
+            SDL_Log("[DEBUG] entering SETUP phase\n");
+            term_feed(&term, "SSH connection setup\r\n", 21);
+            if (ssh_cfg.host.empty())
+                ssh_begin_prompt("Host: ", false);
+            else if (ssh_cfg.user.empty()) {
+                char p[128];
+                snprintf(p, sizeof(p), "User (%s): ", ssh_cfg.host.c_str());
+                ssh_begin_prompt(p, false);
+            }
+        } else {
+            SDL_Log("[DEBUG] entering CONNECTING phase\n");
+            char connecting_msg[256];
+            snprintf(connecting_msg, sizeof(connecting_msg),
+                     "Connecting to %s@%s:%d …\r\n",
+                     ssh_cfg.user.c_str(), ssh_cfg.host.c_str(), ssh_cfg.port);
+            term_feed(&term, connecting_msg, (int)strlen(connecting_msg));
+
+            ssh_cfg.prompt_password = [&](const char *prompt_str) -> std::string {
+                SDL_LockMutex(prompt_req.mtx);
+                prompt_req.prompt   = prompt_str;
+                prompt_req.response.clear();
+                prompt_req.answered = false;
+                prompt_req.pending  = true;
+                prompt_req.secret   = true;
+                SDL_UnlockMutex(prompt_req.mtx);
+                while (true) {
+                    SDL_LockMutex(prompt_req.mtx);
+                    bool done = prompt_req.answered;
+                    std::string resp = prompt_req.response;
+                    SDL_UnlockMutex(prompt_req.mtx);
+                    if (done) return resp;
+                    SDL_Delay(10);
+                }
+            };
+
+            ssh_thread = std::thread([&]() {
+                SDL_Log("[DEBUG] ssh_thread starting\n");
+                ssh_conn_ok = ssh_connect(ssh_cfg, &term);
+                SDL_Log("[DEBUG] ssh_thread done, ssh_conn_ok=%d\n", (int)ssh_conn_ok);
+                ssh_thread_done.store(true);
+            });
         }
-    } else
+    }
 #endif
-    if (!term_spawn(&term, shell)) {
-        return 1;
+    // ---- local shell (non-SSH) -----------------------------------------------
+#ifdef USESSL
+    if (!use_ssh)
+#endif
+    {
+        SDL_Log("[DEBUG] spawning local shell: %s\n", shell);
+        if (!term_spawn(&term, shell)) {
+            SDL_Log("[DEBUG] term_spawn FAILED\n");
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Failed to spawn shell: %s\r\n"
+                     "Press any key to quit.\r\n", shell);
+            term_feed(&term, msg, (int)strlen(msg));
+        } else {
+            SDL_Log("[DEBUG] term_spawn OK, child=%d\n", (int)term.child);
+        }
     }
 
 #ifdef _WIN32
     SDL_Delay(300);
     TERM_READ();
 #else
-    SDL_Delay(200);
-    TERM_READ();
-    for (int i = 0; i < term.rows * term.cols; i++)
-        term.cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
-    term.cur_row = term.cur_col = 0;
-    term.scroll_top = 0; term.scroll_bot = term.rows - 1;
-    term.state = PS_NORMAL;
-    TERM_WRITE("\n", 1);
-    SDL_Delay(100);
-    TERM_READ();
+#  ifdef USESSL
+    if (!use_ssh)
+#  endif
+    {
+        SDL_Delay(200);
+        term_read(&term);
+        for (int i = 0; i < term.rows * term.cols; i++)
+            term.cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+        term.cur_row = term.cur_col = 0;
+        term.scroll_top = 0; term.scroll_bot = term.rows - 1;
+        term.state = PS_NORMAL;
+        term_write(&term, "\n", 1);
+        SDL_Delay(100);
+        term_read(&term);
+    }
 #endif
 
     SDL_Cursor *cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
@@ -253,6 +349,7 @@ int main(int argc, char **argv) {
 
     uint32_t last_ticks = SDL_GetTicks();
     bool running = true;
+    int  debug_frame = 0;
 
     // Auto-scroll state for selection drag
     int  autoscroll_mouse_x = 0, autoscroll_mouse_y = 0;
@@ -263,6 +360,22 @@ int main(int argc, char **argv) {
         double dt = (now - last_ticks) / 1000.0;
         last_ticks = now;
         bool needs_render = false;
+
+        if (debug_frame < 5) {
+            SDL_Log("[DEBUG] frame %d running=%d use_ssh=%d"
+#ifdef USESSL
+                    " ssh_phase=%d ssh_thread_done=%d"
+#endif
+                    " child=%d\n",
+                    debug_frame, (int)running,
+#ifdef USESSL
+                    (int)use_ssh, (int)ssh_phase, (int)ssh_thread_done.load(),
+#else
+                    0,
+#endif
+                    (int)term.child);
+            debug_frame++;
+        }
 
         // Text blink (500ms)
         term.blink += dt;
@@ -317,11 +430,57 @@ int main(int argc, char **argv) {
             }
         }
 
-        // PTY / SSH read
+        // SSH connection state machine
+#ifdef USESSL
+        if (use_ssh && ssh_phase == SshPhase::SETUP) {
+            needs_render = true;
+        } else if (use_ssh && ssh_phase == SshPhase::CONNECTING) {
+            needs_render = true;
+
+            // Check if background thread posted a password prompt request
+            SDL_LockMutex(prompt_req.mtx);
+            bool has_prompt = prompt_req.pending && !prompt_req.answered;
+            std::string prompt_text = has_prompt ? prompt_req.prompt : "";
+            SDL_UnlockMutex(prompt_req.mtx);
+
+            if (has_prompt) {
+                term_feed(&term, prompt_text.c_str(), (int)prompt_text.size());
+                ssh_field_input.clear();
+                ssh_phase = SshPhase::PROMPTING;
+            }
+
+            if (ssh_thread_done.load()) {
+                ssh_thread.join();
+                if (ssh_conn_ok) {
+                    SDL_Log("[DEBUG] SSH connected -> ACTIVE\n");
+                    ssh_phase = SshPhase::ACTIVE;
+                    SDL_StopTextInput();
+                } else {
+                    SDL_Log("[DEBUG] SSH failed -> FAILED\n");
+                    ssh_phase = SshPhase::FAILED;
+                    const char *msg = "\r\nConnection failed. Press any key to close.\r\n";
+                    term_feed(&term, msg, (int)strlen(msg));
+                    SDL_StopTextInput();
+                }
+                needs_render = true;
+            }
+        } else if (use_ssh && ssh_phase == SshPhase::PROMPTING) {
+            needs_render = true;
+        } else if (use_ssh && ssh_phase == SshPhase::FAILED) {
+            needs_render = true;
+        }
+#endif
+
+        // PTY / SSH read — only when fully connected
+#ifdef USESSL
+        bool ssh_ready = !use_ssh || ssh_phase == SshPhase::ACTIVE;
+#else
+        constexpr bool ssh_ready = true;
+#endif
         {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_sb_count = term.sb_count;
-            bool got_data = TERM_READ();
+            bool got_data = ssh_ready ? TERM_READ() : false;
             if (got_data) {
                 needs_render = true;
                 bool new_lines = (term.sb_count != old_sb_count);
@@ -334,8 +493,11 @@ int main(int argc, char **argv) {
 
         // Child / channel exit check
 #ifdef USESSL
-        if (use_ssh) {
-            if (ssh_channel_closed()) {
+        if (use_ssh && ssh_phase == SshPhase::FAILED) {
+            // Already showing error — running stays true until keypress (handled in events)
+        } else if (use_ssh) {
+            if (ssh_phase == SshPhase::ACTIVE && ssh_channel_closed()) {
+                SDL_Log("[DEBUG] SSH channel closed\n");
                 settings_save();
                 running = false;
             }
@@ -344,12 +506,17 @@ int main(int argc, char **argv) {
         {
 #ifdef _WIN32
             if (term_child_exited()) {
+                SDL_Log("[DEBUG] Windows child exited\n");
                 settings_save();
                 running = false;
             }
 #else
             int status;
-            if (waitpid(term.child, &status, WNOHANG) == term.child) {
+            pid_t wp = (term.child > 0) ? waitpid(term.child, &status, WNOHANG) : 0;
+            if (debug_frame <= 5)
+                SDL_Log("[DEBUG] waitpid child=%d result=%d\n", (int)term.child, (int)wp);
+            if (wp == term.child && wp > 0) {
+                SDL_Log("[DEBUG] local child exited pid=%d\n", (int)term.child);
                 settings_save();
                 running = false;
             }
@@ -361,12 +528,102 @@ int main(int argc, char **argv) {
         while (SDL_PollEvent(&ev)) {
             needs_render = true;
             switch (ev.type) {
-            case SDL_QUIT: settings_save(); running = false; break;
+            case SDL_QUIT: settings_save(); SDL_Log("[DEBUG] SDL_QUIT\n"); running = false; break;
 
             case SDL_KEYDOWN: {
+#ifdef USESSL
+                // SETUP: collecting host, user (with visible echo)
+                // PROMPTING: collecting password (with * echo)
+                if (use_ssh && (ssh_phase == SshPhase::SETUP ||
+                                ssh_phase == SshPhase::PROMPTING)) {
+                    SDL_Keycode sym = ev.key.keysym.sym;
+                    if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
+                        term_feed(&term, "\r\n", 2);
+
+                        if (ssh_phase == SshPhase::SETUP) {
+                            // Store the typed value into the right field
+                            if (ssh_cfg.host.empty())
+                                ssh_cfg.host = ssh_field_input;
+                            else if (ssh_cfg.user.empty())
+                                ssh_cfg.user = ssh_field_input;
+                            ssh_field_input.clear();
+
+                            // Advance to next missing field, or start connecting
+                            if (ssh_cfg.host.empty()) {
+                                ssh_begin_prompt("Host: ", false);
+                            } else if (ssh_cfg.user.empty()) {
+                                char p[128];
+                                snprintf(p, sizeof(p), "User (%s): ", ssh_cfg.host.c_str());
+                                ssh_begin_prompt(p, false);
+                            } else {
+                                // All fields collected — start connection thread
+                                ssh_phase = SshPhase::CONNECTING;
+                                char connecting_msg[256];
+                                snprintf(connecting_msg, sizeof(connecting_msg),
+                                         "Connecting to %s@%s:%d …\r\n",
+                                         ssh_cfg.user.c_str(), ssh_cfg.host.c_str(), ssh_cfg.port);
+                                term_feed(&term, connecting_msg, (int)strlen(connecting_msg));
+
+                                ssh_cfg.prompt_password = [&](const char *prompt_str) -> std::string {
+                                    SDL_LockMutex(prompt_req.mtx);
+                                    prompt_req.prompt   = prompt_str;
+                                    prompt_req.response.clear();
+                                    prompt_req.answered = false;
+                                    prompt_req.pending  = true;
+                                    prompt_req.secret   = true;
+                                    SDL_UnlockMutex(prompt_req.mtx);
+                                    while (true) {
+                                        SDL_LockMutex(prompt_req.mtx);
+                                        bool done = prompt_req.answered;
+                                        std::string resp = prompt_req.response;
+                                        SDL_UnlockMutex(prompt_req.mtx);
+                                        if (done) return resp;
+                                        SDL_Delay(10);
+                                    }
+                                };
+                                ssh_thread = std::thread([&]() {
+                                    ssh_conn_ok = ssh_connect(ssh_cfg, &term);
+                                    ssh_thread_done.store(true);
+                                });
+                            }
+                        } else {
+                            // PROMPTING: post password response to waiting thread
+                            SDL_LockMutex(prompt_req.mtx);
+                            prompt_req.response = ssh_field_input;
+                            prompt_req.pending  = false;
+                            prompt_req.answered = true;
+                            SDL_UnlockMutex(prompt_req.mtx);
+                            ssh_field_input.clear();
+                            ssh_phase = SshPhase::CONNECTING;
+                        }
+                    } else if (sym == SDLK_ESCAPE) {
+                        if (ssh_phase == SshPhase::PROMPTING) {
+                            term_feed(&term, "\r\n", 2);
+                            SDL_LockMutex(prompt_req.mtx);
+                            prompt_req.response.clear();
+                            prompt_req.pending  = false;
+                            prompt_req.answered = true;
+                            SDL_UnlockMutex(prompt_req.mtx);
+                            ssh_field_input.clear();
+                            ssh_phase = SshPhase::CONNECTING;
+                        }
+                        // In SETUP, ignore Escape (keep prompting)
+                    } else if (sym == SDLK_BACKSPACE && !ssh_field_input.empty()) {
+                        ssh_field_input.pop_back();
+                        term_feed(&term, "\b \b", 3);
+                    }
+                    break;
+                }
+                // Any key on failure screen closes the window
+                if (use_ssh && ssh_phase == SshPhase::FAILED) {
+                    SDL_Log("[DEBUG] FAILED keypress -> quit\n");
+                    running = false;
+                    break;
+                }
+                // Still connecting — ignore all normal key input
+                if (!ssh_ready) break;
+#endif
                 if (ev.key.repeat) {
-                    // Block repeat for printable keys — SDL_TEXTINPUT handles those.
-                    // Arrow keys, backspace, delete, etc. still need repeat.
                     SDL_Keycode sym = ev.key.keysym.sym;
                     if (sym >= SDLK_SPACE && sym < SDLK_DELETE)
                         break;
@@ -397,16 +654,31 @@ int main(int argc, char **argv) {
                         ev.key.keysym.sym == SDLK_RSHIFT) break;
                 }
                 handle_key(&term, ev.key.keysym, NULL);
-                SDL_Delay(1);  // give pty/ssh a tick to echo
+                SDL_Delay(1);
                 if (TERM_READ()) needs_render = true;
                 break;
             }
 
             case SDL_TEXTINPUT: {
+#ifdef USESSL
+                if (use_ssh && ssh_phase == SshPhase::SETUP) {
+                    // Visible echo for host/user fields
+                    ssh_field_input += ev.text.text;
+                    term_feed(&term, ev.text.text, (int)strlen(ev.text.text));
+                    break;
+                }
+                if (use_ssh && ssh_phase == SshPhase::PROMPTING) {
+                    // Hidden echo (*) for password
+                    ssh_field_input += ev.text.text;
+                    term_feed(&term, "*", 1);
+                    break;
+                }
+                if (!ssh_ready) break;
+#endif
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
                     TERM_WRITE(ev.text.text, (int)strlen(ev.text.text));
-                    SDL_Delay(1);  // give pty/ssh a tick to echo
+                    SDL_Delay(1);
                     if (TERM_READ()) needs_render = true;
                 }
                 break;
@@ -722,7 +994,11 @@ int main(int argc, char **argv) {
     kitty_shutdown();
     menu_font_shutdown();
 #ifdef USESSL
-    if (use_ssh) ssh_disconnect();
+    if (use_ssh) {
+        if (ssh_thread.joinable()) ssh_thread.join();
+        if (prompt_req.mtx) SDL_DestroyMutex(prompt_req.mtx);
+        ssh_disconnect();
+    }
 #endif
     SDL_Quit();
     ft_shutdown();

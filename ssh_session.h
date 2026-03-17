@@ -34,6 +34,7 @@
 
 #include "terminal.h"
 #include <string>
+#include <functional>
 
 struct SshConfig {
     std::string host;
@@ -42,13 +43,18 @@ struct SshConfig {
     // Authentication: tried in order —
     //   1. SSH agent (if running)
     //   2. key_path  (private key; key_path_pub = key_path + ".pub" if empty)
-    //   3. password  (if non-empty)
+    //   3. password  (if non-empty, or prompt_password is called)
     std::string key_path;       // "" = skip file-based key auth
     std::string key_path_pub;   // "" = derive from key_path
-    std::string password;       // "" = skip password auth
+    std::string password;       // "" = skip password auth (use prompt_password)
     // Optional: known-hosts file for host-key verification.
     // Set to "" to skip verification (INSECURE — use only on trusted networks).
     std::string known_hosts_path;  // default: ~/.ssh/known_hosts
+    // Called when no password was supplied and agent/key auth both failed.
+    // Receives the prompt string (e.g. "user@host's password: ") and must
+    // return the password entered by the user, or "" to abort.
+    // If nullptr, password auth is skipped when no password is supplied.
+    std::function<std::string(const char *prompt)> prompt_password;
 };
 
 // Connect, authenticate, and open a PTY channel.
