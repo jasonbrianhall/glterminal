@@ -515,7 +515,7 @@ jobs:
           **Build:** #${{ github.run_number }}
 
           ### 🖥️ Felix Terminal
-          A fast OpenGL-accelerated terminal emulator for Windows.
+          A fast OpenGL-accelerated terminal emulator for Windows and Linux.
 
           ### 📦 Downloads
           - **FelixTerminal.msi** — Windows installer with Start Menu and optional desktop shortcuts
