@@ -27,7 +27,7 @@ A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text usi
 
 On Fedora/RHEL:
 ```
-sudo dnf install SDL2-devel glew-devel freetype-devel
+sudo dnf install SDL2-devel glew-devel freetype-devel libssh2-devel
 ```
 
 On Debian/Ubuntu:
