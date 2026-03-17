@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
 #include <string>
 
 #ifndef _WIN32
@@ -120,7 +121,11 @@ static bool auth_agent(const std::string &user) {
     struct libssh2_agent_publickey *identity = nullptr, *prev = nullptr;
     bool ok = false;
     while (libssh2_agent_get_identity(agent, &identity, prev) == 0) {
-        if (libssh2_agent_userauth(agent, user.c_str(), identity) == 0) {
+        int rc;
+        while ((rc = libssh2_agent_userauth(agent, user.c_str(), identity)) ==
+               LIBSSH2_ERROR_EAGAIN)
+            SDL_Delay(5);
+        if (rc == 0) {
             SDL_Log("[SSH] authenticated via ssh-agent identity '%s'\n",
                     identity->comment ? identity->comment : "(unnamed)");
             ok = true;
@@ -141,31 +146,75 @@ static bool auth_key(const std::string &user,
                      const std::string &passphrase) {
     std::string pub_path = pub_path_in.empty() ? priv_path + ".pub" : pub_path_in;
 
-    int rc = libssh2_userauth_publickey_fromfile(
-        s_session,
-        user.c_str(),
-        pub_path.c_str(),
-        priv_path.c_str(),
-        passphrase.empty() ? nullptr : passphrase.c_str());
+    // Check files are accessible before handing off to libssh2
+    if (access(priv_path.c_str(), R_OK) != 0)
+        SDL_Log("[SSH] key auth: cannot read private key '%s': %s\n",
+                priv_path.c_str(), strerror(errno));
+    if (access(pub_path.c_str(), R_OK) != 0)
+        SDL_Log("[SSH] key auth: cannot read public key '%s': %s\n",
+                pub_path.c_str(), strerror(errno));
+
+    SDL_Log("[SSH] attempting key auth: user='%s' pub='%s' priv='%s'\n",
+            user.c_str(), pub_path.c_str(), priv_path.c_str());
+
+    int rc;
+    while ((rc = libssh2_userauth_publickey_fromfile(
+                s_session,
+                user.c_str(),
+                pub_path.c_str(),
+                priv_path.c_str(),
+                passphrase.empty() ? nullptr : passphrase.c_str())) ==
+           LIBSSH2_ERROR_EAGAIN)
+        SDL_Delay(5);
 
     if (rc == 0) {
         SDL_Log("[SSH] authenticated via key '%s'\n", priv_path.c_str());
         return true;
     }
-    SDL_Log("%s\n", last_ssh2_error("key auth failed").c_str());
+    SDL_Log("[SSH] key auth failed (rc=%d): %s\n", rc, last_ssh2_error("key auth").c_str());
     return false;
 }
 
 // Attempt password authentication.
 static bool auth_password(const std::string &user, const std::string &password) {
-    int rc = libssh2_userauth_password(
-        s_session, user.c_str(), password.c_str());
+    int rc;
+    while ((rc = libssh2_userauth_password(
+                s_session, user.c_str(), password.c_str())) ==
+           LIBSSH2_ERROR_EAGAIN)
+        SDL_Delay(5);
+
     if (rc == 0) {
         SDL_Log("[SSH] authenticated via password\n");
         return true;
     }
     SDL_Log("%s\n", last_ssh2_error("password auth failed").c_str());
     return false;
+}
+
+// Map libssh2 hostkey type integer to the corresponding LIBSSH2_KNOWNHOST_KEY_*
+// flag.  The old code used a ternary that fell back to SSHDSS for anything
+// non-RSA, which breaks Ed25519 and ECDSA — the key types preferred by all
+// modern OpenSSH servers.
+static int hostkey_type_to_knownhost_flag(int key_type) {
+    switch (key_type) {
+    case LIBSSH2_HOSTKEY_TYPE_RSA:       return LIBSSH2_KNOWNHOST_KEY_SSHRSA;
+#ifdef LIBSSH2_HOSTKEY_TYPE_ECDSA_256
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_256: return LIBSSH2_KNOWNHOST_KEY_ECDSA_256;
+#endif
+#ifdef LIBSSH2_HOSTKEY_TYPE_ECDSA_384
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_384: return LIBSSH2_KNOWNHOST_KEY_ECDSA_384;
+#endif
+#ifdef LIBSSH2_HOSTKEY_TYPE_ECDSA_521
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_521: return LIBSSH2_KNOWNHOST_KEY_ECDSA_521;
+#endif
+#ifdef LIBSSH2_HOSTKEY_TYPE_ED25519
+    case LIBSSH2_HOSTKEY_TYPE_ED25519:   return LIBSSH2_KNOWNHOST_KEY_ED25519;
+#endif
+    default:
+        SDL_Log("[SSH] WARNING: unknown host key type %d — falling back to DSS flag\n",
+                key_type);
+        return LIBSSH2_KNOWNHOST_KEY_SSHDSS;
+    }
 }
 
 // Verify the server's host key against the known_hosts file.
@@ -210,9 +259,7 @@ static bool verify_host_key(const std::string &host, int port,
 
     int type_mask = LIBSSH2_KNOWNHOST_TYPE_PLAIN
                   | LIBSSH2_KNOWNHOST_KEYENC_RAW
-                  | (key_type == LIBSSH2_HOSTKEY_TYPE_RSA
-                        ? LIBSSH2_KNOWNHOST_KEY_SSHRSA
-                        : LIBSSH2_KNOWNHOST_KEY_SSHDSS);
+                  | hostkey_type_to_knownhost_flag(key_type);
 
     struct libssh2_knownhost *found = nullptr;
     int check = libssh2_knownhost_checkp(

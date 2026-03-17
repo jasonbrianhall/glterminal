@@ -259,7 +259,7 @@ int main(int argc, char **argv) {
         if (ssh_phase == SshPhase::SETUP) {
             term_feed(&term, "SSH connection setup\r\n", 21);
             if (ssh_cfg.host.empty())
-                ssh_begin_prompt("Host: ", false);
+                ssh_begin_prompt("\r\nHost: ", false);
             else if (ssh_cfg.user.empty()) {
                 char p[128];
                 snprintf(p, sizeof(p), "User (%s): ", ssh_cfg.host.c_str());
