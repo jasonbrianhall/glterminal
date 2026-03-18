@@ -22,6 +22,7 @@
 #include "font_manager.h"
 #ifdef USESSH
 #  include "ssh_session.h"
+#  include "sftp_overlay.h"
 #endif
 
 #include <SDL2/SDL.h>
@@ -145,6 +146,12 @@ int main(int argc, char **argv) {
             return 0;
         }
     }
+
+    // Disable X11 input method composition (IBus/fcitx intercept Ctrl+Shift+U
+    // for Unicode entry before SDL sees it with correct mod state).
+    // A terminal handles its own input — we don't want IME interference.
+    SDL_SetHint(SDL_HINT_IME_SHOW_UI, "0");
+    SDL_SetHint("SDL_IM_MODULE", "");       // empty = disable input method module
 
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
     SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
@@ -293,6 +300,7 @@ int main(int argc, char **argv) {
 
             ssh_thread = std::thread([&]() {
                 ssh_conn_ok = ssh_connect(ssh_cfg, &term);
+                if (ssh_conn_ok) sftp_init();
                 ssh_thread_done.store(true);
             });
         }
@@ -335,6 +343,59 @@ int main(int argc, char **argv) {
     SDL_Cursor *cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
     SDL_Cursor *cursor_hand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
     SDL_SetCursor(cursor_ibeam);
+
+#ifdef USESSH
+    // Get the remote cwd by running 'pwd' on a temporary exec channel.
+    // Falls back to "/" on any failure.
+    auto guess_remote_cwd = [&]() -> std::string {
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        if (!sess) return "/";
+
+        libssh2_session_set_blocking(sess, 1);
+
+        LIBSSH2_CHANNEL *ch = nullptr;
+        while (!(ch = libssh2_channel_open_session(sess))) {
+            if (libssh2_session_last_errno(sess) != LIBSSH2_ERROR_EAGAIN) break;
+            SDL_Delay(5);
+        }
+        if (!ch) {
+            libssh2_session_set_blocking(sess, 0);
+            SDL_Log("[SFTP] guess_remote_cwd: could not open channel, using /\n");
+            return "/";
+        }
+
+        int rc;
+        while ((rc = libssh2_channel_exec(ch, "pwd")) == LIBSSH2_ERROR_EAGAIN)
+            SDL_Delay(5);
+
+        std::string result;
+        if (rc == 0) {
+            char buf[4096] = {};
+            ssize_t n = libssh2_channel_read(ch, buf, sizeof(buf) - 1);
+            if (n > 0) {
+                result = buf;
+                // Strip trailing newline/whitespace
+                while (!result.empty() &&
+                       (result.back() == '\n' || result.back() == '\r' || result.back() == ' '))
+                    result.pop_back();
+            }
+        }
+
+        libssh2_channel_send_eof(ch);
+        libssh2_channel_wait_eof(ch);
+        libssh2_channel_close(ch);
+        libssh2_channel_wait_closed(ch);
+        libssh2_channel_free(ch);
+        libssh2_session_set_blocking(sess, 0);
+
+        if (result.empty() || result[0] != '/') {
+            SDL_Log("[SFTP] guess_remote_cwd: got '%s', falling back to /\n", result.c_str());
+            return "/";
+        }
+        SDL_Log("[SFTP] remote cwd: %s\n", result.c_str());
+        return result;
+    };
+#endif
 
     uint32_t last_ticks = SDL_GetTicks();
     bool running = true;
@@ -405,6 +466,7 @@ int main(int argc, char **argv) {
 
         // SSH connection state machine
 #ifdef USESSH
+        if (g_sftp.visible) needs_render = true;
         if (use_ssh && ssh_phase == SshPhase::SETUP) {
             needs_render = true;
         } else if (use_ssh && ssh_phase == SshPhase::CONNECTING) {
@@ -562,6 +624,7 @@ int main(int argc, char **argv) {
                                 };
                                 ssh_thread = std::thread([&]() {
                                     ssh_conn_ok = ssh_connect(ssh_cfg, &term);
+                                    if (ssh_conn_ok) sftp_init();
                                     ssh_thread_done.store(true);
                                 });
                             }
@@ -602,6 +665,33 @@ int main(int argc, char **argv) {
                 // Still connecting — ignore all normal key input
                 if (!ssh_ready) break;
 #endif
+                // SFTP overlay — forward all keys when visible
+#ifdef USESSH
+                if (g_sftp.visible) {
+                    sftp_overlay_keydown(ev.key.keysym.sym);
+                    needs_render = true;
+                    break;
+                }
+                // F2 = upload, F3 = download
+                if (use_ssh && ssh_active()) {
+                    if (ev.key.keysym.sym == SDLK_F2) {
+                        SDL_Log("[SFTP] F2 upload triggered\n");
+                        SDL_GetWindowSize(window, &win_w, &win_h);
+                        sftp_overlay_open(SftpOverlayMode::UPLOAD,
+                                          guess_remote_cwd().c_str(), win_w, win_h);
+                        needs_render = true;
+                        break;
+                    }
+                    if (ev.key.keysym.sym == SDLK_F3) {
+                        SDL_Log("[SFTP] F3 download triggered\n");
+                        SDL_GetWindowSize(window, &win_w, &win_h);
+                        sftp_overlay_open(SftpOverlayMode::DOWNLOAD,
+                                          guess_remote_cwd().c_str(), win_w, win_h);
+                        needs_render = true;
+                        break;
+                    }
+                }
+#endif
                 if (ev.key.repeat) {
                     SDL_Keycode sym = ev.key.keysym.sym;
                     if (sym >= SDLK_SPACE && sym < SDLK_DELETE)
@@ -640,6 +730,8 @@ int main(int argc, char **argv) {
 
             case SDL_TEXTINPUT: {
 #ifdef USESSH
+                // Drop text input entirely when the SFTP overlay is up
+                if (g_sftp.visible) break;
                 if (use_ssh && ssh_phase == SshPhase::SETUP) {
                     // Visible echo for host/user fields
                     ssh_field_input += ev.text.text;
@@ -952,6 +1044,9 @@ int main(int argc, char **argv) {
             // Menu renders after post-process so it's never distorted
             glViewport(0, 0, win_w, win_h);
             menu_render(&g_menu);
+#ifdef USESSH
+            sftp_overlay_render(win_w, win_h);
+#endif
 
             SDL_GL_SwapWindow(window);
 
@@ -979,6 +1074,7 @@ int main(int argc, char **argv) {
         ssh_abort.store(true);
         if (ssh_thread.joinable()) ssh_thread.join();
         if (prompt_req.mtx) SDL_DestroyMutex(prompt_req.mtx);
+        sftp_shutdown();
         ssh_disconnect();
     }
 #endif

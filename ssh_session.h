@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef USESSH
+#include <libssh2.h>
+#endif
+
 // ============================================================================
 // SSH SESSION  — libssh2-backed remote shell, compiled only when USESSH is
 // defined.  Mirrors the term_pty read/write interface so the main loop needs
@@ -79,7 +83,12 @@ bool ssh_channel_closed();
 // Close channel and free libssh2 resources.
 void ssh_disconnect();
 
+#include <libssh2.h>
+
 // Returns true if an SSH session is currently active.
 bool ssh_active();
+
+// Returns the raw libssh2 session pointer (used by sftp_overlay).
+LIBSSH2_SESSION *ssh_get_session();
 
 #endif // USESSH
