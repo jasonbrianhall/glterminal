@@ -1,5 +1,17 @@
 # Felix Terminal
 
+![Felix the Lovebird](icon.png)
+
+*Felix — the chaos birdie himself*
+
+## The Story Behind the Name
+
+Felix Terminal is named after Felix, a lovebird whose life was tragically cut short. Felix had a particular fondness for perching on top of computer monitors and supervising whatever was happening on screen — and occasionally causing as much mischief as a small bird possibly could. In his honor, this terminal carries his name. Every time it opens, a little chaos birdie lives on.
+
+Rest easy, Felix. 🐦
+
+---
+
 A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text using FreeType triangles via OpenGL 3.3 — no GTK, no Qt, no desktop toolkit dependency.
 
 ## Features
