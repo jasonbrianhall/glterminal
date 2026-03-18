@@ -531,5 +531,6 @@ void ssh_disconnect() {
 bool ssh_active() { return s_active; }
 
 LIBSSH2_SESSION *ssh_get_session() { return s_session; }
+int              ssh_get_socket()  { return s_sock; }
 
 #endif // USESSH

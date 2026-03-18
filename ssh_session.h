@@ -90,5 +90,6 @@ bool ssh_active();
 
 // Returns the raw libssh2 session pointer (used by sftp_overlay).
 LIBSSH2_SESSION *ssh_get_session();
+int              ssh_get_socket();
 
 #endif // USESSH

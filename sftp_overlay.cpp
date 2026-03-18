@@ -23,10 +23,26 @@
 #  include <sys/stat.h>
 #  include <dirent.h>
 #  include <unistd.h>
+#  include <sys/select.h>
 #else
 #  include <windows.h>
 #  include <shlobj.h>
 #endif
+
+// Wait for the socket to become readable or writable, with a timeout.
+// Returns >0 on activity, 0 on timeout, <0 on error.
+static int waitsocket(int sock, LIBSSH2_SESSION *sess) {
+    struct timeval tv;
+    tv.tv_sec  = 10;
+    tv.tv_usec = 0;
+    fd_set fd, *rfd = nullptr, *wfd = nullptr;
+    FD_ZERO(&fd);
+    FD_SET(sock, &fd);
+    int dir = libssh2_session_block_directions(sess);
+    if (dir & LIBSSH2_SESSION_BLOCK_INBOUND)  rfd = &fd;
+    if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) wfd = &fd;
+    return select(sock + 1, rfd, wfd, nullptr, &tv);
+}
 
 // ============================================================================
 // EXTERNAL STATE
@@ -296,53 +312,60 @@ static bool do_download(const char *remote_path, const char *filename,
     snprintf(local_full,  sizeof(local_full),  "%s/%s", local_dir,   filename);
 
     LIBSSH2_SESSION *sess = ssh_get_session();
-    libssh2_session_set_blocking(sess, 1);
+    int              sock = ssh_get_socket();
+    libssh2_session_set_blocking(sess, 0);
 
+    // Stat for size
     LIBSSH2_SFTP_ATTRIBUTES attrs{};
     uint64_t file_size = 0;
-    if (libssh2_sftp_stat(s_sftp, remote_full, &attrs) == 0 &&
-        (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE))
-        file_size = attrs.filesize;
+    { int rc; while ((rc = libssh2_sftp_stat(s_sftp, remote_full, &attrs)) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
+      if (rc == 0 && (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE)) file_size = attrs.filesize; }
 
-    LIBSSH2_SFTP_HANDLE *fh = libssh2_sftp_open(s_sftp, remote_full, LIBSSH2_FXF_READ, 0);
-    if (!fh) {
-        snprintf(status, stsz, "Error: cannot open remote '%s' (sftp %lu)",
-                 filename, libssh2_sftp_last_error(s_sftp));
-        libssh2_session_set_blocking(sess, 0);
-        return false;
+    // Open remote file
+    LIBSSH2_SFTP_HANDLE *fh = nullptr;
+    while (!fh) {
+        fh = libssh2_sftp_open(s_sftp, remote_full, LIBSSH2_FXF_READ, 0);
+        if (!fh) {
+            if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
+            snprintf(status, stsz, "Error: cannot open remote '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
+            libssh2_session_set_blocking(sess, 0); return false;
+        }
     }
+
     FILE *out = fopen(local_full, "wb");
     if (!out) {
         snprintf(status, stsz, "Error: cannot create local '%s': %s", local_full, strerror(errno));
-        libssh2_sftp_close(fh); libssh2_session_set_blocking(sess, 0);
-        return false;
+        while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
+        libssh2_session_set_blocking(sess, 0); return false;
     }
 
-    char buf[65536];
-    ssize_t n;
+    char     buf[32768];
+    ssize_t  n;
     uint64_t total = 0;
+    bool     ok    = true;
     s_progress.store(0.f);
 
-    while ((n = libssh2_sftp_read(fh, buf, sizeof(buf))) > 0) {
-        fwrite(buf, 1, n, out);
-        total += n;
-        if (file_size > 0)
-            s_progress.store((float)total / (float)file_size);
+    for (;;) {
+        n = libssh2_sftp_read(fh, buf, sizeof(buf));
+        if (n == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
+        if (n < 0) { snprintf(status, stsz, "Error reading '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp)); ok = false; break; }
+        if (n == 0) break;
+        if (fwrite(buf, 1, (size_t)n, out) != (size_t)n) {
+            snprintf(status, stsz, "Error writing local '%s': %s", local_full, strerror(errno)); ok = false; break;
+        }
+        total += (uint64_t)n;
+        if (file_size > 0) s_progress.store((float)total / (float)file_size);
         char done_sz[32], total_sz[32];
         fmt_size(total, done_sz, sizeof(done_sz));
         fmt_size(file_size > 0 ? file_size : total, total_sz, sizeof(total_sz));
-        snprintf(g_sftp.status, sizeof(g_sftp.status),
-                 "Downloading '%s'  %s / %s", filename, done_sz, total_sz);
+        snprintf(g_sftp.status, sizeof(g_sftp.status), "Downloading '%s'  %s / %s", filename, done_sz, total_sz);
     }
 
     fclose(out);
-    libssh2_sftp_close(fh);
+    while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
     libssh2_session_set_blocking(sess, 0);
 
-    if (n < 0) {
-        snprintf(status, stsz, "Error reading '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
-        return false;
-    }
+    if (!ok) return false;
     char sz[32]; fmt_size(total, sz, sizeof(sz));
     snprintf(status, stsz, "Downloaded '%s'  →  %s  (%s)", filename, local_dir, sz);
     s_progress.store(1.f);
@@ -366,53 +389,56 @@ static bool do_upload(const char *local_path, const char *filename,
 #endif
 
     FILE *in = fopen(local_full, "rb");
-    if (!in) {
-        snprintf(status, stsz, "Error: cannot open local '%s': %s", local_full, strerror(errno));
-        return false;
-    }
+    if (!in) { snprintf(status, stsz, "Error: cannot open local '%s': %s", local_full, strerror(errno)); return false; }
 
     LIBSSH2_SESSION *sess = ssh_get_session();
-    libssh2_session_set_blocking(sess, 1);
+    int              sock = ssh_get_socket();
+    libssh2_session_set_blocking(sess, 0);
 
-    LIBSSH2_SFTP_HANDLE *fh = libssh2_sftp_open(s_sftp, remote_full,
-        LIBSSH2_FXF_WRITE|LIBSSH2_FXF_CREAT|LIBSSH2_FXF_TRUNC,
-        LIBSSH2_SFTP_S_IRUSR|LIBSSH2_SFTP_S_IWUSR|LIBSSH2_SFTP_S_IRGRP|LIBSSH2_SFTP_S_IROTH);
-    if (!fh) {
-        snprintf(status, stsz, "Error: cannot create remote '%s' (sftp %lu)",
-                 remote_full, libssh2_sftp_last_error(s_sftp));
-        fclose(in); libssh2_session_set_blocking(sess, 0);
-        return false;
+    // Open remote file
+    LIBSSH2_SFTP_HANDLE *fh = nullptr;
+    while (!fh) {
+        fh = libssh2_sftp_open(s_sftp, remote_full,
+            LIBSSH2_FXF_WRITE|LIBSSH2_FXF_CREAT|LIBSSH2_FXF_TRUNC,
+            LIBSSH2_SFTP_S_IRUSR|LIBSSH2_SFTP_S_IWUSR|LIBSSH2_SFTP_S_IRGRP|LIBSSH2_SFTP_S_IROTH);
+        if (!fh) {
+            if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
+            snprintf(status, stsz, "Error: cannot create remote '%s' (sftp %lu)", remote_full, libssh2_sftp_last_error(s_sftp));
+            fclose(in); libssh2_session_set_blocking(sess, 0); return false;
+        }
     }
 
-    char buf[65536];
-    size_t n;
+    // 32KB chunks — sweet spot for libssh2 SFTP window
+    char     buf[32768];
+    size_t   nread;
     uint64_t total = 0;
-    bool ok = true;
+    bool     ok    = true;
     s_progress.store(0.f);
 
-    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+    while ((nread = fread(buf, 1, sizeof(buf), in)) > 0) {
         size_t sent = 0;
-        while (sent < n) {
-            ssize_t rc = libssh2_sftp_write(fh, buf+sent, n-sent);
+        while (sent < nread) {
+            ssize_t rc = libssh2_sftp_write(fh, buf + sent, nread - sent);
+            if (rc == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
             if (rc < 0) {
-                snprintf(status, stsz, "Error writing '%s' (sftp %lu)",
-                         filename, libssh2_sftp_last_error(s_sftp));
+                snprintf(status, stsz, "Error writing '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
                 ok = false; goto done;
             }
-            sent  += rc;
-            total += rc;
+            sent  += (size_t)rc;
+            total += (size_t)rc;
         }
         if (file_size > 0) s_progress.store((float)total / (float)file_size);
         char done_sz[32], total_sz[32];
         fmt_size(total, done_sz, sizeof(done_sz));
         fmt_size(file_size > 0 ? file_size : total, total_sz, sizeof(total_sz));
-        snprintf(g_sftp.status, sizeof(g_sftp.status),
-                 "Uploading '%s'  %s / %s", filename, done_sz, total_sz);
+        snprintf(g_sftp.status, sizeof(g_sftp.status), "Uploading '%s'  %s / %s", filename, done_sz, total_sz);
     }
+    if (!ok) goto done;
+    if (ferror(in)) { snprintf(status, stsz, "Error reading local '%s'", local_full); ok = false; }
 
 done:
     fclose(in);
-    libssh2_sftp_close(fh);
+    while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
     libssh2_session_set_blocking(sess, 0);
 
     if (ok) {
