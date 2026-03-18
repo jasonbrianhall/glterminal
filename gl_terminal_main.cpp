@@ -466,7 +466,24 @@ int main(int argc, char **argv) {
 
         // SSH connection state machine
 #ifdef USESSH
-        if (g_sftp.visible) needs_render = true;
+        // Overlay: only redraw when progress actually changed or transfer just finished.
+        // When idle (no transfer running), a 30ms sleep makes keyboard nav responsive
+        // without spinning the CPU.
+        if (g_sftp.visible) {
+            static float s_last_progress = -1.f;
+            static bool  s_last_transferring = false;
+            float  cur_prog   = g_sftp.transferring ? sftp_progress() : g_sftp.progress;
+            bool   cur_xfer   = g_sftp.transferring;
+            bool   xfer_done  = s_last_transferring && !cur_xfer;  // transition: was running, now done
+            if (cur_prog != s_last_progress || xfer_done || cur_xfer) {
+                needs_render       = true;
+                s_last_progress    = cur_prog;
+            }
+            s_last_transferring = cur_xfer;
+            // Throttle overlay to ~33fps: responsive for keyboard nav, smooth for progress bar
+            if (!needs_render)
+                SDL_Delay(30);
+        }
         if (use_ssh && ssh_phase == SshPhase::SETUP) {
             needs_render = true;
         } else if (use_ssh && ssh_phase == SshPhase::CONNECTING) {

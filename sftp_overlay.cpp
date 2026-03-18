@@ -125,6 +125,8 @@ void sftp_transfer_join() {
     if (s_transfer_thread.joinable()) s_transfer_thread.join();
 }
 
+float sftp_progress() { return s_progress.load(); }
+
 void sftp_shutdown() {
     sftp_transfer_join();
     if (s_sftp) { libssh2_sftp_shutdown(s_sftp); s_sftp = nullptr; }

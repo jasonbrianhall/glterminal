@@ -69,4 +69,7 @@ void sftp_shutdown();
 // Call before sftp_shutdown if a transfer may be in progress (e.g. on quit).
 void sftp_transfer_join();
 
+// Returns current transfer progress 0..1 (thread-safe).
+float sftp_progress();
+
 #endif // USESSH
