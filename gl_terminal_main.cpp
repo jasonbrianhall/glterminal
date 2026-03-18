@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
             // Missing user/host will be prompted in the GL window
             continue;
         }
-        if ((strcmp(arg, "--ssh-key") == 0 || strcmp(arg, "-ssh-key") == 0) && i + 1 < argc) {
+        if ((strcmp(arg, "--ssh-key") == 0 || strcmp(arg, "-ssh-key") == 0 || strcmp(arg, "-i") == 0) && i + 1 < argc) {
             ssh_cfg.key_path = argv[++i];
             continue;
         }
@@ -139,10 +139,26 @@ int main(int argc, char **argv) {
 
         // --help / -h
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-            printf("Usage: gl_terminal [shell]\n");
+            printf("Usage: flt [shell]\n");
+            printf("       flt [options]\n\n");
+            printf("Options:\n");
+            printf("  [shell]                     Command to run instead of default shell\n");
 #ifdef USESSH
-            printf("       gl_terminal --ssh [user@host[:port]]\n");
+            printf("\nSSH options:\n");
+            printf("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
+            printf("  -i <path>                   Private key file (alias: --ssh-key)\n");
+            printf("  --ssh-key <path>            Private key file for public key auth\n");
+            printf("  --ssh-key-pub <path>        Public key file (derived from key path if omitted)\n");
+            printf("  --ssh-password <pass>       Password auth (prefer agent or key)\n");
+            printf("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
 #endif
+            printf("\nKeyboard shortcuts:\n");
+            printf("  F2                          SFTP upload browser (SSH sessions only)\n");
+            printf("  F3                          SFTP download browser (SSH sessions only)\n");
+            printf("  F11                         Toggle full screen\n");
+            printf("  Ctrl+Scroll                 Resize font\n");
+            printf("  Shift+PageUp/Down           Scroll scrollback buffer\n");
+            printf("  Ctrl+Click                  Open URL in browser\n");
             return 0;
         }
     }

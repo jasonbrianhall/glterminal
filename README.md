@@ -15,15 +15,55 @@ A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text usi
 - Alternate screen buffer (used by vim, less, etc.)
 - Configurable themes and window opacity
 - Spawn additional terminal windows
-- Works with /bin/bash, cmd.exe, powershell, and many more.
+- Works with /bin/bash, cmd.exe, powershell, and many more
 - Kitty Graphics Support (static, no animation) e.g. timg icon.png — Windows support untested
 - URL detection with Ctrl+Click to open in browser
+- System font selection from any installed monospace font
+
+## SSH Support (build with `-DUSESSH`)
+
+- Built-in SSH client via **libssh2** — no external SSH binary required
+- Authentication: SSH agent (including **Pageant** on Windows), public key file, and password
+- **CAC/PIV smart card support** via Pageant — works out of the box with standard DoD/government PKCS#11 middleware (e.g. OpenSC feeding keys into Pageant)
+- Host key verification against `~/.ssh/known_hosts`
+- Ed25519, ECDSA, and RSA host key types supported
+- Keepalive to prevent server-side idle disconnect
+- PTY resize forwarded to remote on window resize
+- Password prompt rendered natively inside the terminal window (no external dialog)
+- Launch with `--ssh [user@host[:port]]` or via the **New Terminal → SSH Session** context menu item
+
+## SFTP File Transfer
+
+- Integrated graphical SFTP browser — no separate client needed
+- **F2** — Upload: left panel browses local files, right panel browses remote destination
+- **F3** — Download: right panel browses remote files, left panel selects local destination
+- Tab switches focus between panels; Enter opens directories; Backspace navigates up; Space transfers
+- Real-time progress bar with bytes transferred / total during upload and download
+- Transfers run on a background thread — terminal remains responsive during large file transfers
+- Remote working directory auto-detected via `pwd` on session open
+- Downloads saved to user-chosen local directory (defaults to `~/Downloads/FelixTerminal`)
+- SFTP subsystem shares the existing SSH session — no second connection or re-authentication
+
+## GL Render Modes
+
+Post-process effects applied after terminal rendering — multiple modes can be active simultaneously:
+
+| Mode | Description |
+|---|---|
+| Normal | Standard rendering |
+| CRT | Scanline flicker and phosphor glow |
+| LCD | Subpixel grid overlay |
+| VHS | Noise, chroma bleed, and tracking artifacts |
+| Focus | Vignette darkening outside the active row |
+| C64 | Commodore 64 palette and chunky pixel look |
+| Composite | NTSC composite color bleeding |
 
 ## Dependencies
 
 - SDL2
 - OpenGL / GLEW
 - FreeType2
+- libssh2 *(optional — required for SSH and SFTP support)*
 
 On Fedora/RHEL:
 ```
@@ -41,12 +81,16 @@ sudo apt install libsdl2-dev libglew-dev libfreetype-dev libssh2-1-dev
 make
 ```
 
-or for Windows (requires mingw)
+SSH/SFTP support (recommended):
+```
+make USESSH=1
+```
+
+or for Windows (requires mingw):
 
 ```
 make windows
 ```
-
 
 The fonts are embedded as base64-encoded headers — no external font files required.
 
@@ -56,11 +100,19 @@ The fonts are embedded as base64-encoded headers — no external font files requ
 ./gl_terminal [command]
 ```
 
-Optionally pass a command to run instead of the default shell, e.g.:
+Optionally pass a command to run instead of the default shell:
 
 ```
 ./gl_terminal htop
-./gl_terminal ssh user@host
+```
+
+SSH session (opens connection dialog if host/user not specified):
+
+```
+./gl_terminal --ssh
+./gl_terminal --ssh user@host
+./gl_terminal --ssh user@host:2222
+./gl_terminal --ssh-key ~/.ssh/id_ed25519 --ssh user@host
 ```
 
 ## Keyboard Shortcuts
@@ -68,13 +120,16 @@ Optionally pass a command to run instead of the default shell, e.g.:
 | Shortcut | Action |
 |---|---|
 | `Ctrl+C` (with selection) | Copy selection |
-| `Ctrl+SHIFT+C` (with selection) | Copy selection as HTML |
+| `Ctrl+Shift+C` (with selection) | Copy selection as HTML |
 | `Ctrl+V` | Paste |
 | `Ctrl+Shift+V` | Paste |
 | `Ctrl+Scroll Up/Down` | Increase / decrease font size |
 | `Ctrl+Shift+Scroll` | Increase / decrease font size (4× step) |
 | `Ctrl+Click` | Open URL in browser |
-| `F11` | Toggle Full Screen |
+| `Shift+PageUp / Shift+PageDown` | Scroll scrollback buffer |
+| `F2` | Open SFTP upload browser *(SSH sessions only)* |
+| `F3` | Open SFTP download browser *(SSH sessions only)* |
+| `F11` | Toggle full screen |
 
 
 ## Mouse
@@ -90,7 +145,8 @@ Optionally pass a command to run instead of the default shell, e.g.:
 
 ## Context Menu (Right Click)
 
-- **New Terminal** — spawn a new window
+- **New Terminal** — spawn a new local terminal window
+- **New Terminal → SSH Session** — open a new SSH session window
 - **Copy** — copy selection as plain text
 - **Copy as HTML** — copy with color and style markup
 - **Copy as ANSI** — copy with ANSI escape codes
@@ -98,10 +154,26 @@ Optionally pass a command to run instead of the default shell, e.g.:
 - **Reset** — clear screen and reset cursor
 - **Themes** — submenu to switch color themes
 - **Opacity** — submenu to set window transparency
-- **Sound** — enables or disables sound
+- **Render Mode** — submenu to toggle GL post-process effects
+- **Fonts** — submenu to select from installed system monospace fonts
+- **Sound** — enables or disables CRT audio effect
 - **Fight Mode** — have two guys fight in your console
-- **Bouncing Circle** — a circle with a little ball that bounces around in your console
+- **Bouncing Circle** — a bouncing ball overlay
+- **Select All**
 - **Quit**
+
+## SSH Command-Line Flags
+
+All `--ssh-*` flags also accept a single-dash form (e.g. `-ssh-key`).
+
+| Flag | Description |
+|:---|:---|
+| `--ssh [user@host[:port]]` | Connect via SSH. Host and user are prompted inside the window if omitted. Port defaults to 22. |
+| `-i <path>` | Private key file (same as `--ssh-key`, matches standard `ssh` convention). |
+| `--ssh-key <path>` | Private key file for public key authentication. |
+| `--ssh-key-pub <path>` | Public key file. Derived from `--ssh-key` path (appending `.pub`) if omitted. |
+| `--ssh-password <pass>` | Password. Not recommended — prefer agent or key auth. |
+| `--ssh-known-hosts <path>` | Known hosts file. Default: `~/.ssh/known_hosts`. Set to empty string to skip host verification (insecure). |
 
 ## Themes
 
