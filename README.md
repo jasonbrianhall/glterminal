@@ -28,7 +28,7 @@ A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text usi
 - Configurable themes and window opacity
 - Spawn additional terminal windows
 - Works with /bin/bash, cmd.exe, powershell, and many more
-- Kitty Graphics Support (static, no animation) e.g. timg icon.png — Windows support untested
+- Kitty Graphics Support with Animated GIF Support e.g. timg icon.png — Windows support untested
 - URL detection with Ctrl+Click to open in browser
 - System font selection from any installed monospace font
 
