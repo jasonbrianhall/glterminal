@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string>
+#include <mutex>
 
 #ifndef _WIN32
 #  include <sys/socket.h>
@@ -36,6 +37,11 @@ static LIBSSH2_SESSION *s_session  = nullptr;
 static LIBSSH2_CHANNEL *s_channel  = nullptr;
 static int              s_sock     = -1;   // TCP socket fd
 static bool             s_active   = false;
+
+// All libssh2 calls on this session must hold this mutex.
+// The SFTP transfer thread acquires it for the duration of a transfer;
+// the main thread holds it during ssh_read / ssh_write.
+static std::mutex s_session_mutex;
 
 // ============================================================================
 // HELPERS
@@ -448,6 +454,9 @@ bool ssh_read(Terminal *t) {
     char buf[4096];
     bool got_data = false;
 
+    std::unique_lock<std::mutex> lock(s_session_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return false;  // transfer thread holds it — skip this tick
+
     for (;;) {
         ssize_t n = libssh2_channel_read(s_channel, buf, sizeof(buf));
         if (n > 0) {
@@ -472,6 +481,7 @@ void ssh_write(Terminal *t, const char *buf, int n) {
     (void)t;
     if (!s_active || !s_channel || n <= 0) return;
 
+    std::lock_guard<std::mutex> lock(s_session_mutex);
     int sent = 0;
     while (sent < n) {
         ssize_t rc = libssh2_channel_write(s_channel, buf + sent, (size_t)(n - sent));
@@ -532,5 +542,7 @@ bool ssh_active() { return s_active; }
 
 LIBSSH2_SESSION *ssh_get_session() { return s_session; }
 int              ssh_get_socket()  { return s_sock; }
+void             ssh_session_lock()   { s_session_mutex.lock(); }
+void             ssh_session_unlock() { s_session_mutex.unlock(); }
 
 #endif // USESSH

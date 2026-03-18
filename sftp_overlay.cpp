@@ -307,6 +307,12 @@ static void fmt_size(uint64_t sz, char *buf, int bufsz) {
 // TRANSFER  (runs on background thread — no GL calls allowed)
 // ============================================================================
 
+// RAII wrapper so every return path in do_download/do_upload unlocks cleanly.
+struct SessionLock {
+    SessionLock()  { ssh_session_lock(); }
+    ~SessionLock() { ssh_session_unlock(); }
+};
+
 static bool do_download(const char *remote_path, const char *filename,
                         const char *local_dir, char *status, int stsz) {
     char remote_full[4096], local_full[4096];
@@ -315,6 +321,10 @@ static bool do_download(const char *remote_path, const char *filename,
 
     LIBSSH2_SESSION *sess = ssh_get_session();
     int              sock = ssh_get_socket();
+
+    // Hold the session mutex for the entire transfer — libssh2 is not thread-safe
+    // and ssh_read/ssh_write on the main thread must not race with us.
+    SessionLock session_lock;
     libssh2_session_set_blocking(sess, 0);
 
     // Stat for size
@@ -330,7 +340,7 @@ static bool do_download(const char *remote_path, const char *filename,
         if (!fh) {
             if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
             snprintf(status, stsz, "Error: cannot open remote '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
-            libssh2_session_set_blocking(sess, 0); return false;
+            return false;
         }
     }
 
@@ -338,7 +348,7 @@ static bool do_download(const char *remote_path, const char *filename,
     if (!out) {
         snprintf(status, stsz, "Error: cannot create local '%s': %s", local_full, strerror(errno));
         while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
-        libssh2_session_set_blocking(sess, 0); return false;
+        return false;
     }
 
     char     buf[32768];
@@ -365,7 +375,6 @@ static bool do_download(const char *remote_path, const char *filename,
 
     fclose(out);
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
-    libssh2_session_set_blocking(sess, 0);
 
     if (!ok) return false;
     char sz[32]; fmt_size(total, sz, sizeof(sz));
@@ -395,6 +404,7 @@ static bool do_upload(const char *local_path, const char *filename,
 
     LIBSSH2_SESSION *sess = ssh_get_session();
     int              sock = ssh_get_socket();
+    SessionLock session_lock;
     libssh2_session_set_blocking(sess, 0);
 
     // Open remote file
@@ -406,7 +416,7 @@ static bool do_upload(const char *local_path, const char *filename,
         if (!fh) {
             if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
             snprintf(status, stsz, "Error: cannot create remote '%s' (sftp %lu)", remote_full, libssh2_sftp_last_error(s_sftp));
-            fclose(in); libssh2_session_set_blocking(sess, 0); return false;
+            fclose(in); return false;
         }
     }
 
@@ -441,7 +451,6 @@ static bool do_upload(const char *local_path, const char *filename,
 done:
     fclose(in);
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
-    libssh2_session_set_blocking(sess, 0);
 
     if (ok) {
         char sz[32]; fmt_size(total, sz, sizeof(sz));

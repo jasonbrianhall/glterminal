@@ -92,4 +92,9 @@ bool ssh_active();
 LIBSSH2_SESSION *ssh_get_session();
 int              ssh_get_socket();
 
+// Session mutex — must be held for the duration of any libssh2 call made
+// outside ssh_session.cpp (e.g. SFTP transfers on a background thread).
+void ssh_session_lock();
+void ssh_session_unlock();
+
 #endif // USESSH
