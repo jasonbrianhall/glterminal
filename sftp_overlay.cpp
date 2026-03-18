@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <thread>
+#include <atomic>
 
 #ifndef _WIN32
 #  include <sys/stat.h>
@@ -33,7 +35,15 @@
 static LIBSSH2_SFTP *s_sftp  = nullptr;
 SftpOverlay          g_sftp;
 extern int           g_font_size;
-extern SDL_Window   *g_sdl_window;   // for mid-transfer swap
+
+// Transfer runs on a background thread. Main loop polls these atomics.
+static std::thread        s_transfer_thread;
+static std::atomic<float> s_progress{0.f};
+static std::atomic<bool>  s_transferring{false};
+// Status written by worker, read by main — protected by done flag ordering.
+// Worker writes status then sets s_transferring=false; main reads after.
+static char               s_status_buf[512] = {};
+static bool               s_transfer_ok     = false;
 
 // ============================================================================
 // LAYOUT HELPERS
@@ -95,7 +105,12 @@ bool sftp_init() {
     return true;
 }
 
+void sftp_transfer_join() {
+    if (s_transfer_thread.joinable()) s_transfer_thread.join();
+}
+
 void sftp_shutdown() {
+    sftp_transfer_join();
     if (s_sftp) { libssh2_sftp_shutdown(s_sftp); s_sftp = nullptr; }
 }
 
@@ -270,17 +285,8 @@ static void fmt_size(uint64_t sz, char *buf, int bufsz) {
     else                              snprintf(buf,bufsz,"%llu B",(unsigned long long)sz);
 }
 
-// Forward declaration
-void sftp_overlay_render(int win_w, int win_h);
-
-static void render_progress(int win_w, int win_h) {
-    // Full render pass so panels stay visible behind the progress bar
-    sftp_overlay_render(win_w, win_h);
-    SDL_GL_SwapWindow(g_sdl_window);
-}
-
 // ============================================================================
-// TRANSFER
+// TRANSFER  (runs on background thread — no GL calls allowed)
 // ============================================================================
 
 static bool do_download(const char *remote_path, const char *filename,
@@ -292,7 +298,6 @@ static bool do_download(const char *remote_path, const char *filename,
     LIBSSH2_SESSION *sess = ssh_get_session();
     libssh2_session_set_blocking(sess, 1);
 
-    // Stat the file first so we know total size for the progress bar
     LIBSSH2_SFTP_ATTRIBUTES attrs{};
     uint64_t file_size = 0;
     if (libssh2_sftp_stat(s_sftp, remote_full, &attrs) == 0 &&
@@ -316,30 +321,23 @@ static bool do_download(const char *remote_path, const char *filename,
     char buf[65536];
     ssize_t n;
     uint64_t total = 0;
-    int win_w, win_h;
-    SDL_GetWindowSize(g_sdl_window, &win_w, &win_h);
-
-    g_sftp.transferring = true;
-    g_sftp.progress     = 0.0f;
-    snprintf(g_sftp.status, sizeof(g_sftp.status), "Downloading '%s'...", filename);
+    s_progress.store(0.f);
 
     while ((n = libssh2_sftp_read(fh, buf, sizeof(buf))) > 0) {
         fwrite(buf, 1, n, out);
         total += n;
         if (file_size > 0)
-            g_sftp.progress = (float)total / (float)file_size;
+            s_progress.store((float)total / (float)file_size);
         char done_sz[32], total_sz[32];
         fmt_size(total, done_sz, sizeof(done_sz));
         fmt_size(file_size > 0 ? file_size : total, total_sz, sizeof(total_sz));
         snprintf(g_sftp.status, sizeof(g_sftp.status),
                  "Downloading '%s'  %s / %s", filename, done_sz, total_sz);
-        render_progress(win_w, win_h);
     }
 
     fclose(out);
     libssh2_sftp_close(fh);
     libssh2_session_set_blocking(sess, 0);
-    g_sftp.transferring = false;
 
     if (n < 0) {
         snprintf(status, stsz, "Error reading '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
@@ -347,7 +345,7 @@ static bool do_download(const char *remote_path, const char *filename,
     }
     char sz[32]; fmt_size(total, sz, sizeof(sz));
     snprintf(status, stsz, "Downloaded '%s'  →  %s  (%s)", filename, local_dir, sz);
-    g_sftp.progress = 1.0f;
+    s_progress.store(1.f);
     return true;
 }
 
@@ -357,7 +355,6 @@ static bool do_upload(const char *local_path, const char *filename,
     snprintf(local_full,  sizeof(local_full),  "%s/%s", local_path, filename);
     snprintf(remote_full, sizeof(remote_full), "%s/%s", remote_dir, filename);
 
-    // Get local file size for progress
     uint64_t file_size = 0;
 #ifndef _WIN32
     struct stat st{};
@@ -391,12 +388,7 @@ static bool do_upload(const char *local_path, const char *filename,
     size_t n;
     uint64_t total = 0;
     bool ok = true;
-    int win_w, win_h;
-    SDL_GetWindowSize(g_sdl_window, &win_w, &win_h);
-
-    g_sftp.transferring = true;
-    g_sftp.progress     = 0.0f;
-    snprintf(g_sftp.status, sizeof(g_sftp.status), "Uploading '%s'...", filename);
+    s_progress.store(0.f);
 
     while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
         size_t sent = 0;
@@ -410,41 +402,59 @@ static bool do_upload(const char *local_path, const char *filename,
             sent  += rc;
             total += rc;
         }
-        if (file_size > 0) g_sftp.progress = (float)total / (float)file_size;
+        if (file_size > 0) s_progress.store((float)total / (float)file_size);
         char done_sz[32], total_sz[32];
         fmt_size(total, done_sz, sizeof(done_sz));
         fmt_size(file_size > 0 ? file_size : total, total_sz, sizeof(total_sz));
         snprintf(g_sftp.status, sizeof(g_sftp.status),
                  "Uploading '%s'  %s / %s", filename, done_sz, total_sz);
-        render_progress(win_w, win_h);
     }
 
 done:
     fclose(in);
     libssh2_sftp_close(fh);
     libssh2_session_set_blocking(sess, 0);
-    g_sftp.transferring = false;
 
     if (ok) {
         char sz[32]; fmt_size(total, sz, sizeof(sz));
         snprintf(status, stsz, "Uploaded '%s'  →  %s  (%s)", filename, remote_dir, sz);
-        g_sftp.progress = 1.0f;
+        s_progress.store(1.f);
     }
     return ok;
 }
 
 void sftp_overlay_transfer() {
+    // Don't start a second transfer while one is running
+    if (s_transferring.load()) return;
+
+    // Join any previously finished thread
+    if (s_transfer_thread.joinable()) s_transfer_thread.join();
+
     if (g_sftp.mode == SftpOverlayMode::DOWNLOAD) {
-        // Source = right panel (remote), dest = left panel (local) path
         auto &rp = g_sftp.right;
         auto &lp = g_sftp.left;
         if (rp.entries.empty() || rp.entries[rp.selected].is_dir) return;
-        g_sftp.transfer_ok = do_download(rp.path, rp.entries[rp.selected].name,
-                                          lp.path, g_sftp.status, sizeof(g_sftp.status));
-        // Refresh local panel so downloaded file appears
-        if (g_sftp.transfer_ok) sftp_panel_refresh(lp);
+
+        // Snapshot what we need — thread must not touch g_sftp panel state
+        std::string remote_path = rp.path;
+        std::string filename    = rp.entries[rp.selected].name;
+        std::string local_dir   = lp.path;
+
+        g_sftp.status[0]    = '\0';
+        g_sftp.transfer_ok  = false;
+        g_sftp.transferring = true;
+        s_transferring.store(true);
+        s_progress.store(0.f);
+        snprintf(g_sftp.status, sizeof(g_sftp.status), "Downloading '%s'...", filename.c_str());
+
+        s_transfer_thread = std::thread([remote_path, filename, local_dir]() {
+            bool ok = do_download(remote_path.c_str(), filename.c_str(),
+                                  local_dir.c_str(), s_status_buf, sizeof(s_status_buf));
+            s_transfer_ok = ok;
+            s_transferring.store(false);  // signals main thread that we're done
+        });
+
     } else {
-        // Source = left panel (local), dest = right panel (remote)
         auto &lp = g_sftp.left;
         auto &rp = g_sftp.right;
         if (lp.entries.empty() || lp.entries[lp.selected].is_dir) {
@@ -453,10 +463,24 @@ void sftp_overlay_transfer() {
             g_sftp.transfer_ok = false;
             return;
         }
-        g_sftp.transfer_ok = do_upload(lp.path, lp.entries[lp.selected].name,
-                                        rp.path, g_sftp.status, sizeof(g_sftp.status));
-        // Refresh remote panel so uploaded file appears
-        if (g_sftp.transfer_ok) sftp_panel_refresh(rp);
+
+        std::string local_path  = lp.path;
+        std::string filename    = lp.entries[lp.selected].name;
+        std::string remote_dir  = rp.path;
+
+        g_sftp.status[0]    = '\0';
+        g_sftp.transfer_ok  = false;
+        g_sftp.transferring = true;
+        s_transferring.store(true);
+        s_progress.store(0.f);
+        snprintf(g_sftp.status, sizeof(g_sftp.status), "Uploading '%s'...", filename.c_str());
+
+        s_transfer_thread = std::thread([local_path, filename, remote_dir]() {
+            bool ok = do_upload(local_path.c_str(), filename.c_str(),
+                                remote_dir.c_str(), s_status_buf, sizeof(s_status_buf));
+            s_transfer_ok = ok;
+            s_transferring.store(false);
+        });
     }
 }
 
@@ -614,6 +638,27 @@ static void draw_progress_bar(float px, float py, float pw, float ph, float t) {
 
 void sftp_overlay_render(int win_w, int win_h) {
     if (!g_sftp.visible) return;
+
+    // Poll transfer thread completion
+    if (g_sftp.transferring && !s_transferring.load()) {
+        // Thread just finished — copy results to main state
+        g_sftp.transferring = false;
+        g_sftp.transfer_ok  = s_transfer_ok;
+        g_sftp.progress     = s_progress.load();
+        strncpy(g_sftp.status, s_status_buf, sizeof(g_sftp.status)-1);
+        // Refresh the destination panel so the new file shows up
+        if (g_sftp.transfer_ok) {
+            if (g_sftp.mode == SftpOverlayMode::DOWNLOAD)
+                sftp_panel_refresh(g_sftp.left);   // local panel got a new file
+            else
+                sftp_panel_refresh(g_sftp.right);  // remote panel got a new file
+        }
+        if (s_transfer_thread.joinable()) s_transfer_thread.join();
+    }
+
+    // Copy atomic progress into overlay struct for rendering
+    if (g_sftp.transferring)
+        g_sftp.progress = s_progress.load();
 
     int   rh       = row_h();
     float title_h  = (float)(rh + PAD);

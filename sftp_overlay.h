@@ -66,4 +66,7 @@ std::string sftp_local_home_dir();
 bool sftp_init();
 void sftp_shutdown();
 
+// Call before sftp_shutdown if a transfer may be in progress (e.g. on quit).
+void sftp_transfer_join();
+
 #endif // USESSH

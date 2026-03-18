@@ -1074,6 +1074,7 @@ int main(int argc, char **argv) {
         ssh_abort.store(true);
         if (ssh_thread.joinable()) ssh_thread.join();
         if (prompt_req.mtx) SDL_DestroyMutex(prompt_req.mtx);
+        sftp_transfer_join();
         sftp_shutdown();
         ssh_disconnect();
     }
