@@ -386,8 +386,8 @@ jobs:
                  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
 
           <Identity
-            Name="FelixTerminal"
-            Publisher="CN=FelixTerminal"
+            Name="JasonBrianHall.FelixTerminal"
+            Publisher="CN=7A3CF65F-504C-42F2-BABD-6A0512A0A017"
             Version="${{ needs.build-linux.outputs.version }}"
             ProcessorArchitecture="x64" />
 
