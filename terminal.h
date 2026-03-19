@@ -74,7 +74,34 @@ struct Terminal {
     int           sel_end_row,   sel_end_col;
     bool          sel_active;
     bool          sel_exists;
+
+    // Per-row dirty flags — set by terminal.cpp on any cell write,
+    // cleared by term_render after each row is drawn.
+    // Use uint8_t array; TERM_MAX_ROWS is 256 so this is 256 bytes.
+    uint8_t       dirty_rows[TERM_MAX_ROWS];
+    bool          all_dirty;   // when true, skip per-row check and redraw everything
 };
+
+// ============================================================================
+// DIRTY ROW HELPERS
+// ============================================================================
+
+static inline void term_dirty_row(Terminal *t, int row) {
+    if (row >= 0 && row < t->rows) t->dirty_rows[row] = 1;
+}
+static inline void term_dirty_rows(Terminal *t, int top, int bot) {
+    for (int r = top; r <= bot && r < t->rows; r++) t->dirty_rows[r] = 1;
+}
+static inline void term_dirty_all(Terminal *t) {
+    t->all_dirty = true;
+}
+static inline bool term_row_is_dirty(Terminal *t, int row) {
+    return t->all_dirty || (row >= 0 && row < t->rows && t->dirty_rows[row]);
+}
+static inline void term_clear_dirty(Terminal *t) {
+    t->all_dirty = false;
+    for (int r = 0; r < t->rows; r++) t->dirty_rows[r] = 0;
+}
 
 // ============================================================================
 // LIFECYCLE

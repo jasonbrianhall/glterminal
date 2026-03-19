@@ -204,7 +204,7 @@ static const float OPACITY_LEVELS[] = { 1.0f, 0.85f, 0.7f, 0.5f, 0.3f, 0.1f };
 static const char* OPACITY_NAMES[]  = { "100%", "85%", "70%", "50%", "30%", "10%" };
 static const int   OPACITY_COUNT    = 6;
 
-static const char* RENDER_MODE_NAMES[] = { "Normal", "CRT", "LCD", "VHS", "Focus", "Commodore 64", "Bad Composite" };
+static const char* RENDER_MODE_NAMES[] = { "Normal", "CRT", "LCD", "VHS", "Focus", "Commodore 64", "Bad Composite", "Bloom", "Ghosting", "Wireframe" };
 static_assert(sizeof(RENDER_MODE_NAMES)/sizeof(RENDER_MODE_NAMES[0]) == RENDER_MODE_COUNT,
               "RENDER_MODE_NAMES count mismatch");
 
@@ -644,8 +644,9 @@ void term_render(Terminal *t, int ox, int oy) {
     // Detect URLs in visible content
     detect_urls(t, resolve_cell);
 
-    // Pass 1: backgrounds
+    // Pass 1: backgrounds — only redraw rows that changed
     for (int row = 0; row < t->rows; row++) {
+        if (!term_row_is_dirty(t, row)) continue;
         for (int col = 0; col < t->cols; col++) {
             float px = ox + col*cw, py = oy + row*ch;
             Cell *c = resolve_cell(row, col);
@@ -656,15 +657,15 @@ void term_render(Terminal *t, int ox, int oy) {
             if (cell_in_sel(t, vrow, col)) {
                 draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
             } else {
-                float bg_alpha = 1.f;
-                draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, bg_alpha);
+                draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, 1.f);
             }
         }
     }
 
-    // Pass 2: glyphs and decorations
+    // Pass 2: glyphs and decorations — only redraw rows that changed
     int dirty_cells = 0;
     for (int row = 0; row < t->rows; row++) {
+        if (!term_row_is_dirty(t, row)) continue;
         for (int col = 0; col < t->cols; col++) {
             float px = ox + col*cw, py = oy + row*ch;
             Cell *c = resolve_cell(row, col);
@@ -703,6 +704,9 @@ void term_render(Terminal *t, int ox, int oy) {
             }
         }
     }
+
+    // Clear dirty flags — rows are now up-to-date in the term FBO
+    term_clear_dirty(t);
 
     // Feed glyph activity to CRT audio buzz
     crt_audio_set_activity((float)dirty_cells / (float)(t->cols * t->rows));

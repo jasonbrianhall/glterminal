@@ -289,6 +289,83 @@ static const char *POST_FS =
     "}\n"
 
     // ----------------------------------------------------------------
+    // BLOOM — extract bright pixels first, then spread them outward.
+    // Sampling neighbors and only keeping their contribution when THEY
+    // are bright prevents dark background from diluting the glow.
+    // Two passes baked into one: wide tap ring, brightness-gated.
+    // ----------------------------------------------------------------
+    "float bloom_bright(vec3 c){\n"
+    // Measure how much a pixel exceeds the darkness threshold
+    "  float luma = dot(c, vec3(0.299, 0.587, 0.114));\n"
+    "  return max(0.0, luma - 0.08);\n"   // very low threshold — dark bg
+    "}\n"
+    "vec4 mode_bloom(vec2 u){\n"
+    "  vec4 base = texture(tex, u);\n"
+    "  vec2 px = vec2(1.0/resolution.x, 1.0/resolution.y);\n"
+    // Accumulate glow only from bright neighbours
+    "  vec3 glow = vec3(0.0);\n"
+    "  float total_w = 0.0;\n"
+    // 16 taps across two rings — only contribute if the sample is bright
+    "#define BTAP(ox,oy,w) { vec3 s=texture(tex,u+vec2(ox,oy)*px).rgb; float b=bloom_bright(s); glow+=s*b*(w); total_w+=(w); }\n"
+    // Inner ring r=5
+    "  BTAP( 5.0,  0.0, 1.0) BTAP(-5.0,  0.0, 1.0)\n"
+    "  BTAP( 0.0,  5.0, 1.0) BTAP( 0.0, -5.0, 1.0)\n"
+    "  BTAP( 3.5,  3.5, 0.7) BTAP(-3.5,  3.5, 0.7)\n"
+    "  BTAP( 3.5, -3.5, 0.7) BTAP(-3.5, -3.5, 0.7)\n"
+    // Outer ring r=12
+    "  BTAP(12.0,  0.0, 0.5) BTAP(-12.0, 0.0, 0.5)\n"
+    "  BTAP( 0.0, 12.0, 0.5) BTAP( 0.0,-12.0, 0.5)\n"
+    "  BTAP( 8.5,  8.5, 0.35) BTAP(-8.5, 8.5, 0.35)\n"
+    "  BTAP( 8.5, -8.5, 0.35) BTAP(-8.5,-8.5, 0.35)\n"
+    "#undef BTAP\n"
+    "  glow = (total_w > 0.0) ? glow / total_w : vec3(0.0);\n"
+    // Scale up — the brightness weighting compressed the values
+    "  glow *= 4.5;\n"
+    // Additive over sharp base
+    "  vec3 col = base.rgb + glow;\n"
+    "  return vec4(col, base.a);\n"
+    "}\n"
+
+    // ----------------------------------------------------------------
+    // GHOSTING — tex2 is a *feedback* accumulation FBO that C++ updates
+    // each frame as:  ghost = mix(ghost_prev, current, 0.25)
+    // so the ghost carries a multi-frame exponential tail.
+    // We show max(current, ghost) so trails never hide fresh pixels.
+    // ----------------------------------------------------------------
+    "uniform sampler2D tex2;\n"
+    "vec4 mode_ghosting(vec2 u){\n"
+    "  vec4 cur   = texture(tex,  u);\n"
+    "  vec4 ghost = texture(tex2, u);\n"
+    // Show whichever is brighter per channel so live text always wins
+    "  vec3 col = max(cur.rgb, ghost.rgb);\n"
+    // Phosphor tint — shift ghost trail toward green/cyan
+    "  vec3 tinted = ghost.rgb * vec3(0.5, 1.1, 0.7);\n"
+    "  col = max(col, tinted * 0.6);\n"
+    "  return clamp(vec4(col, 1.0), 0.0, 1.0);\n"
+    "}\n"
+
+    // ----------------------------------------------------------------
+    // WIREFRAME — darkens the background so cell outline quads
+    // (drawn in C++ as thin rects) pop.  Also adds a subtle scanline
+    // grid overlay so the glyph bounding boxes read clearly.
+    // ----------------------------------------------------------------
+    "vec4 mode_wireframe(vec2 u){\n"
+    "  vec4 col = texture(tex, u);\n"
+    // Dim overall brightness heavily — outlines will stand out
+    "  col.rgb *= 0.18;\n"
+    // Grid overlay: thin lines at every ~9px (approximate cell boundary guide)
+    "  vec2 gpx = u * resolution;\n"
+    "  vec2 cell_sz = vec2(9.0, 18.0);\n"   // rough glyph cell — cosmetic only
+    "  vec2 gf = fract(gpx / cell_sz);\n"
+    "  float gridline = 1.0 - smoothstep(0.0, 0.08, min(gf.x, gf.y));\n"
+    "  col.rgb += vec3(0.0, gridline * 0.12, gridline * 0.18);\n"
+    // Boost the outline colour channels from the C++-drawn quads
+    "  float bright = dot(col.rgb, vec3(1.0));\n"
+    "  if(bright > 0.08) col.rgb = col.rgb * 1.6 + vec3(0.0, 0.05, 0.1);\n"
+    "  return clamp(col, 0.0, 1.0);\n"
+    "}\n"
+
+    // ----------------------------------------------------------------
     // MAIN
     // ----------------------------------------------------------------
     "void main(){\n"
@@ -298,6 +375,9 @@ static const char *POST_FS =
     "  else if (mode==4) frag = mode_focus(uv);\n"
     "  else if (mode==5) frag = mode_c64(uv);\n"
     "  else if (mode==6) frag = mode_composite(uv);\n"
+    "  else if (mode==7) frag = mode_bloom(uv);\n"
+    "  else if (mode==8) frag = mode_ghosting(uv);\n"
+    "  else if (mode==9) frag = mode_wireframe(uv);\n"
     "  else              frag = mode_normal(uv);\n"
     "}\n";
 
@@ -335,6 +415,20 @@ static GLint  s_loc_tex    = -1;
 static GLint  s_loc_mode   = -1;
 static GLint  s_loc_time   = -1;
 static GLint  s_loc_res    = -1;
+static GLint  s_loc_tex2   = -1;  // ghosting: previous-frame texture
+
+// Ghost FBO pair — ping-pong so we never read and write the same texture.
+// s_ghost_fbo_tex is always the settled result from last frame (safe to sample).
+// s_ghost_write_fbo is what we write into this frame.
+static GLuint s_ghost_fbo       = 0;
+static GLuint s_ghost_fbo_tex   = 0;
+static GLuint s_ghost_fbo_rb    = 0;
+static GLuint s_ghost2_fbo      = 0;
+static GLuint s_ghost2_fbo_tex  = 0;
+static GLuint s_ghost2_fbo_rb   = 0;
+
+// Wireframe mode: when true, term_render draws cell outlines instead of fills
+bool g_wireframe_cells = false;
 
 // ============================================================================
 // HELPERS
@@ -406,9 +500,17 @@ static void make_color_fbo(GLuint *fbo, GLuint *tex, GLuint *rb, int w, int h) {
 
 static void create_fbo(int w, int h) {
     s_fbo_w = w; s_fbo_h = h;
-    make_color_fbo(&s_fbo,      &s_fbo_tex,      &s_fbo_rb,      w, h);
-    make_color_fbo(&s_term_fbo, &s_term_fbo_tex, &s_term_fbo_rb, w, h);
-    make_color_fbo(&s_ping_fbo, &s_ping_fbo_tex, &s_ping_fbo_rb, w, h);
+    make_color_fbo(&s_fbo,       &s_fbo_tex,       &s_fbo_rb,       w, h);
+    make_color_fbo(&s_term_fbo,  &s_term_fbo_tex,  &s_term_fbo_rb,  w, h);
+    make_color_fbo(&s_ping_fbo,  &s_ping_fbo_tex,  &s_ping_fbo_rb,  w, h);
+    make_color_fbo(&s_ghost_fbo,  &s_ghost_fbo_tex,  &s_ghost_fbo_rb,  w, h);
+    make_color_fbo(&s_ghost2_fbo, &s_ghost2_fbo_tex, &s_ghost2_fbo_rb, w, h);
+    // Clear term FBO to black — it persists between frames and must not
+    // contain garbage on first use.
+    glBindFramebuffer(GL_FRAMEBUFFER, s_term_fbo);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 // ============================================================================
@@ -450,6 +552,7 @@ void gl_init_renderer(int w, int h) {
     s_loc_mode  = glGetUniformLocation(s_quad_prog, "mode");
     s_loc_time  = glGetUniformLocation(s_quad_prog, "time");
     s_loc_res   = glGetUniformLocation(s_quad_prog, "resolution");
+    s_loc_tex2  = glGetUniformLocation(s_quad_prog, "tex2");
 
     // Fullscreen quad VAO (NDC -1..1)
     float quad[] = { -1,-1,  1,-1,  1,1,  -1,-1,  1,1,  -1,1 };
@@ -521,6 +624,72 @@ void draw_rect(float x, float y, float w, float h, float r, float g, float b, fl
 }
 
 // ============================================================================
+// GHOSTING SUPPORT — ping-pong exponential decay, no read-after-write hazard.
+//
+// Call BEFORE gl_begin_frame() so we read from s_term_fbo_tex which was
+// fully written last frame and is completely settled on the GPU.
+//
+// Each frame:
+//   write_fbo  = mix(read_fbo * 0.75,  term_tex * 0.35)
+//   then swap read/write so next frame reads what we just wrote.
+//
+// The shader (mode_ghosting) samples s_ghost_fbo_tex which always points
+// to the stable read side.
+// ============================================================================
+
+static int s_ghost_slot = 0;  // 0 or 1 — which FBO is the current read side
+
+void gl_update_ghost(int win_w, int win_h) {
+    if (!(g_render_mode & RENDER_BIT_GHOSTING)) return;
+
+    float fw = (float)win_w, fh = (float)win_h;
+
+    // Read side: settled from last frame.  Write side: what we produce now.
+    GLuint read_tex  = s_ghost_slot ? s_ghost2_fbo_tex : s_ghost_fbo_tex;
+    GLuint write_fbo = s_ghost_slot ? s_ghost_fbo      : s_ghost2_fbo;
+
+    // Render: decay * read_ghost + 0.35 * term_tex  →  write_fbo
+    // We do this in one pass: clear write_fbo, then two additive draws.
+    glBindFramebuffer(GL_FRAMEBUFFER, write_fbo);
+    glViewport(0, 0, win_w, win_h);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glUseProgram(s_quad_prog);
+    glUniform1i(s_loc_mode, RENDER_MODE_NORMAL);
+    glUniform1f(s_loc_time, 0.f);
+    glUniform2f(s_loc_res, fw, fh);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(s_loc_tex, 0);
+    glBindVertexArray(s_quad_vao);
+
+    // Draw 1: decayed ghost (read side * 0.75) additively into write_fbo
+    glBlendColor(0.75f, 0.75f, 0.75f, 1.0f);
+    glBlendFunc(GL_CONSTANT_COLOR, GL_ONE);
+    glBindTexture(GL_TEXTURE_2D, read_tex);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Draw 2: current terminal content * 0.35 additively into write_fbo
+    // Uses s_term_fbo_tex — written last frame, fully settled, no stall.
+    glBlendColor(0.35f, 0.35f, 0.35f, 1.0f);
+    glBindTexture(GL_TEXTURE_2D, s_term_fbo_tex);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Swap slots — next frame reads what we just wrote.
+    s_ghost_slot ^= 1;
+    // Update s_ghost_fbo_tex to point at the new read side for the shader.
+    // The ghosting shader samples s_ghost_fbo_tex via tex2 uniform.
+    // After the swap, read side is now the slot we just wrote.
+    // We expose it by updating which texture gl_end_frame binds to unit 1.
+    // (done in gl_end_frame via s_ghost_read_tex below)
+
+    // Restore state
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendColor(1, 1, 1, 1);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ============================================================================
 // TERM FRAME — render terminal into its own cached FBO
 // ============================================================================
 
@@ -528,8 +697,21 @@ void gl_begin_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_
     s_accum_n = 0;
     glBindFramebuffer(GL_FRAMEBUFFER, s_term_fbo);
     glViewport(0, 0, win_w, win_h);
+    // Do NOT clear — term_render only redraws dirty rows and relies on the
+    // FBO retaining clean rows from the previous frame.
+    // Call gl_clear_term_frame() first if a full redraw is needed.
+    (void)bg_r; (void)bg_g; (void)bg_b;
+}
+
+// Clear the term FBO to the background colour.  Call before gl_begin_term_frame
+// when all_dirty is true (resize, theme change, alt screen switch, etc.) so
+// stale content from the previous layout doesn't show through.
+void gl_clear_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b) {
+    glBindFramebuffer(GL_FRAMEBUFFER, s_term_fbo);
+    glViewport(0, 0, win_w, win_h);
     glClearColor(bg_r, bg_g, bg_b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void gl_end_term_frame(void) {
@@ -572,6 +754,17 @@ void gl_end_frame(float time, int win_w, int win_h) {
     glUniform2f(s_loc_res,  (float)win_w, (float)win_h);
     glActiveTexture(GL_TEXTURE0);
     glUniform1i(s_loc_tex, 0);
+
+    // Bind ghost texture to unit 1 for ghosting mode.
+    // After gl_update_ghost() swapped slots, the read side is slot^1.
+    GLuint ghost_read_tex = s_ghost_slot ? s_ghost_fbo_tex : s_ghost2_fbo_tex;
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, ghost_read_tex);
+    glUniform1i(s_loc_tex2, 1);
+    glActiveTexture(GL_TEXTURE0);
+
+    // Sync wireframe flag so term_render can switch draw path
+    g_wireframe_cells = (g_render_mode & RENDER_BIT_WIREFRAME) != 0;
 
     // Build ordered list of active mode indices (1..RENDER_MODE_COUNT-1).
     // If nothing is set, treat as a single normal (passthrough) pass.

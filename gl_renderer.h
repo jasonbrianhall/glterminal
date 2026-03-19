@@ -32,7 +32,10 @@ extern GLState G;
 #define RENDER_MODE_FOCUS     4
 #define RENDER_MODE_C64       5
 #define RENDER_MODE_COMPOSITE 6
-#define RENDER_MODE_COUNT     7
+#define RENDER_MODE_BLOOM     7
+#define RENDER_MODE_GHOSTING  8
+#define RENDER_MODE_WIREFRAME 9
+#define RENDER_MODE_COUNT     10
 
 // Bitmask constants
 #define RENDER_BIT_CRT        (1u<<RENDER_MODE_CRT)
@@ -41,6 +44,9 @@ extern GLState G;
 #define RENDER_BIT_FOCUS      (1u<<RENDER_MODE_FOCUS)
 #define RENDER_BIT_C64        (1u<<RENDER_MODE_C64)
 #define RENDER_BIT_COMPOSITE  (1u<<RENDER_MODE_COMPOSITE)
+#define RENDER_BIT_BLOOM      (1u<<RENDER_MODE_BLOOM)
+#define RENDER_BIT_GHOSTING   (1u<<RENDER_MODE_GHOSTING)
+#define RENDER_BIT_WIREFRAME  (1u<<RENDER_MODE_WIREFRAME)
 
 extern uint32_t g_render_mode;  // bitmask of active RENDER_BIT_* flags
 
@@ -80,6 +86,16 @@ void  gl_flush_verts(void);
 //   fight_render(...);
 //   gl_end_frame(...);      // post-process + blit to screen
 void  gl_begin_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b);
+void  gl_clear_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b);
 void  gl_end_term_frame(void);
 
 // Set the focused row (0..1 UV) for FOCUS mode — call before gl_end_frame
+
+// Ghosting: update the ghost accumulation FBO for this frame.
+// Must be called BEFORE gl_begin_frame() — reads from the settled
+// terminal FBO (last frame), avoiding any read-after-write GPU stall.
+void gl_update_ghost(int win_w, int win_h);
+
+// Wireframe: when enabled, term_render should draw cell outlines instead of fills.
+// Read by term_ui.cpp to switch draw_rect → outline path.
+extern bool g_wireframe_cells;

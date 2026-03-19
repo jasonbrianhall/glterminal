@@ -61,6 +61,7 @@ static void scroll_up(Terminal *t) {
         memmove(&CELL(t,top,0), &CELL(t,top+1,0), sizeof(Cell)*t->cols*(bot-top));
     for (int c = 0; c < t->cols; c++)
         CELL(t,bot,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
+    term_dirty_rows(t, top, bot);
     // Shift image placements up with the scroll region
     if (top == 0 && bot == t->rows - 1)
         kitty_scroll(t, 1);
@@ -73,6 +74,7 @@ static void scroll_down(Terminal *t) {
         memmove(&CELL(t,top+1,0), &CELL(t,top,0), sizeof(Cell)*t->cols*(bot-top));
     for (int c = 0; c < t->cols; c++)
         CELL(t,top,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
+    term_dirty_rows(t, top, bot);
 }
 
 static void newline(Terminal *t) {
@@ -164,11 +166,14 @@ static void dispatch_csi(Terminal *t) {
         if (n==2||n==3) {
             for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
             t->cur_row=t->cur_col=0;
+            term_dirty_all(t);
         } else if(n==1) {
             for(int r=0;r<t->cur_row;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+            term_dirty_rows(t, 0, t->cur_row);
         } else {
             for(int r=t->cur_row;r<t->rows;r++)
                 for(int c=(r==t->cur_row?t->cur_col:0);c<t->cols;c++) CELL(t,r,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+            term_dirty_rows(t, t->cur_row, t->rows - 1);
         }
         break;
     }
@@ -176,6 +181,7 @@ static void dispatch_csi(Terminal *t) {
         int n=atoi(p);
         int s=(n==1)?0:t->cur_col, e=(n==0)?t->cols:t->cur_col+1;
         for(int c=s;c<e&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+        term_dirty_row(t, t->cur_row);
         break;
     }
     case 'P': {
@@ -183,6 +189,7 @@ static void dispatch_csi(Terminal *t) {
         int r=t->cur_row, c=t->cur_col;
         memmove(&CELL(t,r,c), &CELL(t,r,c+n), sizeof(Cell)*(t->cols-c-n));
         for(int i=t->cols-n;i<t->cols;i++) CELL(t,r,i)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+        term_dirty_row(t, r);
         break;
     }
     case 'h': case 'l': {
@@ -203,6 +210,7 @@ static void dispatch_csi(Terminal *t) {
                     t->scroll_top = 0; t->scroll_bot = t->rows - 1;
                     t->in_alt_screen = true;
                     kitty_clear(t);
+                    term_dirty_all(t);
                 } else if (!set && t->in_alt_screen) {
                     int sz = t->rows * t->cols;
                     if (t->alt_cells) {
@@ -214,6 +222,7 @@ static void dispatch_csi(Terminal *t) {
                     t->cur_attrs = t->saved_cur_attrs;
                     t->scroll_top = 0; t->scroll_bot = t->rows - 1;
                     t->in_alt_screen = false;
+                    term_dirty_all(t);
                 }
             } else if (mode == 25) {
                 if (!set) { t->cursor_on = false; t->cursor_blink_enabled = false; }
@@ -269,6 +278,7 @@ static void dispatch_csi(Terminal *t) {
                 memmove(&CELL(t,t->cur_row+1,0),&CELL(t,t->cur_row,0),sizeof(Cell)*t->cols*(bot-t->cur_row));
             for(int c=0;c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         }
+        term_dirty_rows(t, t->cur_row, bot);
         break;
     }
     case 'M': {
@@ -279,6 +289,7 @@ static void dispatch_csi(Terminal *t) {
                 memmove(&CELL(t,t->cur_row,0),&CELL(t,t->cur_row+1,0),sizeof(Cell)*t->cols*(bot-t->cur_row));
             for(int c=0;c<t->cols;c++) CELL(t,bot,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
         }
+        term_dirty_rows(t, t->cur_row, bot);
         break;
     }
     case 'S': {
@@ -311,10 +322,12 @@ static void dispatch_csi(Terminal *t) {
     case 'T': { int n=atoi(p); if(n<1)n=1; for(int i=0;i<n;i++) scroll_down(t); break; }
     case 'X': { int n=atoi(p); if(n<1)n=1;
         for(int c=t->cur_col;c<t->cur_col+n&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+        term_dirty_row(t, t->cur_row);
         break; }
     case '@': { int n=atoi(p); if(n<1)n=1;
         for(int c=t->cols-1;c>=t->cur_col+n;c--) CELL(t,t->cur_row,c)=CELL(t,t->cur_row,c-n);
         for(int c=t->cur_col;c<t->cur_col+n&&c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+        term_dirty_row(t, t->cur_row);
         break; }
     case 'c': {
         // Primary DA: advertise VT220 + graphics protocol (4) + colour (22)
@@ -373,6 +386,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
                 else t->cur_col = t->cols - 1;
             }
             CELL(t,t->cur_row,t->cur_col++) = {ready_cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
+            term_dirty_row(t, t->cur_row);
             continue;
         } else if (t->state == PS_NORMAL) {
             utf8_left = 0;
@@ -394,6 +408,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
                         else t->cur_col = t->cols - 1;
                     }
                     CELL(t,t->cur_row,t->cur_col++) = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
+                    term_dirty_row(t, t->cur_row);
                 }
             }
             break;
@@ -419,6 +434,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
                     for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
                     t->cur_row=t->cur_col=0; t->cur_fg=7; t->cur_bg=0; t->cur_attrs=0;
                     kitty_clear(t);
+                    term_dirty_all(t);
                 } else if (ch == 'M') {
                     if (t->cur_row > t->scroll_top) { t->cur_row--; }
                     else { scroll_down(t); }
@@ -546,6 +562,7 @@ void term_init(Terminal *t) {
     t->apc_cap         = 0;
     t->apc_esc_pending = false;
 
+    term_dirty_all(t);
     //SDL_Log("[Term] init: %dx%d cells %.0fx%.0f px\n", t->cols, t->rows, t->cell_w, t->cell_h);
 }
 
@@ -596,6 +613,7 @@ void term_resize(Terminal *t, int win_w, int win_h) {
 #endif
 
     t->scroll_top = 0; t->scroll_bot = new_rows - 1;
+    term_dirty_all(t);
     SDL_Log("[Term] resized to %dx%d\n", new_cols, new_rows);
 }
 

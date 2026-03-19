@@ -427,20 +427,23 @@ int main(int argc, char **argv) {
         last_ticks = now;
         bool needs_render = false;
 
-        // Text blink (500ms)
+        // Text blink (500ms) — mark all rows with ATTR_BLINK cells dirty.
+        // Simplest safe approach: mark all dirty; blink is rare anyway.
         term.blink += dt;
         if (term.blink >= 0.5) {
             term.blink = 0;
             g_blink_text_on = !g_blink_text_on;
+            term_dirty_all(&term);
             needs_render = true;
         }
 
-        // Cursor blink (600ms)
+        // Cursor blink (600ms) — only the cursor row needs to change
         if (term.cursor_blink_enabled) {
             term.cursor_blink += dt;
             if (term.cursor_blink >= 0.6) {
                 term.cursor_blink = 0;
                 term.cursor_on = !term.cursor_on;
+                term_dirty_row(&term, term.cur_row);
                 needs_render = true;
             }
         }
@@ -472,6 +475,7 @@ int main(int argc, char **argv) {
                         pixel_to_cell(&term, autoscroll_mouse_x, autoscroll_mouse_y, 2, 2,
                                       &term.sel_end_row, &term.sel_end_col);
                         term.sel_exists = true;
+                        term_dirty_all(&term);
                         needs_render = true;
                     }
                 }
@@ -536,7 +540,10 @@ int main(int argc, char **argv) {
         }
 #endif
 
-        // PTY / SSH read — only when fully connected
+        // PTY / SSH read — drain everything available before rendering.
+        // Read in a tight loop up to a frame budget (~8ms) so fast output
+        // (cat bigfile, scrolling programs) doesn't fall behind.  We render
+        // at most once per iteration regardless of how much data arrived.
 #ifdef USESSH
         bool ssh_ready = !use_ssh || ssh_phase == SshPhase::ACTIVE;
 #else
@@ -545,7 +552,13 @@ int main(int argc, char **argv) {
         {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_sb_count = term.sb_count;
-            bool got_data = ssh_ready ? TERM_READ() : false;
+            bool got_data = false;
+            uint32_t read_start = SDL_GetTicks();
+            while (ssh_ready && TERM_READ()) {
+                got_data = true;
+                // Stop draining after 8ms so we don't starve the render loop
+                if (SDL_GetTicks() - read_start >= 8) break;
+            }
             if (got_data) {
                 needs_render = true;
                 bool new_lines = (term.sb_count != old_sb_count);
@@ -740,10 +753,12 @@ int main(int argc, char **argv) {
                 int page = term.rows - 1;
                 if (ev.key.keysym.sym == SDLK_PAGEUP && (mod & KMOD_SHIFT)) {
                     term.sb_offset = SDL_min(term.sb_offset + page, term.sb_count);
+                    term_dirty_all(&term);
                     break;
                 }
                 if (ev.key.keysym.sym == SDLK_PAGEDOWN && (mod & KMOD_SHIFT)) {
                     term.sb_offset = SDL_max(term.sb_offset - page, 0);
+                    term_dirty_all(&term);
                     break;
                 }
                 term.sb_offset = 0;
@@ -756,7 +771,6 @@ int main(int argc, char **argv) {
                         ev.key.keysym.sym == SDLK_RSHIFT) break;
                 }
                 handle_key(&term, ev.key.keysym, NULL);
-                SDL_Delay(1);
                 if (TERM_READ()) needs_render = true;
                 break;
             }
@@ -781,7 +795,6 @@ int main(int argc, char **argv) {
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
                     TERM_WRITE(ev.text.text, (int)strlen(ev.text.text));
-                    SDL_Delay(1);
                     if (TERM_READ()) needs_render = true;
                 }
                 break;
@@ -826,15 +839,18 @@ int main(int argc, char **argv) {
                             if (g_menu.sub_open == MENU_ID_THEMES) {
                                 apply_theme(sub_hit);
                                 settings_save();
+                                term_dirty_all(&term);
                             } else if (g_menu.sub_open == MENU_ID_OPACITY) {
                                 g_opacity = ((float[]){1.0f,0.85f,0.7f,0.5f,0.3f,0.1f})[sub_hit];
                                 SDL_SetWindowOpacity(window, g_opacity);
+                                term_dirty_all(&term);
                             } else if (g_menu.sub_open == MENU_ID_RENDER_MODE) {
                                 if (sub_hit == RENDER_MODE_NORMAL) {
                                     g_render_mode = 0;
                                 } else {
                                     g_render_mode ^= (1u << sub_hit);
                                 }
+                                term_dirty_all(&term);
                             } else if (g_menu.sub_open == MENU_ID_NEW_TERMINAL) {
                                 if      (sub_hit == NEW_TERM_IDX_LOCAL) action_new_terminal();
                                 else if (sub_hit == NEW_TERM_IDX_SSH)   action_new_ssh_session();
@@ -850,6 +866,7 @@ int main(int argc, char **argv) {
                                 font_save_config(g_font_list[sub_hit].display_name);
                                 G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                                 settings_save();
+                                term_dirty_all(&term);
                             }
                             g_menu.visible = false;
                         } else {
@@ -889,6 +906,7 @@ int main(int argc, char **argv) {
                         term.sel_start_row = term.sel_end_row = r;
                         term.sel_start_col = term.sel_end_col = c;
                         term.sel_active = true; term.sel_exists = false;
+                        term_dirty_all(&term);
                     }
                 } else if (ev.button.button == SDL_BUTTON_MIDDLE) {
                     if (g_menu.visible) g_menu.visible = false;
@@ -932,9 +950,14 @@ int main(int argc, char **argv) {
                     pixel_to_cell(&term, ev.motion.x, ev.motion.y, 2, 2,
                                   &term.sel_end_row, &term.sel_end_col);
                     term.sel_exists = true;
+                    term_dirty_all(&term);
                 } else {
-                    // Update URL hover highlight — only redraw if hover state changed
-                    needs_render = url_update_hover(&term, ev.motion.x, ev.motion.y, 2, 2);
+                    // Update URL hover highlight — only redraw the affected row
+                    if (url_update_hover(&term, ev.motion.x, ev.motion.y, 2, 2)) {
+                        int hrow = (int)((ev.motion.y - 2) / term.cell_h);
+                        term_dirty_row(&term, hrow);
+                        needs_render = true;
+                    }
                     // Show pointer cursor when over a URL (Ctrl = clickable)
                     SDL_Keymod mod = SDL_GetModState();
                     std::string hurl = url_at_pixel(&term, ev.motion.x, ev.motion.y, 2, 2);
@@ -969,6 +992,7 @@ int main(int argc, char **argv) {
                                  term.sel_start_col == term.sel_end_col);
                     term.sel_exists = !same;
                     if (term.sel_exists) term_copy_selection(&term);
+                    term_dirty_all(&term);
                 }
                 break;
             }
@@ -996,7 +1020,10 @@ int main(int argc, char **argv) {
                 } else {
                     int delta = (ev.wheel.y > 0) ? 3 : -3;
                     int new_off = SDL_clamp(term.sb_offset + delta, 0, term.sb_count);
-                    term.sb_offset = new_off;
+                    if (new_off != term.sb_offset) {
+                        term.sb_offset = new_off;
+                        term_dirty_all(&term);
+                    }
                 }
                 break;
             }
@@ -1017,12 +1044,8 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Snapshot terminal dirtiness BEFORE fight mode and animated render
-        // modes force needs_render — those don't require re-walking cell data.
-        bool term_needs_render = needs_render;
-
         // Animated render modes (CRT flicker, VHS noise) need continuous redraw
-        if (g_render_mode & (RENDER_BIT_CRT | RENDER_BIT_VHS | RENDER_BIT_C64 | RENDER_BIT_COMPOSITE))
+        if (g_render_mode & (RENDER_BIT_CRT | RENDER_BIT_VHS | RENDER_BIT_C64 | RENDER_BIT_COMPOSITE | RENDER_BIT_GHOSTING))
             needs_render = true;
 
         // Notify audio of mode state
@@ -1049,18 +1072,30 @@ int main(int argc, char **argv) {
         // (vsync via SDL_GL_SetSwapInterval(1) already throttles normal frames.)
 
         if (needs_render) {
-            // s_term_dirty tracks whether terminal cell content has changed.
-            // Animation-only frames (fight mode, CRT/VHS flicker) reuse the
-            // cached terminal FBO and skip the expensive term_render call.
-            static bool s_term_dirty = true;
-            if (term_needs_render) s_term_dirty = true;
+            // Only re-render the terminal FBO if at least one row is dirty.
+            // term_render itself skips clean rows, so even a full call with
+            // only one dirty row is cheap.  Scrollback, selection, and resize
+            // all call term_dirty_all() so they always get a full redraw.
+            bool any_dirty = term.all_dirty;
+            if (!any_dirty) {
+                for (int r = 0; r < term.rows && !any_dirty; r++)
+                    any_dirty = term.dirty_rows[r] != 0;
+            }
 
-            if (s_term_dirty) {
-                s_term_dirty = false;
-                gl_begin_term_frame(win_w, win_h, THEMES[g_theme_idx].bg_r, THEMES[g_theme_idx].bg_g, THEMES[g_theme_idx].bg_b);
-                term_render(&term, 2, 2);
+            if (any_dirty) {
+                float bg_r = THEMES[g_theme_idx].bg_r;
+                float bg_g = THEMES[g_theme_idx].bg_g;
+                float bg_b = THEMES[g_theme_idx].bg_b;
+                // On a full redraw, clear the FBO first so stale content
+                // from a previous layout (resize, theme change) doesn't show.
+                if (term.all_dirty)
+                    gl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
+                gl_begin_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
+                term_render(&term, 2, 2);  // clears dirty flags internally
                 gl_end_term_frame();
             }
+
+            gl_update_ghost(win_w, win_h);
 
             // Composite: blit cached terminal into post-process FBO, overlay fight figures
             gl_begin_frame();
