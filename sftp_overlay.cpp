@@ -711,8 +711,8 @@ void sftp_overlay_render(int win_w, int win_h) {
     draw_rect(0, 0, (float)win_w, title_h, 0.12f, 0.12f, 0.18f, 1.f);
     draw_rect(0, title_h-1, (float)win_w, 1, 0.25f, 0.35f, 0.60f, 1.f);
     const char *title = (g_sftp.mode == SftpOverlayMode::DOWNLOAD)
-        ? "SFTP Download (F3)   Tab: switch panel   Up/Down: navigate   Enter/Space: download   Backspace: up   Esc: close"
-        : "SFTP Upload (F2)     Tab: switch panel   Up/Down: navigate   Enter/Space: upload     Backspace: up   Esc: close";
+        ? "SFTP Download (F3)   Tab: switch panel   Up/Down: navigate   Space: download   Backspace: up   Esc: close"
+        : "SFTP Upload (F2)     Tab: switch panel   Up/Down: navigate   Space: upload     Backspace: up   Esc: close";
     sftp_draw_text(title, (float)PAD, title_h * 0.72f, 0.75f, 0.88f, 1.0f, 1.f);
 
     // Two panels — left always local, right always remote
