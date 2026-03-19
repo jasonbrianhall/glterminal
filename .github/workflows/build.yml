@@ -393,7 +393,7 @@ jobs:
 
           <Properties>
             <DisplayName>Felix Terminal</DisplayName>
-            <PublisherDisplayName>Felix Terminal</PublisherDisplayName>
+            <PublisherDisplayName>Jason Brian Hall</PublisherDisplayName>
             <Description>A fast OpenGL-accelerated terminal emulator for Windows.</Description>
             <Logo>Assets\StoreLogo.scale-100.png</Logo>
           </Properties>
