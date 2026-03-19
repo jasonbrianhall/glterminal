@@ -375,6 +375,10 @@ void term_feed(Terminal *t, const char *buf, int len) {
     for (int i = 0; i < len; i++) {
         unsigned char ch = (unsigned char)buf[i];
 
+        // Track cursor position before processing so we can dirty it if it moves
+        int prev_row = t->cur_row;
+        int prev_col = t->cur_col;
+
         uint32_t ready_cp = 0;
         if (t->state == PS_NORMAL && ch >= 0x80) {
             if (ch >= 0xF0 && ch <= 0xF7)      { utf8_cp = ch & 0x07; utf8_left = 3; }
@@ -563,6 +567,14 @@ void term_feed(Terminal *t, const char *buf, int len) {
                     t->osc[t->osc_len++] = (char)ch;
             }
             break;
+        }
+
+        // If the cursor moved, dirty the old and new rows so the cursor
+        // is redrawn correctly. Covers arrow keys, cursor positioning,
+        // newlines, backspace, tab — anything that changes cur_row or cur_col.
+        if (t->cur_row != prev_row || t->cur_col != prev_col) {
+            term_dirty_row(t, prev_row);
+            term_dirty_row(t, t->cur_row);
         }
     }
 }
