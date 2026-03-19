@@ -91,6 +91,7 @@ int main(int argc, char **argv) {
         // prompted inside the GL window.
         if ((strcmp(arg, "--ssh") == 0 || strcmp(arg, "-ssh") == 0)) {
             use_ssh = true;
+            g_kitty_enabled = false;  // tmux/multiplexers send APC; disable kitty to avoid crashes
             if (i + 1 < argc && argv[i+1][0] != '-') {
                 const char *target = argv[++i];
                 const char *at = strchr(target, '@');
@@ -316,7 +317,6 @@ int main(int argc, char **argv) {
 
             ssh_thread = std::thread([&]() {
                 ssh_conn_ok = ssh_connect(ssh_cfg, &term);
-                if (ssh_conn_ok) sftp_init();
                 ssh_thread_done.store(true);
             });
         }
@@ -523,6 +523,10 @@ int main(int argc, char **argv) {
             } else if (ssh_thread_done.load()) {
                 ssh_thread.join();
                 if (ssh_conn_ok) {
+                    // sftp_init must run on the main thread — it temporarily
+                    // sets the session to blocking mode, which races with
+                    // ssh_read/ssh_write if done on the background thread.
+                    sftp_init();
                     ssh_phase = SshPhase::ACTIVE;
                     SDL_StartTextInput();
                 } else {
@@ -540,10 +544,10 @@ int main(int argc, char **argv) {
         }
 #endif
 
-        // PTY / SSH read — drain everything available before rendering.
-        // Read in a tight loop up to a frame budget (~8ms) so fast output
-        // (cat bigfile, scrolling programs) doesn't fall behind.  We render
-        // at most once per iteration regardless of how much data arrived.
+        // PTY / SSH read.
+        // For local PTY: loop up to 8ms to drain burst output without falling behind.
+        // For SSH: ssh_read() already loops internally until EAGAIN, so one call
+        // per frame is correct — looping again just hammers the keepalive path.
 #ifdef USESSH
         bool ssh_ready = !use_ssh || ssh_phase == SshPhase::ACTIVE;
 #else
@@ -553,12 +557,19 @@ int main(int argc, char **argv) {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_sb_count = term.sb_count;
             bool got_data = false;
+#ifdef USESSH
+            if (ssh_ready) {
+                got_data = TERM_READ();
+            }
+#else
+            // Local PTY — drain in a tight loop up to 8ms budget
             uint32_t read_start = SDL_GetTicks();
-            while (ssh_ready && TERM_READ()) {
+            while (TERM_READ()) {
                 got_data = true;
-                // Stop draining after 8ms so we don't starve the render loop
                 if (SDL_GetTicks() - read_start >= 8) break;
             }
+            (void)ssh_ready;
+#endif
             if (got_data) {
                 needs_render = true;
                 bool new_lines = (term.sb_count != old_sb_count);
@@ -670,7 +681,6 @@ int main(int argc, char **argv) {
                                 };
                                 ssh_thread = std::thread([&]() {
                                     ssh_conn_ok = ssh_connect(ssh_cfg, &term);
-                                    if (ssh_conn_ok) sftp_init();
                                     ssh_thread_done.store(true);
                                 });
                             }

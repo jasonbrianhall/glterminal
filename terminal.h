@@ -20,7 +20,7 @@ struct Cell {
 // TERMINAL
 // ============================================================================
 
-typedef enum { PS_NORMAL, PS_ESC, PS_CSI, PS_OSC, PS_CHARSET, PS_APC } ParseState;
+typedef enum { PS_NORMAL, PS_ESC, PS_CSI, PS_OSC, PS_CHARSET, PS_APC, PS_DCS, PS_PM, PS_SOS } ParseState;
 
 struct Terminal {
     Cell         *cells;
@@ -117,6 +117,9 @@ void term_newline(Terminal *t);  // advance cursor one line, scrolling if needed
 // ============================================================================
 
 void term_feed(Terminal *t, const char *buf, int len);
+
+// Kitty graphics protocol — disable for SSH sessions to prevent APC crashes.
+extern bool g_kitty_enabled;
 
 // ============================================================================
 // SCROLLBACK ACCESSORS

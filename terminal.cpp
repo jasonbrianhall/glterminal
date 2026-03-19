@@ -15,6 +15,11 @@ extern int g_font_size;
 // g_sdl_window needed for OSC title; forward-declared here, defined in main
 extern SDL_Window *g_sdl_window;
 
+// When false, ESC _ (APC) sequences are silently discarded instead of being
+// passed to kitty_handle_apc(). Set to false for SSH sessions where tmux
+// and other multiplexers send APC sequences that aren't kitty graphics.
+bool g_kitty_enabled = true;
+
 // ============================================================================
 // SCROLLBACK
 // ============================================================================
@@ -418,9 +423,28 @@ void term_feed(Terminal *t, const char *buf, int len) {
             } else if (ch == ']') {
                 t->state=PS_OSC;
             } else if (ch == '_') {
-                // APC — Kitty graphics protocol
-                t->apc_len = 0;
-                t->state = PS_APC;
+                // APC — Kitty graphics protocol.
+                // Disabled for SSH sessions (tmux sends APC for its own purposes).
+                if (g_kitty_enabled) {
+                    t->apc_len = 0;
+                    t->state = PS_APC;
+                } else {
+                    t->state = PS_DCS;  // sink it — don't let payload corrupt terminal state
+                }
+            } else if (ch == 'P') {
+                // DCS — Device Control String. Tmux uses this heavily for passthrough.
+                // We have no DCS handler; sink everything until ST (ESC \) to prevent
+                // the payload from being misinterpreted as CSI/text.
+                t->apc_esc_pending = false;
+                t->state = PS_DCS;
+            } else if (ch == '^') {
+                // PM — Privacy Message. Sink until ST.
+                t->apc_esc_pending = false;
+                t->state = PS_PM;
+            } else if (ch == 'X') {
+                // SOS — Start of String. Sink until ST.
+                t->apc_esc_pending = false;
+                t->state = PS_SOS;
             } else if (ch == '(' || ch == ')' || ch == '*' || ch == '+') {
                 t->state = PS_CHARSET;
             } else {
@@ -461,7 +485,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
             if (t->apc_esc_pending) {
                 t->apc_esc_pending = false;
                 if (ch == '\\') {
-                    if (t->apc_buf) {
+                    if (g_kitty_enabled && t->apc_buf) {
                         t->apc_buf[t->apc_len] = '\0';
                         kitty_handle_apc(t, t->apc_buf, t->apc_len);
                     }
@@ -472,6 +496,10 @@ void term_feed(Terminal *t, const char *buf, int len) {
                 // Not ST — store the held ESC then handle ch normally below
                 if (!t->apc_buf || t->apc_len >= t->apc_cap - 1) {
                     int new_cap = t->apc_cap ? t->apc_cap * 2 : 65536;
+                    if (new_cap > 4*1024*1024) {
+                        SDL_Log("[APC] buffer exceeded 4MB (apc_len=%d) — aborting sequence\n", t->apc_len);
+                        t->apc_len = 0; t->state = PS_NORMAL; break;
+                    }
                     t->apc_buf = (char*)realloc(t->apc_buf, new_cap);
                     t->apc_cap = new_cap;
                 }
@@ -480,7 +508,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
             if (ch == 0x1b) {
                 t->apc_esc_pending = true;
             } else if (ch == 0x07) {
-                if (t->apc_buf) {
+                if (g_kitty_enabled && t->apc_buf) {
                     t->apc_buf[t->apc_len] = '\0';
                     kitty_handle_apc(t, t->apc_buf, t->apc_len);
                 }
@@ -489,6 +517,10 @@ void term_feed(Terminal *t, const char *buf, int len) {
             } else {
                 if (!t->apc_buf || t->apc_len >= t->apc_cap - 1) {
                     int new_cap = t->apc_cap ? t->apc_cap * 2 : 65536;
+                    if (new_cap > 4*1024*1024) {
+                        SDL_Log("[APC] buffer exceeded 4MB (apc_len=%d) — aborting sequence\n", t->apc_len);
+                        t->apc_len = 0; t->state = PS_NORMAL; break;
+                    }
                     t->apc_buf = (char*)realloc(t->apc_buf, new_cap);
                     t->apc_cap = new_cap;
                 }
@@ -496,6 +528,24 @@ void term_feed(Terminal *t, const char *buf, int len) {
             }
             break;
         }
+        // DCS / PM / SOS — all use the same rule: absorb everything until
+        // ST (ESC \) or BEL.  Tmux sends DCS sequences constantly for its
+        // passthrough and clipboard protocols.  Without this sink the payload
+        // bytes reach PS_NORMAL and get misinterpreted as CSI/text, corrupting
+        // the terminal state and eventually crashing.
+        case PS_DCS:
+        case PS_PM:
+        case PS_SOS:
+            if (ch == 0x07) {
+                t->state = PS_NORMAL;  // BEL = ST shorthand
+            } else if (ch == 0x1b) {
+                t->apc_esc_pending = true;  // reuse flag — next char must be '\'
+            } else if (t->apc_esc_pending) {
+                t->apc_esc_pending = false;
+                if (ch == '\\') t->state = PS_NORMAL;
+                // else: not ST, keep sinking
+            }
+            break;
         case PS_OSC:
             if (ch == 0x07 || ch == 0x1b) {
                 t->osc[t->osc_len] = '\0';

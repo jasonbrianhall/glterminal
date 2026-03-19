@@ -41,7 +41,10 @@ static bool             s_active   = false;
 // All libssh2 calls on this session must hold this mutex.
 // The SFTP transfer thread acquires it for the duration of a transfer;
 // the main thread holds it during ssh_read / ssh_write.
-static std::mutex s_session_mutex;
+// Must be recursive: ssh_read holds the lock, calls term_feed, which calls
+// term_write (for DA responses etc.), which calls ssh_write — same thread,
+// needs to re-enter. std::mutex would deadlock; recursive_mutex allows it.
+static std::recursive_mutex s_session_mutex;
 
 // ============================================================================
 // HELPERS
@@ -454,8 +457,8 @@ bool ssh_read(Terminal *t) {
     char buf[4096];
     bool got_data = false;
 
-    std::unique_lock<std::mutex> lock(s_session_mutex, std::try_to_lock);
-    if (!lock.owns_lock()) return false;  // transfer thread holds it — skip this tick
+    std::unique_lock<std::recursive_mutex> lock(s_session_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return false;
 
     for (;;) {
         ssize_t n = libssh2_channel_read(s_channel, buf, sizeof(buf));
@@ -463,11 +466,15 @@ bool ssh_read(Terminal *t) {
             term_feed(t, buf, (int)n);
             got_data = true;
         } else if (n == LIBSSH2_ERROR_EAGAIN) {
-            int next;
-            libssh2_keepalive_send(s_session, &next);
+            static uint32_t s_last_keepalive = 0;
+            uint32_t now = SDL_GetTicks();
+            if (now - s_last_keepalive >= 1000) {
+                int next_keepalive = 0;
+                libssh2_keepalive_send(s_session, &next_keepalive);
+                s_last_keepalive = now;
+            }
             break;
         } else {
-            // n == 0 (EOF) or error — mark closed
             if (n < 0)
                 SDL_Log("%s\n", last_ssh2_error("channel read error").c_str());
             s_active = false;
@@ -481,7 +488,7 @@ void ssh_write(Terminal *t, const char *buf, int n) {
     (void)t;
     if (!s_active || !s_channel || n <= 0) return;
 
-    std::lock_guard<std::mutex> lock(s_session_mutex);
+    std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
     int sent = 0;
     while (sent < n) {
         ssize_t rc = libssh2_channel_write(s_channel, buf + sent, (size_t)(n - sent));
