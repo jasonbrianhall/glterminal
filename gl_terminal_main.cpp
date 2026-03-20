@@ -23,6 +23,7 @@
 #ifdef USESSH
 #  include "ssh_session.h"
 #  include "sftp_overlay.h"
+#  include "sftp_console.h"
 #endif
 
 #include <SDL2/SDL.h>
@@ -156,6 +157,7 @@ int main(int argc, char **argv) {
             printf("\nKeyboard shortcuts:\n");
             printf("  F2                          SFTP upload browser (SSH sessions only)\n");
             printf("  F3                          SFTP download browser (SSH sessions only)\n");
+            printf("  F4                          SFTP interactive console (SSH sessions only)\n");
             printf("  F11                         Toggle full screen\n");
             printf("  Ctrl+Scroll                 Resize font\n");
             printf("  Shift+PageUp/Down           Scroll scrollback buffer\n");
@@ -721,6 +723,14 @@ int main(int argc, char **argv) {
                 // Still connecting — ignore all normal key input
                 if (!ssh_ready) break;
 #endif
+                // SFTP console (F4) — forward all keys when visible
+#ifdef USESSH
+                if (g_sftp_console_visible) {
+                    sftp_console_keydown(ev.key.keysym, nullptr);
+                    needs_render = true;
+                    break;
+                }
+#endif
                 // SFTP overlay — forward all keys when visible
 #ifdef USESSH
                 if (g_sftp.visible) {
@@ -728,7 +738,7 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
-                // F2 = upload, F3 = download
+                // F2 = upload, F3 = download, F4 = SFTP console
                 if (use_ssh && ssh_active()) {
                     if (ev.key.keysym.sym == SDLK_F2) {
                         SDL_Log("[SFTP] F2 upload triggered\n");
@@ -743,6 +753,13 @@ int main(int argc, char **argv) {
                         SDL_GetWindowSize(window, &win_w, &win_h);
                         sftp_overlay_open(SftpOverlayMode::DOWNLOAD,
                                           guess_remote_cwd().c_str(), win_w, win_h);
+                        needs_render = true;
+                        break;
+                    }
+                    if (ev.key.keysym.sym == SDLK_F4) {
+                        SDL_Log("[SFTP] F4 console triggered\n");
+                        SDL_GetWindowSize(window, &win_w, &win_h);
+                        sftp_console_open(win_w, win_h);
                         needs_render = true;
                         break;
                     }
@@ -787,6 +804,13 @@ int main(int argc, char **argv) {
 
             case SDL_TEXTINPUT: {
 #ifdef USESSH
+                // Forward text to SFTP console when visible
+                if (g_sftp_console_visible) {
+                    SDL_Keysym ks{}; ks.sym = SDLK_UNKNOWN;
+                    sftp_console_keydown(ks, ev.text.text);
+                    needs_render = true;
+                    break;
+                }
                 // Drop text input entirely when the SFTP overlay is up
                 if (g_sftp.visible) break;
                 if (use_ssh && ssh_phase == SshPhase::SETUP) {
@@ -1124,6 +1148,7 @@ int main(int argc, char **argv) {
             menu_render(&g_menu);
 #ifdef USESSH
             sftp_overlay_render(win_w, win_h);
+            sftp_console_render(win_w, win_h);
 #endif
 
             SDL_GL_SwapWindow(window);
@@ -1152,6 +1177,7 @@ int main(int argc, char **argv) {
         ssh_abort.store(true);
         if (ssh_thread.joinable()) ssh_thread.join();
         if (prompt_req.mtx) SDL_DestroyMutex(prompt_req.mtx);
+        sftp_console_join();
         sftp_transfer_join();
         sftp_shutdown();
         ssh_disconnect();

@@ -1,0 +1,1087 @@
+// sftp_console.cpp — interactive SFTP console (F4)
+// Supports: ls [path], cd <path>, pwd, get <file> [localname],
+//           mget <glob>, put <localfile> [remotename], mput <glob>,
+//           mkdir <path>, rmdir <path>, rm <file>, rename <old> <new>,
+//           chmod <mode> <file>, help, exit/quit/bye
+//
+// Shares the libssh2 SFTP subsystem already opened by sftp_overlay.cpp
+// (sftp_init() is idempotent).  Background transfers run on a worker thread
+// so the render loop stays responsive.
+//
+#ifdef USESSH
+
+#include "sftp_console.h"
+#include "sftp_overlay.h"   // sftp_init(), sftp_local_home_dir(), sftp_local_download_dir()
+#include "ssh_session.h"
+#include "gl_renderer.h"
+#include "ft_font.h"
+
+#include <libssh2.h>
+#include <libssh2_sftp.h>
+#include <SDL2/SDL.h>
+
+#include <string>
+#include <vector>
+#include <thread>
+#include <atomic>
+#include <algorithm>
+#include <functional>
+#include <sstream>
+#include <cstring>
+#include <cstdio>
+#include <cerrno>
+#include <ctime>
+#include <fnmatch.h>    // POSIX glob matching (Windows: handled separately)
+
+#ifndef _WIN32
+#  include <sys/stat.h>
+#  include <dirent.h>
+#  include <unistd.h>
+#  include <sys/select.h>
+#else
+#  include <windows.h>
+#  include <shlobj.h>
+#  define fnmatch(p,s,f) (PathMatchSpecA((s),(p)) ? 0 : 1)
+#endif
+
+// ============================================================================
+// EXTERNAL REFS  (provided by sftp_overlay.cpp / ssh_session.cpp)
+// ============================================================================
+
+extern int g_font_size;
+
+// The live SFTP session handle — defined as static inside sftp_overlay.cpp.
+// We reach it through the public init/shutdown API; all actual libssh2 SFTP
+// calls go through a thin accessor declared below.
+static LIBSSH2_SFTP *s_sftp_handle() {
+    // sftp_init() returns the cached handle if already open.
+    if (!sftp_init()) return nullptr;
+    // libssh2_sftp_init() is called inside sftp_init() and stored as a file-
+    // static there.  We need the raw pointer for directory/file ops.
+    // Obtain it by opening a known-path handle and immediately closing it?
+    // Better: expose a thin getter from sftp_overlay.cpp.
+    // For now we store our own copy after the first successful init call.
+    return nullptr; // replaced below with our own init
+}
+
+// We maintain our own SFTP handle so we don't have to touch sftp_overlay internals.
+static LIBSSH2_SFTP *s_sftp  = nullptr;
+
+static bool console_sftp_init() {
+    if (s_sftp) return true;
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    if (!sess) return false;
+    libssh2_session_set_blocking(sess, 1);
+    s_sftp = libssh2_sftp_init(sess);
+    libssh2_session_set_blocking(sess, 0);
+    return s_sftp != nullptr;
+}
+
+static int waitsocket_con(int sock, LIBSSH2_SESSION *sess) {
+    struct timeval tv = { 10, 0 };
+    fd_set fd, *rfd = nullptr, *wfd = nullptr;
+    FD_ZERO(&fd); FD_SET(sock, &fd);
+    int dir = libssh2_session_block_directions(sess);
+    if (dir & LIBSSH2_SESSION_BLOCK_INBOUND)  rfd = &fd;
+    if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) wfd = &fd;
+    return select(sock + 1, rfd, wfd, nullptr, &tv);
+}
+
+// ============================================================================
+// STATE
+// ============================================================================
+
+bool g_sftp_console_visible = false;
+
+static const int MAX_HISTORY   = 200;
+static const int MAX_SCROLLBACK = 2000;
+static const int INPUT_MAX     = 1024;
+static const int PAD           = 8;
+
+struct ConsoleLine {
+    std::string text;
+    float r, g, b;  // colour
+};
+
+static std::vector<ConsoleLine>  s_lines;
+static int                        s_scroll_offset = 0;  // lines from bottom, 0 = at bottom
+
+static char                       s_input[INPUT_MAX] = {};
+static int                        s_input_len  = 0;
+static int                        s_cursor_pos = 0;     // byte position in s_input
+
+static std::vector<std::string>   s_history;
+static int                        s_history_idx = -1;   // -1 = not browsing
+
+static char                       s_remote_cwd[4096] = "/";
+static char                       s_local_cwd[4096]  = {};
+
+// Background transfer
+static std::thread                s_worker;
+static std::atomic<bool>          s_busy{false};
+static std::atomic<float>         s_progress{0.f};
+static std::string                s_progress_label;
+
+// ============================================================================
+// ROW HEIGHT  (shared with sftp_overlay style)
+// ============================================================================
+
+static int rh() { return (int)(g_font_size * 1.8f); }
+
+static float con_text(const char *t, float x, float y, float r, float g, float b, float a = 1.f) {
+    return draw_text(t, x, y, g_font_size, g_font_size, r, g, b, a, 0);
+}
+
+// ============================================================================
+// OUTPUT HELPERS
+// ============================================================================
+
+static void push_line(const char *text, float r = 0.82f, float g = 0.88f, float b = 0.96f) {
+    // Split on newlines so multi-line output renders as separate rows.
+    const char *p = text;
+    const char *nl;
+    while ((nl = strchr(p, '\n')) != nullptr) {
+        s_lines.push_back({ std::string(p, nl), r, g, b });
+        p = nl + 1;
+    }
+    if (*p) s_lines.push_back({ std::string(p), r, g, b });
+    if ((int)s_lines.size() > MAX_SCROLLBACK)
+        s_lines.erase(s_lines.begin(), s_lines.begin() + (s_lines.size() - MAX_SCROLLBACK));
+    s_scroll_offset = 0; // auto-scroll to bottom
+}
+
+static void push_ok  (const char *t) { push_line(t, 0.30f, 1.00f, 0.45f); }
+static void push_err (const char *t) { push_line(t, 1.00f, 0.38f, 0.35f); }
+static void push_info(const char *t) { push_line(t, 0.60f, 0.80f, 1.00f); }
+static void push_cmd (const char *t) {
+    char buf[INPUT_MAX + 8];
+    snprintf(buf, sizeof(buf), "sftp> %s", t);
+    push_line(buf, 0.95f, 0.90f, 0.50f);
+}
+
+// ============================================================================
+// REMOTE HELPERS  (all called on worker thread — must hold session lock)
+// ============================================================================
+
+struct SessionLock {
+    SessionLock()  { ssh_session_lock(); }
+    ~SessionLock() { ssh_session_unlock(); }
+};
+
+static std::string remote_realpath(const char *path) {
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    int sock = ssh_get_socket();
+    char resolved[4096] = {};
+    int rc;
+    while ((rc = libssh2_sftp_realpath(s_sftp, path, resolved, sizeof(resolved)-1))
+           == LIBSSH2_ERROR_EAGAIN)
+        waitsocket_con(sock, sess);
+    return rc >= 0 ? std::string(resolved) : std::string(path);
+}
+
+static bool remote_is_dir(const char *path) {
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    int sock = ssh_get_socket();
+    LIBSSH2_SFTP_ATTRIBUTES attrs{};
+    int rc;
+    while ((rc = libssh2_sftp_stat(s_sftp, path, &attrs)) == LIBSSH2_ERROR_EAGAIN)
+        waitsocket_con(sock, sess);
+    return rc == 0 && (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS)
+           && LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
+}
+
+// Returns "" on success, error string on failure.
+static std::string do_get(const char *remote_full, const char *local_full,
+                           const std::string &label) {
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    int sock = ssh_get_socket();
+    SessionLock lk;
+    libssh2_session_set_blocking(sess, 0);
+
+    // Stat for size
+    LIBSSH2_SFTP_ATTRIBUTES attrs{};
+    uint64_t file_size = 0;
+    { int rc; while ((rc = libssh2_sftp_stat(s_sftp, remote_full, &attrs))
+              == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+      if (rc == 0 && (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE)) file_size = attrs.filesize; }
+
+    LIBSSH2_SFTP_HANDLE *fh = nullptr;
+    while (!fh) {
+        fh = libssh2_sftp_open(s_sftp, remote_full, LIBSSH2_FXF_READ, 0);
+        if (!fh) {
+            if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN)
+            { waitsocket_con(sock, sess); continue; }
+            char e[256];
+            snprintf(e, sizeof(e), "cannot open remote '%s' (sftp err %lu)",
+                     remote_full, libssh2_sftp_last_error(s_sftp));
+            return e;
+        }
+    }
+
+    FILE *out = fopen(local_full, "wb");
+    if (!out) {
+        char e[256];
+        snprintf(e, sizeof(e), "cannot create '%s': %s", local_full, strerror(errno));
+        while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        return e;
+    }
+
+    char buf[32768]; ssize_t n; uint64_t total = 0; bool ok = true;
+    s_progress.store(0.f);
+    for (;;) {
+        n = libssh2_sftp_read(fh, buf, sizeof(buf));
+        if (n == LIBSSH2_ERROR_EAGAIN) { waitsocket_con(sock, sess); continue; }
+        if (n < 0) { ok = false; break; }
+        if (n == 0) break;
+        if (fwrite(buf, 1, (size_t)n, out) != (size_t)n) { ok = false; break; }
+        total += (uint64_t)n;
+        if (file_size) s_progress.store((float)total / (float)file_size);
+    }
+    fclose(out);
+    while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+
+    if (!ok) return std::string("transfer failed for '") + remote_full + "'";
+    s_progress.store(1.f);
+    return "";
+}
+
+static std::string do_put(const char *local_full, const char *remote_full) {
+    uint64_t file_size = 0;
+#ifndef _WIN32
+    struct stat st{}; if (stat(local_full, &st) == 0) file_size = (uint64_t)st.st_size;
+#else
+    WIN32_FILE_ATTRIBUTE_DATA fa{};
+    if (GetFileAttributesExA(local_full, GetFileExInfoStandard, &fa))
+        file_size = ((uint64_t)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+#endif
+    FILE *in = fopen(local_full, "rb");
+    if (!in) {
+        char e[256]; snprintf(e, sizeof(e), "cannot open '%s': %s", local_full, strerror(errno));
+        return e;
+    }
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    int sock = ssh_get_socket();
+    SessionLock lk;
+    libssh2_session_set_blocking(sess, 0);
+
+    LIBSSH2_SFTP_HANDLE *fh = nullptr;
+    while (!fh) {
+        fh = libssh2_sftp_open(s_sftp, remote_full,
+            LIBSSH2_FXF_WRITE|LIBSSH2_FXF_CREAT|LIBSSH2_FXF_TRUNC,
+            LIBSSH2_SFTP_S_IRUSR|LIBSSH2_SFTP_S_IWUSR|
+            LIBSSH2_SFTP_S_IRGRP|LIBSSH2_SFTP_S_IROTH);
+        if (!fh) {
+            if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN)
+            { waitsocket_con(sock, sess); continue; }
+            fclose(in);
+            char e[256]; snprintf(e, sizeof(e), "cannot create remote '%s' (sftp err %lu)",
+                                  remote_full, libssh2_sftp_last_error(s_sftp));
+            return e;
+        }
+    }
+
+    char buf[32768]; size_t nread; uint64_t total = 0; bool ok = true;
+    s_progress.store(0.f);
+    while ((nread = fread(buf, 1, sizeof(buf), in)) > 0) {
+        size_t sent = 0;
+        while (sent < nread) {
+            ssize_t rc = libssh2_sftp_write(fh, buf + sent, nread - sent);
+            if (rc == LIBSSH2_ERROR_EAGAIN) { waitsocket_con(sock, sess); continue; }
+            if (rc < 0) { ok = false; goto put_done; }
+            sent += (size_t)rc; total += (size_t)rc;
+        }
+        if (file_size) s_progress.store((float)total / (float)file_size);
+    }
+    if (ferror(in)) ok = false;
+put_done:
+    fclose(in);
+    while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+    if (!ok) return std::string("transfer failed for '") + local_full + "'";
+    s_progress.store(1.f);
+    return "";
+}
+
+// List remote dir, return entries.  Must be called with session lock held.
+struct RemoteEntry { std::string name; bool is_dir; uint64_t size; uint32_t perms; time_t mtime; };
+static std::vector<RemoteEntry> list_remote_dir(const char *path) {
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    int sock = ssh_get_socket();
+    libssh2_session_set_blocking(sess, 0);
+
+    LIBSSH2_SFTP_HANDLE *dh = nullptr;
+    for (int i = 0; i < 300 && !dh; i++) {
+        dh = libssh2_sftp_opendir(s_sftp, path);
+        if (!dh && libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN)
+        { waitsocket_con(sock, sess); }
+        else if (!dh) break;
+    }
+    std::vector<RemoteEntry> out;
+    if (!dh) return out;
+
+    char name[512], longentry[1024];
+    LIBSSH2_SFTP_ATTRIBUTES attrs{};
+    while (libssh2_sftp_readdir_ex(dh, name, sizeof(name), longentry, sizeof(longentry), &attrs) > 0) {
+        if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
+        RemoteEntry e;
+        e.name   = name;
+        e.is_dir = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) && LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
+        e.size   = (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) ? attrs.filesize : 0;
+        e.perms  = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) ? attrs.permissions : 0;
+        e.mtime  = (attrs.flags & LIBSSH2_SFTP_ATTR_ACMODTIME)   ? (time_t)attrs.mtime : 0;
+        out.push_back(std::move(e));
+    }
+    libssh2_sftp_closedir(dh);
+    return out;
+}
+
+// ============================================================================
+// LOCAL CWD HELPERS
+// ============================================================================
+
+static void local_chdir(const char *path) {
+#ifndef _WIN32
+    if (chdir(path) == 0) getcwd(s_local_cwd, sizeof(s_local_cwd));
+#else
+    SetCurrentDirectoryA(path);
+    GetCurrentDirectoryA(sizeof(s_local_cwd), s_local_cwd);
+#endif
+}
+
+static void refresh_local_cwd() {
+#ifndef _WIN32
+    if (!getcwd(s_local_cwd, sizeof(s_local_cwd)))
+        strncpy(s_local_cwd, sftp_local_home_dir().c_str(), sizeof(s_local_cwd)-1);
+#else
+    if (!GetCurrentDirectoryA(sizeof(s_local_cwd), s_local_cwd))
+        strncpy(s_local_cwd, sftp_local_home_dir().c_str(), sizeof(s_local_cwd)-1);
+#endif
+}
+
+// ============================================================================
+// BUILD A FULL REMOTE PATH  (respects CWD for relative paths)
+// ============================================================================
+
+static std::string remote_abs(const std::string &arg) {
+    if (arg.empty()) return s_remote_cwd;
+    if (arg[0] == '/') return arg;
+    std::string base(s_remote_cwd);
+    if (base.back() != '/') base += '/';
+    return base + arg;
+}
+
+static std::string local_abs(const std::string &arg) {
+    if (arg.empty()) return s_local_cwd;
+#ifndef _WIN32
+    if (arg[0] == '/') return arg;
+    if (arg[0] == '~') return sftp_local_home_dir() + arg.substr(1);
+#else
+    if (arg.size() >= 2 && arg[1] == ':') return arg;
+#endif
+    return std::string(s_local_cwd) + "/" + arg;
+}
+
+// ============================================================================
+// FORMAT HELPERS
+// ============================================================================
+
+static void fmt_size(uint64_t sz, char *buf, int n) {
+    if      (sz >= 1024ULL*1024*1024) snprintf(buf,n,"%.1f GB", sz/(1024.*1024*1024));
+    else if (sz >= 1024ULL*1024)      snprintf(buf,n,"%.1f MB", sz/(1024.*1024));
+    else if (sz >= 1024ULL)           snprintf(buf,n,"%.1f KB", sz/1024.);
+    else                              snprintf(buf,n,"%llu B",  (unsigned long long)sz);
+}
+
+static void fmt_perms(uint32_t p, char *buf) {
+    buf[0] = LIBSSH2_SFTP_S_ISDIR(p) ? 'd' : '-';
+    buf[1] = (p & 0400) ? 'r' : '-'; buf[2] = (p & 0200) ? 'w' : '-'; buf[3] = (p & 0100) ? 'x' : '-';
+    buf[4] = (p & 0040) ? 'r' : '-'; buf[5] = (p & 0020) ? 'w' : '-'; buf[6] = (p & 0010) ? 'x' : '-';
+    buf[7] = (p & 0004) ? 'r' : '-'; buf[8] = (p & 0002) ? 'w' : '-'; buf[9] = (p & 0001) ? 'x' : '-';
+    buf[10] = '\0';
+}
+
+// ============================================================================
+// TOKENISER
+// ============================================================================
+
+static std::vector<std::string> tokenise(const char *line) {
+    std::vector<std::string> toks;
+    const char *p = line;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        std::string tok;
+        bool quoted = false;
+        char qchar  = 0;
+        if (*p == '"' || *p == '\'') { quoted = true; qchar = *p++; }
+        while (*p) {
+            if (quoted) {
+                if (*p == qchar) { p++; break; }
+                if (*p == '\\' && *(p+1)) { p++; tok += *p++; continue; }
+            } else {
+                if (*p == ' ' || *p == '\t') break;
+            }
+            tok += *p++;
+        }
+        if (!tok.empty()) toks.push_back(tok);
+    }
+    return toks;
+}
+
+// ============================================================================
+// COMMAND DISPATCH  (called on worker thread for I/O commands, on main for
+// instant commands like pwd / help / lcd)
+// ============================================================================
+
+static void cmd_help() {
+    push_info("Commands:");
+    push_info("  ls [-l] [path]          List remote directory");
+    push_info("  cd <path>               Change remote directory");
+    push_info("  pwd                     Print remote directory");
+    push_info("  lcd [path]              Change / print local directory");
+    push_info("  lpwd                    Print local directory");
+    push_info("  lls [path]              List local directory");
+    push_info("  lmkdir <path>           Create local directory");
+    push_info("  get <file> [localname]  Download file");
+    push_info("  mget <glob>             Download matching files");
+    push_info("  put <file> [remotename] Upload file");
+    push_info("  mput <glob>             Upload matching local files");
+    push_info("  mkdir <path>            Create remote directory");
+    push_info("  rmdir <path>            Remove remote directory");
+    push_info("  rm <file>               Delete remote file");
+    push_info("  rename <old> <new>      Rename/move remote path");
+    push_info("  chmod <mode> <file>     Change permissions (octal)");
+    push_info("  progress                Show last transfer progress");
+    push_info("  clear                   Clear screen");
+    push_info("  exit / quit / bye       Close console");
+}
+
+// Executed synchronously (no blocking I/O)
+static bool cmd_instant(const std::vector<std::string> &toks) {
+    if (toks.empty()) return true;
+    const std::string &cmd = toks[0];
+
+    if (cmd == "pwd") {
+        push_ok(s_remote_cwd);
+        return true;
+    }
+    if (cmd == "lpwd") {
+        push_ok(s_local_cwd);
+        return true;
+    }
+    if (cmd == "lcd") {
+        if (toks.size() == 1) {
+            push_ok(s_local_cwd);
+        } else {
+            local_chdir(local_abs(toks[1]).c_str());
+            push_ok(s_local_cwd);
+        }
+        return true;
+    }
+    if (cmd == "lls") {
+        const char *dir = toks.size() > 1 ? toks[1].c_str() : s_local_cwd;
+#ifndef _WIN32
+        DIR *d = opendir(dir);
+        if (!d) { push_err(("lls: " + std::string(strerror(errno))).c_str()); return true; }
+        struct dirent *de; std::vector<std::string> names;
+        while ((de = readdir(d))) { if (strcmp(de->d_name,".")&&strcmp(de->d_name,"..")) names.push_back(de->d_name); }
+        closedir(d);
+        std::sort(names.begin(), names.end());
+        for (auto &n : names) push_line(n.c_str());
+#else
+        char pat[4096]; snprintf(pat, sizeof(pat), "%s\\*", dir);
+        WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pat, &fd);
+        std::vector<std::string> names;
+        if (h != INVALID_HANDLE_VALUE) {
+            do { if (strcmp(fd.cFileName,".")&&strcmp(fd.cFileName,"..")) names.push_back(fd.cFileName); }
+            while(FindNextFileA(h,&fd)); FindClose(h);
+        }
+        std::sort(names.begin(), names.end());
+        for (auto &n : names) push_line(n.c_str());
+#endif
+        return true;
+    }
+    if (cmd == "lmkdir") {
+        if (toks.size() < 2) { push_err("usage: lmkdir <path>"); return true; }
+        std::string path = local_abs(toks[1]);
+#ifndef _WIN32
+        if (mkdir(path.c_str(), 0755) != 0)
+            push_err(("lmkdir: " + std::string(strerror(errno))).c_str());
+        else
+            push_ok(("Created " + path).c_str());
+#else
+        if (!CreateDirectoryA(path.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+            push_err(("lmkdir: failed to create " + path).c_str());
+        else
+            push_ok(("Created " + path).c_str());
+#endif
+        return true;
+    }
+    if (cmd == "clear") {
+        s_lines.clear(); s_scroll_offset = 0;
+        return true;
+    }
+    if (cmd == "help" || cmd == "?") {
+        cmd_help();
+        return true;
+    }
+    if (cmd == "exit" || cmd == "quit" || cmd == "bye") {
+        sftp_console_close();
+        return true;
+    }
+    if (cmd == "progress") {
+        char buf[64]; snprintf(buf, sizeof(buf), "%.0f%%", s_progress.load() * 100.f);
+        push_info(buf);
+        return true;
+    }
+    return false;
+}
+
+// Dispatched on a worker thread — may block on network I/O
+static void cmd_worker(std::vector<std::string> toks) {
+    if (toks.empty()) { s_busy.store(false); return; }
+    const std::string &cmd = toks[0];
+
+    // ------------------------------------------------------------------ cd
+    if (cmd == "cd") {
+        if (toks.size() < 2) { push_err("usage: cd <path>"); s_busy.store(false); return; }
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        libssh2_session_set_blocking(sess, 0);
+        std::string target = remote_abs(toks[1]);
+        // Resolve real path so we always store canonical form
+        std::string real = remote_realpath(target.c_str());
+        if (!remote_is_dir(real.c_str())) {
+            push_err(("cd: not a directory: " + real).c_str());
+        } else {
+            strncpy(s_remote_cwd, real.c_str(), sizeof(s_remote_cwd)-1);
+            push_ok(s_remote_cwd);
+        }
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ ls
+    if (cmd == "ls") {
+        bool long_fmt = false;
+        std::string path = s_remote_cwd;
+        for (int i = 1; i < (int)toks.size(); i++) {
+            if (toks[i] == "-l") long_fmt = true;
+            else path = remote_abs(toks[i]);
+        }
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        libssh2_session_set_blocking(sess, 0);
+        auto entries = list_remote_dir(path.c_str());
+        if (entries.empty() && !remote_is_dir(path.c_str())) {
+            push_err(("ls: cannot access " + path).c_str());
+        } else {
+            std::sort(entries.begin(), entries.end(), [](const RemoteEntry &a, const RemoteEntry &b){
+                if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
+                return a.name < b.name;
+            });
+            for (auto &e : entries) {
+                if (long_fmt) {
+                    char perm[12], sz[24], tmbuf[32];
+                    fmt_perms(e.perms, perm);
+                    fmt_size(e.size, sz, sizeof(sz));
+                    if (e.mtime) {
+                        struct tm *tm = gmtime(&e.mtime);
+                        strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d %H:%M", tm);
+                    } else strcpy(tmbuf, "                ");
+                    char line[1024];
+                    snprintf(line, sizeof(line), "%s  %8s  %s  %s%s",
+                             perm, sz, tmbuf, e.name.c_str(), e.is_dir ? "/" : "");
+                    push_line(line, e.is_dir ? 0.90f : 0.82f, e.is_dir ? 0.90f : 0.82f,
+                                     e.is_dir ? 0.50f : 0.96f);
+                } else {
+                    std::string disp = e.is_dir ? ("[" + e.name + "]") : e.name;
+                    push_line(disp.c_str(), e.is_dir ? 0.90f : 0.82f,
+                                            e.is_dir ? 0.90f : 0.82f,
+                                            e.is_dir ? 0.50f : 0.96f);
+                }
+            }
+        }
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ get
+    if (cmd == "get") {
+        if (toks.size() < 2) { push_err("usage: get <remotefile> [localname]"); s_busy.store(false); return; }
+        std::string rpath = remote_abs(toks[1]);
+        std::string fname = toks[1].find('/') != std::string::npos
+            ? toks[1].substr(toks[1].rfind('/')+1) : toks[1];
+        std::string lpath = toks.size() >= 3 ? local_abs(toks[2])
+                                              : std::string(s_local_cwd) + "/" + fname;
+        s_progress_label = "get " + fname;
+        s_progress.store(0.f);
+        std::string err = do_get(rpath.c_str(), lpath.c_str(), fname);
+        if (err.empty()) {
+            push_ok(("Downloaded → " + lpath).c_str());
+        } else {
+            push_err(err.c_str());
+        }
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ mget
+    if (cmd == "mget") {
+        if (toks.size() < 2) { push_err("usage: mget <glob>"); s_busy.store(false); return; }
+        const std::string &pattern = toks[1];
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        libssh2_session_set_blocking(sess, 0);
+        auto entries = list_remote_dir(s_remote_cwd);
+        lk.~SessionLock(); // release before per-file transfers re-acquire
+        new (&lk) SessionLock(); // dummy — we manually manage below
+        // Actually we release and re-lock per file
+        int got = 0;
+        for (auto &e : entries) {
+            if (e.is_dir) continue;
+            if (fnmatch(pattern.c_str(), e.name.c_str(), 0) != 0) continue;
+            std::string rpath = std::string(s_remote_cwd) + "/" + e.name;
+            std::string lpath = std::string(s_local_cwd)  + "/" + e.name;
+            s_progress_label = "mget " + e.name;
+            s_progress.store(0.f);
+            // do_get re-acquires session lock internally
+            std::string err = do_get(rpath.c_str(), lpath.c_str(), e.name);
+            if (err.empty()) {
+                char buf[1024]; snprintf(buf, sizeof(buf), "  ↓ %s", e.name.c_str());
+                push_ok(buf); got++;
+            } else {
+                push_err(err.c_str());
+            }
+        }
+        if (got == 0) push_info("mget: no matching files");
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ put
+    if (cmd == "put") {
+        if (toks.size() < 2) { push_err("usage: put <localfile> [remotename]"); s_busy.store(false); return; }
+        std::string lpath = local_abs(toks[1]);
+        std::string fname = toks[1].find('/') != std::string::npos
+            ? toks[1].substr(toks[1].rfind('/')+1) : toks[1];
+        std::string rpath = toks.size() >= 3 ? remote_abs(toks[2])
+                                              : std::string(s_remote_cwd) + "/" + fname;
+        s_progress_label = "put " + fname;
+        s_progress.store(0.f);
+        std::string err = do_put(lpath.c_str(), rpath.c_str());
+        if (err.empty()) {
+            push_ok(("Uploaded → " + rpath).c_str());
+        } else {
+            push_err(err.c_str());
+        }
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ mput
+    if (cmd == "mput") {
+        if (toks.size() < 2) { push_err("usage: mput <glob>"); s_busy.store(false); return; }
+        const std::string &pattern = toks[1];
+        int put = 0;
+#ifndef _WIN32
+        DIR *d = opendir(s_local_cwd);
+        std::vector<std::string> names;
+        if (d) {
+            struct dirent *de;
+            while ((de = readdir(d))) {
+                if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+                if (fnmatch(pattern.c_str(), de->d_name, 0) == 0) names.push_back(de->d_name);
+            }
+            closedir(d);
+        }
+#else
+        char pat[4096]; snprintf(pat, sizeof(pat), "%s\\*", s_local_cwd);
+        WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pat, &fd);
+        std::vector<std::string> names;
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!strcmp(fd.cFileName,".") || !strcmp(fd.cFileName,"..")) continue;
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+                    if (fnmatch(pattern.c_str(), fd.cFileName, 0) == 0) names.push_back(fd.cFileName);
+            } while (FindNextFileA(h,&fd));
+            FindClose(h);
+        }
+#endif
+        for (auto &name : names) {
+            std::string lpath = std::string(s_local_cwd) + "/" + name;
+            std::string rpath = std::string(s_remote_cwd) + "/" + name;
+            s_progress_label = "mput " + name;
+            s_progress.store(0.f);
+            std::string err = do_put(lpath.c_str(), rpath.c_str());
+            if (err.empty()) {
+                char buf[1024]; snprintf(buf, sizeof(buf), "  ↑ %s", name.c_str());
+                push_ok(buf); put++;
+            } else push_err(err.c_str());
+        }
+        if (put == 0) push_info("mput: no matching files");
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ mkdir
+    if (cmd == "mkdir") {
+        if (toks.size() < 2) { push_err("usage: mkdir <path>"); s_busy.store(false); return; }
+        std::string path = remote_abs(toks[1]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        int rc;
+        while ((rc = libssh2_sftp_mkdir(s_sftp, path.c_str(),
+                LIBSSH2_SFTP_S_IRWXU|LIBSSH2_SFTP_S_IRGRP|LIBSSH2_SFTP_S_IXGRP|
+                LIBSSH2_SFTP_S_IROTH|LIBSSH2_SFTP_S_IXOTH))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("mkdir failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok(("Created " + path).c_str());
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ rmdir
+    if (cmd == "rmdir") {
+        if (toks.size() < 2) { push_err("usage: rmdir <path>"); s_busy.store(false); return; }
+        std::string path = remote_abs(toks[1]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        int rc;
+        while ((rc = libssh2_sftp_rmdir(s_sftp, path.c_str()))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("rmdir failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok(("Removed " + path).c_str());
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ rm
+    if (cmd == "rm") {
+        if (toks.size() < 2) { push_err("usage: rm <file>"); s_busy.store(false); return; }
+        std::string path = remote_abs(toks[1]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        int rc;
+        while ((rc = libssh2_sftp_unlink(s_sftp, path.c_str()))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("rm failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok(("Removed " + path).c_str());
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ rename
+    if (cmd == "rename") {
+        if (toks.size() < 3) { push_err("usage: rename <old> <new>"); s_busy.store(false); return; }
+        std::string src = remote_abs(toks[1]), dst = remote_abs(toks[2]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        int rc;
+        while ((rc = libssh2_sftp_rename(s_sftp, src.c_str(), dst.c_str()))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("rename failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok((src + " → " + dst).c_str());
+        s_busy.store(false); return;
+    }
+
+    // ------------------------------------------------------------------ chmod
+    if (cmd == "chmod") {
+        if (toks.size() < 3) { push_err("usage: chmod <mode> <file>"); s_busy.store(false); return; }
+        unsigned long mode = strtoul(toks[1].c_str(), nullptr, 8);
+        std::string path = remote_abs(toks[2]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        LIBSSH2_SFTP_ATTRIBUTES attrs{};
+        attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
+        attrs.permissions = (uint32_t)mode;
+        int rc;
+        while ((rc = libssh2_sftp_setstat(s_sftp, path.c_str(), &attrs))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("chmod failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok(("chmod " + toks[1] + " " + path).c_str());
+        s_busy.store(false); return;
+    }
+
+    push_err(("Unknown command: " + cmd + "  (type 'help')").c_str());
+    s_busy.store(false);
+}
+
+// ============================================================================
+// EXECUTE  — route instant vs worker
+// ============================================================================
+
+static void execute(const char *line) {
+    if (!*line) return;
+    push_cmd(line);
+
+    // history
+    if (s_history.empty() || s_history.back() != line) {
+        s_history.push_back(line);
+        if ((int)s_history.size() > MAX_HISTORY)
+            s_history.erase(s_history.begin());
+    }
+    s_history_idx = -1;
+
+    auto toks = tokenise(line);
+    if (toks.empty()) return;
+
+    if (cmd_instant(toks)) return;
+
+    // Needs network — dispatch to worker
+    if (s_busy.load()) { push_err("Busy — wait for current transfer to finish"); return; }
+    if (!console_sftp_init()) { push_err("SFTP subsystem not available"); return; }
+    s_busy.store(true);
+    if (s_worker.joinable()) s_worker.join();
+    s_worker = std::thread(cmd_worker, std::move(toks));
+}
+
+// ============================================================================
+// PUBLIC API
+// ============================================================================
+
+void sftp_console_open(int /*win_w*/, int /*win_h*/) {
+    g_sftp_console_visible = true;
+    refresh_local_cwd();
+
+    if (s_lines.empty()) {
+        push_info("SFTP Console — type 'help' for commands, 'exit' to close");
+    }
+
+    // Populate remote CWD from active session if we can
+    if (ssh_active() && console_sftp_init()) {
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        libssh2_session_set_blocking(sess, 0);
+        std::string real = remote_realpath(".");
+        if (!real.empty()) strncpy(s_remote_cwd, real.c_str(), sizeof(s_remote_cwd)-1);
+    }
+
+    char prompt[256];
+    snprintf(prompt, sizeof(prompt), "Remote: %s   Local: %s", s_remote_cwd, s_local_cwd);
+    push_info(prompt);
+}
+
+void sftp_console_close() {
+    g_sftp_console_visible = false;
+}
+
+void sftp_console_join() {
+    if (s_worker.joinable()) s_worker.join();
+    if (s_sftp) { libssh2_sftp_shutdown(s_sftp); s_sftp = nullptr; }
+}
+
+// ============================================================================
+// KEYBOARD
+// ============================================================================
+
+bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
+    if (!g_sftp_console_visible) return false;
+
+    SDL_Keycode sym = ks.sym;
+
+    // Esc — close
+    if (sym == SDLK_ESCAPE) { sftp_console_close(); return true; }
+
+    // Return — execute
+    if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
+        execute(s_input);
+        s_input[0]   = '\0';
+        s_input_len  = 0;
+        s_cursor_pos = 0;
+        return true;
+    }
+
+    // Backspace
+    if (sym == SDLK_BACKSPACE) {
+        if (s_cursor_pos > 0) {
+            memmove(s_input + s_cursor_pos - 1, s_input + s_cursor_pos,
+                    s_input_len - s_cursor_pos + 1);
+            s_cursor_pos--;
+            s_input_len--;
+        }
+        return true;
+    }
+
+    // Delete
+    if (sym == SDLK_DELETE) {
+        if (s_cursor_pos < s_input_len) {
+            memmove(s_input + s_cursor_pos, s_input + s_cursor_pos + 1,
+                    s_input_len - s_cursor_pos);
+            s_input_len--;
+        }
+        return true;
+    }
+
+    // Left / Right / Home / End
+    if (sym == SDLK_LEFT  && s_cursor_pos > 0)             { s_cursor_pos--; return true; }
+    if (sym == SDLK_RIGHT && s_cursor_pos < s_input_len)   { s_cursor_pos++; return true; }
+    if (sym == SDLK_HOME)                                   { s_cursor_pos = 0; return true; }
+    if (sym == SDLK_END)                                    { s_cursor_pos = s_input_len; return true; }
+
+    // History Up / Down
+    if (sym == SDLK_UP) {
+        int n = (int)s_history.size();
+        if (n == 0) return true;
+        if (s_history_idx < 0) s_history_idx = n - 1;
+        else if (s_history_idx > 0) s_history_idx--;
+        const std::string &h = s_history[s_history_idx];
+        strncpy(s_input, h.c_str(), INPUT_MAX - 1);
+        s_input_len  = (int)strlen(s_input);
+        s_cursor_pos = s_input_len;
+        return true;
+    }
+    if (sym == SDLK_DOWN) {
+        int n = (int)s_history.size();
+        if (s_history_idx < 0) return true;
+        if (s_history_idx < n - 1) {
+            s_history_idx++;
+            const std::string &h = s_history[s_history_idx];
+            strncpy(s_input, h.c_str(), INPUT_MAX - 1);
+            s_input_len  = (int)strlen(s_input);
+            s_cursor_pos = s_input_len;
+        } else {
+            s_history_idx = -1;
+            s_input[0] = '\0'; s_input_len = 0; s_cursor_pos = 0;
+        }
+        return true;
+    }
+
+    // Scroll buffer
+    if (sym == SDLK_PAGEUP)   { s_scroll_offset += 10; return true; }
+    if (sym == SDLK_PAGEDOWN) { s_scroll_offset = std::max(0, s_scroll_offset - 10); return true; }
+
+    // Ctrl+C — cancel / clear input
+    if ((ks.mod & KMOD_CTRL) && sym == SDLK_c) {
+        if (s_input_len > 0) {
+            s_input[0] = '\0'; s_input_len = 0; s_cursor_pos = 0;
+        } else {
+            sftp_console_close();
+        }
+        return true;
+    }
+
+    // Ctrl+L — clear
+    if ((ks.mod & KMOD_CTRL) && sym == SDLK_l) {
+        s_lines.clear(); s_scroll_offset = 0;
+        return true;
+    }
+
+    // Printable text
+    if (text_input && *text_input) {
+        int add = (int)strlen(text_input);
+        if (s_input_len + add < INPUT_MAX - 1) {
+            memmove(s_input + s_cursor_pos + add, s_input + s_cursor_pos,
+                    s_input_len - s_cursor_pos + 1);
+            memcpy(s_input + s_cursor_pos, text_input, add);
+            s_input_len  += add;
+            s_cursor_pos += add;
+        }
+        return true;
+    }
+
+    return true; // consume all keys while console is open
+}
+
+// ============================================================================
+// RENDER
+// ============================================================================
+
+void sftp_console_render(int win_w, int win_h) {
+    if (!g_sftp_console_visible) return;
+
+    int row = rh();
+
+    // Full-screen background
+    draw_rect(0, 0, (float)win_w, (float)win_h, 0.05f, 0.06f, 0.08f, 1.f);
+
+    // Title bar
+    float title_h = (float)(row + PAD);
+    draw_rect(0, 0, (float)win_w, title_h, 0.09f, 0.10f, 0.16f, 1.f);
+    draw_rect(0, title_h - 1, (float)win_w, 1, 0.25f, 0.45f, 0.75f, 1.f);
+    {
+        char title[1024];
+        snprintf(title, sizeof(title),
+                 "SFTP Console (F4)   remote: %s   local: %s   "
+                 "PgUp/PgDn: scroll   Up/Down: history   Esc: close",
+                 s_remote_cwd, s_local_cwd);
+        con_text(title, (float)PAD, title_h * 0.72f, 0.65f, 0.82f, 1.0f);
+    }
+
+    // Input row (bottom)
+    float input_h  = (float)(row + PAD * 2);
+    float input_y  = win_h - input_h;
+    draw_rect(0, input_y, (float)win_w, 1, 0.20f, 0.30f, 0.55f, 1.f);
+    draw_rect(0, input_y + 1, (float)win_w, input_h - 1, 0.07f, 0.08f, 0.11f, 1.f);
+
+    // Progress bar (just above input when busy)
+    float progress_y = input_y;
+    if (s_busy.load() || s_progress.load() > 0.f) {
+        float bar_h  = 4.f;
+        progress_y   = input_y - bar_h - 2;
+        float filled = (float)win_w * s_progress.load();
+        draw_rect(0, progress_y, (float)win_w, bar_h, 0.12f, 0.14f, 0.20f, 1.f);
+        if (filled > 0)
+            draw_rect(0, progress_y, filled, bar_h, 0.20f, 0.80f, 0.45f, 1.f);
+        if (!s_progress_label.empty()) {
+            con_text(s_progress_label.c_str(), (float)PAD, progress_y - 4, 0.50f, 0.80f, 0.55f);
+        }
+    }
+
+    // Scrollback area
+    float scroll_top = title_h;
+    float scroll_bot = progress_y - 2;
+    float area_h     = scroll_bot - scroll_top;
+    int   visible    = (int)(area_h / row);
+
+    // Clamp scroll offset
+    int total_lines  = (int)s_lines.size();
+    int max_offset   = std::max(0, total_lines - visible);
+    if (s_scroll_offset > max_offset) s_scroll_offset = max_offset;
+
+    int first = std::max(0, total_lines - visible - s_scroll_offset);
+    for (int i = 0; i < visible; i++) {
+        int idx = first + i;
+        if (idx >= total_lines) break;
+        const auto &ln = s_lines[idx];
+        float y = scroll_top + (float)(i * row) + row * 0.72f;
+        con_text(ln.text.c_str(), (float)PAD, y, ln.r, ln.g, ln.b);
+    }
+
+    // Prompt + input line
+    float prompt_x = (float)PAD;
+    float base_y   = input_y + input_h * 0.65f;
+
+    float px = con_text("sftp> ", prompt_x, base_y, 0.40f, 0.75f, 0.40f);
+
+    // Text before cursor
+    char before[INPUT_MAX];
+    strncpy(before, s_input, s_cursor_pos);
+    before[s_cursor_pos] = '\0';
+    float cx = con_text(before, px, base_y, 0.95f, 0.95f, 0.80f);
+
+    // Cursor block
+    bool blink = (SDL_GetTicks() / 500) % 2 == 0;
+    if (blink || s_busy.load()) {
+        float cw = (float)g_font_size * 0.6f;
+        draw_rect(cx, input_y + PAD, cw, (float)(row), 0.70f, 0.85f, 1.0f, 0.65f);
+    }
+
+    // Text after cursor
+    if (s_cursor_pos < s_input_len) {
+        float after_x = cx + (float)g_font_size * 0.6f;
+        con_text(s_input + s_cursor_pos, after_x, base_y, 0.95f, 0.95f, 0.80f);
+    }
+
+    // Busy indicator
+    if (s_busy.load()) {
+        static const char *spin = "|/-\\";
+        int frame = (SDL_GetTicks() / 120) % 4;
+        char ind[4] = { spin[frame], '\0' };
+        con_text(ind, win_w - PAD - g_font_size, base_y, 0.30f, 0.90f, 0.50f);
+    }
+
+    gl_flush_verts();
+}
+
+#endif // USESSH
