@@ -58,7 +58,8 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_ENTERTAINMENT 12
 #define MENU_ID_SELECT_ALL   14
 #define MENU_ID_FONTS        16
-#define MENU_ID_QUIT         18
+#define MENU_ID_HELP         18
+#define MENU_ID_QUIT         20
 
 // New Terminal submenu item indices
 #define NEW_TERM_IDX_LOCAL  0
@@ -101,6 +102,24 @@ void action_new_ssh_session();
 
 // Free the dedicated menu font face — call before ft_shutdown().
 void menu_font_shutdown();
+
+// ============================================================================
+// HELP OVERLAY  (F1)
+// ============================================================================
+
+extern bool g_help_visible;
+
+// Render the help overlay. Call after menu_render() so it draws on top.
+void help_render(int win_w, int win_h);
+
+// Returns true if the key was consumed (Escape / F1 closes the overlay).
+bool help_keydown(SDL_Keycode sym);
+
+// Returns true if the mouse event was consumed. Opens links or closes overlay.
+bool help_mousedown(int x, int y);
+
+// Returns true if hover state changed (caller should set needs_render).
+bool help_mousemotion(int x, int y);
 
 #include "fight_mode.h"
 #include "font_manager.h"

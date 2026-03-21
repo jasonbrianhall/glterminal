@@ -770,6 +770,16 @@ int main(int argc, char **argv) {
                     if (sym >= SDLK_SPACE && sym < SDLK_DELETE)
                         break;
                 }
+                if (ev.key.keysym.sym == SDLK_F1) {
+                    g_help_visible = !g_help_visible;
+                    needs_render = true;
+                    break;
+                }
+                if (g_help_visible) {
+                    help_keydown(ev.key.keysym.sym);
+                    needs_render = true;
+                    break;
+                }
                 if (ev.key.keysym.sym == SDLK_F11) {
                     bool is_full = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
                     SDL_SetWindowFullscreen(window, is_full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -842,6 +852,12 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                // Clicking anywhere dismisses the help overlay (links open their URL)
+                if (g_help_visible) {
+                    help_mousedown(ev.button.x, ev.button.y);
+                    needs_render = true;
+                    break;
+                }
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -935,6 +951,7 @@ int main(int argc, char **argv) {
 #endif
                                 break;
                             case MENU_ID_SELECT_ALL: term_select_all(&term); break;
+                            case MENU_ID_HELP: g_help_visible = true; needs_render = true; break;
                             case MENU_ID_QUIT: settings_save(); running = false; break;
                             default:
                                 if (hit < 0) g_menu.visible = false;
@@ -965,6 +982,11 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_help_visible) {
+                    if (help_mousemotion(ev.motion.x, ev.motion.y))
+                        needs_render = true;
+                    break;
+                }
                 if (g_menu.visible) {
                     int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
                     if (hit >= 0) g_menu.hovered = hit;
@@ -1172,6 +1194,8 @@ int main(int argc, char **argv) {
             sftp_overlay_render(win_w, win_h);
             sftp_console_render(win_w, win_h);
 #endif
+            // Help overlay renders last (topmost layer)
+            help_render(win_w, win_h);
 
             SDL_GL_SwapWindow(window);
 

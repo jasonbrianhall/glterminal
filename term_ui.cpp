@@ -227,6 +227,8 @@ const MenuItem MENU_ITEMS[] = {
     { nullptr,           true  },
     { "Font  >",         false },
     { nullptr,           true  },
+    { "Help",            false },
+    { nullptr,           true  },
     { "Quit",            false },
 };
 const int MENU_COUNT = (int)(sizeof(MENU_ITEMS)/sizeof(MENU_ITEMS[0]));
@@ -998,4 +1000,203 @@ void action_new_ssh_session() {
     pid_t pid = fork();
     if (pid == 0) { setsid(); execl(self, self, "--ssh", nullptr); _exit(1); }
 #endif
+}
+
+// ============================================================================
+// HELP OVERLAY
+// ============================================================================
+
+bool g_help_visible = false;
+
+struct HelpRow {
+    const char *header;  // non-null = section header row; key/desc/url ignored
+    const char *key;
+    const char *desc;
+    const char *url;     // non-null = desc is a clickable hyperlink opening this URL
+};
+
+static const HelpRow HELP_ROWS[] = {
+    { "── General ──",            nullptr, nullptr, nullptr },
+    { nullptr, "F1",              "Toggle this help screen",                      nullptr },
+    { nullptr, "F11",             "Toggle fullscreen",                            nullptr },
+    { nullptr, "Right-click",     "Open context menu",                            nullptr },
+    { nullptr, "Ctrl+C",          "Copy selection",                               nullptr },
+    { nullptr, "Ctrl+V",          "Paste",                                        nullptr },
+    { nullptr, "Ctrl+Scroll",     "Zoom font in / out",                           nullptr },
+    { nullptr, "Shift+PgUp/Dn",   "Scroll through scrollback buffer",             nullptr },
+    { nullptr, "Ctrl+click URL",  "Open hyperlink in browser",                    nullptr },
+
+    { "── SSH ──",                nullptr, nullptr, nullptr },
+    { nullptr, "--ssh [user@host]","Connect to a remote host via SSH",            nullptr },
+#ifdef USESSH
+    { nullptr, "F2",              "SFTP upload overlay",                          nullptr },
+    { nullptr, "F3",              "SFTP download overlay",                        nullptr },
+    { nullptr, "F4",              "Interactive SFTP console",                     nullptr },
+#endif
+
+    { "── Appearance ──",         nullptr, nullptr, nullptr },
+    { nullptr, "Render Mode",     "Post-process visual effects (right-click menu)",nullptr },
+    { nullptr, "Color Theme",     "Built-in colour schemes (right-click menu)",   nullptr },
+    { nullptr, "Transparency",    "Adjust window opacity (right-click menu)",     nullptr },
+    { nullptr, "Font",            "Switch monospace font (right-click menu)",     nullptr },
+
+    { "── Entertainment ──",      nullptr, nullptr, nullptr },
+    { nullptr, "Entertainment",   "Fight mode, bouncing ball, CRT audio (right-click menu)", nullptr },
+
+    { "── Project ──",            nullptr, nullptr, nullptr },
+    { nullptr, "Source & License","https://github.com/jasonbrianhall/glterminal  (MIT)",
+                                   "https://github.com/jasonbrianhall/glterminal" },
+    { nullptr, "Buy Me a Coffee", "https://buymeacoffee.com/jasonbrianhall",
+                                   "https://buymeacoffee.com/jasonbrianhall"      },
+};
+static const int HELP_ROW_COUNT = (int)(sizeof(HELP_ROWS)/sizeof(HELP_ROWS[0]));
+
+// Layout constants
+#define HELP_KEY_COL_W  (MENU_FONT_SIZE * 15)
+#define HELP_DESC_COL_W (MENU_FONT_SIZE * 30)
+#define HELP_PAD        (MENU_FONT_SIZE)
+#define HELP_ROW_H      (int)(MENU_FONT_SIZE * 1.7f)
+#define HELP_HDR_H      (int)(MENU_FONT_SIZE * 2.0f)
+
+// Hit-rects for clickable links — rebuilt each frame
+struct HelpLinkRect { int x, y, w, h; const char *url; };
+static std::vector<HelpLinkRect> s_help_links;
+static int s_help_hovered_link = -1;  // index into s_help_links, or -1
+
+void help_render(int win_w, int win_h) {
+    if (!g_help_visible) return;
+
+    ensure_menu_face();
+    s_help_links.clear();
+
+    // --- layout ---
+    int total_w = HELP_KEY_COL_W + HELP_DESC_COL_W + HELP_PAD * 3;
+
+    int total_h = HELP_PAD + HELP_HDR_H;
+    for (int i = 0; i < HELP_ROW_COUNT; i++)
+        total_h += HELP_ROWS[i].header ? HELP_HDR_H : HELP_ROW_H;
+    total_h += HELP_PAD;
+
+    int ox = (win_w - total_w) / 2;
+    int oy = (win_h - total_h) / 2;
+    if (ox < 4) ox = 4;
+    if (oy < 4) oy = 4;
+
+    // --- dim backdrop ---
+    draw_rect(0, 0, (float)win_w, (float)win_h, 0.f, 0.f, 0.f, 0.55f);
+
+    // --- panel shadow + body ---
+    draw_rect((float)(ox+3), (float)(oy+3), (float)total_w, (float)total_h, 0,0,0, 0.4f);
+    draw_rect((float)ox, (float)oy, (float)total_w, (float)total_h, 0.10f, 0.10f, 0.13f, 0.97f);
+    draw_rect((float)ox,             (float)oy,             (float)total_w, 1,              0.35f,0.35f,0.55f, 1.f);
+    draw_rect((float)ox,             (float)(oy+total_h-1), (float)total_w, 1,              0.35f,0.35f,0.55f, 1.f);
+    draw_rect((float)ox,             (float)oy,             1,              (float)total_h, 0.35f,0.35f,0.55f, 1.f);
+    draw_rect((float)(ox+total_w-1), (float)oy,             1,              (float)total_h, 0.35f,0.35f,0.55f, 1.f);
+
+    // --- title bar ---
+    float ty = (float)oy + HELP_PAD;
+    draw_rect((float)ox+1, ty, (float)total_w-2, (float)HELP_HDR_H, 0.18f, 0.25f, 0.45f, 1.f);
+
+    const char *title = "GL Terminal — Help";
+    draw_text_menu(title,
+                   (float)(ox + total_w/2) - (float)(strlen(title) * MENU_FONT_SIZE * 0.3f),
+                   ty + HELP_HDR_H * 0.72f,
+                   1.f, 1.f, 1.f, 1.f, ATTR_BOLD);
+
+    const char *hint = "Esc or F1 to close";
+    float hint_x = (float)(ox + total_w) - (float)(strlen(hint) * MENU_FONT_SIZE * 0.56f) - HELP_PAD;
+    draw_text_menu(hint, hint_x, ty + HELP_HDR_H * 0.72f, 0.50f, 0.50f, 0.62f, 1.f);
+
+    ty += HELP_HDR_H;
+
+    // --- rows ---
+    for (int i = 0; i < HELP_ROW_COUNT; i++) {
+        const HelpRow &row = HELP_ROWS[i];
+        if (row.header) {
+            float rh = (float)HELP_HDR_H;
+            draw_rect((float)ox+1, ty, (float)total_w-2, rh, 0.14f, 0.14f, 0.20f, 1.f);
+            draw_rect((float)ox+1, ty + rh - 1.f, (float)total_w-2, 1.f, 0.28f, 0.28f, 0.42f, 1.f);
+            draw_text_menu(row.header, (float)(ox + HELP_PAD), ty + rh * 0.72f,
+                           0.55f, 0.75f, 1.0f, 1.f, ATTR_BOLD);
+            ty += rh;
+        } else {
+            float rh = (float)HELP_ROW_H;
+            if (i % 2 == 0)
+                draw_rect((float)ox+1, ty, (float)total_w-2, rh, 0.f,0.f,0.f, 0.12f);
+
+            // key column
+            draw_text_menu(row.key, (float)(ox + HELP_PAD), ty + rh * 0.72f,
+                           0.85f, 0.95f, 1.0f, 1.f);
+
+            // desc / link column
+            float dx = (float)(ox + HELP_PAD + HELP_KEY_COL_W);
+            if (row.url) {
+                // Find if this link is hovered
+                int link_idx = (int)s_help_links.size();
+                bool hov = (s_help_hovered_link == link_idx);
+
+                // Highlight bar on hover
+                if (hov)
+                    draw_rect(dx - 2.f, ty + 1.f, (float)HELP_DESC_COL_W, rh - 2.f,
+                              0.25f, 0.45f, 0.85f, 0.25f);
+
+                float lr = hov ? 0.55f : 0.40f;
+                float lg = hov ? 0.85f : 0.65f;
+                float lb = 1.0f;
+                draw_text_menu(row.desc, dx, ty + rh * 0.72f, lr, lg, lb, 1.f, ATTR_UNDERLINE);
+
+                // Record hit-rect
+                HelpLinkRect lr2;
+                lr2.x   = (int)dx - 2;
+                lr2.y   = (int)ty;
+                lr2.w   = HELP_DESC_COL_W;
+                lr2.h   = (int)rh;
+                lr2.url = row.url;
+                s_help_links.push_back(lr2);
+            } else {
+                draw_text_menu(row.desc, dx, ty + rh * 0.72f, 0.78f, 0.78f, 0.82f, 1.f);
+            }
+            ty += rh;
+        }
+    }
+
+    gl_flush_verts();
+}
+
+bool help_keydown(SDL_Keycode sym) {
+    if (!g_help_visible) return false;
+    if (sym == SDLK_ESCAPE || sym == SDLK_F1) {
+        g_help_visible = false;
+        return true;
+    }
+    return true;  // swallow all keys while help is open
+}
+
+// Returns true if the mouse event was consumed.
+bool help_mousedown(int x, int y) {
+    if (!g_help_visible) return false;
+    for (auto &lr : s_help_links) {
+        if (x >= lr.x && x < lr.x + lr.w && y >= lr.y && y < lr.y + lr.h) {
+            open_url(lr.url);
+            return true;
+        }
+    }
+    // Click outside a link closes the overlay
+    g_help_visible = false;
+    return true;
+}
+
+// Call from SDL_MOUSEMOTION to update hover state. Returns true if redraw needed.
+bool help_mousemotion(int x, int y) {
+    if (!g_help_visible) return false;
+    int prev = s_help_hovered_link;
+    s_help_hovered_link = -1;
+    for (int i = 0; i < (int)s_help_links.size(); i++) {
+        auto &lr = s_help_links[i];
+        if (x >= lr.x && x < lr.x + lr.w && y >= lr.y && y < lr.y + lr.h) {
+            s_help_hovered_link = i;
+            break;
+        }
+    }
+    return s_help_hovered_link != prev;
 }
