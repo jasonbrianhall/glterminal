@@ -6,6 +6,9 @@
 #include <GL/glew.h>
 #include <GL/gl.h>
 
+// image_viewer.h must come before stb/miniz so its types are visible everywhere
+#include "image_viewer.h"
+
 // ---- stb_image (header-only, embedded) ------------------------------------
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO          // we feed raw bytes, not filenames
@@ -16,11 +19,15 @@
 #define STBI_ONLY_TGA
 #define STBI_ONLY_HDR
 #define STBI_ONLY_PIC
-// stb_image.h must be in the include path (download from https://github.com/nothings/stb)
+// stb_image.h must be in the include path (https://github.com/nothings/stb)
 #include "stb_image.h"
+
+// ---- miniz (zip support) --------------------------------------------------
+// Uses the split-header miniz distribution.
+#include "miniz.h"
+#include "miniz_zip.h"
 // ---------------------------------------------------------------------------
 
-#include "image_viewer.h"
 #include "gl_renderer.h"
 #include "ft_font.h"
 #include "term_color.h"
@@ -36,7 +43,7 @@
 
 #ifdef USESSH
 #  include "ssh_session.h"
-#  include "sftp_overlay.h"   // reuses s_sftp handle + list_remote helpers
+#  include "sftp_overlay.h"
 #  include <libssh2_sftp.h>
 #endif
 
@@ -70,6 +77,65 @@ static bool is_image_ext(const char *name) {
     const char *exts[] = IV_SUPPORTED_EXTS;
     for (auto *e : exts) if (strcmp(ext, e) == 0) return true;
     return false;
+}
+
+static bool is_zip_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return false;
+    char ext[8] = {};
+    for (int i = 0; i < 7 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
+    return strcmp(ext, ".zip") == 0;
+}
+
+// List images inside a local zip file into out.
+// Each entry has is_zip_entry=true, zip_path set to zip_filepath, zip_entry set to the member name.
+static void iv_list_zip(const char *zip_filepath, std::vector<IVEntry> &out) {
+    out.clear();
+    IVEntry up{}; strncpy(up.name, "..", sizeof(up.name)-1); up.is_dir = true;
+    out.push_back(up);
+
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    if (!mz_zip_reader_init_file(&zip, zip_filepath, 0)) return;
+
+    mz_uint n = mz_zip_reader_get_num_files(&zip);
+    for (mz_uint i = 0; i < n; i++) {
+        if (mz_zip_reader_is_file_a_directory(&zip, i)) continue;
+        char fname[512] = {};
+        mz_zip_reader_get_filename(&zip, i, fname, sizeof(fname));
+        if (strncmp(fname, "__MACOSX", 8) == 0) continue;
+        if (!is_image_ext(fname)) continue;
+
+        mz_zip_archive_file_stat st;
+        mz_zip_reader_file_stat(&zip, i, &st);
+
+        IVEntry e{};
+        const char *slash = strrchr(fname, '/');
+        strncpy(e.name, slash ? slash+1 : fname, sizeof(e.name)-1);
+        e.is_zip_entry = true;
+        strncpy(e.zip_path,  zip_filepath, sizeof(e.zip_path)-1);
+        strncpy(e.zip_entry, fname,        sizeof(e.zip_entry)-1);
+        e.size = st.m_uncomp_size;
+        out.push_back(e);
+    }
+    mz_zip_reader_end(&zip);
+
+    std::stable_sort(out.begin()+1, out.end(), [](const IVEntry &a, const IVEntry &b){
+        return strcmp(a.zip_entry, b.zip_entry) < 0;
+    });
+}
+
+// Extract one image from a local zip into a heap buffer. Caller must free().
+static unsigned char *iv_extract_zip_entry(const char *zip_filepath,
+                                            const char *entry_name,
+                                            size_t &out_size) {
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    out_size = 0;
+    if (!mz_zip_reader_init_file(&zip, zip_filepath, 0)) return nullptr;
+    void *buf = mz_zip_reader_extract_file_to_heap(&zip, entry_name, &out_size, 0);
+    mz_zip_reader_end(&zip);
+    return (unsigned char *)buf;
 }
 
 static std::string iv_home() {
@@ -113,8 +179,10 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
             e.is_dir = S_ISDIR(st.st_mode);
             e.size   = (uint64_t)st.st_size;
         }
-        if (e.is_dir || is_image_ext(e.name))
+        if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name)) {
+            if (is_zip_ext(e.name)) e.is_zip = true;
             out.push_back(e);
+        }
     }
     closedir(d);
 #else
@@ -132,8 +200,10 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
         strncpy(e.name, fd.cFileName, sizeof(e.name)-1);
         e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         e.size   = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
-        if (e.is_dir || is_image_ext(e.name))
+        if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name)) {
+            if (is_zip_ext(e.name)) e.is_zip = true;
             out.push_back(e);
+        }
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 #endif
@@ -147,8 +217,6 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
 // Reuse the SFTP subsystem from sftp_overlay (s_sftp is extern there).
 // We call the public sftp_panel helpers indirectly by duplicating the
 // list logic here so we don't need to expose s_sftp directly.
-extern LIBSSH2_SFTP *s_sftp_handle();   // declared below — we define a shim
-
 static void iv_list_remote(const char *path, std::vector<IVEntry> &out) {
     out.clear();
     // Access the SFTP handle via the public SSH session API
@@ -333,7 +401,9 @@ void iv_close() {
 static void iv_refresh() {
     g_iv.selected   = 0;
     g_iv.scroll_top = 0;
-    if (g_iv.remote) {
+    if (g_iv.in_zip) {
+        iv_list_zip(g_iv.zip_file, g_iv.entries);
+    } else if (g_iv.remote) {
 #ifdef USESSH
         iv_list_remote(g_iv.path, g_iv.entries);
 #endif
@@ -346,11 +416,32 @@ static void iv_enter_selected() {
     if (g_iv.entries.empty()) return;
     const IVEntry &e = g_iv.entries[g_iv.selected];
 
+    // ── Inside a zip: load image from zip or go back up ───────────────────
+    if (e.is_zip_entry) {
+        iv_free_tex();
+        g_iv.error[0] = '\0';
+        size_t sz = 0;
+        unsigned char *buf = iv_extract_zip_entry(e.zip_path, e.zip_entry, sz);
+        if (buf) {
+            iv_load_image_from_mem(buf, sz, e.name);
+            free(buf);
+        } else {
+            snprintf(g_iv.error, sizeof(g_iv.error), "Failed to extract: %s", e.name);
+        }
+        return;
+    }
+
     if (e.is_dir) {
+        // ".." from inside a zip goes back to the filesystem directory
+        if (strcmp(e.name, "..") == 0 && g_iv.in_zip) {
+            g_iv.in_zip = false;
+            g_iv.zip_file[0] = '\0';
+            iv_refresh();
+            return;
+        }
         // Navigate into directory
         char newpath[4096];
         if (strcmp(e.name, "..") == 0) {
-            // Go up
             char tmp[4096];
             strncpy(tmp, g_iv.path, sizeof(tmp)-1);
 #ifndef _WIN32
@@ -373,8 +464,23 @@ static void iv_enter_selected() {
             strncpy(g_iv.path, newpath, sizeof(g_iv.path)-1);
         }
         iv_refresh();
+
+    } else if (e.is_zip) {
+        // Enter the zip — list its images
+        char fullpath[4096];
+#ifndef _WIN32
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
+#else
+        snprintf(fullpath, sizeof(fullpath), "%s\\%s", g_iv.path, e.name);
+#endif
+        strncpy(g_iv.zip_file, fullpath, sizeof(g_iv.zip_file)-1);
+        g_iv.in_zip = true;
+        g_iv.selected   = 0;
+        g_iv.scroll_top = 0;
+        iv_list_zip(fullpath, g_iv.entries);
+
     } else {
-        // Load image
+        // Load plain image
         iv_free_tex();
         g_iv.error[0] = '\0';
         if (g_iv.remote) {
@@ -548,10 +654,17 @@ void iv_render(int win_w, int win_h) {
         draw_rect(px, py, 1, ph, 0.35f, 0.55f, 0.95f, 1.f);
         draw_rect(px+pw-1, py, 1, ph, 0.35f, 0.55f, 0.95f, 1.f);
 
-        // Path row
+        // Path row — show zip name when inside a zip
         draw_rect(px, py, pw, (float)rh, 0.08f, 0.10f, 0.10f, 1.f);
         draw_rect(px, py+rh-1, pw, 1, 0.20f, 0.20f, 0.30f, 1.f);
-        char path_disp[4100]; snprintf(path_disp, sizeof(path_disp), " %s", g_iv.path);
+        char path_disp[4100];
+        if (g_iv.in_zip) {
+            const char *zname = strrchr(g_iv.zip_file, '/');
+            if (!zname) zname = strrchr(g_iv.zip_file, '\\');
+            snprintf(path_disp, sizeof(path_disp), " [ZIP] %s", zname ? zname+1 : g_iv.zip_file);
+        } else {
+            snprintf(path_disp, sizeof(path_disp), " %s", g_iv.path);
+        }
         iv_draw_text(path_disp, px + IV_PAD, py + rh * 0.72f, 0.45f, 0.80f, 0.45f, 1.f);
 
         float list_y = py + rh;
@@ -574,13 +687,13 @@ void iv_render(int win_w, int win_h) {
             if      (sel)    draw_rect(px+1, ry, pw-2, (float)rh, 0.18f, 0.38f, 0.75f, 0.90f);
             else if (i%2==0) draw_rect(px,   ry, pw,   (float)rh, 1.f,   1.f,   1.f,   0.02f);
 
-            float nr = sel ? 1.f : (e.is_dir ? 0.90f : 0.82f);
-            float ng = sel ? 1.f : (e.is_dir ? 0.90f : 0.82f);
-            float nb = sel ? 1.f : (e.is_dir ? 0.55f : 0.92f);
+            float nr = sel ? 1.f : (e.is_dir ? 0.90f : (e.is_zip ? 0.95f : 0.82f));
+            float ng = sel ? 1.f : (e.is_dir ? 0.90f : (e.is_zip ? 0.75f : 0.82f));
+            float nb = sel ? 1.f : (e.is_dir ? 0.55f : (e.is_zip ? 0.30f : 0.92f));
 
             char name_buf[520];
             snprintf(name_buf, sizeof(name_buf), "%s%s",
-                     e.is_dir ? "[DIR] " : "      ", e.name);
+                     e.is_dir ? "[DIR] " : (e.is_zip ? "[ZIP] " : "      "), e.name);
             iv_draw_text(name_buf, px + IV_PAD, ry + rh * 0.72f, nr, ng, nb, 1.f);
 
             if (!e.is_dir && e.size > 0) {
@@ -706,7 +819,8 @@ bool iv_keydown(SDL_Keycode sym) {
         // Collect indices of all image entries.
         std::vector<int> img_indices;
         for (int i = 0; i < n; i++)
-            if (!g_iv.entries[i].is_dir) img_indices.push_back(i);
+            if (!g_iv.entries[i].is_dir && !g_iv.entries[i].is_zip)
+                img_indices.push_back(i);
         if (img_indices.empty()) return true;
 
         // Find where the current selection sits in that list

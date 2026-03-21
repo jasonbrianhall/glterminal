@@ -1,6 +1,4 @@
 #pragma once
-#include <GL/glew.h>
-#include <GL/gl.h>
 #include <SDL2/SDL.h>
 #include <string>
 #include <vector>
@@ -20,9 +18,13 @@
 #define IV_SUPPORTED_EXTS { ".jpg",".jpeg",".png",".bmp",".gif",".webp",".tiff",".tif" }
 
 struct IVEntry {
-    char     name[512] = {};
-    bool     is_dir    = false;
-    uint64_t size      = 0;
+    char     name[512]      = {};  // display name
+    bool     is_dir         = false;
+    bool     is_zip         = false;  // .zip file (browsable)
+    bool     is_zip_entry   = false;  // image inside a zip
+    char     zip_path[4096] = {};     // path to the zip file (when is_zip_entry)
+    char     zip_entry[512] = {};     // name inside the zip (when is_zip_entry)
+    uint64_t size           = 0;
 };
 
 struct ImageViewer {
@@ -30,13 +32,16 @@ struct ImageViewer {
     bool remote      = false;   // true = browsing via SFTP
 
     char path[4096]  = {};      // current directory
+    // When inside a zip, zip_file holds the zip path and path holds the zip name
+    bool in_zip      = false;
+    char zip_file[4096] = {};   // absolute path to the open zip
 
     std::vector<IVEntry> entries;
     int  selected    = 0;
     int  scroll_top  = 0;
 
     // Current image (GL texture)
-    GLuint tex       = 0;
+    unsigned int tex = 0;
     int    tex_w     = 0;
     int    tex_h     = 0;
     char   img_label[512] = {};  // filename shown in status bar

@@ -10,9 +10,12 @@
 # Compiler settings
 CXX_LINUX = g++
 CXX_WIN   = x86_64-w64-mingw32-g++
+CC_LINUX  = gcc
+CC_WIN    = x86_64-w64-mingw32-gcc
 
 # Common flags
 CXXFLAGS_COMMON = -Wall -Wextra -std=c++17
+CFLAGS_COMMON   = -Wall -Wextra
 
 # Package config
 PKG_CONFIG_LINUX = pkg-config
@@ -84,6 +87,10 @@ LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LIN
                        $(SSH_LIBS_LINUX) \
                        -lGL -lpng -lz -lm -pthread -lstdc++
 
+# C flags for miniz .c files (no -std=c++17, no -Wextra pedantry on C)
+CFLAGS_LINUX       = $(CFLAGS_COMMON) -DLINUX -O2
+CFLAGS_LINUX_DEBUG = $(CFLAGS_COMMON) -DLINUX -DDEBUG -g -O0
+
 # ============================================================================
 # WINDOWS FLAGS
 # ============================================================================
@@ -106,10 +113,12 @@ CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
                      $(SSH_DEFINE) -DDEBUG -g -O0
 
+CFLAGS_WIN         = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -O2
+CFLAGS_WIN_DEBUG   = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -DDEBUG -g -O0
+
 # ============================================================================
 # SOURCES
 # ============================================================================
-# Shared across platforms (term_pty is platform-specific, excluded here)
 SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               ft_font.cpp           term_color.cpp        \
               terminal.cpp          term_ui.cpp           \
@@ -117,7 +126,10 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               crt_audio.cpp         felix_settings.cpp    \
               kitty_graphics.cpp    font_manager.cpp      \
               sftp_overlay.cpp      sftp_console.cpp      \
+              image_viewer.cpp      \
               $(SSH_SRCS)
+
+SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c
 
 SRCS_LINUX = $(SRCS_COMMON) term_pty.cpp
 SRCS_WIN   = $(SRCS_COMMON) term_pty_win.cpp
@@ -125,10 +137,14 @@ SRCS_WIN   = $(SRCS_COMMON) term_pty_win.cpp
 # ============================================================================
 # OBJECTS
 # ============================================================================
-OBJECTS_LINUX       = $(addprefix $(BUILD_DIR_LINUX)/,      $(SRCS_LINUX:.cpp=.o))
-OBJECTS_LINUX_DEBUG = $(addprefix $(BUILD_DIR_LINUX_DEBUG)/, $(SRCS_LINUX:.cpp=.debug.o))
-OBJECTS_WIN         = $(addprefix $(BUILD_DIR_WIN)/,         $(SRCS_WIN:.cpp=.win.o))
-OBJECTS_WIN_DEBUG   = $(addprefix $(BUILD_DIR_WIN_DEBUG)/,   $(SRCS_WIN:.cpp=.win.debug.o))
+OBJECTS_LINUX       = $(addprefix $(BUILD_DIR_LINUX)/,       $(SRCS_LINUX:.cpp=.o)) \
+                      $(addprefix $(BUILD_DIR_LINUX)/,        $(SRCS_MINIZ:.c=.o))
+OBJECTS_LINUX_DEBUG = $(addprefix $(BUILD_DIR_LINUX_DEBUG)/,  $(SRCS_LINUX:.cpp=.debug.o)) \
+                      $(addprefix $(BUILD_DIR_LINUX_DEBUG)/,  $(SRCS_MINIZ:.c=.debug.o))
+OBJECTS_WIN         = $(addprefix $(BUILD_DIR_WIN)/,          $(SRCS_WIN:.cpp=.win.o)) \
+                      $(addprefix $(BUILD_DIR_WIN)/,           $(SRCS_MINIZ:.c=.win.o))
+OBJECTS_WIN_DEBUG   = $(addprefix $(BUILD_DIR_WIN_DEBUG)/,    $(SRCS_WIN:.cpp=.win.debug.o)) \
+                      $(addprefix $(BUILD_DIR_WIN_DEBUG)/,    $(SRCS_MINIZ:.c=.win.debug.o))
 
 # ============================================================================
 # TARGETS / DIRS
@@ -176,6 +192,10 @@ $(BUILD_DIR_LINUX)/%.o: %.cpp
 	@echo "Compiling (Linux): $<"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR_LINUX)/%.o: %.c
+	@echo "Compiling C (Linux): $<"
+	$(CC_LINUX) $(CFLAGS_LINUX) -MMD -MP -c $< -o $@
+
 # ============================================================================
 # LINUX DEBUG BUILD
 # ============================================================================
@@ -190,6 +210,10 @@ $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG): $(OBJECTS_LINUX_DEBUG)
 $(BUILD_DIR_LINUX_DEBUG)/%.debug.o: %.cpp
 	@echo "Compiling (Linux Debug): $<"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_LINUX_DEBUG)/%.debug.o: %.c
+	@echo "Compiling C (Linux Debug): $<"
+	$(CC_LINUX) $(CFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
 
 # ============================================================================
 # WINDOWS BUILD
@@ -206,6 +230,10 @@ $(BUILD_DIR_WIN)/%.win.o: %.cpp
 	@echo "Compiling (Windows): $<"
 	$(CXX_WIN) $(CXXFLAGS_WIN) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR_WIN)/%.win.o: %.c
+	@echo "Compiling C (Windows): $<"
+	$(CC_WIN) $(CFLAGS_WIN) -MMD -MP -c $< -o $@
+
 # ============================================================================
 # WINDOWS DEBUG BUILD
 # ============================================================================
@@ -220,6 +248,10 @@ $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG): $(OBJECTS_WIN_DEBUG)
 $(BUILD_DIR_WIN_DEBUG)/%.win.debug.o: %.cpp
 	@echo "Compiling (Windows Debug): $<"
 	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN_DEBUG)/%.win.debug.o: %.c
+	@echo "Compiling C (Windows Debug): $<"
+	$(CC_WIN) $(CFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
 
 # ============================================================================
 # DLL COLLECTION
