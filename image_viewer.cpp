@@ -33,6 +33,7 @@
 #include "term_color.h"
 
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_mixer.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,9 +52,12 @@
 #  include <dirent.h>
 #  include <sys/stat.h>
 #  include <unistd.h>
+#  include <fcntl.h>
 #else
 #  include <windows.h>
 #  include <shlobj.h>
+#  include <io.h>
+#  include <fcntl.h>
 #endif
 
 // ============================================================================
@@ -87,6 +91,48 @@ static bool is_zip_ext(const char *name) {
     return strcmp(ext, ".zip") == 0;
 }
 
+static bool is_audio_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return false;
+    char ext[16] = {};
+    for (int i = 0; i < 15 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
+    const char *exts[] = IV_AUDIO_EXTS;
+    for (auto *e : exts) if (strcmp(ext, e) == 0) return true;
+    return false;
+}
+
+static bool is_cdg_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return false;
+    char ext[8] = {};
+    for (int i = 0; i < 7 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
+    return strcmp(ext, ".cdg") == 0;
+}
+
+// Given an audio filename, check if a matching .cdg exists in the same directory
+static bool has_paired_cdg(const char *dir, const char *audio_name) {
+    // Strip extension, append .cdg
+    char base[512];
+    strncpy(base, audio_name, sizeof(base)-1);
+    char *dot = strrchr(base, '.');
+    if (dot) *dot = '\0';
+    char cdg_path[4608];
+#ifndef _WIN32
+    snprintf(cdg_path, sizeof(cdg_path), "%s/%s.cdg", dir, base);
+#else
+    snprintf(cdg_path, sizeof(cdg_path), "%s\\%s.cdg", dir, base);
+#endif
+    // Case-insensitive check: try both .cdg and .CDG
+    FILE *f = fopen(cdg_path, "rb");
+    if (f) { fclose(f); return true; }
+    // Try uppercase
+    char *ext = strrchr(cdg_path, '.');
+    if (ext) { ext[1]='C'; ext[2]='D'; ext[3]='G'; }
+    f = fopen(cdg_path, "rb");
+    if (f) { fclose(f); return true; }
+    return false;
+}
+
 // List images inside a local zip file into out.
 // Each entry has is_zip_entry=true, zip_path set to zip_filepath, zip_entry set to the member name.
 static void iv_list_zip(const char *zip_filepath, std::vector<IVEntry> &out) {
@@ -99,23 +145,57 @@ static void iv_list_zip(const char *zip_filepath, std::vector<IVEntry> &out) {
     if (!mz_zip_reader_init_file(&zip, zip_filepath, 0)) return;
 
     mz_uint n = mz_zip_reader_get_num_files(&zip);
+
+    // First pass: collect all filenames so we can detect CDG pairs
+    std::vector<std::string> all_names;
+    for (mz_uint i = 0; i < n; i++) {
+        char fname[512] = {};
+        mz_zip_reader_get_filename(&zip, i, fname, sizeof(fname));
+        all_names.push_back(fname);
+    }
+
+    // Helper: check if a matching .cdg exists inside this zip for a given audio entry
+    auto zip_has_cdg_pair = [&](const char *audio_fname) -> bool {
+        char base[512]; strncpy(base, audio_fname, sizeof(base)-1);
+        char *dot = strrchr(base, '.'); if (dot) *dot = '\0';
+        for (auto &nm : all_names) {
+            const char *ndot = strrchr(nm.c_str(), '.');
+            if (!ndot) continue;
+            // Compare base names case-insensitively
+            size_t blen = strlen(base);
+            if (nm.size() < blen + 4) continue;
+            if (strncasecmp(nm.c_str(), base, blen) == 0) {
+                char ext[8] = {};
+                for (int j = 0; j < 7 && ndot[j]; j++) ext[j] = tolower((unsigned char)ndot[j]);
+                if (strcmp(ext, ".cdg") == 0) return true;
+            }
+        }
+        return false;
+    };
+
     for (mz_uint i = 0; i < n; i++) {
         if (mz_zip_reader_is_file_a_directory(&zip, i)) continue;
         char fname[512] = {};
         mz_zip_reader_get_filename(&zip, i, fname, sizeof(fname));
         if (strncmp(fname, "__MACOSX", 8) == 0) continue;
-        if (!is_image_ext(fname)) continue;
+
+        bool img   = is_image_ext(fname);
+        bool audio = is_audio_ext(fname);
+        bool cdg   = is_cdg_ext(fname);
+        if (!img && !audio && !cdg) continue;
 
         mz_zip_archive_file_stat st;
         mz_zip_reader_file_stat(&zip, i, &st);
 
         IVEntry e{};
         const char *slash = strrchr(fname, '/');
-        strncpy(e.name, slash ? slash+1 : fname, sizeof(e.name)-1);
+        strncpy(e.name,      slash ? slash+1 : fname, sizeof(e.name)-1);
+        strncpy(e.zip_path,  zip_filepath,             sizeof(e.zip_path)-1);
+        strncpy(e.zip_entry, fname,                    sizeof(e.zip_entry)-1);
         e.is_zip_entry = true;
-        strncpy(e.zip_path,  zip_filepath, sizeof(e.zip_path)-1);
-        strncpy(e.zip_entry, fname,        sizeof(e.zip_entry)-1);
-        e.size = st.m_uncomp_size;
+        e.size         = st.m_uncomp_size;
+        if (audio) { e.is_audio = true; e.has_cdg_pair = zip_has_cdg_pair(fname); }
+        if (cdg)   { e.is_cdg   = true; }
         out.push_back(e);
     }
     mz_zip_reader_end(&zip);
@@ -162,12 +242,13 @@ static int iv_row_h() { return (int)(g_font_size * 1.8f); }
 static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
     out.clear();
 #ifndef _WIN32
+    SDL_Log("[IV] listing dir: %s\n", path);
     if (strcmp(path, "/") != 0) {
         IVEntry up{}; strncpy(up.name, "..", sizeof(up.name)-1); up.is_dir = true;
         out.push_back(up);
     }
     DIR *d = opendir(path);
-    if (!d) return;
+    if (!d) { SDL_Log("[IV] opendir failed: %s\n", path); return; }
     struct dirent *de;
     while ((de = readdir(d))) {
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
@@ -179,8 +260,16 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
             e.is_dir = S_ISDIR(st.st_mode);
             e.size   = (uint64_t)st.st_size;
         }
-        if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name)) {
-            if (is_zip_ext(e.name)) e.is_zip = true;
+        bool img   = is_image_ext(e.name);
+        bool zip   = is_zip_ext(e.name);
+        bool audio = is_audio_ext(e.name);
+        bool cdg   = is_cdg_ext(e.name);
+        SDL_Log("[IV] file: %s  dir=%d img=%d zip=%d audio=%d cdg=%d\n",
+                e.name, e.is_dir, img, zip, audio, cdg);
+        if (e.is_dir || img || zip || audio || cdg) {
+            if (zip)   e.is_zip   = true;
+            if (audio) { e.is_audio = true; e.has_cdg_pair = has_paired_cdg(path, e.name); }
+            if (cdg)   e.is_cdg   = true;
             out.push_back(e);
         }
     }
@@ -200,8 +289,12 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
         strncpy(e.name, fd.cFileName, sizeof(e.name)-1);
         e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         e.size   = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
-        if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name)) {
-            if (is_zip_ext(e.name)) e.is_zip = true;
+        if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name) ||
+            is_audio_ext(e.name) || is_cdg_ext(e.name)) {
+            if (is_zip_ext(e.name))   e.is_zip   = true;
+            if (is_audio_ext(e.name)) { e.is_audio = true;
+                e.has_cdg_pair = has_paired_cdg(path, e.name); }
+            if (is_cdg_ext(e.name))   e.is_cdg   = true;
             out.push_back(e);
         }
     } while (FindNextFileA(h, &fd));
@@ -312,6 +405,192 @@ static void iv_free_tex() {
     g_iv.tex_w = g_iv.tex_h = 0;
 }
 
+// ============================================================================
+// AUDIO STOP / CDG FREE
+// ============================================================================
+
+static void iv_stop_audio() {
+    if (g_iv.music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(g_iv.music);
+        g_iv.music = nullptr;
+    }
+    g_iv.audio_playing  = false;
+    g_iv.audio_paused   = false;
+    g_iv.audio_position = 0.0;
+    g_iv.audio_label[0] = '\0';
+}
+
+static void iv_cdg_free() {
+    if (g_iv.cdg.tex) { glDeleteTextures(1, (GLuint*)&g_iv.cdg.tex); g_iv.cdg.tex = 0; }
+    g_iv.cdg = IVCdg{};
+}
+
+// ============================================================================
+// CDG PROCESSING
+// ============================================================================
+
+static void iv_cdg_process_packet(IVCdg &cdg, int idx) {
+    if (idx < 0 || idx >= cdg.packet_count) return;
+    const uint8_t *p = cdg.data.data() + idx * 24;
+    uint8_t cmd  = p[0] & 0x3F;
+    uint8_t inst = p[1] & 0x3F;
+    if (cmd != 0x09) return;
+    const uint8_t *d = p + 4;
+    switch (inst) {
+    case 1: { uint8_t col = d[0] & 0x0F; memset(cdg.screen, col, sizeof(cdg.screen)); break; }
+    case 2:   cdg.border_color = d[0] & 0x0F; break;
+    case 6: case 38: {
+        bool xor_mode = (inst == 38);
+        uint8_t c0 = d[0]&0x0F, c1 = d[1]&0x0F;
+        int px0 = (d[3]&0x3F)*6, py0 = (d[2]&0x1F)*12;
+        for (int y = 0; y < 12; y++) {
+            uint8_t b = d[4+y];
+            for (int x = 0; x < 6; x++) {
+                int px = px0+x, py = py0+y;
+                if (px < 300 && py < 216) {
+                    uint8_t color = ((b>>(5-x))&1) ? c1 : c0;
+                    if (xor_mode) cdg.screen[py][px] ^= color;
+                    else          cdg.screen[py][px]  = color;
+                }
+            }
+        }
+        break;
+    }
+    case 20: case 24: {
+        uint8_t fill = (inst == 20) ? (d[0]&0x0F) : 0xFF;
+        int h_cmd = (d[1]&0x30)>>4, v_cmd = (d[2]&0x30)>>4;
+        int hoff = (h_cmd==1)?6:(h_cmd==2)?-6:0;
+        int voff = (v_cmd==1)?12:(v_cmd==2)?-12:0;
+        if (!hoff && !voff) break;
+        uint8_t tmp[216][300]; memcpy(tmp, cdg.screen, sizeof(tmp));
+        for (int y=0;y<216;y++) for (int x=0;x<300;x++) {
+            int sx=x-hoff, sy=y-voff;
+            if (fill==0xFF) { sx=(sx+300)%300; sy=(sy+216)%216; cdg.screen[y][x]=tmp[sy][sx]; }
+            else if (sx>=0&&sx<300&&sy>=0&&sy<216) cdg.screen[y][x]=tmp[sy][sx];
+            else cdg.screen[y][x]=fill;
+        }
+        break;
+    }
+    case 30: case 31: {
+        int off = (inst==31)?8:0;
+        for (int i=0;i<8;i++) {
+            uint8_t b0=d[2*i]&0x3F, b1=d[2*i+1]&0x3F;
+            uint8_t r=(((b0>>2)&0x0F))*17;
+            uint8_t g=((((b0&0x03)<<2)|((b1>>4)&0x03)))*17;
+            uint8_t bv=((b1&0x0F))*17;
+            cdg.palette[off+i]=((uint32_t)r<<16)|((uint32_t)g<<8)|bv;
+        }
+        break;
+    }
+    default: break;
+    }
+}
+
+static void iv_cdg_update(double time_sec) {
+    IVCdg &cdg = g_iv.cdg;
+    if (!cdg.active || cdg.packet_count == 0) return;
+    int target = (int)(time_sec * 300.0);
+    if (target < 0) target = 0;
+    if (target >= cdg.packet_count) target = cdg.packet_count - 1;
+    if (target < cdg.current_packet) {
+        memset(cdg.screen, 0, sizeof(cdg.screen));
+        memset(cdg.palette, 0, sizeof(cdg.palette));
+        cdg.current_packet = 0;
+    }
+    while (cdg.current_packet < target)
+        iv_cdg_process_packet(cdg, cdg.current_packet++);
+}
+
+static void iv_cdg_upload_texture() {
+    IVCdg &cdg = g_iv.cdg;
+    if (!cdg.active) return;
+    static uint8_t rgba[216 * 300 * 4];
+    for (int y=0;y<216;y++) for (int x=0;x<300;x++) {
+        uint8_t idx = cdg.screen[y][x] & 0x0F;
+        uint32_t col = cdg.palette[idx];
+        int off = (y*300+x)*4;
+        rgba[off+0]=(col>>16)&0xFF;
+        rgba[off+1]=(col>>8)&0xFF;
+        rgba[off+2]=col&0xFF;
+        rgba[off+3]=0xFF;
+    }
+    if (!cdg.tex) {
+        glGenTextures(1, (GLuint*)&cdg.tex);
+        glBindTexture(GL_TEXTURE_2D, cdg.tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 300, 216, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, cdg.tex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 300, 216, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+static bool iv_cdg_load(const char *cdg_path) {
+    FILE *f = fopen(cdg_path, "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f); rewind(f);
+    if (sz <= 0 || sz % 24 != 0) { fclose(f); return false; }
+    g_iv.cdg.data.resize(sz);
+    bool ok = ((long)fread(g_iv.cdg.data.data(), 1, sz, f) == sz);
+    fclose(f);
+    if (!ok) return false;
+    g_iv.cdg.packet_count   = (int)(sz / 24);
+    g_iv.cdg.current_packet = 0;
+    g_iv.cdg.active         = true;
+    memset(g_iv.cdg.screen,  0, sizeof(g_iv.cdg.screen));
+    memset(g_iv.cdg.palette, 0, sizeof(g_iv.cdg.palette));
+    return true;
+}
+
+// ============================================================================
+// AUDIO PLAY
+// ============================================================================
+
+static bool s_mixer_ready = false;
+
+static void iv_ensure_mixer() {
+    if (s_mixer_ready) return;
+    Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048); // best-effort
+    Mix_AllocateChannels(8);
+    s_mixer_ready = true;
+}
+
+static void iv_play_audio(const char *audio_path, const char *label, bool load_cdg) {
+    iv_stop_audio();
+    iv_cdg_free();
+    iv_free_tex();
+    iv_ensure_mixer();
+
+    g_iv.music = Mix_LoadMUS(audio_path);
+    if (!g_iv.music) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot load: %s", Mix_GetError());
+        return;
+    }
+    Mix_PlayMusic(g_iv.music, 1);
+    g_iv.audio_playing     = true;
+    g_iv.audio_paused      = false;
+    g_iv.audio_position    = 0.0;
+    g_iv.audio_start_ticks = (double)SDL_GetTicks();
+    strncpy(g_iv.audio_label, label, sizeof(g_iv.audio_label)-1);
+    g_iv.error[0] = '\0';
+
+    if (load_cdg) {
+        char cdg_path[4096];
+        strncpy(cdg_path, audio_path, sizeof(cdg_path)-1);
+        char *dot = strrchr(cdg_path, '.');
+        if (dot) {
+            strcpy(dot, ".cdg");
+            if (!iv_cdg_load(cdg_path)) { strcpy(dot, ".CDG"); iv_cdg_load(cdg_path); }
+        }
+    }
+}
+
 static void iv_upload_texture(const unsigned char *rgba, int w, int h) {
     iv_free_tex();
     glGenTextures(1, &g_iv.tex);
@@ -390,6 +669,8 @@ void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
 }
 
 void iv_close() {
+    iv_stop_audio();
+    iv_cdg_free();
     iv_free_tex();
     g_iv.visible = false;
 }
@@ -397,6 +678,30 @@ void iv_close() {
 // ============================================================================
 // NAVIGATE
 // ============================================================================
+
+// ============================================================================
+// TICK  (call every frame)
+// ============================================================================
+
+void iv_tick(double /*dt*/) {
+    if (!g_iv.visible) return;
+
+    // Update audio position
+    if (g_iv.audio_playing && !g_iv.audio_paused) {
+        if (!Mix_PlayingMusic()) {
+            // Track finished
+            g_iv.audio_playing = false;
+        } else {
+            g_iv.audio_position = (SDL_GetTicks() - g_iv.audio_start_ticks) / 1000.0;
+        }
+    }
+
+    // Advance CDG to current position
+    if (g_iv.cdg.active) {
+        iv_cdg_update(g_iv.audio_position);
+        iv_cdg_upload_texture();
+    }
+}
 
 static void iv_refresh() {
     g_iv.selected   = 0;
@@ -416,10 +721,98 @@ static void iv_enter_selected() {
     if (g_iv.entries.empty()) return;
     const IVEntry &e = g_iv.entries[g_iv.selected];
 
-    // ── Inside a zip: load image from zip or go back up ───────────────────
+    // ── Inside a zip: handle image, audio, or CDG entry ──────────────────
     if (e.is_zip_entry) {
-        iv_free_tex();
         g_iv.error[0] = '\0';
+
+        if (e.is_audio) {
+            // Extract audio to a temp file (SDL_mixer needs a real file path)
+            size_t sz = 0;
+            unsigned char *buf = iv_extract_zip_entry(e.zip_path, e.zip_entry, sz);
+            if (!buf) {
+                snprintf(g_iv.error, sizeof(g_iv.error), "Failed to extract: %s", e.name);
+                return;
+            }
+            // Write to temp file
+            char tmp_audio[256];
+            snprintf(tmp_audio, sizeof(tmp_audio), "/tmp/iv_audio_XXXXXX");
+            // Preserve extension so SDL_mixer detects format correctly
+            const char *dot = strrchr(e.name, '.');
+            char tmp_path[512];
+            int fd = -1;
+#ifndef _WIN32
+            snprintf(tmp_path, sizeof(tmp_path), "/tmp/iv_audio_XXXXXX%s", dot ? dot : "");
+            fd = mkstemps(tmp_path, dot ? (int)strlen(dot) : 0);
+#else
+            snprintf(tmp_path, sizeof(tmp_path), "%s\\iv_audio%s",
+                     getenv("TEMP") ? getenv("TEMP") : "C:\\Temp", dot ? dot : ".tmp");
+            fd = open(tmp_path, O_CREAT|O_WRONLY|O_TRUNC|O_BINARY, 0600);
+#endif
+            bool ok = false;
+            if (fd >= 0) {
+                ok = (write(fd, buf, sz) == (ssize_t)sz);
+                close(fd);
+            }
+            free(buf);
+            if (!ok) {
+                snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
+                return;
+            }
+
+            // If CDG pair exists in the zip, extract it too
+            bool load_cdg = e.has_cdg_pair;
+            if (load_cdg) {
+                // Build the CDG entry name from the audio entry name
+                char cdg_entry[512]; strncpy(cdg_entry, e.zip_entry, sizeof(cdg_entry)-1);
+                char *edot = strrchr(cdg_entry, '.'); if (edot) strcpy(edot, ".cdg");
+                size_t csz = 0;
+                unsigned char *cbuf = iv_extract_zip_entry(e.zip_path, cdg_entry, csz);
+                if (!cbuf) {
+                    // try uppercase
+                    if (edot) strcpy(edot, ".CDG");
+                    cbuf = iv_extract_zip_entry(e.zip_path, cdg_entry, csz);
+                }
+                if (cbuf) {
+                    char tmp_cdg[512];
+                    snprintf(tmp_cdg, sizeof(tmp_cdg), "/tmp/iv_cdg_XXXXXX.cdg");
+#ifndef _WIN32
+                    int cfd = mkstemps(tmp_cdg, 4);
+#else
+                    snprintf(tmp_cdg, sizeof(tmp_cdg), "%s\\iv_cdg.cdg",
+                             getenv("TEMP") ? getenv("TEMP") : "C:\\Temp");
+                    int cfd = open(tmp_cdg, O_CREAT|O_WRONLY|O_TRUNC|O_BINARY, 0600);
+#endif
+                    if (cfd >= 0) { write(cfd, cbuf, csz); close(cfd); }
+                    free(cbuf);
+                    iv_stop_audio();
+                    iv_cdg_free();
+                    iv_ensure_mixer();
+                    g_iv.music = Mix_LoadMUS(tmp_path);
+                    if (g_iv.music) {
+                        Mix_PlayMusic(g_iv.music, 1);
+                        g_iv.audio_playing     = true;
+                        g_iv.audio_paused      = false;
+                        g_iv.audio_position    = 0.0;
+                        g_iv.audio_start_ticks = (double)SDL_GetTicks();
+                        strncpy(g_iv.audio_label, e.name, sizeof(g_iv.audio_label)-1);
+                        iv_cdg_load(tmp_cdg);
+                    }
+                    unlink(tmp_cdg);
+                    unlink(tmp_path);
+                    return;
+                }
+                // CDG not found — fall through to plain audio
+            }
+
+            iv_play_audio(tmp_path, e.name, false);
+            unlink(tmp_path);  // SDL_mixer has loaded it, temp file no longer needed
+            return;
+        }
+
+        // Image entry
+        iv_free_tex();
+        iv_stop_audio();
+        iv_cdg_free();
         size_t sz = 0;
         unsigned char *buf = iv_extract_zip_entry(e.zip_path, e.zip_entry, sz);
         if (buf) {
@@ -480,30 +873,40 @@ static void iv_enter_selected() {
         iv_list_zip(fullpath, g_iv.entries);
 
     } else {
-        // Load plain image
-        iv_free_tex();
+        // Load plain image or play audio
         g_iv.error[0] = '\0';
-        if (g_iv.remote) {
-#ifdef USESSH
-            char fullpath[4096];
-            snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
-            size_t sz = 0;
-            unsigned char *buf = iv_download_remote(fullpath, sz);
-            if (buf) {
-                iv_load_image_from_mem(buf, sz, e.name);
-                free(buf);
-            } else {
-                snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
-            }
-#endif
-        } else {
+        if (e.is_audio) {
+            // Audio file — play it, optionally with CDG
             char fullpath[4096];
 #ifndef _WIN32
             snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
 #else
             snprintf(fullpath, sizeof(fullpath), "%s\\%s", g_iv.path, e.name);
 #endif
-            iv_load_local(fullpath, e.name);
+            iv_play_audio(fullpath, e.name, e.has_cdg_pair);
+        } else {
+            // Image file
+            iv_free_tex();
+            iv_stop_audio();
+            iv_cdg_free();
+            if (g_iv.remote) {
+#ifdef USESSH
+                char fullpath[4096];
+                snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
+                size_t sz = 0;
+                unsigned char *buf = iv_download_remote(fullpath, sz);
+                if (buf) { iv_load_image_from_mem(buf, sz, e.name); free(buf); }
+                else snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+#endif
+            } else {
+                char fullpath[4096];
+#ifndef _WIN32
+                snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
+#else
+                snprintf(fullpath, sizeof(fullpath), "%s\\%s", g_iv.path, e.name);
+#endif
+                iv_load_local(fullpath, e.name);
+            }
         }
     }
 }
@@ -639,7 +1042,7 @@ void iv_render(int win_w, int win_h) {
     const char *mode_str = g_iv.remote ? "Eye of Felix — Remote" : "Eye of Felix";
     char title[256];
     snprintf(title, sizeof(title),
-             "%s (F5)   ↑↓: navigate   ←→: prev/next image   Enter/Space: open   Backspace: up   Esc: close",
+             "%s (F5)   ↑↓: navigate   ←→: prev/next   Shift+←→: ±5s   Shift+↑↓: ±30s   Enter: open   Space: pause   S: stop   Esc: close",
              mode_str);
     iv_draw_text(title, (float)IV_PAD, (float)title_h * 0.72f, 0.75f, 0.88f, 1.0f, 1.f);
 
@@ -687,13 +1090,36 @@ void iv_render(int win_w, int win_h) {
             if      (sel)    draw_rect(px+1, ry, pw-2, (float)rh, 0.18f, 0.38f, 0.75f, 0.90f);
             else if (i%2==0) draw_rect(px,   ry, pw,   (float)rh, 1.f,   1.f,   1.f,   0.02f);
 
-            float nr = sel ? 1.f : (e.is_dir ? 0.90f : (e.is_zip ? 0.95f : 0.82f));
-            float ng = sel ? 1.f : (e.is_dir ? 0.90f : (e.is_zip ? 0.75f : 0.82f));
-            float nb = sel ? 1.f : (e.is_dir ? 0.55f : (e.is_zip ? 0.30f : 0.92f));
+            float nr, ng, nb;
+            if (sel) {
+                nr = ng = nb = 1.f;
+            } else if (e.is_dir) {
+                nr = 0.90f; ng = 0.90f; nb = 0.55f;
+            } else if (e.is_zip) {
+                nr = 0.95f; ng = 0.75f; nb = 0.30f;
+            } else if (e.is_audio && e.has_cdg_pair) {
+                nr = 0.40f; ng = 1.00f; nb = 0.60f; // green — has CDG
+            } else if (e.is_audio) {
+                nr = 0.50f; ng = 0.85f; nb = 1.00f; // cyan — audio only
+            } else if (e.is_cdg) {
+                nr = 0.80f; ng = 0.60f; nb = 1.00f; // purple — CDG graphics
+            } else {
+                nr = 0.82f; ng = 0.82f; nb = 0.92f;
+            }
+
+            // Highlight currently playing track
+            bool is_playing_this = g_iv.audio_playing &&
+                strcmp(e.name, g_iv.audio_label) == 0;
+            if (is_playing_this && !sel)
+                draw_rect(px+1, ry, pw-2, (float)rh, 0.10f, 0.30f, 0.15f, 0.60f);
 
             char name_buf[520];
-            snprintf(name_buf, sizeof(name_buf), "%s%s",
-                     e.is_dir ? "[DIR] " : (e.is_zip ? "[ZIP] " : "      "), e.name);
+            const char *prefix = e.is_dir  ? "[DIR] " :
+                                 e.is_zip  ? "[ZIP] " :
+                                 e.is_audio ? (e.has_cdg_pair ? "[CDG] " : "[AUD] ") :
+                                 e.is_cdg  ? "[.CDG]" :
+                                             "      ";
+            snprintf(name_buf, sizeof(name_buf), "%s%s", prefix, e.name);
             iv_draw_text(name_buf, px + IV_PAD, ry + rh * 0.72f, nr, ng, nb, 1.f);
 
             if (!e.is_dir && e.size > 0) {
@@ -716,35 +1142,114 @@ void iv_render(int win_w, int win_h) {
     // Divider
     draw_rect((float)panel_w, (float)content_y, 2, (float)content_h, 0.20f, 0.20f, 0.30f, 1.f);
 
-    // ── Image area ─────────────────────────────────────────────────────────
+    // ── Display area (image / CDG / audio) ─────────────────────────────────
     {
         float ix = (float)img_x, iy = (float)content_y;
         float iw = (float)img_w,  ih = (float)content_h;
 
         draw_rect(ix, iy, iw, ih, 0.04f, 0.04f, 0.06f, 1.f);
 
-        if (g_iv.tex) {
-            // Fit image into area, preserving aspect ratio
-            float scale = std::min(iw / g_iv.tex_w, ih / g_iv.tex_h);
-            float dw = g_iv.tex_w * scale;
-            float dh = g_iv.tex_h * scale;
+        if (g_iv.cdg.active && g_iv.cdg.tex) {
+            // CD+G display — render the 300x216 palette texture
+            float scale = std::min(iw / 300.f, ih / 216.f);
+            float dw = 300.f * scale, dh = 216.f * scale;
             float dx = ix + (iw - dw) * 0.5f;
             float dy = iy + (ih - dh) * 0.5f;
+            // Black border (letterbox)
+            draw_rect(dx, dy, dw, dh, 0.f, 0.f, 0.f, 1.f);
+            // Use the CDG texture rather than g_iv.tex
+            GLuint saved_tex = g_iv.tex;
+            int saved_w = g_iv.tex_w, saved_h = g_iv.tex_h;
+            g_iv.tex   = (unsigned int)g_iv.cdg.tex;
+            g_iv.tex_w = 300; g_iv.tex_h = 216;
+            iv_draw_image(dx, dy, dw, dh);
+            g_iv.tex   = saved_tex;
+            g_iv.tex_w = saved_w; g_iv.tex_h = saved_h;
 
-            // Draw checkerboard background for transparent images
+            // Playback progress bar at bottom of CDG area
+            if (g_iv.audio_playing) {
+                float bar_y  = dy + dh + 4.f;
+                float bar_w  = dw;
+                double total = Mix_MusicDuration(g_iv.music);
+                float prog   = (total > 0) ? (float)(g_iv.audio_position / total) : 0.f;
+                if (prog > 1.f) prog = 1.f;
+                draw_rect(dx, bar_y, bar_w, 6.f, 0.15f, 0.15f, 0.20f, 1.f);
+                draw_rect(dx, bar_y, bar_w * prog, 6.f, 0.30f, 0.80f, 0.40f, 1.f);
+            }
+
+        } else if (g_iv.audio_playing || g_iv.audio_paused) {
+            // Audio-only display — show a simple player UI
+            float cy = iy + ih * 0.35f;
+
+            // Music note icon area
+            draw_rect(ix + iw*0.5f - 40.f, cy - 50.f, 80.f, 80.f,
+                      0.12f, 0.18f, 0.28f, 1.f);
+            const char *note = "\xe2\x99\xab";  // UTF-8 musical note
+            iv_draw_text(note,
+                         ix + iw*0.5f - g_font_size*0.6f,
+                         cy - 5.f,
+                         0.40f, 0.75f, 1.00f, 1.f);
+
+            // Track name
+            iv_draw_text(g_iv.audio_label,
+                         ix + iw*0.5f - strlen(g_iv.audio_label)*g_font_size*0.3f,
+                         cy + 50.f,
+                         0.90f, 0.95f, 1.00f, 1.f);
+
+            // Paused indicator
+            if (g_iv.audio_paused) {
+                const char *paused = "[ PAUSED ]";
+                iv_draw_text(paused,
+                             ix + iw*0.5f - strlen(paused)*g_font_size*0.3f,
+                             cy + 50.f + rh,
+                             1.00f, 0.75f, 0.30f, 1.f);
+            }
+
+            // Progress bar
+            double total = g_iv.music ? Mix_MusicDuration(g_iv.music) : 0.0;
+            float prog = (total > 0) ? (float)(g_iv.audio_position / total) : 0.f;
+            if (prog > 1.f) prog = 1.f;
+            float bar_x = ix + iw * 0.1f;
+            float bar_w = iw * 0.8f;
+            float bar_y = cy + 80.f + rh;
+            draw_rect(bar_x, bar_y, bar_w, 8.f, 0.15f, 0.15f, 0.20f, 1.f);
+            if (prog > 0.f)
+                draw_rect(bar_x, bar_y, bar_w * prog, 8.f, 0.30f, 0.80f, 0.40f, 1.f);
+
+            // Time display
+            int cur_s = (int)g_iv.audio_position;
+            int tot_s = (int)total;
+            char timebuf[32];
+            snprintf(timebuf, sizeof(timebuf), "%d:%02d / %d:%02d",
+                     cur_s/60, cur_s%60, tot_s/60, tot_s%60);
+            iv_draw_text(timebuf,
+                         bar_x + bar_w*0.5f - strlen(timebuf)*g_font_size*0.3f,
+                         bar_y + 18.f,
+                         0.55f, 0.65f, 0.75f, 1.f);
+
+            // Controls hint
+            const char *ctrl = "Space: pause/resume   S: stop   ←→: prev/next track";
+            iv_draw_text(ctrl,
+                         ix + iw*0.5f - strlen(ctrl)*g_font_size*0.3f,
+                         bar_y + 40.f,
+                         0.40f, 0.45f, 0.55f, 1.f);
+
+        } else if (g_iv.tex) {
+            float scale = std::min(iw / g_iv.tex_w, ih / g_iv.tex_h);
+            float dw = g_iv.tex_w * scale, dh = g_iv.tex_h * scale;
+            float dx = ix + (iw - dw) * 0.5f, dy = iy + (ih - dh) * 0.5f;
             draw_rect(dx, dy, dw, dh, 0.25f, 0.25f, 0.25f, 1.f);
             iv_draw_image(dx, dy, dw, dh);
+
         } else if (g_iv.error[0]) {
             iv_draw_text(g_iv.error,
-                         ix + iw * 0.5f - strlen(g_iv.error) * g_font_size * 0.3f,
-                         iy + ih * 0.5f,
-                         1.f, 0.4f, 0.4f, 1.f);
+                         ix + iw*0.5f - strlen(g_iv.error)*g_font_size*0.3f,
+                         iy + ih*0.5f, 1.f, 0.4f, 0.4f, 1.f);
         } else {
-            const char *hint = "Select an image file to preview";
+            const char *hint = "Select an image, audio, or CD+G file";
             iv_draw_text(hint,
-                         ix + iw * 0.5f - strlen(hint) * g_font_size * 0.3f,
-                         iy + ih * 0.5f,
-                         0.35f, 0.40f, 0.50f, 1.f);
+                         ix + iw*0.5f - strlen(hint)*g_font_size*0.3f,
+                         iy + ih*0.5f, 0.35f, 0.40f, 0.50f, 1.f);
         }
     }
 
@@ -755,14 +1260,29 @@ void iv_render(int win_w, int win_h) {
         draw_rect(0, st_y+1, (float)win_w, (float)status_h-1, 0.09f, 0.09f, 0.13f, 1.f);
 
         char status[512];
-        if (g_iv.tex) {
+        if (g_iv.cdg.active) {
+            int pkt = g_iv.cdg.current_packet, tot = g_iv.cdg.packet_count;
+            snprintf(status, sizeof(status), "  \xe2\x99\xab %s   CD+G: packet %d/%d  (%.1fs)",
+                     g_iv.audio_label, pkt, tot, g_iv.audio_position);
+        } else if (g_iv.audio_playing || g_iv.audio_paused) {
+            snprintf(status, sizeof(status), "  \xe2\x99\xab %s   %.1fs%s",
+                     g_iv.audio_label, g_iv.audio_position,
+                     g_iv.audio_paused ? "  [PAUSED]" : "");
+        } else if (g_iv.tex) {
             snprintf(status, sizeof(status), "  %s   %dx%d px",
                      g_iv.img_label, g_iv.tex_w, g_iv.tex_h);
         } else {
             int n = (int)g_iv.entries.size();
-            int imgs = 0;
-            for (auto &e : g_iv.entries) if (!e.is_dir) imgs++;
-            snprintf(status, sizeof(status), "  %d items (%d images)", n, imgs);
+            int imgs = 0, audio = 0, cdgs = 0;
+            for (auto &e : g_iv.entries) {
+                if (!e.is_dir && !e.is_zip) {
+                    if (e.is_audio) audio++;
+                    else if (e.is_cdg) cdgs++;
+                    else imgs++;
+                }
+            }
+            snprintf(status, sizeof(status), "  %d items  (%d images, %d audio, %d cdg)",
+                     n, imgs, audio, cdgs);
         }
         iv_draw_text(status, (float)IV_PAD, st_y + status_h * 0.72f,
                      0.60f, 0.70f, 0.85f, 1.f);
@@ -785,14 +1305,6 @@ bool iv_keydown(SDL_Keycode sym) {
         iv_close();
         return true;
 
-    case SDLK_UP:
-        if (g_iv.selected > 0) g_iv.selected--;
-        return true;
-
-    case SDLK_DOWN:
-        if (g_iv.selected < n - 1) g_iv.selected++;
-        return true;
-
     case SDLK_PAGEUP:
         g_iv.selected = std::max(0, g_iv.selected - 10);
         return true;
@@ -809,41 +1321,104 @@ bool iv_keydown(SDL_Keycode sym) {
         g_iv.selected = n > 0 ? n - 1 : 0;
         return true;
 
-    case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
+    case SDLK_RETURN: case SDLK_KP_ENTER:
         iv_enter_selected();
+        return true;
+
+    case SDLK_SPACE:
+        // If audio is playing/paused, toggle pause; otherwise open selected
+        if (g_iv.audio_playing) {
+            Mix_PauseMusic();
+            g_iv.audio_paused  = true;
+            g_iv.audio_playing = false;
+        } else if (g_iv.audio_paused) {
+            Mix_ResumeMusic();
+            g_iv.audio_playing = true;
+            g_iv.audio_paused  = false;
+            // Adjust start_ticks to account for paused time
+            g_iv.audio_start_ticks = (double)SDL_GetTicks() - g_iv.audio_position * 1000.0;
+        } else {
+            iv_enter_selected();
+        }
+        return true;
+
+    case SDLK_s:
+        iv_stop_audio();
+        iv_cdg_free();
         return true;
 
     case SDLK_LEFT:
     case SDLK_RIGHT: {
-        // Find the previous/next image file (non-directory), wrapping around.
-        // Collect indices of all image entries.
-        std::vector<int> img_indices;
+        SDL_Keymod mod = SDL_GetModState();
+        // Shift+Left/Right = seek ±5 seconds when audio is playing
+        if ((mod & KMOD_SHIFT) && (g_iv.audio_playing || g_iv.audio_paused)) {
+            double delta = (sym == SDLK_RIGHT) ? 5.0 : -5.0;
+            double newpos = g_iv.audio_position + delta;
+            if (newpos < 0.0) newpos = 0.0;
+            if (Mix_SetMusicPosition(newpos) == 0) {
+                g_iv.audio_position    = newpos;
+                g_iv.audio_start_ticks = (double)SDL_GetTicks() - newpos * 1000.0;
+                // CDG must replay from start to catch up to new position
+                if (g_iv.cdg.active) {
+                    memset(g_iv.cdg.screen,  0, sizeof(g_iv.cdg.screen));
+                    memset(g_iv.cdg.palette, 0, sizeof(g_iv.cdg.palette));
+                    g_iv.cdg.current_packet = 0;
+                }
+            }
+            return true;
+        }
+        // No shift — navigate to prev/next playable file
+        std::vector<int> playable;
         for (int i = 0; i < n; i++)
-            if (!g_iv.entries[i].is_dir && !g_iv.entries[i].is_zip)
-                img_indices.push_back(i);
-        if (img_indices.empty()) return true;
+            if (!g_iv.entries[i].is_dir && !g_iv.entries[i].is_zip &&
+                !g_iv.entries[i].is_cdg)
+                playable.push_back(i);
+        if (playable.empty()) return true;
 
-        // Find where the current selection sits in that list
         int pos = -1;
-        for (int i = 0; i < (int)img_indices.size(); i++)
-            if (img_indices[i] == g_iv.selected) { pos = i; break; }
+        for (int i = 0; i < (int)playable.size(); i++)
+            if (playable[i] == g_iv.selected) { pos = i; break; }
 
-        // If current selection is a dir, find the nearest image instead
-        if (pos < 0) pos = (sym == SDLK_RIGHT) ? 0 : (int)img_indices.size() - 1;
+        if (pos < 0) pos = (sym == SDLK_RIGHT) ? 0 : (int)playable.size() - 1;
         else if (sym == SDLK_RIGHT)
-            pos = (pos + 1) % (int)img_indices.size();
+            pos = (pos + 1) % (int)playable.size();
         else
-            pos = (pos - 1 + (int)img_indices.size()) % (int)img_indices.size();
+            pos = (pos - 1 + (int)playable.size()) % (int)playable.size();
 
-        g_iv.selected = img_indices[pos];
+        g_iv.selected = playable[pos];
         iv_enter_selected();
         return true;
     }
 
+    case SDLK_UP:
+    case SDLK_DOWN: {
+        SDL_Keymod mod = SDL_GetModState();
+        // Shift+Up/Down = seek ±30 seconds when audio is playing
+        if ((mod & KMOD_SHIFT) && (g_iv.audio_playing || g_iv.audio_paused)) {
+            double delta = (sym == SDLK_UP) ? 30.0 : -30.0;
+            double newpos = g_iv.audio_position + delta;
+            if (newpos < 0.0) newpos = 0.0;
+            if (Mix_SetMusicPosition(newpos) == 0) {
+                g_iv.audio_position    = newpos;
+                g_iv.audio_start_ticks = (double)SDL_GetTicks() - newpos * 1000.0;
+                if (g_iv.cdg.active) {
+                    memset(g_iv.cdg.screen,  0, sizeof(g_iv.cdg.screen));
+                    memset(g_iv.cdg.palette, 0, sizeof(g_iv.cdg.palette));
+                    g_iv.cdg.current_packet = 0;
+                }
+            }
+            return true;
+        }
+        // No shift — normal list navigation
+        if (sym == SDLK_UP) { if (g_iv.selected > 0) g_iv.selected--; }
+        else                 { if (g_iv.selected < n-1) g_iv.selected++; }
+        return true;
+    }
+
     case SDLK_BACKSPACE:
-        // Go up one directory
-        if (n > 0) {
-            // Simulate selecting ".." and entering
+        if (g_iv.audio_playing || g_iv.audio_paused) {
+            iv_stop_audio(); iv_cdg_free();
+        } else if (n > 0) {
             for (int i = 0; i < n; i++) {
                 if (strcmp(g_iv.entries[i].name, "..") == 0) {
                     g_iv.selected = i;
@@ -855,6 +1430,6 @@ bool iv_keydown(SDL_Keycode sym) {
         return true;
 
     default:
-        return true;  // swallow all keys while open
+        return true;
     }
 }
