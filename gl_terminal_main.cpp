@@ -20,6 +20,7 @@
 #include "felix_settings.h"
 #include "kitty_graphics.h"
 #include "font_manager.h"
+#include "image_viewer.h"
 #ifdef USESSH
 #  include "ssh_session.h"
 #  include "sftp_overlay.h"
@@ -775,6 +776,21 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+                if (ev.key.keysym.sym == SDLK_F5) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+#ifdef USESSH
+                    iv_open(use_ssh && ssh_active(), win_w, win_h);
+#else
+                    iv_open(false, win_w, win_h);
+#endif
+                    needs_render = true;
+                    break;
+                }
+                if (g_iv.visible) {
+                    iv_keydown(ev.key.keysym.sym);
+                    needs_render = true;
+                    break;
+                }
                 if (g_help_visible) {
                     help_keydown(ev.key.keysym.sym);
                     needs_render = true;
@@ -861,6 +877,8 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+                // Image viewer captures all clicks
+                if (g_iv.visible) { needs_render = true; break; }
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1197,6 +1215,8 @@ int main(int argc, char **argv) {
             sftp_overlay_render(win_w, win_h);
             sftp_console_render(win_w, win_h);
 #endif
+            // Image viewer (F5) — full-screen overlay
+            iv_render(win_w, win_h);
             // Help overlay renders last (topmost layer)
             help_render(win_w, win_h);
 
