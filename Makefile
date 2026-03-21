@@ -75,7 +75,7 @@ CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                  $(SSH_LIBS_LINUX) \
-                 -lGL -lpng -lz -lm -pthread -lstdc++ \
+                 -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer \
                  -s -Wl,--gc-sections -flto
 
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
@@ -85,7 +85,7 @@ CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                        $(SSH_LIBS_LINUX) \
-                       -lGL -lpng -lz -lm -pthread -lstdc++
+                       -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer
 
 # C flags for miniz .c files (no -std=c++17, no -Wextra pedantry on C)
 CFLAGS_LINUX       = $(CFLAGS_COMMON) -DLINUX -O2
@@ -104,7 +104,7 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
-               -lopengl32 -lpng -lz -lwinmm -mwindows \
+               -lopengl32 -lpng -lz -lwinmm -mwindows -lSDL2_mixer \
                -s -Wl,--gc-sections -flto
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
