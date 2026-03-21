@@ -113,6 +113,13 @@ static int                        s_cursor_pos = 0;     // byte position in s_in
 static std::vector<std::string>   s_history;
 static int                        s_history_idx = -1;   // -1 = not browsing
 
+// Mouse selection within the scrollback — (line, col) pairs
+struct SelPos { int line = -1; int col = 0; };
+static SelPos s_sel_start;
+static SelPos s_sel_end;
+static bool   s_sel_active  = false;  // drag in progress
+static bool   s_sel_exists  = false;  // selection retained after mouseup
+
 static char                       s_remote_cwd[4096] = "/";
 static char                       s_local_cwd[4096]  = {};
 
@@ -518,6 +525,7 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
     }
     if (cmd == "clear") {
         s_lines.clear(); s_scroll_offset = 0;
+        s_sel_exists = false; s_sel_active = false;
         return true;
     }
     if (cmd == "help" || cmd == "?") {
@@ -951,6 +959,25 @@ bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
     if (sym == SDLK_PAGEUP)   { s_scroll_offset += 10; return true; }
     if (sym == SDLK_PAGEDOWN) { s_scroll_offset = std::max(0, s_scroll_offset - 10); return true; }
 
+    // Ctrl+V — paste clipboard into input
+    if ((ks.mod & KMOD_CTRL) && sym == SDLK_v) {
+        char *clip = SDL_GetClipboardText();
+        if (clip && *clip) {
+            int add = (int)strlen(clip);
+            // Strip newlines — paste as single line
+            for (int i = 0; i < add; i++) if (clip[i] == '\n' || clip[i] == '\r') clip[i] = ' ';
+            if (s_input_len + add < INPUT_MAX - 1) {
+                memmove(s_input + s_cursor_pos + add, s_input + s_cursor_pos,
+                        s_input_len - s_cursor_pos + 1);
+                memcpy(s_input + s_cursor_pos, clip, add);
+                s_input_len  += add;
+                s_cursor_pos += add;
+            }
+        }
+        if (clip) SDL_free(clip);
+        return true;
+    }
+
     // Ctrl+C — cancel / clear input
     if ((ks.mod & KMOD_CTRL) && sym == SDLK_c) {
         if (s_input_len > 0) {
@@ -984,12 +1011,166 @@ bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
 }
 
 // ============================================================================
+// GEOMETRY HELPERS  (shared between mouse handlers and render)
+// ============================================================================
+
+// Compute the scrollback viewport geometry — same math as render.
+// Returns false if mouse is outside the scrollback area.
+static bool console_layout(int win_h,
+                            float &scroll_top_out, int &visible_out,
+                            int &first_out, float &progress_y_out) {
+    int row = rh();
+    float title_h = (float)(row + PAD);
+    float input_h = (float)(row + PAD * 2);
+    float input_y = (float)(win_h) - input_h;
+
+    float progress_y = input_y;
+    if (s_busy.load() || s_progress.load() > 0.f)
+        progress_y = input_y - 4.f - 2.f;
+
+    float scroll_top = title_h;
+    float scroll_bot = progress_y - 2.f;
+    float area_h     = scroll_bot - scroll_top;
+    int   visible    = (int)(area_h / row);
+
+    int total_lines = (int)s_lines.size();
+    int max_offset  = std::max(0, total_lines - visible);
+    if (s_scroll_offset > max_offset) s_scroll_offset = max_offset;
+    int first = std::max(0, total_lines - visible - s_scroll_offset);
+
+    scroll_top_out  = scroll_top;
+    visible_out     = visible;
+    first_out       = first;
+    progress_y_out  = progress_y;
+    return true;
+}
+
+// Convert a pixel Y coordinate to a line index in s_lines (-1 if outside).
+static int pixel_to_line(int py, int win_h) {
+    float scroll_top; int visible, first; float progress_y;
+    console_layout(win_h, scroll_top, visible, first, progress_y);
+    int row = rh();
+    if (py < (int)scroll_top || py >= (int)(scroll_top + visible * row)) return -1;
+    int i = (int)((py - scroll_top) / row);
+    int idx = first + i;
+    if (idx < 0 || idx >= (int)s_lines.size()) return -1;
+    return idx;
+}
+
+// Compare two SelPos values — returns -1, 0, +1
+static int sel_cmp(SelPos a, SelPos b) {
+    if (a.line != b.line) return a.line < b.line ? -1 : 1;
+    if (a.col  != b.col)  return a.col  < b.col  ? -1 : 1;
+    return 0;
+}
+
+// Convert pixel X within a line to a character column index.
+// Uses the same mono-spaced assumption as the renderer: each char is
+// approximately g_font_size * 0.6 wide.  For proportional fonts a proper
+// measurement loop would be needed, but this matches what draw_text produces.
+static int pixel_to_col(int px, const std::string &text) {
+    float char_w = g_font_size * 0.6f;
+    float text_x = (float)PAD;
+    int col = (int)((px - text_x) / char_w);
+    if (col < 0) col = 0;
+    if (col > (int)text.size()) col = (int)text.size();
+    return col;
+}
+
+static void console_copy_selection() {
+    if (!s_sel_exists) return;
+    SelPos a = s_sel_start, b = s_sel_end;
+    if (sel_cmp(a, b) > 0) std::swap(a, b);
+    if (a.line < 0 || a.line >= (int)s_lines.size()) return;
+
+    std::string text;
+    for (int li = a.line; li <= b.line && li < (int)s_lines.size(); li++) {
+        const std::string &ln = s_lines[li].text;
+        int from = (li == a.line) ? std::min(a.col, (int)ln.size()) : 0;
+        int to   = (li == b.line) ? std::min(b.col + 1, (int)ln.size()) : (int)ln.size();
+        if (from > to) std::swap(from, to);
+        if (!text.empty()) text += '\n';
+        text += ln.substr(from, to - from);
+    }
+    if (!text.empty())
+        SDL_SetClipboardText(text.c_str());
+}
+
+// ============================================================================
+// MOUSE
+// ============================================================================
+
+bool sftp_console_mousedown(int x, int y, int button) {
+    if (!g_sftp_console_visible) return false;
+
+    // Right-click — paste clipboard into input line
+    if (button == SDL_BUTTON_RIGHT) {
+        char *clip = SDL_GetClipboardText();
+        if (clip && *clip) {
+            int add = (int)strlen(clip);
+            for (int i = 0; i < add; i++)
+                if (clip[i] == '\n' || clip[i] == '\r') clip[i] = ' ';
+            if (s_input_len + add < INPUT_MAX - 1) {
+                memmove(s_input + s_cursor_pos + add, s_input + s_cursor_pos,
+                        s_input_len - s_cursor_pos + 1);
+                memcpy(s_input + s_cursor_pos, clip, add);
+                s_input_len  += add;
+                s_cursor_pos += add;
+            }
+        }
+        if (clip) SDL_free(clip);
+        return true;
+    }
+
+    // Left-click — start selection (clears existing)
+    s_sel_exists = false;
+    s_sel_active = false;
+
+    extern int g_console_last_win_h;
+    int line = pixel_to_line(y, g_console_last_win_h);
+    if (line < 0) return true;
+    int col = pixel_to_col(x, s_lines[line].text);
+    s_sel_start = { line, col };
+    s_sel_end   = { line, col };
+    s_sel_active = true;
+    return true;
+}
+
+bool sftp_console_mousemotion(int x, int y, bool lbutton) {
+    if (!g_sftp_console_visible) return false;
+    if (!lbutton || !s_sel_active) return true;
+    extern int g_console_last_win_h;
+    int line = pixel_to_line(y, g_console_last_win_h);
+    if (line < 0) return true;
+    int col = pixel_to_col(x, s_lines[line].text);
+    s_sel_end    = { line, col };
+    s_sel_exists = (sel_cmp(s_sel_start, s_sel_end) != 0);
+    return true;
+}
+
+bool sftp_console_mouseup(int x, int y) {
+    if (!g_sftp_console_visible) return false;
+    (void)x; (void)y;
+    if (s_sel_active) {
+        s_sel_active = false;
+        s_sel_exists = (sel_cmp(s_sel_start, s_sel_end) != 0);
+        if (s_sel_exists)
+            console_copy_selection();
+    }
+    return true;
+}
+
+// Last win_h seen by render — used by mouse handlers.
+int g_console_last_win_h = 480;
+
+// ============================================================================
 // RENDER
 // ============================================================================
 
 void sftp_console_render(int win_w, int win_h) {
     if (!g_sftp_console_visible) return;
 
+    g_console_last_win_h = win_h;
     int row = rh();
 
     // Full-screen background
@@ -1040,12 +1221,28 @@ void sftp_console_render(int win_w, int win_h) {
     if (s_scroll_offset > max_offset) s_scroll_offset = max_offset;
 
     int first = std::max(0, total_lines - visible - s_scroll_offset);
+    SelPos sel_a = s_sel_start, sel_b = s_sel_end;
+    if (sel_cmp(sel_a, sel_b) > 0) std::swap(sel_a, sel_b);
+    bool has_sel = s_sel_exists || s_sel_active;
+    float char_w = g_font_size * 0.6f;
     for (int i = 0; i < visible; i++) {
         int idx = first + i;
         if (idx >= total_lines) break;
         const auto &ln = s_lines[idx];
-        float y = scroll_top + (float)(i * row) + row * 0.72f;
-        con_text(ln.text.c_str(), (float)PAD, y, ln.r, ln.g, ln.b);
+        float y = scroll_top + (float)(i * row);
+
+        // Selection highlight
+        if (has_sel && idx >= sel_a.line && idx <= sel_b.line) {
+            int from_col = (idx == sel_a.line) ? sel_a.col : 0;
+            int to_col   = (idx == sel_b.line) ? sel_b.col + 1 : (int)ln.text.size();
+            if (from_col > to_col) std::swap(from_col, to_col);
+            float hx = PAD + from_col * char_w;
+            float hw = (to_col - from_col) * char_w;
+            if (hw < char_w) hw = char_w; // always show at least one char width
+            draw_rect(hx, y, hw, (float)row, 0.25f, 0.50f, 0.90f, 0.45f);
+        }
+
+        con_text(ln.text.c_str(), (float)PAD, y + row * 0.72f, ln.r, ln.g, ln.b);
     }
 
     // Prompt + input line

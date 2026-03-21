@@ -835,6 +835,13 @@ int main(int argc, char **argv) {
             }
 
             case SDL_MOUSEBUTTONDOWN: {
+#ifdef USESSH
+                if (g_sftp_console_visible) {
+                    sftp_console_mousedown(ev.button.x, ev.button.y, ev.button.button);
+                    needs_render = true;
+                    break;
+                }
+#endif
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -950,6 +957,14 @@ int main(int argc, char **argv) {
             }
 
             case SDL_MOUSEMOTION:
+#ifdef USESSH
+                if (g_sftp_console_visible) {
+                    sftp_console_mousemotion(ev.motion.x, ev.motion.y,
+                                             (ev.motion.state & SDL_BUTTON_LMASK) != 0);
+                    needs_render = true;
+                    break;
+                }
+#endif
                 if (g_menu.visible) {
                     int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
                     if (hit >= 0) g_menu.hovered = hit;
@@ -1003,6 +1018,13 @@ int main(int argc, char **argv) {
                 break;
 
             case SDL_MOUSEBUTTONUP: {
+#ifdef USESSH
+                if (g_sftp_console_visible) {
+                    sftp_console_mouseup(ev.button.x, ev.button.y);
+                    needs_render = true;
+                    break;
+                }
+#endif
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
