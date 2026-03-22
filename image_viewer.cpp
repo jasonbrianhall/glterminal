@@ -813,34 +813,32 @@ static void iv_enter_selected() {
         if (strcmp(e.name, "..") == 0) {
             char tmp[4096];
             strncpy(tmp, g_iv.path, sizeof(tmp)-1);
-#ifndef _WIN32
-            char *slash = strrchr(tmp, '/');
-            if (slash && slash != tmp) { *slash = '\0'; }
-            else { tmp[0]='/'; tmp[1]='\0'; }
-#else
-            char *slash = strrchr(tmp, '\\');
-            if (!slash) slash = strrchr(tmp, '/');
-            if (slash && slash != tmp) { *slash = '\0'; }
-            else { tmp[0]='\\'; tmp[1]='\0'; }
-#endif
+            if (g_iv.remote || tmp[0] == '/') {
+                char *slash = strrchr(tmp, '/');
+                if (slash && slash != tmp) { *slash = '\0'; }
+                else { tmp[0]='/'; tmp[1]='\0'; }
+            } else {
+                char *slash = strrchr(tmp, '\\');
+                if (!slash) slash = strrchr(tmp, '/');
+                if (slash && slash != tmp) { *slash = '\0'; }
+                else { tmp[0]='\\'; tmp[1]='\0'; }
+            }
             strncpy(g_iv.path, tmp, sizeof(g_iv.path)-1);
         } else {
-#ifndef _WIN32
-            snprintf(newpath, sizeof(newpath), "%s/%s", g_iv.path, e.name);
-#else
-            snprintf(newpath, sizeof(newpath), "%s\\%s", g_iv.path, e.name);
-#endif
+            snprintf(newpath, sizeof(newpath), "%s%s%s",
+                     g_iv.path,
+                     (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\",
+                     e.name);
             strncpy(g_iv.path, newpath, sizeof(g_iv.path)-1);
         }
         iv_refresh();
 
     } else if (e.is_zip) {
         char fullpath[4096];
-#ifndef _WIN32
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
-#else
-        snprintf(fullpath, sizeof(fullpath), "%s\\%s", g_iv.path, e.name);
-#endif
+        snprintf(fullpath, sizeof(fullpath), "%s%s%s",
+                 g_iv.path,
+                 (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\",
+                 e.name);
 
         // Peek inside the zip — if it contains a CDG+audio pair, auto-play it
         // instead of entering browse mode.
@@ -938,15 +936,97 @@ static void iv_enter_selected() {
     } else {
         // Load plain image or play audio
         g_iv.error[0] = '\0';
+        char fullpath[4096];
+        snprintf(fullpath, sizeof(fullpath), "%s%s%s",
+                 g_iv.path,
+                 (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\",
+                 e.name);
+
         if (e.is_audio) {
-            // Audio file — play it, optionally with CDG
-            char fullpath[4096];
-#ifndef _WIN32
-            snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
-#else
-            snprintf(fullpath, sizeof(fullpath), "%s\\%s", g_iv.path, e.name);
+            if (g_iv.remote) {
+#ifdef USESSH
+                // Download to temp file — SDL_mixer can't read from SSH paths
+                size_t sz = 0;
+                unsigned char *buf = iv_download_remote(fullpath, sz);
+                if (buf) {
+                    const char *dot = strrchr(e.name, '.');
+                    std::string tmp = iv_write_tempfile(buf, sz, dot ? dot : ".tmp");
+                    free(buf);
+                    if (!tmp.empty()) {
+                        iv_play_audio(tmp.c_str(), e.name, false);
+                        iv_delete_tempfile(tmp.c_str());
+                    } else {
+                        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
+                    }
+                } else {
+                    snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+                }
 #endif
-            iv_play_audio(fullpath, e.name, e.has_cdg_pair);
+            } else {
+                iv_play_audio(fullpath, e.name, e.has_cdg_pair);
+            }
+
+        } else if (e.is_zip) {
+            if (g_iv.remote) {
+#ifdef USESSH
+                // Download zip to temp file, then treat exactly like a local zip
+                size_t sz = 0;
+                unsigned char *buf = iv_download_remote(fullpath, sz);
+                if (buf) {
+                    std::string tmp = iv_write_tempfile(buf, sz, ".zip");
+                    free(buf);
+                    if (!tmp.empty()) {
+                        // Peek for CDG pair — same logic as local zip
+                        if (zip_contains_cdg_pair(tmp.c_str())) {
+                            // Build a fake local IVEntry pointing at the temp zip
+                            IVEntry fake_zip = e;
+                            strncpy(fake_zip.name,     tmp.c_str(), sizeof(fake_zip.name)-1);
+                            strncpy(fake_zip.zip_path, tmp.c_str(), sizeof(fake_zip.zip_path)-1);
+                            fake_zip.is_zip        = true;
+                            fake_zip.has_cdg_pair  = true;
+                            // Temporarily switch to local mode so iv_enter_selected's
+                            // is_zip branch uses the local temp file path
+                            bool was_remote = g_iv.remote;
+                            g_iv.remote = false;
+                            char saved_path[4096];
+                            strncpy(saved_path, g_iv.path, sizeof(saved_path)-1);
+                            // Find the directory part of tmp for g_iv.path
+                            strncpy(g_iv.path, tmp.c_str(), sizeof(g_iv.path)-1);
+                            char *last_sep = strrchr(g_iv.path, '/');
+                            if (!last_sep) last_sep = strrchr(g_iv.path, '\\');
+                            if (last_sep) *last_sep = '\0';
+                            // Temporarily add the fake entry and enter it
+                            g_iv.entries.clear();
+                            g_iv.entries.push_back(fake_zip);
+                            g_iv.selected = 0;
+                            iv_enter_selected();
+                            // Restore
+                            g_iv.remote = was_remote;
+                            strncpy(g_iv.path, saved_path, sizeof(g_iv.path)-1);
+                            // Keep temp zip alive for playback; delete on close
+                        } else {
+                            // No CDG pair — just browse it
+                            g_iv.in_zip = true;
+                            strncpy(g_iv.zip_file, tmp.c_str(), sizeof(g_iv.zip_file)-1);
+                            g_iv.selected = 0; g_iv.scroll_top = 0;
+                            iv_list_zip(tmp.c_str(), g_iv.entries);
+                        }
+                    } else {
+                        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
+                    }
+                } else {
+                    snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+                }
+#endif
+            } else {
+                // Local zip — should have been caught by the is_zip branch above,
+                // but handle gracefully just in case
+                g_iv.in_zip = true;
+                strncpy(g_iv.zip_file, fullpath, sizeof(g_iv.zip_file)-1);
+                g_iv.selected = 0; g_iv.scroll_top = 0;
+                iv_list_zip(fullpath, g_iv.entries);
+            }
+
         } else {
             // Image file
             iv_free_tex();
@@ -954,20 +1034,12 @@ static void iv_enter_selected() {
             iv_cdg_free();
             if (g_iv.remote) {
 #ifdef USESSH
-                char fullpath[4096];
-                snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
                 size_t sz = 0;
                 unsigned char *buf = iv_download_remote(fullpath, sz);
                 if (buf) { iv_load_image_from_mem(buf, sz, e.name); free(buf); }
                 else snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
 #endif
             } else {
-                char fullpath[4096];
-#ifndef _WIN32
-                snprintf(fullpath, sizeof(fullpath), "%s/%s", g_iv.path, e.name);
-#else
-                snprintf(fullpath, sizeof(fullpath), "%s\\%s", g_iv.path, e.name);
-#endif
                 iv_load_local(fullpath, e.name);
             }
         }
