@@ -49,6 +49,12 @@ jobs:
           mingw64-freetype \
           mingw64-glew \
           mingw64-libssh2 \
+          mingw64-gtk3 mingw64-gtkmm30 \
+          mingw64-SDL2 mingw64-SDL2_mixer \
+          mingw64-libvorbis mingw64-flac \
+          mingw64-opus mingw64-opusfile \
+          mingw64-taglib.noarch \
+          mingw64-glew \
           wine \
           zip unzip \
           ImageMagick \
