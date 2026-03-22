@@ -12,13 +12,7 @@
 // ---- stb_image (header-only, embedded) ------------------------------------
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO          // we feed raw bytes, not filenames
-#define STBI_ONLY_JPEG
-#define STBI_ONLY_PNG
-#define STBI_ONLY_BMP
-#define STBI_ONLY_GIF
-#define STBI_ONLY_TGA
-#define STBI_ONLY_HDR
-#define STBI_ONLY_PIC
+// Note: do NOT use STBI_ONLY_* — the full decoder handles progressive JPEGs
 // stb_image.h must be in the include path (https://github.com/nothings/stb)
 #include "stb_image.h"
 
@@ -840,15 +834,34 @@ static void iv_enter_selected() {
                  (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\",
                  e.name);
 
+        // For remote zips, download to a temp file first
+        std::string tmp_zip_path;
+        const char *zip_to_open = fullpath;
+        if (g_iv.remote) {
+#ifdef USESSH
+            size_t zsz = 0;
+            unsigned char *zbuf = iv_download_remote(fullpath, zsz);
+            if (!zbuf) {
+                snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+                return;
+            }
+            tmp_zip_path = iv_write_tempfile(zbuf, zsz, ".zip");
+            free(zbuf);
+            if (tmp_zip_path.empty()) {
+                snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
+                return;
+            }
+            zip_to_open = tmp_zip_path.c_str();
+#endif
+        }
+
         // Peek inside the zip — if it contains a CDG+audio pair, auto-play it
-        // instead of entering browse mode.
         mz_zip_archive zip;
         mz_zip_zero_struct(&zip);
         bool auto_played = false;
-        if (mz_zip_reader_init_file(&zip, fullpath, 0)) {
+        if (mz_zip_reader_init_file(&zip, zip_to_open, 0)) {
             mz_uint n = mz_zip_reader_get_num_files(&zip);
 
-            // Collect all names
             std::vector<std::string> all_names;
             for (mz_uint i = 0; i < n; i++) {
                 char fname[512] = {};
@@ -856,14 +869,12 @@ static void iv_enter_selected() {
                 all_names.push_back(fname);
             }
 
-            // Look for an audio file that has a matching .cdg
             for (mz_uint i = 0; i < n && !auto_played; i++) {
                 if (mz_zip_reader_is_file_a_directory(&zip, i)) continue;
                 char fname[512] = {};
                 mz_zip_reader_get_filename(&zip, i, fname, sizeof(fname));
                 if (!is_audio_ext(fname)) continue;
 
-                // Build expected CDG name
                 char cdg_entry[512]; strncpy(cdg_entry, fname, sizeof(cdg_entry)-1);
                 char *dot = strrchr(cdg_entry, '.'); if (!dot) continue;
                 strcpy(dot, ".cdg");
@@ -876,25 +887,23 @@ static void iv_enter_selected() {
                 }
                 if (!found_cdg) continue;
 
-                // Found a pair — extract both to temp files and play
                 mz_zip_reader_end(&zip);
 
                 auto extract_to_tmp = [&](const char *entry, const char *ext) -> std::string {
                     size_t sz = 0;
-                    unsigned char *buf = iv_extract_zip_entry(fullpath, entry, sz);
+                    unsigned char *buf = iv_extract_zip_entry(zip_to_open, entry, sz);
                     if (!buf) return "";
                     std::string path = iv_write_tempfile(buf, sz, ext);
                     free(buf);
                     return path;
                 };
 
-                // Find the actual CDG entry name (case-insensitive match)
                 std::string cdg_actual;
                 for (auto &nm : all_names)
                     if (strcasecmp(nm.c_str(), cdg_entry) == 0) { cdg_actual = nm; break; }
 
                 const char *audio_ext = strrchr(fname, '.');
-                std::string tmp_audio = extract_to_tmp(fname,      audio_ext ? audio_ext : ".mp3");
+                std::string tmp_audio = extract_to_tmp(fname, audio_ext ? audio_ext : ".mp3");
                 std::string tmp_cdg   = extract_to_tmp(cdg_actual.c_str(), ".cdg");
 
                 if (!tmp_audio.empty()) {
@@ -918,19 +927,37 @@ static void iv_enter_selected() {
                     if (!tmp_cdg.empty()) iv_delete_tempfile(tmp_cdg.c_str());
                     auto_played = true;
                 }
-                break;  // only play the first pair found
+                break;
             }
 
             if (!auto_played) mz_zip_reader_end(&zip);
         }
 
+        if (!tmp_zip_path.empty()) iv_delete_tempfile(tmp_zip_path.c_str());
+
         if (!auto_played) {
-            // No CDG pair found — enter browse mode as before
-            strncpy(g_iv.zip_file, fullpath, sizeof(g_iv.zip_file)-1);
-            g_iv.in_zip     = true;
-            g_iv.selected   = 0;
-            g_iv.scroll_top = 0;
-            iv_list_zip(fullpath, g_iv.entries);
+            // No CDG pair — browse mode (re-download if remote, or use local path)
+            if (g_iv.remote) {
+#ifdef USESSH
+                // Re-download for browsing (or keep temp — but we deleted it above)
+                size_t zsz = 0;
+                unsigned char *zbuf = iv_download_remote(fullpath, zsz);
+                if (zbuf) {
+                    std::string tmp2 = iv_write_tempfile(zbuf, zsz, ".zip");
+                    free(zbuf);
+                    if (!tmp2.empty()) {
+                        strncpy(g_iv.zip_file, tmp2.c_str(), sizeof(g_iv.zip_file)-1);
+                        g_iv.in_zip = true; g_iv.selected = 0; g_iv.scroll_top = 0;
+                        iv_list_zip(tmp2.c_str(), g_iv.entries);
+                        // keep temp alive for zip entry extraction
+                    }
+                }
+#endif
+            } else {
+                strncpy(g_iv.zip_file, fullpath, sizeof(g_iv.zip_file)-1);
+                g_iv.in_zip = true; g_iv.selected = 0; g_iv.scroll_top = 0;
+                iv_list_zip(fullpath, g_iv.entries);
+            }
         }
 
     } else {
@@ -964,67 +991,6 @@ static void iv_enter_selected() {
 #endif
             } else {
                 iv_play_audio(fullpath, e.name, e.has_cdg_pair);
-            }
-
-        } else if (e.is_zip) {
-            if (g_iv.remote) {
-#ifdef USESSH
-                // Download zip to temp file, then treat exactly like a local zip
-                size_t sz = 0;
-                unsigned char *buf = iv_download_remote(fullpath, sz);
-                if (buf) {
-                    std::string tmp = iv_write_tempfile(buf, sz, ".zip");
-                    free(buf);
-                    if (!tmp.empty()) {
-                        // Peek for CDG pair — same logic as local zip
-                        if (zip_contains_cdg_pair(tmp.c_str())) {
-                            // Build a fake local IVEntry pointing at the temp zip
-                            IVEntry fake_zip = e;
-                            strncpy(fake_zip.name,     tmp.c_str(), sizeof(fake_zip.name)-1);
-                            strncpy(fake_zip.zip_path, tmp.c_str(), sizeof(fake_zip.zip_path)-1);
-                            fake_zip.is_zip        = true;
-                            fake_zip.has_cdg_pair  = true;
-                            // Temporarily switch to local mode so iv_enter_selected's
-                            // is_zip branch uses the local temp file path
-                            bool was_remote = g_iv.remote;
-                            g_iv.remote = false;
-                            char saved_path[4096];
-                            strncpy(saved_path, g_iv.path, sizeof(saved_path)-1);
-                            // Find the directory part of tmp for g_iv.path
-                            strncpy(g_iv.path, tmp.c_str(), sizeof(g_iv.path)-1);
-                            char *last_sep = strrchr(g_iv.path, '/');
-                            if (!last_sep) last_sep = strrchr(g_iv.path, '\\');
-                            if (last_sep) *last_sep = '\0';
-                            // Temporarily add the fake entry and enter it
-                            g_iv.entries.clear();
-                            g_iv.entries.push_back(fake_zip);
-                            g_iv.selected = 0;
-                            iv_enter_selected();
-                            // Restore
-                            g_iv.remote = was_remote;
-                            strncpy(g_iv.path, saved_path, sizeof(g_iv.path)-1);
-                            // Keep temp zip alive for playback; delete on close
-                        } else {
-                            // No CDG pair — just browse it
-                            g_iv.in_zip = true;
-                            strncpy(g_iv.zip_file, tmp.c_str(), sizeof(g_iv.zip_file)-1);
-                            g_iv.selected = 0; g_iv.scroll_top = 0;
-                            iv_list_zip(tmp.c_str(), g_iv.entries);
-                        }
-                    } else {
-                        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
-                    }
-                } else {
-                    snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
-                }
-#endif
-            } else {
-                // Local zip — should have been caught by the is_zip branch above,
-                // but handle gracefully just in case
-                g_iv.in_zip = true;
-                strncpy(g_iv.zip_file, fullpath, sizeof(g_iv.zip_file)-1);
-                g_iv.selected = 0; g_iv.scroll_top = 0;
-                iv_list_zip(fullpath, g_iv.entries);
             }
 
         } else {
