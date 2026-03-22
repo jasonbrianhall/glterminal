@@ -31,9 +31,9 @@
 #include <cstdio>
 #include <cerrno>
 #include <ctime>
-#include <fnmatch.h>    // POSIX glob matching (Windows: handled separately)
 
 #ifndef _WIN32
+#  include <fnmatch.h>
 #  include <sys/stat.h>
 #  include <dirent.h>
 #  include <unistd.h>
@@ -41,6 +41,8 @@
 #else
 #  include <windows.h>
 #  include <shlobj.h>
+#  include <shlwapi.h>
+#  pragma comment(lib, "shlwapi.lib")
 #  define fnmatch(p,s,f) (PathMatchSpecA((s),(p)) ? 0 : 1)
 #endif
 
@@ -200,6 +202,7 @@ static bool remote_is_dir(const char *path) {
 // Returns "" on success, error string on failure.
 static std::string do_get(const char *remote_full, const char *local_full,
                            const std::string &label) {
+    (void)label;
     LIBSSH2_SESSION *sess = ssh_get_session();
     int sock = ssh_get_socket();
     SessionLock lk;
