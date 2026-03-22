@@ -373,11 +373,20 @@ static void iv_list_remote(const char *path, std::vector<IVEntry> &out) {
             if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
             bool is_dir = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) &&
                           LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
-            if (!is_dir && !is_image_ext(name)) continue;
+            bool img   = is_image_ext(name);
+            bool audio = is_audio_ext(name);
+            bool zip   = is_zip_ext(name);
+            bool cdg   = is_cdg_ext(name);
+            if (!is_dir && !img && !audio && !zip && !cdg) continue;
             IVEntry e{};
             strncpy(e.name, name, sizeof(e.name)-1);
             e.is_dir = is_dir;
             e.size   = (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) ? attrs.filesize : 0;
+            if (audio) e.is_audio = true;
+            if (zip)   e.is_zip   = true;
+            if (cdg)   e.is_cdg   = true;
+            // Note: has_cdg_pair and zip CDG peek not done for remote listings
+            // (would require extra SFTP round-trips per file)
             out.push_back(e);
         }
         libssh2_sftp_closedir(dh);

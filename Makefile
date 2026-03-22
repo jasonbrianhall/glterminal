@@ -126,7 +126,7 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               crt_audio.cpp         felix_settings.cpp    \
               kitty_graphics.cpp    font_manager.cpp      \
               sftp_overlay.cpp      sftp_console.cpp      \
-              image_viewer.cpp      \
+              image_viewer.cpp      cdg.cpp               \
               $(SSH_SRCS)
 
 SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c
