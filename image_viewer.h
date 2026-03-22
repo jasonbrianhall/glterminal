@@ -16,7 +16,7 @@
 // ============================================================================
 
 #define IV_SUPPORTED_EXTS  { ".jpg",".jpeg",".png",".bmp",".gif",".webp",".tiff",".tif" }
-#define IV_AUDIO_EXTS      { ".mp3",".ogg",".flac",".opus",".wav" }
+#define IV_AUDIO_EXTS      { ".mp3",".ogg",".flac",".opus",".wav",".mid",".midi" }
 
 struct IVEntry {
     char     name[512]      = {};
