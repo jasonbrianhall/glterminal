@@ -61,8 +61,47 @@
 #endif
 
 // ============================================================================
-// GLOBALS
+// CROSS-PLATFORM TEMP FILE
 // ============================================================================
+
+// Write data to a new temp file with the given extension. Returns the path on
+// success or "" on failure. Caller must delete the file when done.
+static std::string iv_write_tempfile(const unsigned char *data, size_t len,
+                                      const char *ext) {
+    char path[512];
+#ifndef _WIN32
+    snprintf(path, sizeof(path), "/tmp/iv_tmp_XXXXXX%s", ext ? ext : "");
+    int fd = mkstemps(path, ext ? (int)strlen(ext) : 0);
+    if (fd < 0) return "";
+    ssize_t written = write(fd, data, len);
+    close(fd);
+    if (written != (ssize_t)len) { unlink(path); return ""; }
+#else
+    char tmp_dir[MAX_PATH];
+    if (!GetTempPathA(sizeof(tmp_dir), tmp_dir)) return "";
+    char base[MAX_PATH];
+    if (!GetTempFileNameA(tmp_dir, "iv_", 0, base)) return "";
+    // GetTempFileName creates a .tmp file — rename to include the right extension
+    snprintf(path, sizeof(path), "%s%s", base, ext ? ext : "");
+    // Write to the path directly (overwrite the placeholder)
+    FILE *f = fopen(path, "wb");
+    if (!f) { DeleteFileA(base); return ""; }
+    bool ok = (fwrite(data, 1, len, f) == len);
+    fclose(f);
+    DeleteFileA(base);  // remove the placeholder .tmp
+    if (!ok) { DeleteFileA(path); return ""; }
+#endif
+    return std::string(path);
+}
+
+static void iv_delete_tempfile(const char *path) {
+    if (!path || !path[0]) return;
+#ifndef _WIN32
+    unlink(path);
+#else
+    DeleteFileA(path);
+#endif
+}
 
 ImageViewer g_iv;
 extern int  g_font_size;
@@ -702,28 +741,10 @@ static void iv_enter_selected() {
                 snprintf(g_iv.error, sizeof(g_iv.error), "Failed to extract: %s", e.name);
                 return;
             }
-            // Write to temp file
-            char tmp_audio[256];
-            snprintf(tmp_audio, sizeof(tmp_audio), "/tmp/iv_audio_XXXXXX");
-            // Preserve extension so SDL_mixer detects format correctly
             const char *dot = strrchr(e.name, '.');
-            char tmp_path[512];
-            int fd = -1;
-#ifndef _WIN32
-            snprintf(tmp_path, sizeof(tmp_path), "/tmp/iv_audio_XXXXXX%s", dot ? dot : "");
-            fd = mkstemps(tmp_path, dot ? (int)strlen(dot) : 0);
-#else
-            snprintf(tmp_path, sizeof(tmp_path), "%s\\iv_audio%s",
-                     getenv("TEMP") ? getenv("TEMP") : "C:\\Temp", dot ? dot : ".tmp");
-            fd = open(tmp_path, O_CREAT|O_WRONLY|O_TRUNC|O_BINARY, 0600);
-#endif
-            bool ok = false;
-            if (fd >= 0) {
-                ok = (write(fd, buf, sz) == (ssize_t)sz);
-                close(fd);
-            }
+            std::string tmp_path = iv_write_tempfile(buf, sz, dot ? dot : ".tmp");
             free(buf);
-            if (!ok) {
+            if (tmp_path.empty()) {
                 snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
                 return;
             }
@@ -731,32 +752,19 @@ static void iv_enter_selected() {
             // If CDG pair exists in the zip, extract it too
             bool load_cdg = e.has_cdg_pair;
             if (load_cdg) {
-                // Build the CDG entry name from the audio entry name
                 char cdg_entry[512]; strncpy(cdg_entry, e.zip_entry, sizeof(cdg_entry)-1);
                 char *edot = strrchr(cdg_entry, '.'); if (edot) strcpy(edot, ".cdg");
                 size_t csz = 0;
                 unsigned char *cbuf = iv_extract_zip_entry(e.zip_path, cdg_entry, csz);
                 if (!cbuf) {
-                    // try uppercase
                     if (edot) strcpy(edot, ".CDG");
                     cbuf = iv_extract_zip_entry(e.zip_path, cdg_entry, csz);
                 }
                 if (cbuf) {
-                    char tmp_cdg[512];
-                    snprintf(tmp_cdg, sizeof(tmp_cdg), "/tmp/iv_cdg_XXXXXX.cdg");
-#ifndef _WIN32
-                    int cfd = mkstemps(tmp_cdg, 4);
-#else
-                    snprintf(tmp_cdg, sizeof(tmp_cdg), "%s\\iv_cdg.cdg",
-                             getenv("TEMP") ? getenv("TEMP") : "C:\\Temp");
-                    int cfd = open(tmp_cdg, O_CREAT|O_WRONLY|O_TRUNC|O_BINARY, 0600);
-#endif
-                    if (cfd >= 0) { write(cfd, cbuf, csz); close(cfd); }
+                    std::string tmp_cdg = iv_write_tempfile(cbuf, csz, ".cdg");
                     free(cbuf);
-                    iv_stop_audio();
-                    iv_cdg_free();
-                    iv_ensure_mixer();
-                    g_iv.music = Mix_LoadMUS(tmp_path);
+                    iv_stop_audio(); iv_cdg_free(); iv_ensure_mixer();
+                    g_iv.music = Mix_LoadMUS(tmp_path.c_str());
                     if (g_iv.music) {
                         Mix_PlayMusic(g_iv.music, 1);
                         g_iv.audio_playing     = true;
@@ -764,17 +772,16 @@ static void iv_enter_selected() {
                         g_iv.audio_position    = 0.0;
                         g_iv.audio_start_ticks = (double)SDL_GetTicks();
                         strncpy(g_iv.audio_label, e.name, sizeof(g_iv.audio_label)-1);
-                        iv_cdg_load(tmp_cdg);
+                        if (!tmp_cdg.empty()) iv_cdg_load(tmp_cdg.c_str());
                     }
-                    unlink(tmp_cdg);
-                    unlink(tmp_path);
+                    if (!tmp_cdg.empty()) iv_delete_tempfile(tmp_cdg.c_str());
+                    iv_delete_tempfile(tmp_path.c_str());
                     return;
                 }
-                // CDG not found — fall through to plain audio
             }
 
-            iv_play_audio(tmp_path, e.name, false);
-            unlink(tmp_path);  // SDL_mixer has loaded it, temp file no longer needed
+            iv_play_audio(tmp_path.c_str(), e.name, false);
+            iv_delete_tempfile(tmp_path.c_str());
             return;
         }
 
@@ -878,12 +885,9 @@ static void iv_enter_selected() {
                     size_t sz = 0;
                     unsigned char *buf = iv_extract_zip_entry(fullpath, entry, sz);
                     if (!buf) return "";
-                    char tmp[512];
-                    snprintf(tmp, sizeof(tmp), "/tmp/iv_zip_XXXXXX%s", ext);
-                    int fd = mkstemps(tmp, (int)strlen(ext));
-                    if (fd < 0) { free(buf); return ""; }
-                    write(fd, buf, sz); close(fd); free(buf);
-                    return std::string(tmp);
+                    std::string path = iv_write_tempfile(buf, sz, ext);
+                    free(buf);
+                    return path;
                 };
 
                 // Find the actual CDG entry name (case-insensitive match)
@@ -912,8 +916,8 @@ static void iv_enter_selected() {
                         g_iv.error[0] = '\0';
                         if (!tmp_cdg.empty()) iv_cdg_load(tmp_cdg.c_str());
                     }
-                    unlink(tmp_audio.c_str());
-                    if (!tmp_cdg.empty()) unlink(tmp_cdg.c_str());
+                    iv_delete_tempfile(tmp_audio.c_str());
+                    if (!tmp_cdg.empty()) iv_delete_tempfile(tmp_cdg.c_str());
                     auto_played = true;
                 }
                 break;  // only play the first pair found
