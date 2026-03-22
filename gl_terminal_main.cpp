@@ -201,6 +201,24 @@ int main(int argc, char **argv) {
     }
 
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
+    if (!ctx) {
+        // Core profile failed (common on Raspberry Pi with VC4/V3D Mesa drivers).
+        // Fall back to compatibility profile — still GL 3.3, but the driver
+        // won't refuse the FBConfig.  If this also fails we abort cleanly rather
+        // than crashing inside gl_init_renderer with a NULL context.
+        SDL_Log("INFO: GL 3.3 Core profile failed (%s), retrying with Compatibility profile\n",
+                SDL_GetError());
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+        ctx = SDL_GL_CreateContext(window);
+    }
+    if (!ctx) {
+        SDL_Log("FATAL: Could not create any GL 3.3 context: %s\n", SDL_GetError());
+        SDL_Log("HINT:  On Raspberry Pi ensure /boot/config.txt has 'dtoverlay=vc4-kms-v3d'\n");
+        SDL_Log("HINT:  Or try: MESA_GL_VERSION_OVERRIDE=3.3 MESA_GLSL_VERSION_OVERRIDE=330 ./flt\n");
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
     SDL_GL_MakeCurrent(window, ctx);
     SDL_GL_SetSwapInterval(1);
 
