@@ -1166,6 +1166,13 @@ int main(int argc, char **argv) {
         bc_tick((float)win_w, (float)win_h, bc_dt);
         if (bc_get_enabled()) needs_render = true;
 
+        // Eye of Felix tick — always runs when visible, outside the needs_render gate
+        if (g_iv.visible) {
+            iv_tick((double)bc_dt);
+            if (g_iv.audio_playing || g_iv.audio_paused || g_iv.cdg_display)
+                needs_render = true;
+        }
+
         // Hard cap at ~60 fps for animated/fight modes that don't vsync themselves.
         // Sleep is placed AFTER rendering so input→render has no artificial delay.
         // (vsync via SDL_GL_SetSwapInterval(1) already throttles normal frames.)
