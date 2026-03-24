@@ -25,6 +25,8 @@
 #  include "ssh_session.h"
 #  include "sftp_overlay.h"
 #  include "sftp_console.h"
+#  include "port_forward.h"
+#  include "pf_overlay.h"
 #endif
 
 #include <SDL2/SDL.h>
@@ -82,6 +84,8 @@ int main(int argc, char **argv) {
 
 #ifdef USESSH
     SshConfig ssh_cfg;
+    struct PfPending { int lp; std::string rh; int rp; };
+    std::vector<PfPending> pf_locals_pending, pf_remotes_pending;
 #endif
     bool use_ssh = false;
 
@@ -132,6 +136,22 @@ int main(int argc, char **argv) {
             ssh_cfg.known_hosts_path = argv[++i];
             continue;
         }
+        if ((strcmp(arg, "-L") == 0 || strcmp(arg, "--forward-local") == 0) && i + 1 < argc) {
+            int lp, rp; std::string rh;
+            if (pf_parse_spec(argv[++i], &lp, &rh, &rp))
+                pf_locals_pending.push_back({lp, rh, rp});
+            else
+                fprintf(stderr, "Bad -L spec (expected local_port:remote_host:remote_port): %s\n", argv[i]);
+            continue;
+        }
+        if ((strcmp(arg, "-R") == 0 || strcmp(arg, "--forward-remote") == 0) && i + 1 < argc) {
+            int lp, rp; std::string rh;
+            if (pf_parse_spec(argv[++i], &lp, &rh, &rp))
+                pf_remotes_pending.push_back({lp, rh, rp});
+            else
+                fprintf(stderr, "Bad -R spec (expected remote_port:local_host:local_port): %s\n", argv[i]);
+            continue;
+        }
 #endif // USESSH
 
         // Positional: shell command (local mode only)
@@ -154,11 +174,15 @@ int main(int argc, char **argv) {
             printf("  --ssh-key-pub <path>        Public key file (derived from key path if omitted)\n");
             printf("  --ssh-password <pass>       Password auth (prefer agent or key)\n");
             printf("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
+            printf("  -L local_port:remote_host:remote_port   Local port forward\n");
+            printf("  -R remote_port:local_host:local_port    Remote port forward\n");
 #endif
             printf("\nKeyboard shortcuts:\n");
             printf("  F2                          SFTP upload browser (SSH sessions only)\n");
             printf("  F3                          SFTP download browser (SSH sessions only)\n");
             printf("  F4                          SFTP interactive console (SSH sessions only)\n");
+            printf("  F5                          Eye of Felix — image viewer / audio player\n");
+            printf("  F6                          Port forward manager (SSH sessions only)\n");
             printf("  F11                         Toggle full screen\n");
             printf("  Ctrl+Scroll                 Resize font\n");
             printf("  Shift+PageUp/Down           Scroll scrollback buffer\n");
@@ -550,6 +574,10 @@ int main(int argc, char **argv) {
                     sftp_init();
                     ssh_phase = SshPhase::ACTIVE;
                     SDL_StartTextInput();
+                    for (auto &p : pf_locals_pending)
+                        pf_add_local(p.lp, p.rh, p.rp);
+                    for (auto &p : pf_remotes_pending)
+                        pf_add_remote(p.lp, p.rh, p.rp);
                 } else {
                     ssh_phase = SshPhase::FAILED;
                     const char *msg = "\r\nConnection failed. Press any key to close.\r\n";
@@ -804,6 +832,21 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+#ifdef USESSH
+                if (ev.key.keysym.sym == SDLK_F6 && use_ssh && ssh_active()) {
+                    if (g_pf_overlay.visible)
+                        g_pf_overlay.visible = false;
+                    else
+                        pf_overlay_open();
+                    needs_render = true;
+                    break;
+                }
+                if (g_pf_overlay.visible) {
+                    if (pf_overlay_keydown(ev.key.keysym.sym))
+                        needs_render = true;
+                    break;
+                }
+#endif
                 if (g_iv.visible) {
                     iv_keydown(ev.key.keysym.sym);
                     needs_render = true;
@@ -855,6 +898,12 @@ int main(int argc, char **argv) {
                 if (g_sftp_console_visible) {
                     SDL_Keysym ks{}; ks.sym = SDLK_UNKNOWN;
                     sftp_console_keydown(ks, ev.text.text);
+                    needs_render = true;
+                    break;
+                }
+                // Feed text into port-forward overlay input field when active
+                if (g_pf_overlay.visible) {
+                    pf_overlay_textinput(ev.text.text);
                     needs_render = true;
                     break;
                 }
@@ -1239,6 +1288,7 @@ int main(int argc, char **argv) {
 #ifdef USESSH
             sftp_overlay_render(win_w, win_h);
             sftp_console_render(win_w, win_h);
+            pf_overlay_render(win_w, win_h);
 #endif
             // Image viewer (F5) — full-screen overlay
             iv_render(win_w, win_h);
@@ -1274,6 +1324,7 @@ int main(int argc, char **argv) {
         sftp_console_join();
         sftp_transfer_join();
         sftp_shutdown();
+        pf_shutdown_all();
         ssh_disconnect();
     }
 #endif

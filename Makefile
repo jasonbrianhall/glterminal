@@ -57,7 +57,7 @@ SSH2_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libssh2 2>/dev/null ||
 SSH2_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags libssh2 2>/dev/null || echo "")
 SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || echo "-lssh2")
 
-  SSH_SRCS         = ssh_session.cpp
+  SSH_SRCS         = ssh_session.cpp port_forward.cpp pf_overlay.cpp
   SSH_DEFINE       = -DUSESSH
   SSH_CFLAGS_LINUX = $(SSH2_CFLAGS_LINUX)
   SSH_LIBS_LINUX   = $(SSH2_LIBS_LINUX) -lcrypto -lssl
