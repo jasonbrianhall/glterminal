@@ -22,7 +22,6 @@ void        open_url(const std::string &url);
 void pixel_to_cell(Terminal *t, int px, int py, int ox, int oy, int *row, int *col);
 bool cell_in_sel(Terminal *t, int r, int c);
 
-void term_select_word(Terminal *t, int row, int col);
 void term_select_all(Terminal *t);
 void term_copy_selection(Terminal *t);
 void term_copy_selection_html(Terminal *t);

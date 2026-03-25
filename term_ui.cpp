@@ -304,59 +304,6 @@ std::string url_at_pixel(Terminal *t, int mouse_px, int mouse_py, int ox, int oy
 // CLIPBOARD
 // ============================================================================
 
-// Word chars: alphanumeric plus common non-space identifer/path chars
-static inline bool is_word_char(uint32_t cp) {
-    if (cp <= ' ') return false;
-    // Explicit non-word punctuation that should break words
-    const char *breaks = " \t\r\n\"'`()[]{}|&;<>!#$%^*+=,";
-    if (cp < 128) {
-        for (const char *p = breaks; *p; p++)
-            if (cp == (uint32_t)(unsigned char)*p) return false;
-        return true;
-    }
-    return true;  // non-ASCII unicode: treat as word char
-}
-
-void term_select_word(Terminal *t, int row, int col) {
-    if (row < 0 || row >= t->sb_count + t->rows) return;
-    if (col < 0 || col >= t->cols) return;
-
-    Cell *clicked = vcell(t, row, col);
-    if (!clicked) return;
-    bool clicked_is_word = is_word_char(clicked->cp);
-
-    // If clicked on whitespace, just clear selection
-    if (!clicked_is_word) {
-        t->sel_start_row = t->sel_end_row = row;
-        t->sel_start_col = t->sel_end_col = col;
-        t->sel_active = false;
-        t->sel_exists = false;
-        return;
-    }
-
-    // Walk left to find word start
-    int sc = col;
-    while (sc > 0) {
-        Cell *prev = vcell(t, row, sc - 1);
-        if (!prev || !is_word_char(prev->cp)) break;
-        sc--;
-    }
-    // Walk right to find word end (inclusive)
-    int ec = col;
-    while (ec < t->cols - 1) {
-        Cell *next = vcell(t, row, ec + 1);
-        if (!next || !is_word_char(next->cp)) break;
-        ec++;
-    }
-
-    t->sel_start_row = row;
-    t->sel_start_col = sc;
-    t->sel_end_row   = row;
-    t->sel_end_col   = ec;
-    t->sel_active    = false;
-    t->sel_exists    = true;
-}
-
 void term_select_all(Terminal *t) {
     t->sel_start_row = 0;
     t->sel_start_col = 0;

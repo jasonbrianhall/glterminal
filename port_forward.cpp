@@ -1,4 +1,4 @@
-// port_forward.cpp — SSH local and remote port forwarding for Felix Terminal
+// port_forward.cpp — SSH local, remote, and SOCKS5 dynamic port forwarding
 // Compiled only when USESSH is defined.
 
 #ifdef USESSH
@@ -16,6 +16,7 @@
 #include <string>
 #include <cstring>
 #include <cstdio>
+#include <cstdint>
 
 #ifndef _WIN32
 #  include <sys/socket.h>
@@ -29,6 +30,10 @@
        int fl = fcntl(fd, F_GETFL, 0);
        fcntl(fd, F_SETFL, fl | O_NONBLOCK);
    }
+   static void sock_set_blocking(int fd) {
+       int fl = fcntl(fd, F_GETFL, 0);
+       fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+   }
    static int  sock_errno() { return errno; }
    static bool sock_would_block(int e) { return e == EAGAIN || e == EWOULDBLOCK; }
 #else
@@ -37,6 +42,10 @@
    static void sock_close(int fd) { closesocket(fd); }
    static void sock_set_nonblock(int fd) {
        u_long mode = 1;
+       ioctlsocket(fd, FIONBIO, &mode);
+   }
+   static void sock_set_blocking(int fd) {
+       u_long mode = 0;
        ioctlsocket(fd, FIONBIO, &mode);
    }
    static int  sock_errno() { return WSAGetLastError(); }
@@ -84,6 +93,17 @@ struct RemoteForward {
     std::vector<Tunnel*>    tunnels;
 };
 
+struct SocksForward {
+    int              local_port = 0;
+    int              listen_fd  = -1;
+    bool             listen_ok  = false;
+    std::atomic<bool> stop{false};
+    std::thread      accept_thread;
+
+    std::mutex           tunnels_mtx;
+    std::vector<Tunnel*> tunnels;
+};
+
 // ============================================================================
 // STATE
 // ============================================================================
@@ -91,6 +111,7 @@ struct RemoteForward {
 static std::mutex                       s_fwd_mtx;
 static std::vector<LocalForward*>       s_locals;
 static std::vector<RemoteForward*>      s_remotes;
+static std::vector<SocksForward*>       s_socks;
 
 // ============================================================================
 // HELPERS
@@ -372,6 +393,185 @@ static void remote_accept_loop(RemoteForward *rf) {
 }
 
 // ============================================================================
+// SOCKS5 DYNAMIC FORWARDING  (-D)
+// ============================================================================
+
+// Read exactly n bytes from a blocking fd.  Returns false on error/EOF.
+static bool recv_exact(int fd, uint8_t *buf, int n) {
+    int got = 0;
+    while (got < n) {
+        int r = (int)recv(fd, (char*)buf + got, n - got, 0);
+        if (r <= 0) return false;
+        got += r;
+    }
+    return true;
+}
+
+// Send exactly n bytes.  Returns false on error.
+static bool send_exact(int fd, const uint8_t *buf, int n) {
+    int sent = 0;
+    while (sent < n) {
+        int r = (int)send(fd, (const char*)buf + sent, n - sent, 0);
+        if (r <= 0) return false;
+        sent += r;
+    }
+    return true;
+}
+
+// Perform the SOCKS5 handshake on a freshly accepted *blocking* fd.
+// On success fills dest_host/dest_port and returns true.
+// Sends the appropriate SOCKS5 reply in both success and failure cases.
+// Only CONNECT + no-auth (0x00) is supported, matching OpenSSH -D behaviour.
+static bool socks5_handshake(int fd, std::string &dest_host, int &dest_port) {
+    // --- Greeting ---
+    uint8_t hdr[2];
+    if (!recv_exact(fd, hdr, 2)) return false;
+    if (hdr[0] != 0x05) return false;   // not SOCKS5
+
+    uint8_t nmethods = hdr[1];
+    uint8_t methods[255];
+    if (nmethods > 0 && !recv_exact(fd, methods, nmethods)) return false;
+
+    // We only support NO AUTH (0x00)
+    bool no_auth = false;
+    for (int i = 0; i < nmethods; i++)
+        if (methods[i] == 0x00) { no_auth = true; break; }
+
+    if (!no_auth) {
+        uint8_t reject[2] = {0x05, 0xFF};
+        send_exact(fd, reject, 2);
+        return false;
+    }
+    uint8_t accept_method[2] = {0x05, 0x00};
+    if (!send_exact(fd, accept_method, 2)) return false;
+
+    // --- Request ---
+    uint8_t req[4];
+    if (!recv_exact(fd, req, 4)) return false;
+    if (req[0] != 0x05) return false;   // VER
+    if (req[1] != 0x01) {               // only CONNECT supported
+        uint8_t reply[10] = {0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+        send_exact(fd, reply, 10);
+        return false;
+    }
+    // req[2] = RSV, req[3] = ATYP
+
+    char host_buf[256] = {};
+    uint16_t port_net  = 0;
+    uint8_t  atyp      = req[3];
+
+    if (atyp == 0x01) {
+        // IPv4
+        uint8_t ip4[4];
+        if (!recv_exact(fd, ip4, 4)) return false;
+        snprintf(host_buf, sizeof(host_buf), "%d.%d.%d.%d",
+                 ip4[0], ip4[1], ip4[2], ip4[3]);
+    } else if (atyp == 0x03) {
+        // Domain name (FQDN)
+        uint8_t len;
+        if (!recv_exact(fd, &len, 1)) return false;
+        if (!recv_exact(fd, (uint8_t*)host_buf, len)) return false;
+        host_buf[len] = '\0';
+    } else if (atyp == 0x04) {
+        // IPv6
+        uint8_t ip6[16];
+        if (!recv_exact(fd, ip6, 16)) return false;
+        snprintf(host_buf, sizeof(host_buf),
+                 "%02x%02x:%02x%02x:%02x%02x:%02x%02x:"
+                 "%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+                 ip6[0],  ip6[1],  ip6[2],  ip6[3],
+                 ip6[4],  ip6[5],  ip6[6],  ip6[7],
+                 ip6[8],  ip6[9],  ip6[10], ip6[11],
+                 ip6[12], ip6[13], ip6[14], ip6[15]);
+    } else {
+        uint8_t reply[10] = {0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+        send_exact(fd, reply, 10);
+        return false;
+    }
+
+    if (!recv_exact(fd, (uint8_t*)&port_net, 2)) return false;
+    dest_host = host_buf;
+    dest_port = (int)ntohs(port_net);
+
+    // Success reply: VER=5 REP=0 RSV=0 ATYP=1 BND.ADDR=0.0.0.0 BND.PORT=0
+    uint8_t reply[10] = {0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+    return send_exact(fd, reply, 10);
+}
+
+static void socks_accept_loop(SocksForward *sf) {
+    SDL_Log("[PF-D] SOCKS5 proxy listening on localhost:%d\n", sf->local_port);
+
+    while (!sf->stop.load()) {
+        reap_tunnels(sf->tunnels, sf->tunnels_mtx);
+
+        struct sockaddr_storage addr;
+        socklen_t addrlen = sizeof(addr);
+        int client_fd = (int)accept(sf->listen_fd, (struct sockaddr*)&addr, &addrlen);
+        if (client_fd < 0) {
+            if (!sock_would_block(sock_errno())) {
+                SDL_Log("[PF-D] accept error on SOCKS5 port %d\n", sf->local_port);
+                break;
+            }
+            SDL_Delay(10);
+            continue;
+        }
+
+        // Make blocking for the handshake; tunnel_pump will re-set non-blocking.
+        sock_set_blocking(client_fd);
+
+        std::string dest_host;
+        int dest_port = 0;
+        if (!socks5_handshake(client_fd, dest_host, dest_port)) {
+            SDL_Log("[PF-D] SOCKS5 handshake failed\n");
+            sock_close(client_fd);
+            continue;
+        }
+
+        SDL_Log("[PF-D] SOCKS5 CONNECT %s:%d\n", dest_host.c_str(), dest_port);
+
+        // Open SSH direct-tcpip channel to the negotiated destination
+        ssh_session_lock();
+        LIBSSH2_CHANNEL *ch = nullptr;
+        int attempts = 0;
+        while (attempts++ < 200) {
+            ch = libssh2_channel_direct_tcpip_ex(
+                     ssh_get_session(),
+                     dest_host.c_str(), dest_port,
+                     "127.0.0.1", sf->local_port);
+            if (ch) break;
+            if (libssh2_session_last_errno(ssh_get_session()) != LIBSSH2_ERROR_EAGAIN) break;
+            ssh_session_unlock();
+            SDL_Delay(5);
+            ssh_session_lock();
+        }
+        ssh_session_unlock();
+
+        if (!ch) {
+            SDL_Log("[PF-D] failed to open SSH channel to %s:%d\n",
+                    dest_host.c_str(), dest_port);
+            sock_close(client_fd);
+            continue;
+        }
+
+        ssh_session_lock();
+        libssh2_channel_set_blocking(ch, 0);
+        ssh_session_unlock();
+
+        Tunnel *t = new Tunnel();
+        t->local_fd = client_fd;
+        t->channel  = ch;
+        t->thread   = std::thread(tunnel_pump, t);
+
+        {
+            std::lock_guard<std::mutex> lk(sf->tunnels_mtx);
+            sf->tunnels.push_back(t);
+        }
+    }
+
+    SDL_Log("[PF-D] SOCKS5 accept loop exiting for port %d\n", sf->local_port);
+}
+
+// ============================================================================
 // PUBLIC API
 // ============================================================================
 
@@ -440,6 +640,25 @@ bool pf_add_remote(int remote_port, const std::string &local_host, int local_por
     return true;
 }
 
+bool pf_add_socks(int local_port) {
+    SocksForward *sf = new SocksForward();
+    sf->local_port = local_port;
+
+    sf->listen_fd = make_listen_socket(local_port);
+    if (sf->listen_fd < 0) {
+        SDL_Log("[PF-D] failed to bind SOCKS5 proxy on localhost:%d\n", local_port);
+        delete sf;
+        return false;
+    }
+    sf->listen_ok = true;
+    sf->accept_thread = std::thread(socks_accept_loop, sf);
+
+    std::lock_guard<std::mutex> lk(s_fwd_mtx);
+    s_socks.push_back(sf);
+    SDL_Log("[PF-D] SOCKS5 dynamic forward registered on localhost:%d\n", local_port);
+    return true;
+}
+
 void pf_shutdown_all() {
     SDL_Log("[PF] shutting down all port forwards\n");
 
@@ -455,7 +674,6 @@ void pf_shutdown_all() {
         std::lock_guard<std::mutex> lk(s_fwd_mtx);
         for (LocalForward *lf : s_locals) {
             if (lf->accept_thread.joinable()) lf->accept_thread.join();
-            // Stop and join all tunnels
             {
                 std::lock_guard<std::mutex> tlk(lf->tunnels_mtx);
                 for (Tunnel *t : lf->tunnels) {
@@ -511,6 +729,38 @@ void pf_shutdown_all() {
             delete rf;
         }
         s_remotes.clear();
+    }
+
+    // Stop all SOCKS5 forwards
+    {
+        std::lock_guard<std::mutex> lk(s_fwd_mtx);
+        for (SocksForward *sf : s_socks) {
+            sf->stop.store(true);
+            if (sf->listen_fd >= 0) { sock_close(sf->listen_fd); sf->listen_fd = -1; }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lk(s_fwd_mtx);
+        for (SocksForward *sf : s_socks) {
+            if (sf->accept_thread.joinable()) sf->accept_thread.join();
+            {
+                std::lock_guard<std::mutex> tlk(sf->tunnels_mtx);
+                for (Tunnel *t : sf->tunnels) {
+                    t->stop.store(true);
+                    if (t->local_fd >= 0) { sock_close(t->local_fd); t->local_fd = -1; }
+                }
+            }
+            {
+                std::lock_guard<std::mutex> tlk(sf->tunnels_mtx);
+                for (Tunnel *t : sf->tunnels) {
+                    if (t->thread.joinable()) t->thread.join();
+                    delete t;
+                }
+                sf->tunnels.clear();
+            }
+            delete sf;
+        }
+        s_socks.clear();
     }
 
     SDL_Log("[PF] all port forwards stopped\n");
@@ -570,6 +820,19 @@ std::vector<PfStatus> pf_status() {
         {
             std::lock_guard<std::mutex> tlk(rf->tunnels_mtx);
             s.active_connections = (int)rf->tunnels.size();
+        }
+        out.push_back(s);
+    }
+    for (SocksForward *sf : s_socks) {
+        PfStatus s;
+        s.type               = PfStatus::SOCKS;
+        s.local_port         = sf->local_port;
+        s.remote_host        = "";
+        s.remote_port        = 0;
+        s.listener_ok        = sf->listen_ok;
+        {
+            std::lock_guard<std::mutex> tlk(sf->tunnels_mtx);
+            s.active_connections = (int)sf->tunnels.size();
         }
         out.push_back(s);
     }

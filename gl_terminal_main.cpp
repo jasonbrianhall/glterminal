@@ -87,6 +87,7 @@ int main(int argc, char **argv) {
     SshConfig ssh_cfg;
     struct PfPending { int lp; std::string rh; int rp; };
     std::vector<PfPending> pf_locals_pending, pf_remotes_pending;
+    std::vector<int> pf_socks_pending;
 #endif
     bool use_ssh = false;
 
@@ -153,6 +154,14 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Bad -R spec (expected remote_port:local_host:local_port): %s\n", argv[i]);
             continue;
         }
+        if ((strcmp(arg, "-D") == 0 || strcmp(arg, "--dynamic") == 0) && i + 1 < argc) {
+            int port = atoi(argv[++i]);
+            if (port > 0 && port <= 65535)
+                pf_socks_pending.push_back(port);
+            else
+                fprintf(stderr, "Bad -D port (expected 1-65535): %s\n", argv[i]);
+            continue;
+        }
 #endif // USESSH
 
         // Positional: shell command (local mode only)
@@ -177,6 +186,7 @@ int main(int argc, char **argv) {
             printf("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
             printf("  -L local_port:remote_host:remote_port   Local port forward\n");
             printf("  -R remote_port:local_host:local_port    Remote port forward\n");
+            printf("  -D local_port                           SOCKS5 dynamic port forward\n");
 #endif
             printf("\nKeyboard shortcuts:\n");
             printf("  F2                          SFTP upload browser (SSH sessions only)\n");
@@ -607,6 +617,8 @@ int main(int argc, char **argv) {
                         pf_add_local(p.lp, p.rh, p.rp);
                     for (auto &p : pf_remotes_pending)
                         pf_add_remote(p.lp, p.rh, p.rp);
+                    for (int port : pf_socks_pending)
+                        pf_add_socks(port);
                 } else {
                     ssh_phase = SshPhase::FAILED;
                     const char *msg = "\r\nConnection failed. Press any key to close.\r\n";
@@ -1078,14 +1090,9 @@ int main(int argc, char **argv) {
                     } else {
                         autoscroll_mouse_x = ev.button.x;
                         autoscroll_mouse_y = ev.button.y;
-                        if (ev.button.clicks == 2) {
-                            // Double-click: select word under cursor
-                            term_select_word(&term, r, c);
-                        } else {
-                            term.sel_start_row = term.sel_end_row = r;
-                            term.sel_start_col = term.sel_end_col = c;
-                            term.sel_active = true; term.sel_exists = false;
-                        }
+                        term.sel_start_row = term.sel_end_row = r;
+                        term.sel_start_col = term.sel_end_col = c;
+                        term.sel_active = true; term.sel_exists = false;
                         term_dirty_all(&term);
                     }
                 } else if (ev.button.button == SDL_BUTTON_MIDDLE) {
