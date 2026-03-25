@@ -49,6 +49,9 @@ A standalone OpenGL terminal emulator for Linux and MS Windows with SDL fallback
 - Integrated graphical SFTP browser — no separate client needed
 - **F2** — Upload: left panel browses local files, right panel browses remote destination
 - **F3** — Download: right panel browses remote files, left panel selects local destination
+- **F4** — SFTP Console
+- **F5** — Eye of Felix (let's you view remote and local image and listen to audio, including Karaoke CD+G files)
+- **F6** — Local and remote port fowarding console
 - Tab switches focus between panels; Enter opens directories; Backspace navigates up; Space transfers
 - Real-time progress bar with bytes transferred / total during upload and download
 - Transfers run on a background thread — terminal remains responsive during large file transfers
