@@ -4,7 +4,7 @@
 #include <windows.h>
 #include <string.h>
 #include <stdlib.h>
-
+#include <cwchar>
 // Optional write override (set by SSH layer; nullptr = use ConPTY pipe)
 void (*g_term_write_override)(Terminal *t, const char *s, int n) = nullptr;
 
@@ -87,11 +87,42 @@ bool term_spawn(Terminal *t, const char *cmd) {
     si.StartupInfo.cb = sizeof(si);
     si.lpAttributeList = attrList;
 
-    // Inherit TERM and COLORTERM so the shell knows it has colour support
-    // SetEnvironmentVariable affects the current process, child inherits it.
+    //
+    // --- ENVIRONMENT FIX ---
+    // ConPTY child does NOT inherit environment unless explicitly set.
+    //
+
+    // Always set terminal-related vars
     SetEnvironmentVariableW(L"TERM",      L"xterm-256color");
     SetEnvironmentVariableW(L"COLORTERM", L"truecolor");
 
+    // Pass through DISPLAY if present
+    wchar_t buf[512];
+    DWORD len;
+
+    len = GetEnvironmentVariableW(L"DISPLAY", buf, 512);
+    if (len > 0 && len < 512) {
+        SetEnvironmentVariableW(L"DISPLAY", buf);
+    }
+
+    // Pass through XAUTHORITY if present
+    len = GetEnvironmentVariableW(L"XAUTHORITY", buf, 512);
+    if (len > 0 && len < 512) {
+        SetEnvironmentVariableW(L"XAUTHORITY", buf);
+    }
+
+    // Optional fallback: assume ~/.Xauthority
+    if (len == 0) {
+        wchar_t home[512];
+        DWORD hlen = GetEnvironmentVariableW(L"USERPROFILE", home, 512);
+        if (hlen > 0 && hlen < 512) {
+            wchar_t xa[600];
+            swprintf(xa, 600, L"%s\\.Xauthority", home);
+            SetEnvironmentVariableW(L"XAUTHORITY", xa);
+        }
+    }
+
+    // Convert command to wide
     wchar_t wcmd[512];
     MultiByteToWideChar(CP_UTF8, 0, cmd, -1, wcmd, 512);
 
@@ -111,6 +142,7 @@ bool term_spawn(Terminal *t, const char *cmd) {
     s_hThread = CreateThread(nullptr, 0, pty_reader_thread, t, 0, nullptr);
     return true;
 }
+
 
 // ============================================================================
 // term_read  — drain the reader thread's buffer into the terminal
