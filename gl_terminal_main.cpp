@@ -1078,9 +1078,14 @@ int main(int argc, char **argv) {
                     } else {
                         autoscroll_mouse_x = ev.button.x;
                         autoscroll_mouse_y = ev.button.y;
-                        term.sel_start_row = term.sel_end_row = r;
-                        term.sel_start_col = term.sel_end_col = c;
-                        term.sel_active = true; term.sel_exists = false;
+                        if (ev.button.clicks == 2) {
+                            // Double-click: select word under cursor
+                            term_select_word(&term, r, c);
+                        } else {
+                            term.sel_start_row = term.sel_end_row = r;
+                            term.sel_start_col = term.sel_end_col = c;
+                            term.sel_active = true; term.sel_exists = false;
+                        }
                         term_dirty_all(&term);
                     }
                 } else if (ev.button.button == SDL_BUTTON_MIDDLE) {
