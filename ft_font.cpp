@@ -214,7 +214,6 @@ float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
     }
     int load_err = FT_Load_Glyph(face, gi, load_flags);
     if (load_err) {
-        SDL_Log("[Glyph] cp=U+%04X FT_Load_Glyph failed err=%d flags=0x%x\n", cp, load_err, load_flags);
         return 0.f;
     }
 

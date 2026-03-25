@@ -22,6 +22,7 @@
 #include "kitty_graphics.h"
 #include "font_manager.h"
 #include "image_viewer.h"
+#include "wopr/wopr.h"
 #ifdef USESSH
 #  include "ssh_session.h"
 #  include "sftp_overlay.h"
@@ -87,6 +88,7 @@ int main(int argc, char **argv) {
     SshConfig ssh_cfg;
     struct PfPending { int lp; std::string rh; int rp; };
     std::vector<PfPending> pf_locals_pending, pf_remotes_pending;
+    std::vector<int> pf_socks_pending;
 #endif
     bool use_ssh = false;
 
@@ -153,6 +155,14 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Bad -R spec (expected remote_port:local_host:local_port): %s\n", argv[i]);
             continue;
         }
+        if ((strcmp(arg, "-D") == 0 || strcmp(arg, "--dynamic") == 0) && i + 1 < argc) {
+            int port = atoi(argv[++i]);
+            if (port > 0 && port <= 65535)
+                pf_socks_pending.push_back(port);
+            else
+                fprintf(stderr, "Bad -D port (expected 1-65535): %s\n", argv[i]);
+            continue;
+        }
 #endif // USESSH
 
         // Positional: shell command (local mode only)
@@ -177,6 +187,7 @@ int main(int argc, char **argv) {
             printf("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
             printf("  -L local_port:remote_host:remote_port   Local port forward\n");
             printf("  -R remote_port:local_host:local_port    Remote port forward\n");
+            printf("  -D local_port                           SOCKS5 dynamic port forward\n");
 #endif
             printf("\nKeyboard shortcuts:\n");
             printf("  F2                          SFTP upload browser (SSH sessions only)\n");
@@ -278,6 +289,7 @@ int main(int argc, char **argv) {
     apply_theme(0);
     ft_init();
     crt_audio_init();
+    wopr_audio_init();
 
     Terminal term;
     term_init(&term);
@@ -607,6 +619,8 @@ int main(int argc, char **argv) {
                         pf_add_local(p.lp, p.rh, p.rp);
                     for (auto &p : pf_remotes_pending)
                         pf_add_remote(p.lp, p.rh, p.rp);
+                    for (int port : pf_socks_pending)
+                        pf_add_socks(port);
                 } else {
                     ssh_phase = SshPhase::FAILED;
                     const char *msg = "\r\nConnection failed. Press any key to close.\r\n";
@@ -796,6 +810,18 @@ int main(int argc, char **argv) {
                     running = false;
                     break;
                 }
+                // F7/WOPR checked before ssh_ready so it works in local sessions
+                if (ev.key.keysym.sym == SDLK_F7) {
+                    if (g_wopr.visible) wopr_close();
+                    else                wopr_open();
+                    needs_render = true;
+                    break;
+                }
+                if (g_wopr.visible) {
+                    wopr_keydown(ev.key.keysym.sym, nullptr);
+                    needs_render = true;
+                    break;
+                }
                 // Still connecting — ignore all normal key input
                 if (!ssh_ready) break;
 #endif
@@ -938,6 +964,12 @@ int main(int argc, char **argv) {
                 }
                 // Drop text input entirely when the SFTP overlay is up
                 if (g_sftp.visible) break;
+                // Forward text to WOPR login fields
+                if (g_wopr.visible) {
+                    wopr_keydown(SDLK_UNKNOWN, ev.text.text);
+                    needs_render = true;
+                    break;
+                }
                 if (use_ssh && ssh_phase == SshPhase::SETUP) {
                     // Visible echo for host/user fields
                     ssh_field_input += ev.text.text;
@@ -1262,6 +1294,12 @@ int main(int argc, char **argv) {
         bc_tick((float)win_w, (float)win_h, bc_dt);
         if (bc_get_enabled()) needs_render = true;
 
+        // WOPR overlay tick
+        if (g_wopr.visible) {
+            wopr_update(dt);
+            needs_render = true;
+        }
+
         // Eye of Felix tick — always runs when visible, outside the needs_render gate
         if (g_iv.visible) {
             iv_tick((double)bc_dt);
@@ -1323,6 +1361,8 @@ int main(int argc, char **argv) {
             iv_render(win_w, win_h);
             // Help overlay renders last (topmost layer)
             help_render(win_w, win_h);
+            // WOPR overlay — above everything including help
+            if (g_wopr.visible) wopr_render(win_w, win_h);
 
             if (g_use_sdl_renderer)
                 SDL_RenderPresent(g_sdl_renderer);
@@ -1349,6 +1389,7 @@ int main(int argc, char **argv) {
         if (g_sdl_renderer) SDL_DestroyRenderer(g_sdl_renderer);
     }
     SDL_DestroyWindow(window);
+    wopr_audio_shutdown();
     crt_audio_shutdown();
     kitty_shutdown();
     menu_font_shutdown();

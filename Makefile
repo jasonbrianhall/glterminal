@@ -71,6 +71,7 @@ SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || e
 CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
                  $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
                  $(SSH_CFLAGS_LINUX) \
+                 -Iwopr \
                  -DLINUX $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
@@ -81,6 +82,7 @@ LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
                        $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
                        $(SSH_CFLAGS_LINUX) \
+                       -Iwopr \
                        -DLINUX $(SSH_DEFINE) -DDEBUG -g -O0
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
@@ -97,6 +99,7 @@ CFLAGS_LINUX_DEBUG = $(CFLAGS_COMMON) -DLINUX -DDEBUG -g -O0
 CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
                $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
                $(SSH_CFLAGS_WIN) \
+               -Iwopr \
                -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
                $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
 
@@ -110,6 +113,7 @@ LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
                      $(SSH_CFLAGS_WIN) \
+                     -Iwopr \
                      -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
                      $(SSH_DEFINE) -DDEBUG -g -O0
 
@@ -131,8 +135,22 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
 
 SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c
 
-SRCS_LINUX = $(SRCS_COMMON) term_pty.cpp
-SRCS_WIN   = $(SRCS_COMMON) term_pty_win.cpp
+SRCS_WOPR = wopr/wopr.cpp                \
+            wopr/wopr_audio.cpp          \
+            wopr/wopr_tictactoe.cpp      \
+            wopr/wopr_chess.cpp          \
+            wopr/wopr_mines.cpp          \
+            wopr/wopr_maze.cpp           \
+            wopr/wopr_war.cpp            \
+            wopr/beatchess.cpp       \
+            wopr/chess_ai_move.cpp       \
+            wopr/minesweeper_game.cpp    \
+            wopr/highscores.cpp            
+
+
+
+SRCS_LINUX = $(SRCS_COMMON) $(SRCS_WOPR) term_pty.cpp
+SRCS_WIN   = $(SRCS_COMMON) $(SRCS_WOPR) term_pty_win.cpp
 
 # ============================================================================
 # OBJECTS
@@ -192,6 +210,11 @@ $(BUILD_DIR_LINUX)/%.o: %.cpp
 	@echo "Compiling (Linux): $<"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR_LINUX)/wopr/%.o: wopr/%.cpp
+	@mkdir -p $(BUILD_DIR_LINUX)/wopr
+	@echo "Compiling (Linux): $<"
+	$(CXX_LINUX) $(CXXFLAGS_LINUX) -MMD -MP -c $< -o $@
+
 $(BUILD_DIR_LINUX)/%.o: %.c
 	@echo "Compiling C (Linux): $<"
 	$(CC_LINUX) $(CFLAGS_LINUX) -MMD -MP -c $< -o $@
@@ -208,6 +231,11 @@ $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG): $(OBJECTS_LINUX_DEBUG)
 	@echo "✓ $@"
 
 $(BUILD_DIR_LINUX_DEBUG)/%.debug.o: %.cpp
+	@echo "Compiling (Linux Debug): $<"
+	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_LINUX_DEBUG)/wopr/%.debug.o: wopr/%.cpp
+	@mkdir -p $(BUILD_DIR_LINUX_DEBUG)/wopr
 	@echo "Compiling (Linux Debug): $<"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
 
@@ -230,6 +258,11 @@ $(BUILD_DIR_WIN)/%.win.o: %.cpp
 	@echo "Compiling (Windows): $<"
 	$(CXX_WIN) $(CXXFLAGS_WIN) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR_WIN)/wopr/%.win.o: wopr/%.cpp
+	@mkdir -p $(BUILD_DIR_WIN)/wopr
+	@echo "Compiling (Windows): $<"
+	$(CXX_WIN) $(CXXFLAGS_WIN) -MMD -MP -c $< -o $@
+
 $(BUILD_DIR_WIN)/%.win.o: %.c
 	@echo "Compiling C (Windows): $<"
 	$(CC_WIN) $(CFLAGS_WIN) -MMD -MP -c $< -o $@
@@ -246,6 +279,11 @@ $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG): $(OBJECTS_WIN_DEBUG)
 	@echo "✓ $@"
 
 $(BUILD_DIR_WIN_DEBUG)/%.win.debug.o: %.cpp
+	@echo "Compiling (Windows Debug): $<"
+	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN_DEBUG)/wopr/%.win.debug.o: wopr/%.cpp
+	@mkdir -p $(BUILD_DIR_WIN_DEBUG)/wopr
 	@echo "Compiling (Windows Debug): $<"
 	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
 

@@ -5,8 +5,8 @@
 #include <SDL2/SDL.h>
 
 // F6 overlay — view and manage dynamic port forwards.
-// Shows all active local (-L) and remote (-R) forwards with live
-// connection counts, and lets the user add or remove them at runtime.
+// Shows all active local (-L), remote (-R), and SOCKS5 (-D) forwards with
+// live connection counts, and lets the user add or remove them at runtime.
 
 struct PfOverlay {
     bool visible  = false;
@@ -14,10 +14,10 @@ struct PfOverlay {
 
     // Input field for adding a new forward
     bool  input_active = false;
-    bool  skip_next_textinput = false;  // swallow the SDL_TEXTINPUT paired with L/R keydown
+    bool  skip_next_textinput = false;  // swallow the SDL_TEXTINPUT paired with L/R/D keydown
     char  input_buf[256] = {};
     int   input_len      = 0;
-    // 'L' or 'R' — which type is being added
+    // 'L', 'R', or 'D' — which type is being added
     char  input_type     = 'L';
 
     char  status[256]    = {};   // feedback line

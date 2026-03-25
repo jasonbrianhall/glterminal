@@ -141,6 +141,11 @@ struct BonkVoice { float phase; float freq; int samples_left, total_samples; flo
 // ============================================================================
 
 static SDL_AudioDeviceID s_dev           = 0;
+
+// ── WOPR modem screech — written from main thread, read from audio callback ──
+static const float *s_wopr_buf = nullptr;  // F32 mono buffer
+static int          s_wopr_len = 0;        // total samples
+static volatile int s_wopr_pos = 0;        // playhead (atomic enough for our use)
 static uint32_t          s_cur_mode      = 0;
 static bool              s_audio_enabled = false;  // off by default
 
@@ -334,6 +339,14 @@ static void audio_callback(void * /*userdata*/, Uint8 *stream, int len) {
         // Soft clip
         if      (sample >  1.0f) sample =  1.0f;
         else if (sample < -1.0f) sample = -1.0f;
+
+        // ── WOPR modem screech mix-in ──────────────────────────────────────
+        if (s_wopr_buf && s_wopr_pos < s_wopr_len) {
+            sample += s_wopr_buf[s_wopr_pos++] * 0.7f;
+            if (sample >  1.0f) sample =  1.0f;
+            if (sample < -1.0f) sample = -1.0f;
+        }
+
         out[i] = sample;
     }
 }
@@ -382,6 +395,22 @@ void term_audio_init(void) {
 
 void term_audio_shutdown(void) {
     if (s_dev) { SDL_CloseAudioDevice(s_dev); s_dev = 0; }
+}
+
+SDL_AudioDeviceID term_audio_get_device(void) { return s_dev; }
+
+void term_audio_wopr_play(const float *buf, int num_samples) {
+    SDL_LockAudioDevice(s_dev);
+    s_wopr_buf = buf;
+    s_wopr_len = num_samples;
+    s_wopr_pos = 0;
+    SDL_UnlockAudioDevice(s_dev);
+}
+
+void term_audio_wopr_stop(void) {
+    SDL_LockAudioDevice(s_dev);
+    s_wopr_pos = s_wopr_len;  // advance past end
+    SDL_UnlockAudioDevice(s_dev);
 }
 
 void term_audio_set_enabled(bool en) {
