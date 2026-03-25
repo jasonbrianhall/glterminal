@@ -7,6 +7,7 @@
 #include "DejaVuMono.h"
 #include "DejaVuMonoOblique.h"
 #include "DejaVuMonoBoldOblique.h"
+#include "FreeMono.h"
 
 #include <SDL2/SDL.h>
 #include <math.h>
@@ -22,6 +23,7 @@ FT_Face    s_ft_face_reg  = NULL;
 FT_Face    s_ft_face_obl  = NULL;
 FT_Face    s_ft_face_bobl = NULL;
 FT_Face    s_emoji_face   = NULL;
+FT_Face    s_symbols_face = NULL;  // fallback for Misc Symbols block (chess, etc.)
 
 unsigned char *s_font_buf      = NULL;
 unsigned char *s_font_buf_reg  = NULL;
@@ -74,9 +76,30 @@ void ft_init(void) {
     } else {
         SDL_Log("[Font] emoji base64 decode failed\n");
     }
+
+    // Load embedded FreeMono as symbols fallback (Misc Symbols U+2600-27BF,
+    // includes chess pieces, card suits, etc.)
+    {
+        unsigned char *buf = nullptr;
+        size_t sz = 0;
+        if (base64_decode(FREEMONO_FONT_B64, FREEMONO_FONT_B64_SIZE, &buf, &sz) == 0 && buf) {
+            if (FT_New_Memory_Face(s_ft_lib, buf, (FT_Long)sz, 0, &s_symbols_face) == 0) {
+                SDL_Log("[Font] symbols: %s %s (embedded FreeMono)\n",
+                        s_symbols_face->family_name, s_symbols_face->style_name);
+                s_symbols_face->generic.data = buf;
+            } else {
+                free(buf);
+            }
+        }
+    }
 }
 
 void ft_shutdown(void) {
+    if (s_symbols_face) {
+        if (s_symbols_face->generic.data) free(s_symbols_face->generic.data);
+        FT_Done_Face(s_symbols_face);
+        s_symbols_face = nullptr;
+    }
     if (s_emoji_face)    FT_Done_Face(s_emoji_face);
     if (s_ft_face_bobl)  FT_Done_Face(s_ft_face_bobl);
     if (s_ft_face_obl)   FT_Done_Face(s_ft_face_obl);
@@ -289,7 +312,13 @@ float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
         if (cp == 0xFE0F) continue;
 
         FT_Face face = base_face;
-        if (s_emoji_face && is_emoji_codepoint(cp)) {
+        // Misc Symbols block (U+2600-27BF) — route to symbols face first,
+        // before emoji face, since NotoEmoji may have stub entries for these
+        if (s_symbols_face && cp >= 0x2600 && cp <= 0x27BF) {
+            if (FT_Get_Char_Index(s_symbols_face, cp)) face = s_symbols_face;
+        }
+        // Emoji — only if not already handled by symbols face
+        if (face == base_face && s_emoji_face && is_emoji_codepoint(cp)) {
             if (FT_Get_Char_Index(s_emoji_face, cp)) face = s_emoji_face;
         }
 
@@ -302,6 +331,10 @@ float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
         if (adv == 0.f) {
             if (face != s_emoji_face && s_emoji_face)
                 adv = draw_glyph(s_emoji_face, cp, cx, y, font_px, emoji_px, 1.f, 1.f, 1.f, a, verts);
+        }
+        if (adv == 0.f) {
+            if (face != s_symbols_face && s_symbols_face)
+                adv = draw_glyph(s_symbols_face, cp, cx, y, font_px, font_px, r, g, b, a, verts);
         }
         if (adv == 0.f) {
             FT_Set_Pixel_Sizes(base_face, 0, (FT_UInt)font_px);

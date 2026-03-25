@@ -15,6 +15,7 @@ extern FT_Face    s_ft_face_reg;  // Regular
 extern FT_Face    s_ft_face_obl;  // Oblique
 extern FT_Face    s_ft_face_bobl; // BoldOblique
 extern FT_Face    s_emoji_face;
+extern FT_Face    s_symbols_face;  // Misc Symbols fallback (chess pieces, etc.)
 
 // ============================================================================
 // API
