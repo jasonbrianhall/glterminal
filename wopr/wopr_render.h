@@ -2,9 +2,10 @@
 // wopr_render.h — thin wrappers around the Felix Terminal rendering API.
 
 #include "../gl_renderer.h"   // draw_rect()
+#include "../font_manager.h"  // g_font_size, g_font_list
 #include "../ft_font.h"       // draw_text()
 
-extern int g_font_size;       // defined in gl_terminal_main.cpp
+extern int g_font_size;
 
 static inline void gl_draw_rect(float x, float y, float w, float h,
                                 float r, float g, float b, float a)
@@ -29,4 +30,3 @@ static inline float gl_text_height(float /*scale*/)
 {
     return (float)g_font_size;
 }
-
