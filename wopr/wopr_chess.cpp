@@ -52,6 +52,7 @@ static const char *piece_glyph(const ChessPiece &p) {
     if (p.color == WHITE) {
         switch (p.type) {
             case KING:   return "\xe2\x99\x94"; // ♔
+            //case KING:   return "K"; // ♔
             case QUEEN:  return "\xe2\x99\x95"; // ♕
             case ROOK:   return "\xe2\x99\x96"; // ♖
             case BISHOP: return "\xe2\x99\x97"; // ♗
@@ -181,9 +182,11 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
                 float pr = (p.color == WHITE) ? 1.0f : 0.45f;
                 float pg = (p.color == WHITE) ? 1.0f : 0.75f;
                 float pb = (p.color == WHITE) ? 1.0f : 0.45f;
-                gl_draw_text(g,
-                             cx + (cell_w - gl_text_width(g, scale)) * 0.5f,
-                             cy + cell_h * 0.85f, pr, pg, pb, 1.f, scale);
+                //gl_draw_text(g, cx + (cell_w - gl_text_width(g, scale)) * 0.5f, cy + cell_h * 0.85f, pr, pg, pb, 1.f, scale);
+                //gl_draw_text(g, x0, y0, 1,1,1,1, 1.0f);
+                float tx = cx + cell_w * 0.5f;
+                float ty = cy + cell_h * 0.6f;
+                gl_draw_text(g, tx, ty, pr, pg, pb, 1.f, scale);
             }
         }
     }
