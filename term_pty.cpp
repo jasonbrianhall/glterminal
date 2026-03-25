@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 
 // Optional write override (set by SSH layer; nullptr = use pty_fd)
 void (*g_term_write_override)(Terminal *t, const char *s, int n) = nullptr;
@@ -18,26 +19,56 @@ bool term_spawn(Terminal *t, const char *cmd) {
         .ws_xpixel = (unsigned short)(t->cols*(int)t->cell_w),
         .ws_ypixel = (unsigned short)(t->rows*(int)t->cell_h)
     };
+
     int master;
     pid_t pid = forkpty(&master, NULL, NULL, &ws);
-    if (pid < 0) { perror("forkpty"); return false; }
+    if (pid < 0) {
+        perror("forkpty");
+        return false;
+    }
+
     if (pid == 0) {
+        // --- terminal-related env you already set ---
         char cols_str[16], rows_str[16];
         snprintf(cols_str, sizeof(cols_str), "%d", t->cols);
         snprintf(rows_str, sizeof(rows_str), "%d", t->rows);
+
         setenv("TERM",      "xterm-kitty", 1);
         setenv("COLORTERM", "truecolor",   1);
-        setenv("COLUMNS", cols_str, 1);
-        setenv("LINES",   rows_str, 1);
-        const char *argv[] = {cmd, NULL};
-        execvp(argv[0], (char*const*)argv);
+        setenv("COLUMNS",   cols_str,      1);
+        setenv("LINES",     rows_str,      1);
+
+        // --- X11-related env: preserve if present ---
+        const char *disp = getenv("DISPLAY");
+        if (disp && *disp) {
+            setenv("DISPLAY", disp, 1);
+        }
+
+        const char *xauth = getenv("XAUTHORITY");
+        if (xauth && *xauth) {
+            setenv("XAUTHORITY", xauth, 1);
+        } else {
+            // Optional: try a sane default if not set
+            const char *home = getenv("HOME");
+            if (home && *home) {
+                char xauth_path[PATH_MAX];
+                snprintf(xauth_path, sizeof(xauth_path),
+                         "%s/.Xauthority", home);
+                setenv("XAUTHORITY", xauth_path, 1);
+            }
+        }
+
+        const char *argv[] = { cmd, NULL };
+        execvp(argv[0], (char * const *)argv);
         _exit(1);
     }
+
     t->pty_fd = master;
     t->child  = pid;
+
     int fl = fcntl(master, F_GETFL, 0);
     fcntl(master, F_SETFL, fl | O_NONBLOCK);
-    //SDL_Log("[Term] spawned shell pid=%d fd=%d\n", pid, master);
+
     return true;
 }
 
