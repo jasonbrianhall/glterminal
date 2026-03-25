@@ -12,7 +12,7 @@ Rest easy, Felix. 🐦
 
 ---
 
-A standalone OpenGL terminal emulator for Linux and MS Windows. Renders text using FreeType triangles via OpenGL 3.3 — no GTK, no Qt, no desktop toolkit dependency.
+A standalone OpenGL terminal emulator for Linux and MS Windows with SDL fallback for rendering (some shaders in SDL are CPU rendered so they are slow). Renders text using FreeType triangles via OpenGL 3.3 — no GTK, no Qt, no desktop toolkit dependency.
 
 ## Features
 
