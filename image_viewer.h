@@ -45,6 +45,7 @@ struct ImageViewer {
 
     // Current image (GL texture)
     unsigned int tex  = 0;
+    SDL_Texture *sdl_tex = nullptr;   // SDL renderer path (replaces tex)
     int    tex_w      = 0;
     int    tex_h      = 0;
     char   img_label[512] = {};
@@ -61,6 +62,7 @@ struct ImageViewer {
     // CD+G — uses your CDGDisplay from cdg.h/cdg.cpp
     CDGDisplay  *cdg_display      = nullptr;  // non-null when CDG is active
     unsigned int cdg_tex          = 0;        // GL texture 300x216, updated each frame
+    SDL_Texture *sdl_cdg_tex      = nullptr;  // SDL renderer path (replaces cdg_tex)
 };
 
 extern ImageViewer g_iv;

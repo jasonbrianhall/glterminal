@@ -1,5 +1,6 @@
 #include "gl_renderer.h"
 #include "gl_terminal.h"
+#include "sdl_renderer.h"
 #include <SDL2/SDL.h>
 #include <stddef.h>
 #include <math.h>
@@ -518,6 +519,7 @@ static void create_fbo(int w, int h) {
 // ============================================================================
 
 void gl_init_renderer(int w, int h) {
+    if (g_use_sdl_renderer) { sdl_init_renderer(w, h); return; }
     glewExperimental = GL_TRUE;
     glewInit();
 
@@ -570,6 +572,7 @@ void gl_init_renderer(int w, int h) {
 }
 
 void gl_resize_fbo(int w, int h) {
+    if (g_use_sdl_renderer) { sdl_resize_fbo(w, h); return; }
     create_fbo(w, h);
 }
 
@@ -581,6 +584,7 @@ static Vertex s_accum[MAX_VERTS];
 static int    s_accum_n = 0;
 
 void gl_flush_verts(void) {
+    if (g_use_sdl_renderer) { sdl_flush_verts(); return; }
     if (s_accum_n == 0) return;
     glUseProgram(G.prog);
     glUniformMatrix4fv(G.proj_loc, 1, GL_FALSE, G.proj.m);
@@ -593,6 +597,7 @@ void gl_flush_verts(void) {
 
 // Accumulates vertices; flushes automatically when the buffer is nearly full.
 void draw_verts(Vertex *v, int n, GLenum /*mode*/) {
+    if (g_use_sdl_renderer) { sdl_draw_verts(v, n); return; }
     if (n <= 0) return;
     if (s_accum_n + n > MAX_VERTS) {
         gl_flush_verts();
@@ -616,6 +621,14 @@ void draw_verts(Vertex *v, int n, GLenum /*mode*/) {
 }
 
 void draw_rect(float x, float y, float w, float h, float r, float g, float b, float a) {
+    if (g_use_sdl_renderer) {
+        Vertex v[6] = {
+            {x,   y,   r,g,b,a}, {x+w, y,   r,g,b,a}, {x+w, y+h, r,g,b,a},
+            {x,   y,   r,g,b,a}, {x+w, y+h, r,g,b,a}, {x,   y+h, r,g,b,a},
+        };
+        sdl_draw_verts(v, 6);
+        return;
+    }
     Vertex v[6] = {
         {x,   y,   r,g,b,a}, {x+w, y,   r,g,b,a}, {x+w, y+h, r,g,b,a},
         {x,   y,   r,g,b,a}, {x+w, y+h, r,g,b,a}, {x,   y+h, r,g,b,a},
@@ -640,6 +653,7 @@ void draw_rect(float x, float y, float w, float h, float r, float g, float b, fl
 static int s_ghost_slot = 0;  // 0 or 1 — which FBO is the current read side
 
 void gl_update_ghost(int win_w, int win_h) {
+    if (g_use_sdl_renderer) { sdl_update_ghost(win_w, win_h); return; }
     if (!(g_render_mode & RENDER_BIT_GHOSTING)) return;
 
     float fw = (float)win_w, fh = (float)win_h;
@@ -694,6 +708,7 @@ void gl_update_ghost(int win_w, int win_h) {
 // ============================================================================
 
 void gl_begin_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b) {
+    if (g_use_sdl_renderer) { sdl_begin_term_frame(win_w, win_h, bg_r, bg_g, bg_b); return; }
     s_accum_n = 0;
     glBindFramebuffer(GL_FRAMEBUFFER, s_term_fbo);
     glViewport(0, 0, win_w, win_h);
@@ -707,6 +722,7 @@ void gl_begin_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_
 // when all_dirty is true (resize, theme change, alt screen switch, etc.) so
 // stale content from the previous layout doesn't show through.
 void gl_clear_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b) {
+    if (g_use_sdl_renderer) { sdl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b); return; }
     glBindFramebuffer(GL_FRAMEBUFFER, s_term_fbo);
     glViewport(0, 0, win_w, win_h);
     glClearColor(bg_r, bg_g, bg_b, 1.0f);
@@ -715,6 +731,7 @@ void gl_clear_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_
 }
 
 void gl_end_term_frame(void) {
+    if (g_use_sdl_renderer) { sdl_end_term_frame(); return; }
     gl_flush_verts();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -724,6 +741,7 @@ void gl_end_term_frame(void) {
 // ============================================================================
 
 void gl_begin_frame(void) {
+    if (g_use_sdl_renderer) { sdl_begin_frame(); return; }
     s_accum_n = 0;
     // Bind the composite FBO and blit the cached terminal content into it
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
@@ -737,6 +755,7 @@ void gl_begin_frame(void) {
 }
 
 void gl_end_frame(float time, int win_w, int win_h) {
+    if (g_use_sdl_renderer) { sdl_end_frame(time, win_w, win_h); return; }
     // Flush all accumulated geometry into the FBO in one draw call.
     gl_flush_verts();
 

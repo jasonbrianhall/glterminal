@@ -10,6 +10,7 @@
 
 #include "gl_terminal.h"
 #include "gl_renderer.h"
+#include "sdl_renderer.h"
 #include "ft_font.h"
 #include "term_color.h"
 #include "terminal.h"
@@ -226,25 +227,44 @@ int main(int argc, char **argv) {
 
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
     if (!ctx) {
-        // Core profile failed (common on Raspberry Pi with VC4/V3D Mesa drivers).
-        // Fall back to compatibility profile — still GL 3.3, but the driver
-        // won't refuse the FBConfig.  If this also fails we abort cleanly rather
-        // than crashing inside gl_init_renderer with a NULL context.
-        SDL_Log("INFO: GL 3.3 Core profile failed (%s), retrying with Compatibility profile\n",
+        SDL_Log("INFO: GL 3.3 not available (%s), retrying with Compatibility profile\n",
                 SDL_GetError());
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
         ctx = SDL_GL_CreateContext(window);
     }
     if (!ctx) {
-        SDL_Log("FATAL: Could not create any GL 3.3 context: %s\n", SDL_GetError());
-        SDL_Log("HINT:  On Raspberry Pi ensure /boot/config.txt has 'dtoverlay=vc4-kms-v3d'\n");
-        SDL_Log("HINT:  Or try: MESA_GL_VERSION_OVERRIDE=3.3 MESA_GLSL_VERSION_OVERRIDE=330 ./flt\n");
+        SDL_Log("INFO: GL 3.3 unavailable (%s), falling back to SDL renderer\n", SDL_GetError());
+        g_use_sdl_renderer = true;
+        // Recreate the window without the OpenGL flag so the SDL renderer can own it
         SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+        window = SDL_CreateWindow(
+            WIN_TITLE,
+            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+            win_w, win_h,
+            SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        g_sdl_window = window;
+        // Set icon again on the new window
+        SDL_Surface *icon_surf2 = SDL_CreateRGBSurfaceFrom(
+            (void*)icon_pixels, icon_w, icon_h, 32, icon_w * 4,
+            0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+        if (icon_surf2) { SDL_SetWindowIcon(window, icon_surf2); SDL_FreeSurface(icon_surf2); }
+        g_sdl_renderer = SDL_CreateRenderer(window, -1,
+            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!g_sdl_renderer) {
+            SDL_Log("WARN: Accelerated renderer failed (%s), trying software\n", SDL_GetError());
+            g_sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+        }
+        if (!g_sdl_renderer) {
+            SDL_Log("FATAL: Could not create any renderer: %s\n", SDL_GetError());
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+        SDL_SetRenderDrawBlendMode(g_sdl_renderer, SDL_BLENDMODE_BLEND);
+    } else {
+        SDL_GL_MakeCurrent(window, ctx);
+        SDL_GL_SetSwapInterval(1);
     }
-    SDL_GL_MakeCurrent(window, ctx);
-    SDL_GL_SetSwapInterval(1);
 
     apply_theme(0);
     ft_init();
@@ -276,8 +296,10 @@ int main(int argc, char **argv) {
     SDL_GetWindowSize(window, &win_w, &win_h);
 
     gl_init_renderer(win_w, win_h);
-    kitty_init();
-    glViewport(0, 0, win_w, win_h);
+    if (!g_use_sdl_renderer) {
+        kitty_init();
+        glViewport(0, 0, win_w, win_h);
+    }
 
     term_resize(&term, win_w, win_h);
 
@@ -494,7 +516,7 @@ int main(int argc, char **argv) {
         }
 
         // Kitty animation frames
-        if (kitty_tick(dt))
+        if (!g_use_sdl_renderer && kitty_tick(dt))
             needs_render = true;
 
         // Auto-scroll during selection drag
@@ -1198,7 +1220,7 @@ int main(int argc, char **argv) {
                 if (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
                     ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
-                    glViewport(0, 0, win_w, win_h);
+                    if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                     gl_resize_fbo(win_w, win_h);
                     term_resize(&term, win_w, win_h);
@@ -1272,7 +1294,7 @@ int main(int argc, char **argv) {
 
             // Composite: blit cached terminal into post-process FBO, overlay fight figures
             gl_begin_frame();
-            glViewport(0, 0, win_w, win_h);
+            if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
             if (fight_get_enabled()) {
                 fight_render((float)win_w, (float)win_h);
             }
@@ -1283,7 +1305,7 @@ int main(int argc, char **argv) {
             gl_end_frame(t_sec, win_w, win_h);
 
             // Menu renders after post-process so it's never distorted
-            glViewport(0, 0, win_w, win_h);
+            if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
             menu_render(&g_menu);
 #ifdef USESSH
             sftp_overlay_render(win_w, win_h);
@@ -1295,7 +1317,10 @@ int main(int argc, char **argv) {
             // Help overlay renders last (topmost layer)
             help_render(win_w, win_h);
 
-            SDL_GL_SwapWindow(window);
+            if (g_use_sdl_renderer)
+                SDL_RenderPresent(g_sdl_renderer);
+            else
+                SDL_GL_SwapWindow(window);
 
             // Cap idle/animated frames at ~60 fps after swap to avoid busy-looping.
             // Input frames are already throttled by vsync above; this only bites
@@ -1311,10 +1336,14 @@ int main(int argc, char **argv) {
 
     SDL_FreeCursor(cursor_hand);
     SDL_FreeCursor(cursor_ibeam);
-    SDL_GL_DeleteContext(ctx);
+    if (!g_use_sdl_renderer) {
+        SDL_GL_DeleteContext(ctx);
+        kitty_shutdown();
+    } else {
+        if (g_sdl_renderer) SDL_DestroyRenderer(g_sdl_renderer);
+    }
     SDL_DestroyWindow(window);
     crt_audio_shutdown();
-    kitty_shutdown();
     menu_font_shutdown();
 #ifdef USESSH
     if (use_ssh) {

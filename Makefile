@@ -120,14 +120,14 @@ CFLAGS_WIN_DEBUG   = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -DDEBUG -g -O0
 # SOURCES
 # ============================================================================
 SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
-              ft_font.cpp           term_color.cpp        \
-              terminal.cpp          term_ui.cpp           \
-              gl_bouncingcircle.cpp fight_mode.cpp        \
-              crt_audio.cpp         felix_settings.cpp    \
-              kitty_graphics.cpp    font_manager.cpp      \
-              sftp_overlay.cpp      sftp_console.cpp      \
-              image_viewer.cpp      cdg.cpp               \
-              $(SSH_SRCS)
+              sdl_renderer.cpp      ft_font.cpp           \
+              term_color.cpp        terminal.cpp          \
+              term_ui.cpp           gl_bouncingcircle.cpp \
+              fight_mode.cpp        crt_audio.cpp         \
+              felix_settings.cpp    kitty_graphics.cpp    \
+              font_manager.cpp      sftp_overlay.cpp      \
+              sftp_console.cpp      image_viewer.cpp      \
+              cdg.cpp               $(SSH_SRCS)
 
 SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c
 

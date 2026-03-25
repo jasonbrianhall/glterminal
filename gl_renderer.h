@@ -1,3 +1,15 @@
+// gl_renderer.h — auto-selects backend based on SDL_RENDERER define.
+//
+// When building with -DSDL_RENDERER the entire OpenGL path is replaced by
+// sdl_renderer.h which exposes the same API surface.  All other source files
+// (#include "gl_renderer.h") require no changes.
+//
+// Original OpenGL-specific declarations follow below for the normal build.
+
+#ifdef SDL_RENDERER
+#  include "sdl_renderer.h"
+#else
+
 #pragma once
 #include <GL/glew.h>
 #include <GL/gl.h>
@@ -24,7 +36,6 @@ extern GLState G;
 // RENDER MODES  (bitmask — multiple modes can be active simultaneously)
 // ============================================================================
 
-// Bit indices — used to index RENDER_MODE_NAMES[] and for menu display
 #define RENDER_MODE_NORMAL    0
 #define RENDER_MODE_CRT       1
 #define RENDER_MODE_LCD       2
@@ -37,7 +48,6 @@ extern GLState G;
 #define RENDER_MODE_WIREFRAME 9
 #define RENDER_MODE_COUNT     10
 
-// Bitmask constants
 #define RENDER_BIT_CRT        (1u<<RENDER_MODE_CRT)
 #define RENDER_BIT_LCD        (1u<<RENDER_MODE_LCD)
 #define RENDER_BIT_VHS        (1u<<RENDER_MODE_VHS)
@@ -48,7 +58,7 @@ extern GLState G;
 #define RENDER_BIT_GHOSTING   (1u<<RENDER_MODE_GHOSTING)
 #define RENDER_BIT_WIREFRAME  (1u<<RENDER_MODE_WIREFRAME)
 
-extern uint32_t g_render_mode;  // bitmask of active RENDER_BIT_* flags
+extern uint32_t g_render_mode;
 
 // ============================================================================
 // API
@@ -58,44 +68,20 @@ Mat4  mat4_ortho(float l, float r, float b, float t, float n, float f);
 void  gl_init_renderer(int w, int h);
 void  gl_resize_fbo(int w, int h);
 
-// Call before rendering terminal content — binds the offscreen FBO
 void  gl_begin_frame(void);
-// Call after rendering terminal content — applies post-process and blits to screen
 void  gl_end_frame(float time, int win_w, int win_h);
 
-// Append vertices to the frame accumulator (does NOT issue a draw call).
-// All geometry must be GL_TRIANGLES — mixing modes is not supported.
 void  draw_verts(Vertex *v, int n, GLenum mode);
 void  draw_rect(float x, float y, float w, float h, float r, float g, float b, float a);
 
-// Issue one glDrawArrays for everything accumulated since the last flush.
-// Called automatically by gl_end_frame(); call manually only if you need an
-// explicit mid-frame ordering boundary (e.g. before the post-process blit).
 void  gl_flush_verts(void);
 
-// Two-FBO split: terminal content is cached in a separate FBO so fight mode
-// and animated render modes don't need to re-walk every cell each frame.
-//
-// Usage:
-//   if (term_dirty) {
-//       gl_begin_term_frame(w, h, bg_r, bg_g, bg_b);
-//       term_render(...);
-//       gl_end_term_frame();
-//   }
-//   gl_begin_frame();       // binds composite FBO, blits term cache in
-//   fight_render(...);
-//   gl_end_frame(...);      // post-process + blit to screen
 void  gl_begin_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b);
 void  gl_clear_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b);
 void  gl_end_term_frame(void);
 
-// Set the focused row (0..1 UV) for FOCUS mode — call before gl_end_frame
+void  gl_update_ghost(int win_w, int win_h);
 
-// Ghosting: update the ghost accumulation FBO for this frame.
-// Must be called BEFORE gl_begin_frame() — reads from the settled
-// terminal FBO (last frame), avoiding any read-after-write GPU stall.
-void gl_update_ghost(int win_w, int win_h);
-
-// Wireframe: when enabled, term_render should draw cell outlines instead of fills.
-// Read by term_ui.cpp to switch draw_rect → outline path.
 extern bool g_wireframe_cells;
+
+#endif // !SDL_RENDERER
