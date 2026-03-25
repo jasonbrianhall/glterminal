@@ -3,7 +3,6 @@
 #include "ft_font.h"    // s_ft_face, g_font_size
 #include "gl_terminal.h" // TERM_COLS_DEFAULT etc.
 #include "kitty_graphics.h"
-#include "sdl_renderer.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -70,7 +69,7 @@ static void scroll_up(Terminal *t) {
     term_dirty_rows(t, top, bot);
     // Shift image placements up with the scroll region
     if (top == 0 && bot == t->rows - 1)
-        if (!g_use_sdl_renderer) kitty_scroll(t, 1);
+        kitty_scroll(t, 1);
 }
 
 static void scroll_down(Terminal *t) {
@@ -215,7 +214,7 @@ static void dispatch_csi(Terminal *t) {
                     t->cur_row = t->cur_col = 0;
                     t->scroll_top = 0; t->scroll_bot = t->rows - 1;
                     t->in_alt_screen = true;
-                    if (!g_use_sdl_renderer) kitty_clear(t);
+                    kitty_clear(t);
                     term_dirty_all(t);
                 } else if (!set && t->in_alt_screen) {
                     int sz = t->rows * t->cols;
@@ -462,7 +461,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
                 } else if (ch == 'c') {
                     for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
                     t->cur_row=t->cur_col=0; t->cur_fg=7; t->cur_bg=0; t->cur_attrs=0;
-                    if (!g_use_sdl_renderer) kitty_clear(t);
+                    kitty_clear(t);
                     term_dirty_all(t);
                 } else if (ch == 'M') {
                     if (t->cur_row > t->scroll_top) { t->cur_row--; }
@@ -490,7 +489,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
             if (t->apc_esc_pending) {
                 t->apc_esc_pending = false;
                 if (ch == '\\') {
-                    if (g_kitty_enabled && t->apc_buf && !g_use_sdl_renderer) {
+                    if (g_kitty_enabled && t->apc_buf) {
                         t->apc_buf[t->apc_len] = '\0';
                         kitty_handle_apc(t, t->apc_buf, t->apc_len);
                     }
@@ -513,7 +512,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
             if (ch == 0x1b) {
                 t->apc_esc_pending = true;
             } else if (ch == 0x07) {
-                if (g_kitty_enabled && t->apc_buf && !g_use_sdl_renderer) {
+                if (g_kitty_enabled && t->apc_buf) {
                     t->apc_buf[t->apc_len] = '\0';
                     kitty_handle_apc(t, t->apc_buf, t->apc_len);
                 }

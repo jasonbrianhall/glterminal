@@ -296,10 +296,8 @@ int main(int argc, char **argv) {
     SDL_GetWindowSize(window, &win_w, &win_h);
 
     gl_init_renderer(win_w, win_h);
-    if (!g_use_sdl_renderer) {
-        kitty_init();
-        glViewport(0, 0, win_w, win_h);
-    }
+    kitty_init();
+    if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
 
     term_resize(&term, win_w, win_h);
 
@@ -516,7 +514,7 @@ int main(int argc, char **argv) {
         }
 
         // Kitty animation frames
-        if (!g_use_sdl_renderer && kitty_tick(dt))
+        if (kitty_tick(dt))
             needs_render = true;
 
         // Auto-scroll during selection drag
@@ -1338,12 +1336,12 @@ int main(int argc, char **argv) {
     SDL_FreeCursor(cursor_ibeam);
     if (!g_use_sdl_renderer) {
         SDL_GL_DeleteContext(ctx);
-        kitty_shutdown();
     } else {
         if (g_sdl_renderer) SDL_DestroyRenderer(g_sdl_renderer);
     }
     SDL_DestroyWindow(window);
     crt_audio_shutdown();
+    kitty_shutdown();
     menu_font_shutdown();
 #ifdef USESSH
     if (use_ssh) {

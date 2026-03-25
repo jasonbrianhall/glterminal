@@ -2,7 +2,6 @@
 #include "term_pty.h"
 #include "ft_font.h"
 #include "gl_renderer.h"
-#include "sdl_renderer.h"
 #include "term_color.h"
 #include "gl_terminal.h"
 #include "gl_bouncingcircle.h"
@@ -404,8 +403,7 @@ void term_copy_selection_html(Terminal *t) {
     html += "</style>\n</head>\n<body>\n<div class=\"terminal\">";
 
     // Collect any kitty images that fall within the selection row range
-    std::vector<KittyHtmlImage> kimages;
-    if (!g_use_sdl_renderer) kimages = kitty_get_html_images(t, r0, r1);
+    std::vector<KittyHtmlImage> kimages = kitty_get_html_images(t, r0, r1);
     int kimg_idx = 0;
 
     TermColorVal last_fg = ~(TermColorVal)0, last_bg = ~(TermColorVal)0;
@@ -716,7 +714,7 @@ void term_render(Terminal *t, int ox, int oy) {
     crt_audio_set_activity((float)dirty_cells / (float)(t->cols * t->rows));
 
     // Kitty graphics — render placed images over the glyph layer
-    if (!g_use_sdl_renderer) kitty_render(t, ox, oy);
+    kitty_render(t, ox, oy);
 
     // Cursor
     if (!scrolled && t->cursor_on) {

@@ -14,6 +14,7 @@
 
 #include "kitty_graphics.h"
 #include "gl_renderer.h"
+#include "sdl_renderer.h"
 #include "term_pty.h"
 #include "gl_terminal.h"
 
@@ -168,18 +169,18 @@ static std::vector<uint8_t> b64_decode(const char *src, int slen) {
 
 // One frame of an animated image.
 struct KittyFrame {
-    GLuint tex         = 0;
-    int    pw = 0, ph  = 0;   // pixel dimensions of this frame
-    int    duration_ms = 100; // frame display duration (z= in a=f, default 100ms)
+    GLuint       tex         = 0;
+    SDL_Texture *sdl_tex     = nullptr;
+    int    pw = 0, ph  = 0;
+    int    duration_ms = 100;
 };
 
 struct KittyImage {
-    uint32_t id;
-    GLuint   tex;             // frame[0] texture for non-animated images
-    int      pw, ph;          // pixel dimensions of frame 0 (base image)
+    uint32_t     id;
+    GLuint       tex        = 0;
+    SDL_Texture *sdl_tex    = nullptr;
+    int      pw, ph;
 
-    // Animation frames: frame[0] is the base/background layer.
-    // For non-animated images this is empty and tex/pw/ph are used directly.
     std::vector<KittyFrame> frames;
     bool animated = false;
 };
@@ -258,33 +259,66 @@ static GLuint upload_texture(const uint8_t *pixels, int w, int h, bool has_alpha
     return tex;
 }
 
-static GLuint build_image(const std::vector<uint8_t> &raw, int fmt, int pw, int ph) {
+// Upload pixels as an SDL_Texture (always RGBA, ABGR8888 matches stb/libpng output)
+static SDL_Texture *upload_sdl_texture(const uint8_t *pixels, int w, int h) {
+    SDL_Texture *t = SDL_CreateTexture(g_sdl_renderer,
+        SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
+    if (!t) return nullptr;
+    SDL_UpdateTexture(t, nullptr, pixels, w * 4);
+    SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+    return t;
+}
+
+// Upload RGB pixels (expand to RGBA)
+static SDL_Texture *upload_sdl_texture_rgb(const uint8_t *pixels, int w, int h) {
+    std::vector<uint8_t> rgba(w * h * 4);
+    for (int i = 0; i < w * h; i++) {
+        rgba[i*4+0] = pixels[i*3+0];
+        rgba[i*4+1] = pixels[i*3+1];
+        rgba[i*4+2] = pixels[i*3+2];
+        rgba[i*4+3] = 0xFF;
+    }
+    return upload_sdl_texture(rgba.data(), w, h);
+}
+
+static void free_tex(GLuint gl, SDL_Texture *sdl) {
+    if (g_use_sdl_renderer) { if (sdl) SDL_DestroyTexture(sdl); }
+    else                    { if (gl)  glDeleteTextures(1, &gl); }
+}
+
+// Build image from raw/decoded data. Fills either gl_tex or sdl_tex depending on path.
+// Returns true on success.
+static bool build_image(const std::vector<uint8_t> &raw, int fmt, int pw, int ph,
+                        GLuint *gl_tex_out, SDL_Texture **sdl_tex_out,
+                        int *w_out, int *h_out) {
     if (fmt == 100) {
         int w = 0, h = 0;
         uint8_t *dec = decode_png(raw.data(), (int)raw.size(), &w, &h);
-        if (!dec) { SDL_Log("[Kitty] PNG decode failed\n"); return 0; }
-        GLuint tex = upload_texture(dec, w, h, true);
+        if (!dec) { SDL_Log("[Kitty] PNG decode failed\n"); return false; }
+        if (g_use_sdl_renderer) *sdl_tex_out = upload_sdl_texture(dec, w, h);
+        else                    *gl_tex_out   = upload_texture(dec, w, h, true);
         free(dec);
-        return tex;
+        *w_out = w; *h_out = h;
+        return g_use_sdl_renderer ? (*sdl_tex_out != nullptr) : (*gl_tex_out != 0);
     }
     if (fmt == 32) {
         int expected = pw * ph * 4;
-        if ((int)raw.size() < expected) {
-            SDL_Log("[Kitty] f=32 data too short: got %d expected %d\n", (int)raw.size(), expected);
-            return 0;
-        }
-        return upload_texture(raw.data(), pw, ph, true);
+        if ((int)raw.size() < expected) { SDL_Log("[Kitty] f=32 data too short\n"); return false; }
+        if (g_use_sdl_renderer) *sdl_tex_out = upload_sdl_texture(raw.data(), pw, ph);
+        else                    *gl_tex_out   = upload_texture(raw.data(), pw, ph, true);
+        *w_out = pw; *h_out = ph;
+        return g_use_sdl_renderer ? (*sdl_tex_out != nullptr) : (*gl_tex_out != 0);
     }
     if (fmt == 24) {
         int expected = pw * ph * 3;
-        if ((int)raw.size() < expected) {
-            SDL_Log("[Kitty] f=24 data too short\n");
-            return 0;
-        }
-        return upload_texture(raw.data(), pw, ph, false);
+        if ((int)raw.size() < expected) { SDL_Log("[Kitty] f=24 data too short\n"); return false; }
+        if (g_use_sdl_renderer) *sdl_tex_out = upload_sdl_texture_rgb(raw.data(), pw, ph);
+        else                    *gl_tex_out   = upload_texture(raw.data(), pw, ph, false);
+        *w_out = pw; *h_out = ph;
+        return g_use_sdl_renderer ? (*sdl_tex_out != nullptr) : (*gl_tex_out != 0);
     }
     SDL_Log("[Kitty] unsupported format %d\n", fmt);
-    return 0;
+    return false;
 }
 
 static void send_response(Terminal *t, uint32_t id, int quiet, bool ok, const char *msg) {
@@ -416,13 +450,32 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
             // Delete all placements (upper=also free image data)
             pv.clear();
             if (p.d == 'A') {
-                if (p.i) { auto it=s_images.find(p.i); if(it!=s_images.end()){glDeleteTextures(1,&it->second.tex);s_images.erase(it);} }
-                else { for(auto &kv:s_images) glDeleteTextures(1,&kv.second.tex); s_images.clear(); }
+                if (p.i) {
+                    auto it=s_images.find(p.i);
+                    if (it!=s_images.end()) {
+                        for (auto &fr : it->second.frames) free_tex(fr.tex, fr.sdl_tex);
+                        free_tex(it->second.tex, it->second.sdl_tex);
+                        s_images.erase(it);
+                    }
+                } else {
+                    for (auto &kv : s_images) {
+                        for (auto &fr : kv.second.frames) free_tex(fr.tex, fr.sdl_tex);
+                        free_tex(kv.second.tex, kv.second.sdl_tex);
+                    }
+                    s_images.clear();
+                }
             }
             break;
         case 'i': case 'I':
             pv.erase(std::remove_if(pv.begin(),pv.end(),[&](const KittyPlacement &pl){return pl.image_id==p.i;}),pv.end());
-            if (p.d == 'I') { auto it=s_images.find(p.i); if(it!=s_images.end()){glDeleteTextures(1,&it->second.tex);s_images.erase(it);} }
+            if (p.d == 'I') {
+                auto it=s_images.find(p.i);
+                if (it!=s_images.end()) {
+                    for (auto &fr : it->second.frames) free_tex(fr.tex, fr.sdl_tex);
+                    free_tex(it->second.tex, it->second.sdl_tex);
+                    s_images.erase(it);
+                }
+            }
             break;
         case 'p': case 'P':
             pv.erase(std::remove_if(pv.begin(),pv.end(),[&](const KittyPlacement &pl){
@@ -556,58 +609,61 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
 
             // ---- a=f: append/replace an animation frame ----
             if (ts.pending.is_frame) {
-                // Decode the new frame pixels
-                GLuint frame_tex = 0;
+                GLuint       frame_gl  = 0;
+                SDL_Texture *frame_sdl = nullptr;
                 int fw = 0, fh = 0;
+                bool ok = false;
                 if (ts.pending.fmt == 100) {
                     uint8_t *dec = decode_png(
                         ts.pending.data.data(), (int)ts.pending.data.size(), &fw, &fh);
-                    if (dec) { frame_tex = upload_texture(dec, fw, fh, true); free(dec); }
-                    else SDL_Log("[Kitty] a=f PNG decode failed\n");
+                    if (dec) {
+                        if (g_use_sdl_renderer) frame_sdl = upload_sdl_texture(dec, fw, fh);
+                        else                    frame_gl   = upload_texture(dec, fw, fh, true);
+                        free(dec);
+                        ok = g_use_sdl_renderer ? (frame_sdl != nullptr) : (frame_gl != 0);
+                    } else SDL_Log("[Kitty] a=f PNG decode failed\n");
                 } else {
-                    fw = ts.pending.pw; fh = ts.pending.ph;
-                    frame_tex = build_image(ts.pending.data, ts.pending.fmt, fw, fh);
+                    ok = build_image(ts.pending.data, ts.pending.fmt,
+                                     ts.pending.pw, ts.pending.ph,
+                                     &frame_gl, &frame_sdl, &fw, &fh);
                 }
 
-                if (frame_tex) {
-                    // Find or create the KittyImage entry
+                if (ok) {
                     KittyImage &img = s_images[img_id];
                     img.id = img_id;
                     img.animated = true;
 
-                    // If there's no base frame yet, bootstrap one from the first frame data
-                    if (!img.tex) {
-                        img.tex = frame_tex;
-                        img.pw  = fw; img.ph = fh;
-                        // Also store as frame[0] if no frames yet
+                    if (!img.tex && !img.sdl_tex) {
+                        img.tex     = frame_gl;
+                        img.sdl_tex = frame_sdl;
+                        img.pw = fw; img.ph = fh;
                         if (img.frames.empty()) {
                             KittyFrame f0;
-                            f0.tex = frame_tex;
-                            f0.pw  = fw; f0.ph = fh;
+                            f0.tex = frame_gl; f0.sdl_tex = frame_sdl;
+                            f0.pw = fw; f0.ph = fh;
                             f0.duration_ms = ts.pending.frame_duration_ms > 0
                                            ? ts.pending.frame_duration_ms : 100;
                             img.frames.push_back(f0);
                         }
                     } else {
-                        // Append or replace frame
-                        int fn = ts.pending.frame_number;
+                        int fn  = ts.pending.frame_number;
                         int dur = ts.pending.frame_duration_ms > 0
                                 ? ts.pending.frame_duration_ms : 100;
                         KittyFrame fr;
-                        fr.tex = frame_tex; fr.pw = fw; fr.ph = fh;
+                        fr.tex = frame_gl; fr.sdl_tex = frame_sdl;
+                        fr.pw = fw; fr.ph = fh;
                         fr.duration_ms = dur;
                         if (fn == 0 || fn > (int)img.frames.size()) {
-                            // append
                             img.frames.push_back(fr);
                         } else {
-                            int idx = fn - 1;  // 1-based → 0-based
-                            if (img.frames[idx].tex && img.frames[idx].tex != img.tex)
-                                glDeleteTextures(1, &img.frames[idx].tex);
+                            int idx = fn - 1;
+                            KittyFrame &old = img.frames[idx];
+                            if (old.tex != img.tex || old.sdl_tex != img.sdl_tex)
+                                free_tex(old.tex, old.sdl_tex);
                             img.frames[idx] = fr;
                         }
                     }
 
-                    // Start running automatically when the first non-base frame arrives
                     KittyAnimCtrl &ac = s_anim[img_id];
                     if (ac.state == AnimState::STOPPED && img.frames.size() > 1)
                         ac.state = AnimState::RUNNING;
@@ -621,15 +677,12 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
             }
 
             // ---- Normal transmit: replace whole image ----
-            // Delete old texture if re-using id
             {
                 auto it = s_images.find(img_id);
                 if (it != s_images.end()) {
-                    // Free all frame textures
                     for (auto &fr : it->second.frames)
-                        if (fr.tex && fr.tex != it->second.tex)
-                            glDeleteTextures(1, &fr.tex);
-                    glDeleteTextures(1, &it->second.tex);
+                        free_tex(fr.tex, fr.sdl_tex);
+                    free_tex(it->second.tex, it->second.sdl_tex);
                     s_images.erase(it);
                 }
                 s_anim.erase(img_id);
@@ -638,25 +691,20 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
             KittyImage img = {};
             img.id = img_id;
 
-            if (ts.pending.fmt == 100) {
+            {
+                GLuint       gl_tex  = 0;
+                SDL_Texture *sdl_tex = nullptr;
                 int w = 0, h = 0;
-                uint8_t *dec = decode_png(
-                    ts.pending.data.data(), (int)ts.pending.data.size(), &w, &h);
-                if (dec) {
-                    img.pw  = w; img.ph = h;
-                    img.tex = upload_texture(dec, w, h, true);
-                    free(dec);
-                } else {
-                    SDL_Log("[Kitty] PNG decode failed\n");
+                bool ok = build_image(ts.pending.data, ts.pending.fmt,
+                                      ts.pending.pw, ts.pending.ph,
+                                      &gl_tex, &sdl_tex, &w, &h);
+                if (ok) {
+                    img.pw = w; img.ph = h;
+                    img.tex = gl_tex; img.sdl_tex = sdl_tex;
                 }
-            } else {
-                img.pw  = ts.pending.pw;
-                img.ph  = ts.pending.ph;
-                img.tex = build_image(ts.pending.data, ts.pending.fmt,
-                                      ts.pending.pw, ts.pending.ph);
             }
 
-            if (img.tex) {
+            if (img.tex || img.sdl_tex) {
                 s_images[img_id] = img;
                 send_response(t, img_id, ts.pending.quiet, true, nullptr);
 
@@ -781,12 +829,74 @@ void kitty_render(Terminal *t, int ox, int oy) {
     KittyTermState &ts = tit->second;
     if (ts.placements.empty()) return;
 
-    // Flush accumulated colored-vertex geometry before switching shaders
-    gl_flush_verts();
-
-    // Sort by z_index so layering is correct; stable_sort preserves insertion order for ties
     std::stable_sort(ts.placements.begin(), ts.placements.end(),
         [](const KittyPlacement &a, const KittyPlacement &b){ return a.z_index < b.z_index; });
+
+    if (g_use_sdl_renderer) {
+        // SDL path: flush vertex geometry, then RenderCopyF each placement
+        gl_flush_verts();
+        for (const KittyPlacement &pl : ts.placements) {
+            auto iit = s_images.find(pl.image_id);
+            if (iit == s_images.end()) continue;
+            const KittyImage &img = iit->second;
+
+            SDL_Texture *tex = img.sdl_tex;
+            int ipw = img.pw, iph = img.ph;
+            if (img.animated && !img.frames.empty()) {
+                auto ait = s_anim.find(pl.image_id);
+                int fi = (ait != s_anim.end()) ? ait->second.cur_frame : 0;
+                if (fi < 0) fi = 0;
+                if (fi >= (int)img.frames.size()) fi = (int)img.frames.size() - 1;
+                const KittyFrame &fr = img.frames[fi];
+                if (fr.sdl_tex) { tex = fr.sdl_tex; ipw = fr.pw; iph = fr.ph; }
+            }
+            if (!tex) continue;
+
+            float cw = t->cell_w, ch = t->cell_h;
+            float disp_w = pl.cols ? pl.cols * cw : (float)ipw;
+            float disp_h = pl.rows ? pl.rows * ch : (float)iph;
+            float vis_row = (float)(pl.y_cell + t->sb_offset);
+
+            if (vis_row + disp_h / ch <= 0 || vis_row >= (float)t->rows) continue;
+
+            float dx = ox + pl.x_cell * cw;
+            float dy = oy + vis_row * ch;
+
+            // Source rect (crop)
+            SDL_Rect src;
+            src.x = pl.src_x;
+            src.y = pl.src_y;
+            src.w = pl.src_w ? pl.src_w : ipw;
+            src.h = pl.src_h ? pl.src_h : iph;
+
+            // Clip to terminal viewport
+            float top_limit    = (float)oy;
+            float bottom_limit = oy + t->rows * ch;
+
+            if (dy < top_limit) {
+                float clip = top_limit - dy;
+                float frac = clip / disp_h;
+                src.y += (int)(frac * src.h);
+                src.h -= (int)(frac * src.h);
+                disp_h -= clip;
+                dy = top_limit;
+            }
+            if (dy + disp_h > bottom_limit) {
+                float clip = (dy + disp_h) - bottom_limit;
+                float frac = clip / disp_h;
+                src.h -= (int)(frac * src.h);
+                disp_h -= clip;
+            }
+            if (disp_h <= 0 || src.h <= 0) continue;
+
+            SDL_FRect dst = { dx, dy, disp_w, disp_h };
+            SDL_RenderCopyF(g_sdl_renderer, tex, &src, &dst);
+        }
+        return;
+    }
+
+    // GL path — original shader-based render
+    gl_flush_verts();
 
     glUseProgram(s_img_prog);
     glUniformMatrix4fv(s_img_proj, 1, GL_FALSE, G.proj.m);
@@ -801,10 +911,8 @@ void kitty_render(Terminal *t, int ox, int oy) {
         const KittyImage &img = iit->second;
         if (!img.tex) continue;
 
-        // Pick the right texture: animated images use the current frame
-        GLuint tex  = img.tex;
-        int    ipw  = img.pw;
-        int    iph  = img.ph;
+        GLuint tex = img.tex;
+        int    ipw = img.pw, iph = img.ph;
         if (img.animated && !img.frames.empty()) {
             auto ait = s_anim.find(pl.image_id);
             int fi = (ait != s_anim.end()) ? ait->second.cur_frame : 0;
@@ -820,7 +928,6 @@ void kitty_render(Terminal *t, int ox, int oy) {
         float disp_h = pl.rows ? pl.rows * ch : (float)iph;
 
         float vis_row = (float)(pl.y_cell + t->sb_offset);
-
         float img_rows = disp_h / ch;
         if (vis_row + img_rows <= 0 || vis_row >= (float)t->rows) continue;
 
@@ -831,10 +938,8 @@ void kitty_render(Terminal *t, int ox, int oy) {
         if (ipw > 0 && iph > 0) {
             int sw = pl.src_w ? pl.src_w : ipw;
             int sh = pl.src_h ? pl.src_h : iph;
-            u0 = (float)pl.src_x / ipw;
-            v0 = (float)pl.src_y / iph;
-            u1 = u0 + (float)sw / ipw;
-            v1 = v0 + (float)sh / iph;
+            u0 = (float)pl.src_x / ipw; v0 = (float)pl.src_y / iph;
+            u1 = u0 + (float)sw / ipw;  v1 = v0 + (float)sh / iph;
         }
 
         if (dy < (float)oy) {
@@ -868,8 +973,6 @@ void kitty_render(Terminal *t, int ox, int oy) {
 
     glBindVertexArray(0);
     glUseProgram(0);
-
-    // Restore colored-vertex program state for subsequent draws
     glUseProgram(G.prog);
     glUniformMatrix4fv(G.proj_loc, 1, GL_FALSE, G.proj.m);
     glUseProgram(0);
@@ -880,6 +983,8 @@ void kitty_render(Terminal *t, int ox, int oy) {
 // ============================================================================
 
 void kitty_init(void) {
+    if (g_use_sdl_renderer) return;  // no GL resources needed in SDL path
+
     // Build shader
     auto compile = [](const char *src, GLenum type) -> GLuint {
         GLuint s = glCreateShader(type);
@@ -1029,13 +1134,30 @@ std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, in
         auto iit = s_images.find(pl.image_id);
         if (iit == s_images.end()) continue;
         const KittyImage &img = iit->second;
-        if (!img.tex || img.pw <= 0 || img.ph <= 0) continue;
+        if (!img.tex && !img.sdl_tex) continue;
+        if (img.pw <= 0 || img.ph <= 0) continue;
 
-        // Read texture back from GPU
+        // Read pixels back from GPU
         std::vector<uint8_t> pixels(img.pw * img.ph * 4);
-        glBindTexture(GL_TEXTURE_2D, img.tex);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-        glBindTexture(GL_TEXTURE_2D, 0);
+        if (g_use_sdl_renderer) {
+            // Render the texture to a temporary target and read pixels back
+            SDL_Texture *rt = SDL_CreateTexture(g_sdl_renderer,
+                SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET,
+                img.pw, img.ph);
+            if (!rt) continue;
+            SDL_SetRenderTarget(g_sdl_renderer, rt);
+            SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 0);
+            SDL_RenderClear(g_sdl_renderer);
+            SDL_RenderCopy(g_sdl_renderer, img.sdl_tex, nullptr, nullptr);
+            SDL_RenderReadPixels(g_sdl_renderer, nullptr,
+                SDL_PIXELFORMAT_ABGR8888, pixels.data(), img.pw * 4);
+            SDL_SetRenderTarget(g_sdl_renderer, nullptr);
+            SDL_DestroyTexture(rt);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, img.tex);
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
 
         // Apply source crop if specified
         int sx = pl.src_x, sy = pl.src_y;
@@ -1112,14 +1234,15 @@ void kitty_scroll(Terminal *t, int lines) {
 void kitty_shutdown(void) {
     for (auto &kv : s_images) {
         for (auto &fr : kv.second.frames)
-            if (fr.tex && fr.tex != kv.second.tex)
-                glDeleteTextures(1, &fr.tex);
-        glDeleteTextures(1, &kv.second.tex);
+            free_tex(fr.tex, fr.sdl_tex);
+        free_tex(kv.second.tex, kv.second.sdl_tex);
     }
     s_images.clear();
     s_anim.clear();
     s_terms.clear();
-    if (s_img_prog) { glDeleteProgram(s_img_prog); s_img_prog = 0; }
-    if (s_img_vao)  { glDeleteVertexArrays(1, &s_img_vao); s_img_vao = 0; }
-    if (s_img_vbo)  { glDeleteBuffers(1, &s_img_vbo); s_img_vbo = 0; }
+    if (!g_use_sdl_renderer) {
+        if (s_img_prog) { glDeleteProgram(s_img_prog); s_img_prog = 0; }
+        if (s_img_vao)  { glDeleteVertexArrays(1, &s_img_vao); s_img_vao = 0; }
+        if (s_img_vbo)  { glDeleteBuffers(1, &s_img_vbo); s_img_vbo = 0; }
+    }
 }
