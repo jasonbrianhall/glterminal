@@ -188,6 +188,15 @@ int main(int argc, char **argv) {
             printf("  Ctrl+Scroll                 Resize font\n");
             printf("  Shift+PageUp/Down           Scroll scrollback buffer\n");
             printf("  Ctrl+Click                  Open URL in browser\n");
+            printf("\nTroubleshooting:\n");
+            printf("  If the terminal fails to start due to missing OpenGL 3.3 support\n");
+            printf("  (common on Raspberry Pi with Mesa/VC4), try:\n");
+            printf("    MESA_GL_VERSION_OVERRIDE=3.3 MESA_GLSL_VERSION_OVERRIDE=330 flt\n");
+            printf("  Or add these to your ~/.profile to make it permanent:\n");
+            printf("    export MESA_GL_VERSION_OVERRIDE=3.3\n");
+            printf("    export MESA_GLSL_VERSION_OVERRIDE=330\n");
+            printf("  Without the override, flt falls back to an SDL software renderer\n");
+            printf("  which supports all features except GPU-accelerated visual effects.\n");
             return 0;
         }
     }
