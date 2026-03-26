@@ -71,9 +71,9 @@ void wopr_mines_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     gl_draw_text(info, x0, y0, 0.f, 0.8f, 0.3f, 1.f, scale);
     y0 += fch * 1.5f;
 
-    // Cell size: 2 chars wide
-    float cell_w = fcw * 2.5f;
-    float cell_h = fch * 1.1f;
+    // Cell size: make cells square-ish and large enough to see glyphs
+    float cell_w = fcw * 3.0f;
+    float cell_h = fch * 1.5f;
 
     for (int row = 0; row < m.height; row++) {
         for (int col = 0; col < m.width; col++) {
@@ -112,9 +112,10 @@ void wopr_mines_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
             }
 
             if (is_cursor) { gr *= 0.5f; gg = 1.f; gb *= 0.5f; }
-            gl_draw_text(glyph,
-                         cx + (cell_w - gl_text_width(glyph, scale)) * 0.5f,
-                         cy, gr, gg, gb, 1.f, scale);
+            // Centre glyph horizontally and vertically within cell
+            float tx = cx + (cell_w - gl_text_width(glyph, scale)) * 0.5f;
+            float ty = cy + (cell_h - fch) * 0.5f;
+            gl_draw_text(glyph, tx, ty, gr, gg, gb, 1.f, scale);
         }
     }
 

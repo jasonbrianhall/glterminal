@@ -30,18 +30,23 @@ struct WoprChessState {
     bool          ai_done;
     char message[128];
     bool game_over;
+
+    int    move_count;      // total half-moves played (0-player mode)
+    double min_think_ms;    // current minimum think delay in ms
 };
 
 struct AiArg {
     ChessGameState  game;
     ChessMove      *out;
     bool           *done;
+    double          min_think_ms;  // delay floor for this move
 };
 
 static void *ai_worker(void *arg) {
     AiArg *a = (AiArg *)arg;
     ChessAIConfig cfg = chess_ai_get_default_config();
     cfg.search_depth  = 5;
+    cfg.min_think_ms  = a->min_think_ms;
     ChessAIMoveResult r = chess_ai_compute_move(&a->game, cfg);
     *a->out  = r.move;
     *a->done = true;
@@ -83,10 +88,11 @@ static const char *piece_glyph(const ChessPiece &p) {
 static void start_ai(WoprChessState *s) {
     s->ai_thinking = true;
     s->ai_done     = false;
-    AiArg *arg     = new AiArg;
-    arg->game      = s->game;
-    arg->out       = &s->ai_result;
-    arg->done      = &s->ai_done;
+    AiArg *arg       = new AiArg;
+    arg->game        = s->game;
+    arg->out         = &s->ai_result;
+    arg->done        = &s->ai_done;
+    arg->min_think_ms = s->min_think_ms;
     pthread_create(&s->ai_thread, nullptr, ai_worker, arg);
     pthread_detach(s->ai_thread);
 }
@@ -101,6 +107,7 @@ static void start_game(WoprChessState *s) {
     s->ai_done     = false;
     s->game_over   = false;
     s->screen      = SCREEN_GAME;
+    s->move_count   = 0;
 
     if (s->num_players == 0) {
         strcpy(s->message, "WOPR VS WOPR.  WHITE CALCULATING...");
@@ -114,8 +121,9 @@ static void start_game(WoprChessState *s) {
 
 void wopr_chess_enter(WoprState *w) {
     WoprChessState *s = new WoprChessState{};
-    s->screen    = SCREEN_LOBBY;
-    s->lobby_sel = 1;   // default to 1 player
+    s->screen       = SCREEN_LOBBY;
+    s->lobby_sel    = 1;
+    s->min_think_ms = 1500.0;  // resets only when re-entering from menu
     w->sub_state = s;
 }
 
@@ -139,18 +147,24 @@ void wopr_chess_update(WoprState *w, double dt) {
             s->status = chess_check_game_status(&s->game);
 
             if (s->status == CHESS_CHECKMATE_WHITE) {
-                strcpy(s->message, s->num_players == 0
-                    ? "CHECKMATE.  BLACK WINS." : "CHECKMATE.  WOPR WINS.");
+                if (s->num_players == 0) { start_game(s); return; }
+                strcpy(s->message, "CHECKMATE.  WOPR WINS.");
                 s->game_over = true;
             } else if (s->status == CHESS_CHECKMATE_BLACK) {
-                strcpy(s->message, s->num_players == 0
-                    ? "CHECKMATE.  WHITE WINS." : "CHECKMATE!  YOU WIN.");
+                if (s->num_players == 0) { start_game(s); return; }
+                strcpy(s->message, "CHECKMATE!  YOU WIN.");
                 s->game_over = true;
             } else if (s->status == CHESS_STALEMATE) {
+                if (s->num_players == 0) { start_game(s); return; }
                 strcpy(s->message, "STALEMATE.  DRAW.");
                 s->game_over = true;
             } else {
                 if (s->num_players == 0) {
+                    // Decay delay: each move it gets faster, floor at 0
+                    s->move_count++;
+                    s->min_think_ms *= 0.80;  // 20% faster each move
+                    if (s->min_think_ms < 10.0) s->min_think_ms = 0.0;
+
                     const char *side = (s->game.turn == WHITE) ? "WHITE" : "BLACK";
                     if (chess_is_in_check(&s->game, s->game.turn))
                         snprintf(s->message, sizeof(s->message), "CHECK!  %s CALCULATING...", side);
@@ -302,8 +316,8 @@ bool wopr_chess_keydown(WoprState *w, SDL_Keycode sym) {
     // ── Game ───────────────────────────────────────────────────────────────
     if (s->ai_thinking) return true;
 
-    // R always returns to lobby
-    if (sym == SDLK_r) { s->screen = SCREEN_LOBBY; return true; }
+    // R always returns to lobby and resets speed
+    if (sym == SDLK_r) { s->screen = SCREEN_LOBBY; s->min_think_ms = 1500.0; return true; }
 
     if (s->game_over || s->status != CHESS_PLAYING) return true;
 

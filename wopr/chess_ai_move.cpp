@@ -63,6 +63,7 @@ ChessAIConfig chess_ai_get_default_config(void) {
 #endif
     config.threshold_centipawns = 25;
     config.use_randomization = true;
+    config.min_think_ms = 1500.0;
     return config;
 }
 
@@ -252,18 +253,19 @@ ChessAIMoveResult chess_ai_compute_move(ChessGameState *game, ChessAIConfig conf
     DEBUG_PRINT(" (score: %d, chosen from %d candidates)\n\n", result.score, result.candidate_moves);
     AI_YIELD_IMPL();
 
-    /* Enforce minimum think time so the AI doesn't feel instant */
-    {
+    /* Enforce minimum think time */
+    if (config.min_think_ms > 0.0) {
         clock_t end = clock();
-        double elapsed = (double)(end - think_start) / CLOCKS_PER_SEC;
-        double remaining = 1.5 - elapsed;
-        if (remaining > 0.0) {
+        double elapsed_ms = (double)(end - think_start) / CLOCKS_PER_SEC * 1000.0;
+        double remaining_ms = config.min_think_ms - elapsed_ms;
+        if (remaining_ms > 0.0) {
 #ifdef _WIN32
-            Sleep((DWORD)(remaining * 1000));
+            Sleep((DWORD)remaining_ms);
 #else
             struct timespec ts;
-            ts.tv_sec  = (time_t)remaining;
-            ts.tv_nsec = (long)((remaining - ts.tv_sec) * 1e9);
+            double remaining_s = remaining_ms / 1000.0;
+            ts.tv_sec  = (time_t)remaining_s;
+            ts.tv_nsec = (long)((remaining_s - ts.tv_sec) * 1e9);
             nanosleep(&ts, nullptr);
 #endif
         }
