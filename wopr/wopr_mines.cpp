@@ -158,7 +158,10 @@ bool wopr_mines_keydown(WoprState *w, SDL_Keycode sym) {
         case SDLK_LEFT:  if (m.cursorX > 0) m.cursorX--; break;
         case SDLK_RIGHT: if (m.cursorX < m.width-1)  m.cursorX++; break;
         case SDLK_SPACE: case SDLK_RETURN:
-            if (!m.flagged[m.cursorY][m.cursorX]) {
+            if (m.revealed[m.cursorY][m.cursorX]) {
+                // Chord: reveal adjacent cells if flag count matches mine count
+                m.revealAdjacentCells(m.cursorY, m.cursorX);
+            } else if (!m.flagged[m.cursorY][m.cursorX]) {
                 m.reveal(m.cursorX, m.cursorY);
             }
             break;
