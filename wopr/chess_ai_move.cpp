@@ -12,6 +12,12 @@
 #include "chess_ai_move.h"
 #include <stdlib.h>
 #include <limits.h>
+#include <time.h>
+
+static void ensure_seeded(void) {
+    static bool seeded = false;
+    if (!seeded) { srand((unsigned)time(nullptr)); seeded = true; }
+}
 
 #ifdef ALLEGRO_H
     #include <allegro.h>
@@ -74,6 +80,9 @@ ChessAIConfig chess_ai_get_default_config(void) {
 ChessAIMoveResult chess_ai_compute_move(ChessGameState *game, ChessAIConfig config) {
     ChessAIMoveResult result;
     
+    ensure_seeded();
+    clock_t think_start = clock();
+
     /* Initialize result */
     result.move.from_row = -1;
     result.move.from_col = -1;
@@ -242,6 +251,23 @@ ChessAIMoveResult chess_ai_compute_move(ChessGameState *game, ChessAIConfig conf
     DEBUG_MOVE(result.move);
     DEBUG_PRINT(" (score: %d, chosen from %d candidates)\n\n", result.score, result.candidate_moves);
     AI_YIELD_IMPL();
+
+    /* Enforce minimum think time so the AI doesn't feel instant */
+    {
+        clock_t end = clock();
+        double elapsed = (double)(end - think_start) / CLOCKS_PER_SEC;
+        double remaining = 1.5 - elapsed;
+        if (remaining > 0.0) {
+#ifdef _WIN32
+            Sleep((DWORD)(remaining * 1000));
+#else
+            struct timespec ts;
+            ts.tv_sec  = (time_t)remaining;
+            ts.tv_nsec = (long)((remaining - ts.tv_sec) * 1e9);
+            nanosleep(&ts, nullptr);
+#endif
+        }
+    }
 
     return result;
 }
