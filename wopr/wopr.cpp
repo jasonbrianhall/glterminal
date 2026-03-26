@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include "wopr_render.h"
+#include <ctime>
 
 // ============================================================================
 // GLOBALS
@@ -50,6 +51,8 @@ static double                   g_drip_delay = 0.18; // seconds between lines
 // ============================================================================
 // HELPERS
 // ============================================================================
+
+
 
 static std::string to_upper(const std::string &s) {
     std::string r = s;
@@ -343,76 +346,36 @@ static void do_command(WoprState *w, const std::string &raw) {
 
     // ── SITREP ────────────────────────────────────────────────────────────
     if (verb == "SITREP" || cmd == "SIT REP" || cmd == "SITUATION REPORT") {
-        push_line(w, "  *** SITUATION REPORT -- ALL THEATERS ***");
-        push_line(w, "  CLASSIFICATION: TOP SECRET / CODEWORD");
-        push_line(w, "  DTG: 030414Z JUN 83");
-        push_line(w, "");
-        push_line(w, "  THEATER: NORTH ATLANTIC");
-        push_line(w, "    SOVIET NORTHERN FLEET -- ELEVATED POSTURE");
-        push_line(w, "    4 DELTA-III SSBNs UNDERWAY, LAST FIX: 71N 012E");
-        push_line(w, "    USS CHICAGO (SSN-721) PROSECUTING CONTACT SIERRA-7");
-        push_line(w, "    NATO SACLANT -- DEFCON 3, WATCHCON 2");
-        push_line(w, "");
-        push_line(w, "  THEATER: CENTRAL EUROPE");
-        push_line(w, "    WARSAW PACT GROUND FORCES -- NO CHANGE FROM BASELINE");
-        push_line(w, "    GSFG MOTORIZED DIVISIONS: 85% READINESS (EST.)");
-        push_line(w, "    USAREUR ALERT STATUS: BLUE (INCREASED VIGILANCE)");
-        push_line(w, "");
-        push_line(w, "  THEATER: PACIFIC");
-        push_line(w, "    SOVIET PACIFIC FLEET -- ROUTINE POSTURE");
-        push_line(w, "    EXCEPTION: SSG JULIETT-CLASS DEPARTED VLADIVOSTOK");
-        push_line(w, "    HEADING UNKNOWN.  USN P-3s TASKED FOR LOCALIZATION.");
-        push_line(w, "");
-        push_line(w, "  STRATEGIC FORCES:");
-        push_line(w, "    MINUTEMAN III -- ALL SILOS NOMINAL");
-        push_line(w, "    TRIDENT SUBMARINES -- 6 OF 8 ON PATROL");
-        push_line(w, "    B-52 ALERT POSTURE -- 30% AIRBORNE (ABOVE NORMAL)");
-        push_line(w, "    LAUNCH-ON-WARNING AUTHORITY: DELEGATED TO SAC CINC");
-        push_line(w, "");
-        push_line(w, "  -------------------------------------------------------");
-        push_line(w, "  SALUTE REPORTS -- ENEMY ACTIVITY (3 OF 11 SHOWN)");
-        push_line(w, "  -------------------------------------------------------");
-        push_line(w, "");
-        push_line(w, "  SALUTE #1  --  REPORT ORIGIN: HUMINT ASSET FOXGLOVE");
-        push_line(w, "    S - SIZE      : BATTALION MINUS (~350 PERSONNEL)");
-        push_line(w, "    A - ACTIVITY  : FORWARD ASSEMBLY, BRIDGING EQUIPMENT");
-        push_line(w, "                    BEING STAGED AT RIVER CROSSING SITE");
-        push_line(w, "    L - LOCATION  : GRID 447-882, ELBE RIVER WEST BANK");
-        push_line(w, "                    APPROX 14KM NE OF MAGDEBURG");
-        push_line(w, "    U - UNIFORM   : SOVIET MOTOR RIFLE, SUMMER DRESS");
-        push_line(w, "                    CHEMICAL PROTECTION SUITS OBSERVED");
-        push_line(w, "    T - TIME      : 030147Z JUN 83  (FIRST OBSERVED)");
-        push_line(w, "    E - EQUIPMENT : 12x T-72 MBT, 8x BMP-1, 4x PMP");
-        push_line(w, "                    PONTOON BRIDGE SECTIONS, 2x SA-9 GASKIN");
-        push_line(w, "");
-        push_line(w, "  SALUTE #2  --  REPORT ORIGIN: NRO KEYHOLE-11 PASS 7734");
-        push_line(w, "    S - SIZE      : REGIMENT (~1800 PERSONNEL EST.)");
-        push_line(w, "    A - ACTIVITY  : DISPERSAL FROM GARRISON, MOVING EAST");
-        push_line(w, "                    TO WEST.  TACTICAL COLUMN FORMATION.");
-        push_line(w, "    L - LOCATION  : AUTOBAHN E40, 22KM WEST OF LEIPZIG");
-        push_line(w, "                    COORDINATES: 51.21N  11.87E");
-        push_line(w, "    U - UNIFORM   : INDETERMINATE FROM IMAGERY ALTITUDE");
-        push_line(w, "                    VEHICLE MARKINGS CONSISTENT W/ 3RD SHOCK ARMY");
-        push_line(w, "    T - TIME      : 030312Z JUN 83");
-        push_line(w, "    E - EQUIPMENT : 40+ AFVs, SELF-PROPELLED ARTILLERY");
-        push_line(w, "                    IDENTIFIED: 2S3 AKATSIYA 152MM SP HOWITZERS");
-        push_line(w, "                    1x ZSU-23-4 SHILKA AIR DEFENSE");
-        push_line(w, "");
-        push_line(w, "  SALUTE #3  --  REPORT ORIGIN: SIGINT NSA STATION AUGSBURG");
-        push_line(w, "    S - SIZE      : COMPANY-SIZED ELEMENT (~80 PERSONNEL)");
-        push_line(w, "    A - ACTIVITY  : RADIO TRAFFIC SURGE, ENCRYPTED BURST");
-        push_line(w, "                    TRANSMISSIONS ON KNOWN SPETSNAZ FREQS");
-        push_line(w, "                    CONSISTENT WITH PRE-MISSION COORDINATION");
-        push_line(w, "    L - LOCATION  : BEARING TRIANGULATION: 52.4N  13.1E");
-        push_line(w, "                    WEST BERLIN CORRIDOR VICINITY");
-        push_line(w, "    U - UNIFORM   : UNKNOWN -- NO VISUAL CONFIRMATION");
-        push_line(w, "    T - TIME      : 030023Z JUN 83  (SIGNAL INTERCEPT)");
-        push_line(w, "    E - EQUIPMENT : COMMS EQUIPMENT ONLY -- R-350M INFERRED");
-        push_line(w, "                    NO HEAVY EQUIPMENT SIGNATURES DETECTED");
-        push_line(w, "");
-        push_line(w, "  -------------------------------------------------------");
-        push_line(w, "  ASSESSMENT: ELEVATED TENSION.  NO INDICATORS OF");
-        push_line(w, "  IMMINENT ATTACK.  SITUATION FLUID.  NEXT UPDATE: +2HRS.");
+
+        srand((unsigned)time(nullptr));
+        SaluteReport current_salute = SALUTE_POOL[rand()%SALUTE_POOL_SIZE];
+        push_line(w, "Source: ");
+        push_line(w, current_salute.source);
+        push_line(w, ""); 
+
+        push_line(w, "Activity:"); 
+        push_line(w,current_salute.activity);
+        if (!current_salute.activity2==NULL) push_line(w, current_salute.activity2);
+        push_line(w, ""); 
+
+        push_line(w, "Location:");
+        push_line(w,current_salute.location);
+        if (!current_salute.activity2==NULL) push_line(w,current_salute.location2);
+        push_line(w, ""); 
+
+        push_line(w, "Uniform:");
+        push_line(w,current_salute.uniform);
+        if (!current_salute.activity2==NULL) push_line(w,current_salute.uniform2);
+        push_line(w, ""); 
+
+        
+        push_line(w, "Time:");
+        push_line(w,current_salute.time_dtg);
+        push_line(w, ""); 
+
+        push_line(w, "Equipment:");
+        push_line(w,current_salute.equipment);
+        if (!current_salute.activity2==NULL) push_line(w,current_salute.equipment2);
         push_line(w, "");
         return;
     }
