@@ -11,7 +11,7 @@
 //   - 300-baud simulated login sequence (FALKEN / JOSHUA)
 //   - WOPR game menu
 //   - Playable: Tic-Tac-Toe, Chess, Minesweeper, Falken's Maze,
-//               Global Thermonuclear War
+//               Global Thermonuclear War, Zork
 // ============================================================================
 
 enum class WoprPhase {
@@ -21,12 +21,13 @@ enum class WoprPhase {
     LOGIN_INPUT,      // Waiting for user keystrokes
     LOGIN_REJECTED,   // Wrong creds → "IDENTIFICATION NOT RECOGNIZED"
     CONNECTING,       // "CONNECTING TO WOPR..." crawl
-    GAME_MENU,        // Main WOPR game list
+    GAME_MENU,        // Main WOPR game list / command shell
     PLAYING_TTT,
     PLAYING_CHESS,
     PLAYING_MINES,
     PLAYING_MAZE,
     PLAYING_WAR,
+    PLAYING_ZORK,
     FAREWELL,         // "A STRANGE GAME..." on exit
 };
 
@@ -37,6 +38,7 @@ enum class WoprGame {
     GLOBAL_WAR,
     TIC_TAC_TOE,
     MINESWEEPER,
+    ZORK,
     // Sentinel
     COUNT
 };
@@ -135,3 +137,11 @@ void wopr_war_update(WoprState *w, double dt);
 void wopr_war_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_war_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_war_free(WoprState *w);
+
+// Zork / Dungeon
+void wopr_zork_enter(WoprState *w);
+void wopr_zork_update(WoprState *w, double dt);
+void wopr_zork_render(WoprState *w, int x, int y, int cw, int ch, int cols);
+bool wopr_zork_keydown(WoprState *w, SDL_Keycode sym);
+void wopr_zork_text(WoprState *w, const char *text);
+void wopr_zork_free(WoprState *w);

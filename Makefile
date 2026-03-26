@@ -148,7 +148,7 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
 	    wopr/zork/dso5.c \
 	    wopr/zork/dso6.c \
 	    wopr/zork/dso7.c \
-	    wopr/zork/dsub.c \
+	    wopr/zork_modified/dsub.c \
 	    wopr/zork/dverb1.c\
 	    wopr/zork/dverb2.c \
 	    wopr/zork_modified/gdt.c \

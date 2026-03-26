@@ -11,44 +11,40 @@ extern "C" {
     int  init_(void);
     void game_(void);
 
-    extern char g_zork_out[];
-    extern int  g_zork_out_write;
-    extern int  g_zork_out_read;
+    // Shared I/O surfaces declared in supp.c
+    extern char zork_input_buf[];
+    extern int  zork_input_ready;
     extern int  g_zork_game_over;
-
     void zork_shim_set_input(const char *line);
-
-    static const int ZORK_OUT_SIZE = 65536;
 }
 
-// ── Sub-game state ────────────────────────────────────────────────────────
+// ── Per-instance state ────────────────────────────────────────────────────
 struct ZorkState {
-    SDL_Thread *thread      = nullptr;
-    SDL_mutex  *out_mtx     = nullptr;
-    std::string input_buf;               // line being typed by player
-    std::string partial_line;            // incomplete output line accumulator
-    bool        dead        = false;     // game thread has exited
+    SDL_Thread *thread   = nullptr;
+    SDL_mutex  *line_mtx = nullptr;   // guards access to the WoprState lines
+    WoprState  *wopr     = nullptr;   // back-pointer so the callback can push
+    std::string input_buf;            // line being typed by the player
+    bool        dead     = false;
 };
 
-// ── Ring-buffer drain ─────────────────────────────────────────────────────
-static std::string zork_drain_output(ZorkState *zs)
+// ── Active instance pointer (one game at a time) ──────────────────────────
+static ZorkState *s_active = nullptr;
+
+// ── Output callback: called by supp.c's more_output() per complete line ───
+// This is a plain C function so supp.c can call it without C++ linkage issues.
+extern "C" void wopr_zork_push_line(const char *line)
 {
-    SDL_LockMutex(zs->out_mtx);
-    std::string result;
-    while (g_zork_out_read != g_zork_out_write) {
-        result += g_zork_out[g_zork_out_read];
-        g_zork_out_read = (g_zork_out_read + 1) % ZORK_OUT_SIZE;
-    }
-    SDL_UnlockMutex(zs->out_mtx);
-    return result;
+    if (!s_active || !s_active->wopr) return;
+    SDL_LockMutex(s_active->line_mtx);
+    s_active->wopr->lines.push_back(std::string(line));
+    SDL_UnlockMutex(s_active->line_mtx);
 }
 
 // ── Game thread ───────────────────────────────────────────────────────────
 static int zork_thread_fn(void * /*userdata*/)
 {
-    g_zork_out_write = 0;
-    g_zork_out_read  = 0;
     g_zork_game_over = 0;
+    zork_input_ready = 0;
 
     if (init_())
         game_();
@@ -60,9 +56,11 @@ static int zork_thread_fn(void * /*userdata*/)
 // ── Enter ─────────────────────────────────────────────────────────────────
 void wopr_zork_enter(WoprState *w)
 {
-    ZorkState *zs = new ZorkState();
-    zs->out_mtx   = SDL_CreateMutex();
-    w->sub_state  = zs;
+    ZorkState *zs  = new ZorkState();
+    zs->line_mtx   = SDL_CreateMutex();
+    zs->wopr       = w;
+    w->sub_state   = zs;
+    s_active       = zs;
 
     zs->thread = SDL_CreateThread(zork_thread_fn, "ZorkThread", nullptr);
     if (!zs->thread) {
@@ -71,31 +69,16 @@ void wopr_zork_enter(WoprState *w)
     }
 }
 
-// ── Update (called every frame) ───────────────────────────────────────────
+// ── Update ────────────────────────────────────────────────────────────────
 void wopr_zork_update(WoprState *w, double /*dt*/)
 {
     ZorkState *zs = static_cast<ZorkState *>(w->sub_state);
-    if (!zs) return;
+    if (!zs || zs->dead) return;
 
-    // Accumulate new output
-    zs->partial_line += zork_drain_output(zs);
-
-    // Split on newlines and push complete lines into terminal buffer
-    std::string &acc = zs->partial_line;
-    size_t pos;
-    while ((pos = acc.find('\n')) != std::string::npos) {
-        w->lines.push_back(acc.substr(0, pos));
-        acc.erase(0, pos + 1);
-    }
-
-    // Check for game-over after draining
-    if (g_zork_game_over && !zs->dead) {
+    // Lines are pushed directly into w->lines by wopr_zork_push_line().
+    // We only need to check for game-over here.
+    if (g_zork_game_over) {
         zs->dead = true;
-        // Flush any remaining partial line
-        if (!acc.empty()) {
-            w->lines.push_back(acc);
-            acc.clear();
-        }
         w->lines.push_back("");
         w->lines.push_back("  -- ZORK SESSION ENDED --");
         w->lines.push_back("  TYPE  LIST GAMES  TO PLAY AGAIN.");
@@ -107,10 +90,8 @@ void wopr_zork_update(WoprState *w, double /*dt*/)
 }
 
 // ── Render ────────────────────────────────────────────────────────────────
-// Output is already in w->lines via wopr_zork_update(); the standard WOPR
-// terminal renderer handles display. We only need to show the input prompt
-// which the WOPR renderer already does for PLAYING_ZORK the same way it
-// does for GAME_MENU — using w->input_buf.  Nothing extra needed here.
+// Output is already in w->lines; the standard WOPR terminal renderer handles
+// everything. The "> " prompt is drawn by wopr_render() when in_zork is true.
 void wopr_zork_render(WoprState *w, int /*x*/, int /*y*/,
                       int /*cw*/, int /*ch*/, int /*cols*/)
 {
@@ -131,7 +112,6 @@ bool wopr_zork_keydown(WoprState *w, SDL_Keycode sym)
         line += '\n';
         zork_shim_set_input(line.c_str());
         zs->input_buf.clear();
-        // Mirror into w->input_buf so renderer clears correctly
         w->input_buf.clear();
         return true;
     }
@@ -142,15 +122,13 @@ bool wopr_zork_keydown(WoprState *w, SDL_Keycode sym)
         }
         return true;
     case SDLK_ESCAPE:
-        // Let wopr_keydown's sub_back() handle it
-        return false;
+        return false;  // let sub_back() in wopr.cpp handle it
     default:
-        // Printable input is handled by wopr_zork_text(); nothing extra here.
-        return true;
+        return true;   // printable chars handled by wopr_zork_text()
     }
 }
 
-// ── Text input (from SDL_TEXTINPUT event) ─────────────────────────────────
+// ── Text input (SDL_TEXTINPUT event) ─────────────────────────────────────
 void wopr_zork_text(WoprState *w, const char *text)
 {
     ZorkState *zs = static_cast<ZorkState *>(w->sub_state);
@@ -175,7 +153,10 @@ void wopr_zork_free(WoprState *w)
     if (zs->thread)
         SDL_WaitThread(zs->thread, nullptr);
 
-    SDL_DestroyMutex(zs->out_mtx);
+    if (s_active == zs)
+        s_active = nullptr;
+
+    SDL_DestroyMutex(zs->line_mtx);
     delete zs;
     w->sub_state = nullptr;
 }

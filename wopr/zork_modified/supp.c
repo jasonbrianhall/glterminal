@@ -1,4 +1,9 @@
 /* supp.c -- support routines for dungeon */
+/* Modified for WOPR overlay:
+ *   more_output() formats and calls wopr_zork_push_line() directly.
+ *   exit_() sets a flag instead of calling exit().
+ *   zork_input_buf / zork_input_ready replace stdin for gdt.c.
+ */
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -16,68 +21,42 @@
 
 #include "../zork/funcs.h"
 
-extern void exit(int);
-extern int  rand(void);
-extern time_t time(time_t *);
-extern struct tm *localtime();
+extern void exit P((int));
+extern int  rand P((void));
+extern time_t time P((time_t *));
+extern struct tm *localtime ();
 
 /* ============================================================================
- * ZORK I/O SHIM
- *
- * g_zork_out      ring buffer — dungeon writes here via more_output();
- *                 wopr_zork.cpp drains it each frame.
- * g_zork_in       line buffer — wopr_zork.cpp calls zork_shim_set_input()
- *                 to post a newline-terminated command; dungeon reads it
- *                 via zork_shim_fgets() (called from gdt.c in place of
- *                 fgets(stdin)).
- * g_zork_game_over set to 1 by exit_() so wopr_zork.cpp can return to menu.
+ * Shared I/O surfaces
  * ========================================================================== */
 
-#define ZORK_OUT_SIZE 65536
-#define ZORK_IN_SIZE  512
+void wopr_zork_push_line(const char *line);   /* implemented in wopr_zork.cpp */
 
-char g_zork_out[ZORK_OUT_SIZE];
-int  g_zork_out_write = 0;
-int  g_zork_out_read  = 0;
-
-char g_zork_in[ZORK_IN_SIZE];
-int  g_zork_in_ready  = 0;
-
+char zork_input_buf[512];
+int  zork_input_ready = 0;
 int  g_zork_game_over = 0;
-
-static void zork_out_push(const char *s)
-{
-    while (*s) {
-        int next = (g_zork_out_write + 1) % ZORK_OUT_SIZE;
-        if (next == g_zork_out_read) return; /* full — drop */
-        g_zork_out[g_zork_out_write] = *s++;
-        g_zork_out_write = next;
-    }
-}
 
 void zork_shim_set_input(const char *line)
 {
-    strncpy(g_zork_in, line, ZORK_IN_SIZE - 1);
-    g_zork_in[ZORK_IN_SIZE - 1] = '\0';
-    g_zork_in_ready = 1;
+    strncpy(zork_input_buf, line, sizeof(zork_input_buf) - 1);
+    zork_input_buf[sizeof(zork_input_buf) - 1] = '\0';
+    zork_input_ready = 1;
 }
 
-/* Drop-in for fgets(buf, n, stdin) used in gdt.c */
 char *zork_shim_fgets(char *buf, int n)
 {
-    if (!g_zork_in_ready) {
+    if (!zork_input_ready) {
         if (n > 0) buf[0] = '\0';
         return buf;
     }
-    strncpy(buf, g_zork_in, n - 1);
+    strncpy(buf, zork_input_buf, n - 1);
     buf[n - 1] = '\0';
-    g_zork_in_ready = 0;
+    zork_input_ready = 0;
     return buf;
 }
 
 /* ============================================================================
- * more_output — signature UNCHANGED (const char *fmt, ...)
- * Body routes through the shim ring buffer instead of stdout.
+ * more_output — format and push directly, no buffering
  * ========================================================================== */
 
 static int crows   = 24;
@@ -97,7 +76,8 @@ void more_output(const char *fmt, ...)
         va_start(ap, fmt);
         vsnprintf(buf, sizeof(buf), fmt, ap);
         va_end(ap);
-        zork_out_push(buf);
+        printf("Buffer is %s\n", buf);
+        wopr_zork_push_line(buf);
     }
 
     coutput++;
@@ -109,9 +89,7 @@ void more_input(void)
 }
 
 /* ============================================================================
- * Game lifecycle
- * exit_() sets a flag instead of calling exit() so the WOPR overlay can
- * return to the game menu cleanly rather than killing the process.
+ * Lifecycle
  * ========================================================================== */
 
 void exit_(void)

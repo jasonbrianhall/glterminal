@@ -4,6 +4,11 @@
 /* ALL RIGHTS RESERVED, COMMERCIAL USAGE STRICTLY PROHIBITED */
 /* WRITTEN BY R. M. SUPNIK */
 
+/* Modified for WOPR overlay:
+ *   All fgets(buf, sizeof buf, stdin) → zork_shim_fgets(buf, sizeof buf)
+ *   All fflush(stdout) removed (no stdout in overlay mode)
+ */
+
 #include <stdio.h>
 #include <ctype.h>
 #include "../zork/funcs.h"
@@ -235,7 +240,7 @@ L13000:
 /* DX-- DISPLAY EXITS */
 
 L14000:
-    if (! (j > 0 && j <= exits_1.xlnt && (k > 0 && k <= exits_1.xlnt) && j <= 
+    if (! (j > 0 && j <= exits_1.xlnt && (k > 0 && k <= exits_1.xlnt) && j <=
 	    k)) {
 	goto L2200;
     }
@@ -312,7 +317,7 @@ L18000:
     goto L2000;
 
 
-/* DS-- DISPLAY STARS (findex star info) */
+/* DS-- DISPLAY STARS */
 
 L19000:
     more_output(NULL);
@@ -529,7 +534,7 @@ L37000:
 /* D2-- DISPLAY ROOM2 LIST */
 
 L38000:
-    if (! (j > 0 && j <= oroom2_1.r2lnt && (k > 0 && k <= oroom2_1.r2lnt) && 
+    if (! (j > 0 && j <= oroom2_1.r2lnt && (k > 0 && k <= oroom2_1.r2lnt) &&
 	    j <= k)) {
 	goto L2200;
     }
