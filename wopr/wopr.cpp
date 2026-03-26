@@ -18,10 +18,9 @@ WoprState g_wopr;
 // CONSTANTS
 // ============================================================================
 
-// Game name → WoprGame mapping (used by "PLAY <name>")
 struct GameEntry {
-    const char *label;      // canonical display name
-    const char *keyword;    // primary match token (upper-cased)
+    const char *label;
+    const char *keyword;
     WoprGame    id;
 };
 
@@ -31,8 +30,9 @@ static const GameEntry GAMES[] = {
     { "GLOBAL THERMONUCLEAR WAR", "WAR",         WoprGame::GLOBAL_WAR },
     { "TIC-TAC-TOE",              "TIC",         WoprGame::TIC_TAC_TOE},
     { "MINESWEEPER",              "MINESWEEPER", WoprGame::MINESWEEPER},
+    { "ZORK",                     "ZORK",        WoprGame::ZORK       },
 };
-static const int GAME_COUNT = 5;
+static const int GAME_COUNT = 6;
 
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
@@ -46,13 +46,11 @@ static int  g_wire_story_idx  = 0;
 // Drip queue: lines waiting to be released one at a time into w->lines
 static std::vector<std::string> g_drip_queue;
 static double                   g_drip_acc   = 0.0;
-static double                   g_drip_delay = 0.18; // seconds between lines
+static double                   g_drip_delay = 0.18;
 
 // ============================================================================
 // HELPERS
 // ============================================================================
-
-
 
 static std::string to_upper(const std::string &s) {
     std::string r = s;
@@ -93,9 +91,8 @@ static void set_phase(WoprState *w, WoprPhase p) {
 // COMMAND SHELL
 // ============================================================================
 
-// Command history (simple ring)
 static std::vector<std::string> g_cmd_history;
-static int                      g_history_cursor = -1; // -1 = live input
+static int                      g_history_cursor = -1;
 
 static void enter_shell(WoprState *w) {
     push_line(w, "");
@@ -103,10 +100,9 @@ static void enter_shell(WoprState *w) {
     push_line(w, "");
     w->input_buf.clear();
     g_history_cursor = -1;
-    set_phase(w, WoprPhase::GAME_MENU); // GAME_MENU is reused as CMD_PROMPT
+    set_phase(w, WoprPhase::GAME_MENU);
 }
 
-// Trim leading/trailing spaces, collapse internal runs to single space
 static std::string normalise(const std::string &s) {
     std::string r;
     bool sp = true;
@@ -122,7 +118,6 @@ static std::string normalise(const std::string &s) {
     return r;
 }
 
-// Split on first space: verb + rest
 static void split_verb(const std::string &cmd, std::string &verb, std::string &rest) {
     auto pos = cmd.find(' ');
     if (pos == std::string::npos) {
@@ -135,7 +130,6 @@ static void split_verb(const std::string &cmd, std::string &verb, std::string &r
 
 static WoprGame find_game(const std::string &token) {
     for (int i = 0; i < GAME_COUNT; i++) {
-        // Match on keyword prefix or full label
         std::string lbl = GAMES[i].label;
         std::string kw  = GAMES[i].keyword;
         if (token == kw || token == lbl ||
@@ -177,6 +171,14 @@ static void launch_game(WoprState *w, WoprGame game) {
             set_phase(w, WoprPhase::PLAYING_WAR);
             wopr_war_enter(w);
             break;
+        case WoprGame::ZORK:
+            push_line(w, "INITIATING: ZORK");
+            push_line(w, "");
+            push_line(w, "  LOADING GREAT UNDERGROUND EMPIRE...");
+            push_line(w, "");
+            set_phase(w, WoprPhase::PLAYING_ZORK);
+            wopr_zork_enter(w);
+            break;
         default: break;
     }
 }
@@ -215,6 +217,7 @@ static void do_command(WoprState *w, const std::string &raw) {
         push_line(w, "");
         push_line(w, "  EXAMPLE:  PLAY CHESS");
         push_line(w, "            PLAY GLOBAL THERMONUCLEAR WAR");
+        push_line(w, "            PLAY ZORK");
         return;
     }
 
@@ -252,7 +255,6 @@ static void do_command(WoprState *w, const std::string &raw) {
     if (verb == "INTELLIGENCE" || verb == "INTEL" || verb == "THREAT") {
         push_line(w, "  *** CLASSIFIED -- EYES ONLY -- LEVEL 5 ***");
         push_line(w, "");
-        // Print the report line-by-line (it may contain \n)
         const char *report = INTEL_REPORTS[g_intel_idx % INTEL_COUNT];
         g_intel_idx++;
         std::string line;
@@ -333,7 +335,6 @@ static void do_command(WoprState *w, const std::string &raw) {
         push_line(w, "  ** MILNET WIRE SERVICE -- UNCLASSIFIED FEED **");
         push_line(w, "  RECEIVING...");
         push_line(w, "");
-        // Queue the next story to drip in line by line
         const char **story = WIRE_STORIES[g_wire_story_idx % WIRE_STORY_COUNT];
         g_wire_story_idx++;
         for (int i = 0; story[i] != nullptr; i++) {
@@ -353,31 +354,30 @@ static void do_command(WoprState *w, const std::string &raw) {
         SaluteReport current_salute = SALUTE_POOL[rand()%SALUTE_POOL_SIZE];
         push_line(w, "Source: ");
         push_line(w, current_salute.source);
-        push_line(w, ""); 
+        push_line(w, "");
 
-        push_line(w, "Activity:"); 
-        push_line(w,current_salute.activity);
+        push_line(w, "Activity:");
+        push_line(w, current_salute.activity);
         if (!current_salute.activity2==NULL) push_line(w, current_salute.activity2);
-        push_line(w, ""); 
+        push_line(w, "");
 
         push_line(w, "Location:");
-        push_line(w,current_salute.location);
-        if (!current_salute.activity2==NULL) push_line(w,current_salute.location2);
-        push_line(w, ""); 
+        push_line(w, current_salute.location);
+        if (!current_salute.activity2==NULL) push_line(w, current_salute.location2);
+        push_line(w, "");
 
         push_line(w, "Uniform:");
-        push_line(w,current_salute.uniform);
-        if (!current_salute.activity2==NULL) push_line(w,current_salute.uniform2);
-        push_line(w, ""); 
+        push_line(w, current_salute.uniform);
+        if (!current_salute.activity2==NULL) push_line(w, current_salute.uniform2);
+        push_line(w, "");
 
-        
         push_line(w, "Time:");
-        push_line(w,current_salute.time_dtg);
-        push_line(w, ""); 
+        push_line(w, current_salute.time_dtg);
+        push_line(w, "");
 
         push_line(w, "Equipment:");
-        push_line(w,current_salute.equipment);
-        if (!current_salute.activity2==NULL) push_line(w,current_salute.equipment2);
+        push_line(w, current_salute.equipment);
+        if (!current_salute.activity2==NULL) push_line(w, current_salute.equipment2);
         push_line(w, "");
         return;
     }
@@ -421,6 +421,7 @@ void wopr_close() {
         case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
+        case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
         default: break;
     }
     wopr_audio_stop();
@@ -509,6 +510,7 @@ void wopr_update(double dt) {
     case WoprPhase::PLAYING_MINES: wopr_mines_update(w, dt); break;
     case WoprPhase::PLAYING_MAZE:  wopr_maze_update(w, dt);  break;
     case WoprPhase::PLAYING_WAR:   wopr_war_update(w, dt);   break;
+    case WoprPhase::PLAYING_ZORK:  wopr_zork_update(w, dt);  break;
 
     case WoprPhase::FAREWELL:
         if (crawl_done(w) && w->phase_timer > 2.5)
@@ -550,7 +552,8 @@ void wopr_render(int win_w, int win_h) {
     float area_w = win_w - 2*(PAD + 8);
     int   vis_rows = (int)((win_h - 2*(PAD + 8)) / ch) - 2;
 
-    // Sub-game rendering
+    // Sub-game rendering (games with their own full UI)
+    // Zork is intentionally NOT here — it uses the terminal scroll path below
     bool in_subgame = false;
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:
@@ -573,13 +576,13 @@ void wopr_render(int win_w, int win_h) {
     if (in_subgame) { gl_flush_verts(); return; }
 
     // ── Terminal log scroll ──────────────────────────────────────────────────
-    int total = (int)w->lines.size();
+    int total       = (int)w->lines.size();
     int crawl_extra = w->crawl_target.empty() ? 0 : 1;
-    // CMD_PROMPT needs one extra line for the input row
-    bool in_shell = (w->phase == WoprPhase::GAME_MENU);
-    int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell) ? 1 : 0;
-    int used = total + crawl_extra + input_extra;
-    int start_line = std::max(0, used - vis_rows);
+    bool in_shell   = (w->phase == WoprPhase::GAME_MENU);
+    bool in_zork    = (w->phase == WoprPhase::PLAYING_ZORK);
+    int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell || in_zork) ? 1 : 0;
+    int used        = total + crawl_extra + input_extra;
+    int start_line  = std::max(0, used - vis_rows);
 
     float y = y0;
     for (int li = start_line; li < total; li++) {
@@ -608,7 +611,12 @@ void wopr_render(int win_w, int win_h) {
         std::string prompt = "WOPR> " + w->input_buf;
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
-        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE); // brighter green for prompt
+        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
+    } else if (in_zork) {
+        std::string prompt = "> " + w->input_buf;
+        Uint32 ticks = SDL_GetTicks();
+        if ((ticks / 500) % 2 == 0) prompt += '_';
+        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
     }
 
     gl_flush_verts();
@@ -625,6 +633,7 @@ static bool sub_back(WoprState *w) {
         case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
+        case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
         default: return false;
     }
     push_line(w, "");
@@ -632,7 +641,7 @@ static bool sub_back(WoprState *w) {
     push_line(w, "");
     w->input_buf.clear();
     g_history_cursor = -1;
-    set_phase(w, WoprPhase::GAME_MENU); // back to CMD_PROMPT
+    set_phase(w, WoprPhase::GAME_MENU);
     return true;
 }
 
@@ -657,6 +666,11 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
         case WoprPhase::PLAYING_WAR:
             if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
             return wopr_war_keydown(w, sym);
+        case WoprPhase::PLAYING_ZORK:
+            if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
+            if (text && *text)
+                wopr_zork_text(w, text);
+            return wopr_zork_keydown(w, sym);
         default: break;
     }
 

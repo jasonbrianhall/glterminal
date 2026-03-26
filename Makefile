@@ -140,6 +140,7 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
             wopr/zork/demons.c \
             wopr/zork/dgame.c \
             wopr/zork/dinit.c  \
+	    wopr/zork_modified/dmain.c \
 	    wopr/zork/dso1.c \
 	    wopr/zork/dso2.c \
 	    wopr/zork/dso3.c \
@@ -150,7 +151,7 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
 	    wopr/zork/dsub.c \
 	    wopr/zork/dverb1.c\
 	    wopr/zork/dverb2.c \
-	    wopr/zork/gdt.c \
+	    wopr/zork_modified/gdt.c \
 	    wopr/zork/lightp.c \
 	    wopr/zork/local.c \
 	    wopr/zork/nobjs.c \
@@ -162,7 +163,7 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
 	    wopr/zork/objcts.c \
 	    wopr/zork/rooms.c \
 	    wopr/zork/sobjs.c \
-	    wopr/zork/supp.c \
+	    wopr/zork_modified/supp.c \
 	    wopr/zork/sverbs.c \
 	    wopr/zork/verbs.c \
 	    wopr/zork/villns.c
@@ -175,7 +176,8 @@ SRCS_WOPR = wopr/wopr.cpp                \
             wopr/wopr_mines.cpp          \
             wopr/wopr_maze.cpp           \
             wopr/wopr_war.cpp            \
-            wopr/beatchess.cpp       \
+            wopr/wopr_zork.cpp           \
+            wopr/beatchess.cpp           \
             wopr/chess_ai_move.cpp       \
             wopr/minesweeper_game.cpp    \
             wopr/highscores.cpp            
@@ -197,9 +199,6 @@ OBJECTS_WIN         = $(addprefix $(BUILD_DIR_WIN)/,          $(SRCS_WIN:.cpp=.w
 OBJECTS_WIN_DEBUG   = $(addprefix $(BUILD_DIR_WIN_DEBUG)/,    $(SRCS_WIN:.cpp=.win.debug.o)) \
                       $(addprefix $(BUILD_DIR_WIN_DEBUG)/,    $(SRCS_MINIZ:.c=.win.debug.o))
 
-# ============================================================================
-# TARGETS / DIRS
-# ============================================================================
 EXECUTABLE_LINUX       = flt$(SSH_SUFFIX)
 EXECUTABLE_LINUX_DEBUG = flt_debug$(SSH_SUFFIX)
 EXECUTABLE_WIN         = flt$(SSH_SUFFIX).exe
@@ -213,7 +212,13 @@ BUILD_DIR_WIN_DEBUG   = $(BUILD_DIR)/windows_debug
 
 DLL_SOURCE_DIR = /usr/x86_64-w64-mingw32/sys-root/mingw/bin
 
-$(shell mkdir -p $(BUILD_DIR_LINUX) $(BUILD_DIR_LINUX_DEBUG) $(BUILD_DIR_WIN) $(BUILD_DIR_WIN_DEBUG))
+$(shell mkdir -p \
+    $(BUILD_DIR_LINUX) $(BUILD_DIR_LINUX_DEBUG) \
+    $(BUILD_DIR_WIN)   $(BUILD_DIR_WIN_DEBUG) \
+    $(BUILD_DIR_LINUX)/wopr/zork         $(BUILD_DIR_LINUX)/wopr/zork_modified \
+    $(BUILD_DIR_LINUX_DEBUG)/wopr/zork   $(BUILD_DIR_LINUX_DEBUG)/wopr/zork_modified \
+    $(BUILD_DIR_WIN)/wopr/zork           $(BUILD_DIR_WIN)/wopr/zork_modified \
+    $(BUILD_DIR_WIN_DEBUG)/wopr/zork     $(BUILD_DIR_WIN_DEBUG)/wopr/zork_modified)
 
 # ============================================================================
 # TOP-LEVEL TARGETS
@@ -244,11 +249,17 @@ $(BUILD_DIR_LINUX)/%.o: %.cpp
 	$(CXX_LINUX) $(CXXFLAGS_LINUX) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_LINUX)/wopr/%.o: wopr/%.cpp
-	@mkdir -p $(BUILD_DIR_LINUX)/wopr
+	@mkdir -p $(dir $@)
 	@echo "Compiling (Linux): $<"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_LINUX)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Linux): $<"
+	$(CC_LINUX) $(CFLAGS_LINUX) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_LINUX)/wopr/%.o: wopr/%.c
+	@mkdir -p $(dir $@)
 	@echo "Compiling C (Linux): $<"
 	$(CC_LINUX) $(CFLAGS_LINUX) -MMD -MP -c $< -o $@
 
@@ -268,11 +279,17 @@ $(BUILD_DIR_LINUX_DEBUG)/%.debug.o: %.cpp
 	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_LINUX_DEBUG)/wopr/%.debug.o: wopr/%.cpp
-	@mkdir -p $(BUILD_DIR_LINUX_DEBUG)/wopr
+	@mkdir -p $(dir $@)
 	@echo "Compiling (Linux Debug): $<"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_LINUX_DEBUG)/%.debug.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Linux Debug): $<"
+	$(CC_LINUX) $(CFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_LINUX_DEBUG)/wopr/%.debug.o: wopr/%.c
+	@mkdir -p $(dir $@)
 	@echo "Compiling C (Linux Debug): $<"
 	$(CC_LINUX) $(CFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
 
@@ -292,11 +309,17 @@ $(BUILD_DIR_WIN)/%.win.o: %.cpp
 	$(CXX_WIN) $(CXXFLAGS_WIN) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_WIN)/wopr/%.win.o: wopr/%.cpp
-	@mkdir -p $(BUILD_DIR_WIN)/wopr
+	@mkdir -p $(dir $@)
 	@echo "Compiling (Windows): $<"
 	$(CXX_WIN) $(CXXFLAGS_WIN) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_WIN)/%.win.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Windows): $<"
+	$(CC_WIN) $(CFLAGS_WIN) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN)/wopr/%.win.o: wopr/%.c
+	@mkdir -p $(dir $@)
 	@echo "Compiling C (Windows): $<"
 	$(CC_WIN) $(CFLAGS_WIN) -MMD -MP -c $< -o $@
 
@@ -316,11 +339,17 @@ $(BUILD_DIR_WIN_DEBUG)/%.win.debug.o: %.cpp
 	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_WIN_DEBUG)/wopr/%.win.debug.o: wopr/%.cpp
-	@mkdir -p $(BUILD_DIR_WIN_DEBUG)/wopr
+	@mkdir -p $(dir $@)
 	@echo "Compiling (Windows Debug): $<"
 	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_WIN_DEBUG)/%.win.debug.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Windows Debug): $<"
+	$(CC_WIN) $(CFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN_DEBUG)/wopr/%.win.debug.o: wopr/%.c
+	@mkdir -p $(dir $@)
 	@echo "Compiling C (Windows Debug): $<"
 	$(CC_WIN) $(CFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
 
