@@ -72,49 +72,55 @@ void wopr_mines_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     y0 += fch * 1.5f;
 
     // Cell size: make cells square-ish and large enough to see glyphs
-    float cell_w = fcw * 3.0f;
-    float cell_h = fch * 1.5f;
+    // Size grid to fill available width
+    float avail_w = (cols > 0) ? (float)cols * fcw : fcw * 80;
+    float cell_w  = (avail_w - fcw * 2) / (float)m.width;
+    float cell_h  = fch * 1.5f;
 
     for (int row = 0; row < m.height; row++) {
         for (int col = 0; col < m.width; col++) {
             float cx = x0 + col * cell_w;
             float cy = y0 + row * cell_h;
 
-            bool is_cursor = (m.cursorY == row && m.cursorX == col);
+            bool is_cursor   = (m.cursorY == row && m.cursorX == col);
+            bool is_revealed = m.revealed[row][col];
 
-            float br = 0.f, bg = 0.08f, bb = 0.f;
-            if (is_cursor) { br = 0.f; bg = 0.5f; bb = 0.15f; }
-            gl_draw_rect(cx, cy, cell_w - 1, cell_h - 1, br, bg, bb, 0.8f);
+            // Background — exactly like chess
+            float br = 0.f, bg = is_revealed ? 0.03f : 0.08f, bb = 0.f;
+            if (is_cursor) { bg = 0.5f; bb = 0.15f; }
+            gl_draw_rect(cx, cy, cell_w - 1, cell_h - 1, br, bg, bb, 0.9f);
 
-            char glyph[4] = ".";
-            float gr = 0.f, gg = 0.7f, gb = 0.2f;
+            // Glyph — drawn at cy + cell_h * 0.6f, centred, exactly like chess pieces
+            char glyph[4] = "#";
+            float gr = 0.f, gg = 0.5f, gb = 0.15f;
 
-            if (m.flagged[row][col] && !m.revealed[row][col]) {
-                glyph[0] = 'F';
-                gr = 1.f; gg = 0.7f; gb = 0.f;
-            } else if (!m.revealed[row][col]) {
-                glyph[0] = '#';
-                gr = 0.f; gg = 0.5f; gb = 0.15f;
+            if (m.flagged[row][col] && !is_revealed) {
+                glyph[0] = 'F'; gr=1.f; gg=0.8f; gb=0.f;
+            } else if (!is_revealed) {
+                glyph[0] = '#'; gr=0.f; gg=0.5f; gb=0.15f;
             } else if (m.minefield[row][col]) {
-                glyph[0] = '*';
-                gr = 1.f; gg = 0.2f; gb = 0.2f;
+                glyph[0] = '*'; gr=1.f; gg=0.2f; gb=0.2f;
             } else {
                 int adj = m.countAdjacentMines(col, row);
                 if (adj == 0) {
-                    glyph[0] = ' ';
+                    glyph[0] = '.'; gr=0.f; gg=0.12f; gb=0.04f;
                 } else {
                     glyph[0] = '0' + adj;
-                    static float adj_r[] = {0,0.3f,0.f,1.f,0.2f,1.f,0.3f,0.6f,0.8f};
-                    static float adj_g[] = {0,0.6f,1.f,0.3f,0.3f,0.f,0.8f,0.f,0.8f};
-                    static float adj_b[] = {0,1.f, 0.f,0.3f,1.f,0.f,0.8f,0.f,0.8f};
-                    gr = adj_r[adj]; gg = adj_g[adj]; gb = adj_b[adj];
+                    switch (adj) {
+                        case 1: gr=0.3f; gg=0.5f; gb=1.0f; break;
+                        case 2: gr=0.2f; gg=0.8f; gb=0.2f; break;
+                        case 3: gr=1.0f; gg=0.2f; gb=0.2f; break;
+                        case 4: gr=1.0f; gg=0.9f; gb=0.1f; break;
+                        case 5: gr=0.8f; gg=0.2f; gb=0.8f; break;
+                        case 6: gr=0.2f; gg=0.9f; gb=0.9f; break;
+                        default:gr=1.0f; gg=1.0f; gb=1.0f; break;
+                    }
                 }
             }
 
             if (is_cursor) { gr *= 0.5f; gg = 1.f; gb *= 0.5f; }
-            // Centre glyph horizontally and vertically within cell
-            float tx = cx + (cell_w - gl_text_width(glyph, scale)) * 0.5f;
-            float ty = cy + (cell_h - fch) * 0.5f;
+            float tx = cx;
+            float ty = cy + cell_h * 0.6f;
             gl_draw_text(glyph, tx, ty, gr, gg, gb, 1.f, scale);
         }
     }
@@ -152,8 +158,23 @@ bool wopr_mines_keydown(WoprState *w, SDL_Keycode sym) {
         case SDLK_LEFT:  if (m.cursorX > 0) m.cursorX--; break;
         case SDLK_RIGHT: if (m.cursorX < m.width-1)  m.cursorX++; break;
         case SDLK_SPACE: case SDLK_RETURN:
-            if (!m.flagged[m.cursorY][m.cursorX])
+            if (!m.flagged[m.cursorY][m.cursorX]) {
+                fprintf(stderr, "REVEAL: cursor=(%d,%d) firstMove=%d\n",
+                        m.cursorX, m.cursorY, m.firstMove);
                 m.reveal(m.cursorX, m.cursorY);
+                // Dump board state
+                fprintf(stderr, "BOARD after reveal (R=revealed M=mine .=hidden):\n");
+                for (int y = 0; y < m.height; y++) {
+                    for (int x = 0; x < m.width; x++) {
+                        if (m.revealed[y][x])
+                            fprintf(stderr, m.minefield[y][x] ? "M" : "%d",
+                                    m.countAdjacentMines(x, y));
+                        else
+                            fprintf(stderr, ".");
+                    }
+                    fprintf(stderr, "\n");
+                }
+            }
             break;
         case SDLK_f:
             m.toggleFlag(m.cursorX, m.cursorY);
