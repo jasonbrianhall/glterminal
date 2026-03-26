@@ -65,6 +65,82 @@ static const char *INTEL_REPORTS[] = {
 static const int INTEL_COUNT = 6;
 static int g_intel_idx = 0;
 
+// Wire service stories — AP/UPI teletype style, each entry is one "story"
+// Stories are arrays of lines terminated by nullptr
+static const char *WIRE_STORIES[][12] = {
+    {
+        "AP  --  WASHINGTON  --  1983-06-03  04:17 EDT",
+        "WHITE HOUSE CONFIRMS LATE-NIGHT EMERGENCY SESSION OF",
+        "NATIONAL SECURITY COUNCIL.  PRESS SECRETARY DECLINED",
+        "TO COMMENT ON REPORTS OF ELEVATED STRATEGIC ALERT STATUS.",
+        "PENTAGON SOURCES SAY SITUATION IS 'BEING MONITORED.'",
+        nullptr
+    },
+    {
+        "UPI  --  LONDON  --  1983-06-03  09:02 BST",
+        "BRITISH MINISTRY OF DEFENCE SCRAMBLED TORNADO INTERCEPTORS",
+        "OVER NORTH SEA FOLLOWING UNIDENTIFIED RADAR CONTACTS.",
+        "MOD SPOKESMAN CALLED IT 'A ROUTINE EXERCISE.'",
+        "NATO ALLIES HAVE BEEN NOTIFIED.",
+        nullptr
+    },
+    {
+        "AP  --  MOSCOW (VIA HELSINKI)  --  1983-06-03  11:44 LOCAL",
+        "TASS NEWS AGENCY REPORTS SOVIET NORTHERN FLEET CONDUCTING",
+        "'SCHEDULED MANEUVERS' IN BARENTS SEA.  WESTERN ANALYSTS",
+        "NOTE UNUSUAL CONCENTRATION OF DELTA-CLASS SUBMARINES.",
+        "NO COMMENT FROM U.S. STATE DEPARTMENT AS OF PRESS TIME.",
+        nullptr
+    },
+    {
+        "UPI  --  CHEYENNE, WY  --  1983-06-03  02:58 MDT",
+        "RESIDENTS REPORT UNUSUAL CONVOY ACTIVITY ON HIGHWAYS",
+        "NEAR WARREN AIR FORCE BASE.  BASE PUBLIC AFFAIRS OFFICE",
+        "DID NOT RETURN CALLS.  FAA HAS ISSUED TEMPORARY FLIGHT",
+        "RESTRICTION OVER A 40-MILE RADIUS.",
+        nullptr
+    },
+    {
+        "AP  --  UNITED NATIONS  --  1983-06-03  14:30 EDT",
+        "SECURITY COUNCIL CALLED TO EMERGENCY SESSION THIS AFTERNOON.",
+        "U.S. AMBASSADOR REQUESTED CLOSED PROCEEDINGS.",
+        "SOVIET DELEGATION WALKED OUT AFTER APPROXIMATELY",
+        "TWENTY MINUTES.  DETAILS UNAVAILABLE AT PRESS TIME.",
+        nullptr
+    },
+    {
+        "UPI  --  COLORADO SPRINGS  --  1983-06-03  03:22 MDT",
+        "NORAD SPOKESWOMAN CONFIRMS 'ANOMALOUS TRACK DATA'",
+        "WAS RECEIVED AND EVALUATED EARLIER THIS EVENING.",
+        "'ALL SYSTEMS PERFORMED AS DESIGNED,' SHE SAID.",
+        "'THERE IS NO CAUSE FOR PUBLIC ALARM AT THIS TIME.'",
+        nullptr
+    },
+    {
+        "AP  --  TOKYO  --  1983-06-03  18:05 JST",
+        "JAPANESE DEFENSE AGENCY RAISES ALERT STATUS FOLLOWING",
+        "REPORTS OF SUBMARINE CONTACT IN SEA OF JAPAN.",
+        "MARITIME SELF-DEFENSE FORCE P-3 ORIONS HAVE BEEN",
+        "DEPLOYED.  U.S. SEVENTH FLEET DECLINES COMMENT.",
+        nullptr
+    },
+    {
+        "UPI  --  WASHINGTON  --  1983-06-03  05:51 EDT",
+        "CONGRESSIONAL LEADERS BRIEFED BY NSA DIRECTOR AT 0400.",
+        "SENATOR RESPONDS: 'I AM NOT IN A POSITION TO DISCUSS",
+        "THE CONTENTS OF THAT BRIEFING.'  HOUSE INTELLIGENCE",
+        "COMMITTEE CHAIR CALLS SITUATION 'SERIOUS BUT MANAGEABLE.'",
+        nullptr
+    },
+};
+static const int WIRE_STORY_COUNT = 8;
+static int  g_wire_story_idx  = 0;
+
+// Drip queue: lines waiting to be released one at a time into w->lines
+static std::vector<std::string> g_drip_queue;
+static double                   g_drip_acc   = 0.0;
+static double                   g_drip_delay = 0.18; // seconds between lines
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -220,6 +296,8 @@ static void do_command(WoprState *w, const std::string &raw) {
         push_line(w, "  LIST GAMES            SHOW AVAILABLE SIMULATIONS");
         push_line(w, "  PLAY <game>           LAUNCH A SIMULATION");
         push_line(w, "  INTELLIGENCE          DISPLAY CURRENT THREAT ASSESSMENT");
+        push_line(w, "  WIRE                  INCOMING WIRE SERVICE FEED");
+        push_line(w, "  SITREP                SITUATION REPORT -- ALL THEATERS");
         push_line(w, "  STATUS                SYSTEM AND DEFCON STATUS");
         push_line(w, "  WHOAMI                DISPLAY CURRENT USER RECORD");
         push_line(w, "  HISTORY               COMMAND HISTORY");
@@ -344,6 +422,100 @@ static void do_command(WoprState *w, const std::string &raw) {
         return;
     }
 
+    // ── WIRE ──────────────────────────────────────────────────────────────
+    if (verb == "WIRE" || cmd == "WIRE FEED" || cmd == "NEWS") {
+        push_line(w, "  ** MILNET WIRE SERVICE -- UNCLASSIFIED FEED **");
+        push_line(w, "  RECEIVING...");
+        push_line(w, "");
+        // Queue the next story to drip in line by line
+        const char **story = WIRE_STORIES[g_wire_story_idx % WIRE_STORY_COUNT];
+        g_wire_story_idx++;
+        for (int i = 0; story[i] != nullptr; i++) {
+            g_drip_queue.push_back(std::string("  ") + story[i]);
+        }
+        g_drip_queue.push_back("");
+        g_drip_queue.push_back("  -- END TRANSMISSION --");
+        g_drip_queue.push_back("");
+        g_drip_acc = 0.0;
+        return;
+    }
+
+    // ── SITREP ────────────────────────────────────────────────────────────
+    if (verb == "SITREP" || cmd == "SIT REP" || cmd == "SITUATION REPORT") {
+        push_line(w, "  *** SITUATION REPORT -- ALL THEATERS ***");
+        push_line(w, "  CLASSIFICATION: TOP SECRET / CODEWORD");
+        push_line(w, "  DTG: 030414Z JUN 83");
+        push_line(w, "");
+        push_line(w, "  THEATER: NORTH ATLANTIC");
+        push_line(w, "    SOVIET NORTHERN FLEET -- ELEVATED POSTURE");
+        push_line(w, "    4 DELTA-III SSBNs UNDERWAY, LAST FIX: 71N 012E");
+        push_line(w, "    USS CHICAGO (SSN-721) PROSECUTING CONTACT SIERRA-7");
+        push_line(w, "    NATO SACLANT -- DEFCON 3, WATCHCON 2");
+        push_line(w, "");
+        push_line(w, "  THEATER: CENTRAL EUROPE");
+        push_line(w, "    WARSAW PACT GROUND FORCES -- NO CHANGE FROM BASELINE");
+        push_line(w, "    GSFG MOTORIZED DIVISIONS: 85% READINESS (EST.)");
+        push_line(w, "    USAREUR ALERT STATUS: BLUE (INCREASED VIGILANCE)");
+        push_line(w, "");
+        push_line(w, "  THEATER: PACIFIC");
+        push_line(w, "    SOVIET PACIFIC FLEET -- ROUTINE POSTURE");
+        push_line(w, "    EXCEPTION: SSG JULIETT-CLASS DEPARTED VLADIVOSTOK");
+        push_line(w, "    HEADING UNKNOWN.  USN P-3s TASKED FOR LOCALIZATION.");
+        push_line(w, "");
+        push_line(w, "  STRATEGIC FORCES:");
+        push_line(w, "    MINUTEMAN III -- ALL SILOS NOMINAL");
+        push_line(w, "    TRIDENT SUBMARINES -- 6 OF 8 ON PATROL");
+        push_line(w, "    B-52 ALERT POSTURE -- 30% AIRBORNE (ABOVE NORMAL)");
+        push_line(w, "    LAUNCH-ON-WARNING AUTHORITY: DELEGATED TO SAC CINC");
+        push_line(w, "");
+        push_line(w, "  -------------------------------------------------------");
+        push_line(w, "  SALUTE REPORTS -- ENEMY ACTIVITY (3 OF 11 SHOWN)");
+        push_line(w, "  -------------------------------------------------------");
+        push_line(w, "");
+        push_line(w, "  SALUTE #1  --  REPORT ORIGIN: HUMINT ASSET FOXGLOVE");
+        push_line(w, "    S - SIZE      : BATTALION MINUS (~350 PERSONNEL)");
+        push_line(w, "    A - ACTIVITY  : FORWARD ASSEMBLY, BRIDGING EQUIPMENT");
+        push_line(w, "                    BEING STAGED AT RIVER CROSSING SITE");
+        push_line(w, "    L - LOCATION  : GRID 447-882, ELBE RIVER WEST BANK");
+        push_line(w, "                    APPROX 14KM NE OF MAGDEBURG");
+        push_line(w, "    U - UNIFORM   : SOVIET MOTOR RIFLE, SUMMER DRESS");
+        push_line(w, "                    CHEMICAL PROTECTION SUITS OBSERVED");
+        push_line(w, "    T - TIME      : 030147Z JUN 83  (FIRST OBSERVED)");
+        push_line(w, "    E - EQUIPMENT : 12x T-72 MBT, 8x BMP-1, 4x PMP");
+        push_line(w, "                    PONTOON BRIDGE SECTIONS, 2x SA-9 GASKIN");
+        push_line(w, "");
+        push_line(w, "  SALUTE #2  --  REPORT ORIGIN: NRO KEYHOLE-11 PASS 7734");
+        push_line(w, "    S - SIZE      : REGIMENT (~1800 PERSONNEL EST.)");
+        push_line(w, "    A - ACTIVITY  : DISPERSAL FROM GARRISON, MOVING EAST");
+        push_line(w, "                    TO WEST.  TACTICAL COLUMN FORMATION.");
+        push_line(w, "    L - LOCATION  : AUTOBAHN E40, 22KM WEST OF LEIPZIG");
+        push_line(w, "                    COORDINATES: 51.21N  11.87E");
+        push_line(w, "    U - UNIFORM   : INDETERMINATE FROM IMAGERY ALTITUDE");
+        push_line(w, "                    VEHICLE MARKINGS CONSISTENT W/ 3RD SHOCK ARMY");
+        push_line(w, "    T - TIME      : 030312Z JUN 83");
+        push_line(w, "    E - EQUIPMENT : 40+ AFVs, SELF-PROPELLED ARTILLERY");
+        push_line(w, "                    IDENTIFIED: 2S3 AKATSIYA 152MM SP HOWITZERS");
+        push_line(w, "                    1x ZSU-23-4 SHILKA AIR DEFENSE");
+        push_line(w, "");
+        push_line(w, "  SALUTE #3  --  REPORT ORIGIN: SIGINT NSA STATION AUGSBURG");
+        push_line(w, "    S - SIZE      : COMPANY-SIZED ELEMENT (~80 PERSONNEL)");
+        push_line(w, "    A - ACTIVITY  : RADIO TRAFFIC SURGE, ENCRYPTED BURST");
+        push_line(w, "                    TRANSMISSIONS ON KNOWN SPETSNAZ FREQS");
+        push_line(w, "                    CONSISTENT WITH PRE-MISSION COORDINATION");
+        push_line(w, "    L - LOCATION  : BEARING TRIANGULATION: 52.4N  13.1E");
+        push_line(w, "                    WEST BERLIN CORRIDOR VICINITY");
+        push_line(w, "    U - UNIFORM   : UNKNOWN -- NO VISUAL CONFIRMATION");
+        push_line(w, "    T - TIME      : 030023Z JUN 83  (SIGNAL INTERCEPT)");
+        push_line(w, "    E - EQUIPMENT : COMMS EQUIPMENT ONLY -- R-350M INFERRED");
+        push_line(w, "                    NO HEAVY EQUIPMENT SIGNATURES DETECTED");
+        push_line(w, "");
+        push_line(w, "  -------------------------------------------------------");
+        push_line(w, "  ASSESSMENT: ELEVATED TENSION.  NO INDICATORS OF");
+        push_line(w, "  IMMINENT ATTACK.  SITUATION FLUID.  NEXT UPDATE: +2HRS.");
+        push_line(w, "");
+        return;
+    }
+
     // ── UNKNOWN ───────────────────────────────────────────────────────────
     push_line(w, "  COMMAND NOT RECOGNIZED: " + verb);
     push_line(w, "  TYPE  HELP  FOR AVAILABLE COMMANDS.");
@@ -362,6 +534,9 @@ void wopr_open() {
     g_cmd_history.clear();
     g_history_cursor = -1;
     g_intel_idx      = 0;
+    g_wire_story_idx = 0;
+    g_drip_queue.clear();
+    g_drip_acc       = 0.0;
 
     wopr_audio_play_screech();
 
@@ -452,6 +627,15 @@ void wopr_update(double dt) {
 
     // CMD_PROMPT is stored in GAME_MENU slot
     case WoprPhase::GAME_MENU:
+        // Drain wire drip queue
+        if (!g_drip_queue.empty()) {
+            g_drip_acc += dt;
+            while (g_drip_acc >= g_drip_delay && !g_drip_queue.empty()) {
+                g_drip_acc -= g_drip_delay;
+                push_line(w, g_drip_queue.front());
+                g_drip_queue.erase(g_drip_queue.begin());
+            }
+        }
         break;
 
     case WoprPhase::PLAYING_TTT:   wopr_ttt_update(w, dt);   break;
@@ -703,7 +887,7 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
         if (sym == SDLK_TAB) {
             static const char *VERBS[] = {
                 "HELP", "LIST GAMES", "PLAY ", "INTELLIGENCE",
-                "STATUS", "WHOAMI", "HISTORY", "CLEAR", "LOGOUT"
+                "WIRE", "SITREP", "STATUS", "WHOAMI", "HISTORY", "CLEAR", "LOGOUT"
             };
             std::string up = to_upper(w->input_buf);
             for (auto *v : VERBS) {
