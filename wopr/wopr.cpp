@@ -1,4 +1,5 @@
 #include "wopr.h"
+#include "wopr_salute.h"
 #include <SDL2/SDL.h>
 #include <string.h>
 #include <math.h>
@@ -35,104 +36,9 @@ static const int GAME_COUNT = 5;
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
 
-// Fake intelligence reports
-static const char *INTEL_REPORTS[] = {
-    "SIGINT INTERCEPT 7734-ALPHA:\n"
-    "  SOVIET MISSILE SILO ACTIVITY DETECTED -- OBLAST REGION 12.\n"
-    "  LAUNCH READINESS: ELEVATED.  CONFIDENCE: 74%.",
-
-    "NRO KEYHOLE-11 IMAGERY (DECLASSIFIED):\n"
-    "  NOVEMBER-CLASS SUBMARINE DEPARTED MURMANSK 06:14 ZULU.\n"
-    "  PROJECTED INTERCEPT WINDOW: 72 HOURS.",
-
-    "HUMINT SOURCE CARDINAL:\n"
-    "  POLITBURO CONVENED EMERGENCY SESSION 03:00 LOCAL.\n"
-    "  SUBJECT: FIRST-STRIKE DOCTRINE REVIEW.  RELIABILITY: B2.",
-
-    "NORAD TRACK 4891:\n"
-    "  UNIDENTIFIED BOGEY -- BEARING 047, ALTITUDE FL550.\n"
-    "  TRANSPONDER SILENT.  F-15 EAGLES SCRAMBLED FROM ELMENDORF.",
-
-    "NSA ECHELON INTERCEPT:\n"
-    "  KEYWORD HITS: LAUNCH, OMEGA, FIREBREAK.\n"
-    "  ORIGINATING NODE: MOSCOW SWITCHING CENTER 14.  PRIORITY: RED.",
-
-    "DIA ASSESSMENT:\n"
-    "  PROBABILITY OF FIRST-STRIKE WITHIN 96 HOURS: 3%.\n"
-    "  NOTE: WOPR MODELS THIS AS STATISTICALLY INDISTINGUISHABLE\n"
-    "  FROM A TRAINING EXERCISE.",
-};
 static const int INTEL_COUNT = 6;
 static int g_intel_idx = 0;
 
-// Wire service stories — AP/UPI teletype style, each entry is one "story"
-// Stories are arrays of lines terminated by nullptr
-static const char *WIRE_STORIES[][12] = {
-    {
-        "AP  --  WASHINGTON  --  1983-06-03  04:17 EDT",
-        "WHITE HOUSE CONFIRMS LATE-NIGHT EMERGENCY SESSION OF",
-        "NATIONAL SECURITY COUNCIL.  PRESS SECRETARY DECLINED",
-        "TO COMMENT ON REPORTS OF ELEVATED STRATEGIC ALERT STATUS.",
-        "PENTAGON SOURCES SAY SITUATION IS 'BEING MONITORED.'",
-        nullptr
-    },
-    {
-        "UPI  --  LONDON  --  1983-06-03  09:02 BST",
-        "BRITISH MINISTRY OF DEFENCE SCRAMBLED TORNADO INTERCEPTORS",
-        "OVER NORTH SEA FOLLOWING UNIDENTIFIED RADAR CONTACTS.",
-        "MOD SPOKESMAN CALLED IT 'A ROUTINE EXERCISE.'",
-        "NATO ALLIES HAVE BEEN NOTIFIED.",
-        nullptr
-    },
-    {
-        "AP  --  MOSCOW (VIA HELSINKI)  --  1983-06-03  11:44 LOCAL",
-        "TASS NEWS AGENCY REPORTS SOVIET NORTHERN FLEET CONDUCTING",
-        "'SCHEDULED MANEUVERS' IN BARENTS SEA.  WESTERN ANALYSTS",
-        "NOTE UNUSUAL CONCENTRATION OF DELTA-CLASS SUBMARINES.",
-        "NO COMMENT FROM U.S. STATE DEPARTMENT AS OF PRESS TIME.",
-        nullptr
-    },
-    {
-        "UPI  --  CHEYENNE, WY  --  1983-06-03  02:58 MDT",
-        "RESIDENTS REPORT UNUSUAL CONVOY ACTIVITY ON HIGHWAYS",
-        "NEAR WARREN AIR FORCE BASE.  BASE PUBLIC AFFAIRS OFFICE",
-        "DID NOT RETURN CALLS.  FAA HAS ISSUED TEMPORARY FLIGHT",
-        "RESTRICTION OVER A 40-MILE RADIUS.",
-        nullptr
-    },
-    {
-        "AP  --  UNITED NATIONS  --  1983-06-03  14:30 EDT",
-        "SECURITY COUNCIL CALLED TO EMERGENCY SESSION THIS AFTERNOON.",
-        "U.S. AMBASSADOR REQUESTED CLOSED PROCEEDINGS.",
-        "SOVIET DELEGATION WALKED OUT AFTER APPROXIMATELY",
-        "TWENTY MINUTES.  DETAILS UNAVAILABLE AT PRESS TIME.",
-        nullptr
-    },
-    {
-        "UPI  --  COLORADO SPRINGS  --  1983-06-03  03:22 MDT",
-        "NORAD SPOKESWOMAN CONFIRMS 'ANOMALOUS TRACK DATA'",
-        "WAS RECEIVED AND EVALUATED EARLIER THIS EVENING.",
-        "'ALL SYSTEMS PERFORMED AS DESIGNED,' SHE SAID.",
-        "'THERE IS NO CAUSE FOR PUBLIC ALARM AT THIS TIME.'",
-        nullptr
-    },
-    {
-        "AP  --  TOKYO  --  1983-06-03  18:05 JST",
-        "JAPANESE DEFENSE AGENCY RAISES ALERT STATUS FOLLOWING",
-        "REPORTS OF SUBMARINE CONTACT IN SEA OF JAPAN.",
-        "MARITIME SELF-DEFENSE FORCE P-3 ORIONS HAVE BEEN",
-        "DEPLOYED.  U.S. SEVENTH FLEET DECLINES COMMENT.",
-        nullptr
-    },
-    {
-        "UPI  --  WASHINGTON  --  1983-06-03  05:51 EDT",
-        "CONGRESSIONAL LEADERS BRIEFED BY NSA DIRECTOR AT 0400.",
-        "SENATOR RESPONDS: 'I AM NOT IN A POSITION TO DISCUSS",
-        "THE CONTENTS OF THAT BRIEFING.'  HOUSE INTELLIGENCE",
-        "COMMITTEE CHAIR CALLS SITUATION 'SERIOUS BUT MANAGEABLE.'",
-        nullptr
-    },
-};
 static const int WIRE_STORY_COUNT = 8;
 static int  g_wire_story_idx  = 0;
 
@@ -413,11 +319,6 @@ static void do_command(WoprState *w, const std::string &raw) {
 
     // ── LOGOUT / QUIT / EXIT ──────────────────────────────────────────────
     if (verb == "LOGOUT" || verb == "QUIT" || verb == "EXIT" || verb == "BYE") {
-        push_line(w, "A STRANGE GAME.");
-        push_line(w, "THE ONLY WINNING MOVE IS NOT TO PLAY.");
-        push_line(w, "");
-        push_line(w, "HOW ABOUT A NICE GAME OF CHESS?");
-        set_phase(w, WoprPhase::FAREWELL);
         begin_crawl(w, "SESSION TERMINATED.  GOODBYE, PROFESSOR FALKEN.");
         return;
     }
