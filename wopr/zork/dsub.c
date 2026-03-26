@@ -162,7 +162,7 @@ void bug_(int a, int b)
     /* Local variables */
 
     more_output(NULL);
-    printf("PROGRAM ERROR %d, PARAMETER=%d\n", a, b);
+    more_output("PROGRAM ERROR %d, PARAMETER=%d\n", a, b);
 
     if (debug_1.dbgflg != 0) {
 	return;

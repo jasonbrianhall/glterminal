@@ -429,14 +429,14 @@ L10000:
 
 L1925:
     more_output(NULL);
-    printf("%s is version %1d.%1d%c.\n", LOCALTEXTFILE, i, j, k);
+    more_output("%s is version %1d.%1d%c.\n", LOCALTEXTFILE, i, j, k);
     more_output(NULL);
-    printf("I require version %1d.%1d%c.\n", vers_1.vmaj, vers_1.vmin,
+    more_output("I require version %1d.%1d%c.\n", vers_1.vmaj, vers_1.vmin,
 	   vers_1.vedit);
     goto L1975;
 L1950:
     more_output(NULL);
-    printf("I can't open %s.\n", LOCALTEXTFILE);
+    more_output("I can't open %s.\n", LOCALTEXTFILE);
 L1975:
     more_output("Suddenly a sinister, wraithlike figure appears before you,");
     more_output("seeming to float in the air.  In a low, sorrowful voice he says,");
