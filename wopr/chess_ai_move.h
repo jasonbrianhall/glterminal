@@ -16,6 +16,7 @@ typedef struct {
     int search_depth;
     int threshold_centipawns;
     bool use_randomization;
+    double min_think_ms;   // minimum delay in ms; 0 = as fast as possible
 } ChessAIConfig;
 
 typedef struct {

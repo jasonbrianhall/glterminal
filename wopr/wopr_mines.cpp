@@ -159,21 +159,7 @@ bool wopr_mines_keydown(WoprState *w, SDL_Keycode sym) {
         case SDLK_RIGHT: if (m.cursorX < m.width-1)  m.cursorX++; break;
         case SDLK_SPACE: case SDLK_RETURN:
             if (!m.flagged[m.cursorY][m.cursorX]) {
-                fprintf(stderr, "REVEAL: cursor=(%d,%d) firstMove=%d\n",
-                        m.cursorX, m.cursorY, m.firstMove);
                 m.reveal(m.cursorX, m.cursorY);
-                // Dump board state
-                fprintf(stderr, "BOARD after reveal (R=revealed M=mine .=hidden):\n");
-                for (int y = 0; y < m.height; y++) {
-                    for (int x = 0; x < m.width; x++) {
-                        if (m.revealed[y][x])
-                            fprintf(stderr, m.minefield[y][x] ? "M" : "%d",
-                                    m.countAdjacentMines(x, y));
-                        else
-                            fprintf(stderr, ".");
-                    }
-                    fprintf(stderr, "\n");
-                }
             }
             break;
         case SDLK_f:
