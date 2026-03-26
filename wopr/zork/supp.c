@@ -34,7 +34,7 @@ extern struct tm *localtime ();
 
 void exit_()
 {
-    fprintf(stderr, "The game is over.\n");
+    more_output("The game is over.\n");
     exit(0);
 }
 
