@@ -323,7 +323,7 @@ static void do_command(WoprState *w, const std::string &raw) {
     // ── LOGOUT / QUIT / EXIT ──────────────────────────────────────────────
     if (verb == "LOGOUT" || verb == "QUIT" || verb == "EXIT" || verb == "BYE") {
         begin_crawl(w, "SESSION TERMINATED.  GOODBYE, PROFESSOR FALKEN.");
-        SDL_Delay(1000);
+        SDL_Delay(100);
         wopr_close();
         return;
     }
