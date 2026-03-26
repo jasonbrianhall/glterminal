@@ -76,7 +76,6 @@ void more_output(const char *fmt, ...)
         va_start(ap, fmt);
         vsnprintf(buf, sizeof(buf), fmt, ap);
         va_end(ap);
-        printf("Buffer is %s\n", buf);
         wopr_zork_push_line(buf);
     }
 
