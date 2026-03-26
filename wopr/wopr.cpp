@@ -16,24 +16,54 @@ WoprState g_wopr;
 // CONSTANTS
 // ============================================================================
 
-static const char *GAME_LABELS[] = {
-    "CHESS",
-    "FALKEN'S MAZE",
-    "GLOBAL THERMONUCLEAR WAR",
-    "TIC-TAC-TOE",
-    "MINESWEEPER",
+// Game name → WoprGame mapping (used by "PLAY <name>")
+struct GameEntry {
+    const char *label;      // canonical display name
+    const char *keyword;    // primary match token (upper-cased)
+    WoprGame    id;
 };
-static const WoprGame GAME_IDS[] = {
-    WoprGame::CHESS,
-    WoprGame::FALKEN_MAZE,
-    WoprGame::GLOBAL_WAR,
-    WoprGame::TIC_TAC_TOE,
-    WoprGame::MINESWEEPER,
+
+static const GameEntry GAMES[] = {
+    { "CHESS",                    "CHESS",       WoprGame::CHESS      },
+    { "FALKEN'S MAZE",            "MAZE",        WoprGame::FALKEN_MAZE},
+    { "GLOBAL THERMONUCLEAR WAR", "WAR",         WoprGame::GLOBAL_WAR },
+    { "TIC-TAC-TOE",              "TIC",         WoprGame::TIC_TAC_TOE},
+    { "MINESWEEPER",              "MINESWEEPER", WoprGame::MINESWEEPER},
 };
 static const int GAME_COUNT = 5;
 
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
+
+// Fake intelligence reports
+static const char *INTEL_REPORTS[] = {
+    "SIGINT INTERCEPT 7734-ALPHA:\n"
+    "  SOVIET MISSILE SILO ACTIVITY DETECTED -- OBLAST REGION 12.\n"
+    "  LAUNCH READINESS: ELEVATED.  CONFIDENCE: 74%.",
+
+    "NRO KEYHOLE-11 IMAGERY (DECLASSIFIED):\n"
+    "  NOVEMBER-CLASS SUBMARINE DEPARTED MURMANSK 06:14 ZULU.\n"
+    "  PROJECTED INTERCEPT WINDOW: 72 HOURS.",
+
+    "HUMINT SOURCE CARDINAL:\n"
+    "  POLITBURO CONVENED EMERGENCY SESSION 03:00 LOCAL.\n"
+    "  SUBJECT: FIRST-STRIKE DOCTRINE REVIEW.  RELIABILITY: B2.",
+
+    "NORAD TRACK 4891:\n"
+    "  UNIDENTIFIED BOGEY -- BEARING 047, ALTITUDE FL550.\n"
+    "  TRANSPONDER SILENT.  F-15 EAGLES SCRAMBLED FROM ELMENDORF.",
+
+    "NSA ECHELON INTERCEPT:\n"
+    "  KEYWORD HITS: LAUNCH, OMEGA, FIREBREAK.\n"
+    "  ORIGINATING NODE: MOSCOW SWITCHING CENTER 14.  PRIORITY: RED.",
+
+    "DIA ASSESSMENT:\n"
+    "  PROBABILITY OF FIRST-STRIKE WITHIN 96 HOURS: 3%.\n"
+    "  NOTE: WOPR MODELS THIS AS STATISTICALLY INDISTINGUISHABLE\n"
+    "  FROM A TRAINING EXERCISE.",
+};
+static const int INTEL_COUNT = 6;
+static int g_intel_idx = 0;
 
 // ============================================================================
 // HELPERS
@@ -75,29 +105,59 @@ static void set_phase(WoprState *w, WoprPhase p) {
 }
 
 // ============================================================================
-// MENU HELPERS
-// First line index of the game list (for highlight rendering)
+// COMMAND SHELL
 // ============================================================================
 
-static int g_menu_line_start = -1; // index into w->lines where "  1. CHESS" is
+// Command history (simple ring)
+static std::vector<std::string> g_cmd_history;
+static int                      g_history_cursor = -1; // -1 = live input
 
-static void show_menu(WoprState *w) {
-    crawl_commit(w);
+static void enter_shell(WoprState *w) {
     push_line(w, "");
-    push_line(w, "GREETINGS, PROFESSOR FALKEN.");
+    push_line(w, "TYPE  HELP  FOR AVAILABLE COMMANDS.");
     push_line(w, "");
-    push_line(w, "SHALL WE PLAY A GAME?");
-    push_line(w, "");
-    g_menu_line_start = (int)w->lines.size(); // record where entries start
-    for (int i = 0; i < GAME_COUNT; i++) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "  %d. %s", i + 1, GAME_LABELS[i]);
-        push_line(w, buf);
+    w->input_buf.clear();
+    g_history_cursor = -1;
+    set_phase(w, WoprPhase::GAME_MENU); // GAME_MENU is reused as CMD_PROMPT
+}
+
+// Trim leading/trailing spaces, collapse internal runs to single space
+static std::string normalise(const std::string &s) {
+    std::string r;
+    bool sp = true;
+    for (char c : s) {
+        if (c == ' ' || c == '\t') {
+            if (!sp) { r += ' '; sp = true; }
+        } else {
+            r += (char)toupper((unsigned char)c);
+            sp = false;
+        }
     }
-    push_line(w, "");
-    push_line(w, "  ESC  EXIT");
-    w->menu_sel = 0;
-    set_phase(w, WoprPhase::GAME_MENU);
+    if (!r.empty() && r.back() == ' ') r.pop_back();
+    return r;
+}
+
+// Split on first space: verb + rest
+static void split_verb(const std::string &cmd, std::string &verb, std::string &rest) {
+    auto pos = cmd.find(' ');
+    if (pos == std::string::npos) {
+        verb = cmd; rest = "";
+    } else {
+        verb = cmd.substr(0, pos);
+        rest = cmd.substr(pos + 1);
+    }
+}
+
+static WoprGame find_game(const std::string &token) {
+    for (int i = 0; i < GAME_COUNT; i++) {
+        // Match on keyword prefix or full label
+        std::string lbl = GAMES[i].label;
+        std::string kw  = GAMES[i].keyword;
+        if (token == kw || token == lbl ||
+            (token.size() >= 3 && lbl.find(token) != std::string::npos))
+            return GAMES[i].id;
+    }
+    return WoprGame::NONE;
 }
 
 static void launch_game(WoprState *w, WoprGame game) {
@@ -125,11 +185,169 @@ static void launch_game(WoprState *w, WoprGame game) {
             break;
         case WoprGame::GLOBAL_WAR:
             push_line(w, "INITIATING: GLOBAL THERMONUCLEAR WAR");
+            push_line(w, "");
+            push_line(w, "  WARNING: THIS SIMULATION USES LIVE TARGETING DATA.");
+            push_line(w, "  ESTIMATED CASUALTIES: 4.2 BILLION.");
+            push_line(w, "");
             set_phase(w, WoprPhase::PLAYING_WAR);
             wopr_war_enter(w);
             break;
         default: break;
     }
+}
+
+static void do_command(WoprState *w, const std::string &raw) {
+    std::string cmd = normalise(raw);
+    if (cmd.empty()) { push_line(w, ""); return; }
+
+    // Echo with prompt
+    push_line(w, std::string("WOPR> ") + cmd);
+    push_line(w, "");
+
+    // History
+    g_cmd_history.push_back(cmd);
+    if (g_cmd_history.size() > 32) g_cmd_history.erase(g_cmd_history.begin());
+    g_history_cursor = -1;
+
+    std::string verb, rest;
+    split_verb(cmd, verb, rest);
+
+    // ── HELP ──────────────────────────────────────────────────────────────
+    if (verb == "HELP" || verb == "?") {
+        push_line(w, "  AVAILABLE COMMANDS:");
+        push_line(w, "");
+        push_line(w, "  HELP                  DISPLAY THIS MESSAGE");
+        push_line(w, "  LIST GAMES            SHOW AVAILABLE SIMULATIONS");
+        push_line(w, "  PLAY <game>           LAUNCH A SIMULATION");
+        push_line(w, "  INTELLIGENCE          DISPLAY CURRENT THREAT ASSESSMENT");
+        push_line(w, "  STATUS                SYSTEM AND DEFCON STATUS");
+        push_line(w, "  WHOAMI                DISPLAY CURRENT USER RECORD");
+        push_line(w, "  HISTORY               COMMAND HISTORY");
+        push_line(w, "  CLEAR                 CLEAR TERMINAL BUFFER");
+        push_line(w, "  LOGOUT / QUIT / EXIT  TERMINATE SESSION");
+        push_line(w, "");
+        push_line(w, "  EXAMPLE:  PLAY CHESS");
+        push_line(w, "            PLAY GLOBAL THERMONUCLEAR WAR");
+        return;
+    }
+
+    // ── LIST (GAMES) ──────────────────────────────────────────────────────
+    if (verb == "LIST" || cmd == "GAMES" || cmd == "LIST GAMES" || cmd == "SHOW GAMES") {
+        push_line(w, "  AVAILABLE SIMULATIONS:");
+        push_line(w, "");
+        for (int i = 0; i < GAME_COUNT; i++) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "    %-32s  (PLAY %s)", GAMES[i].label, GAMES[i].keyword);
+            push_line(w, buf);
+        }
+        push_line(w, "");
+        return;
+    }
+
+    // ── PLAY ──────────────────────────────────────────────────────────────
+    if (verb == "PLAY" || verb == "RUN" || verb == "START") {
+        if (rest.empty()) {
+            push_line(w, "  USAGE:  PLAY <game name>");
+            push_line(w, "  TYPE  LIST GAMES  FOR AVAILABLE SIMULATIONS.");
+            return;
+        }
+        WoprGame g = find_game(rest);
+        if (g == WoprGame::NONE) {
+            push_line(w, "  SIMULATION NOT FOUND: " + rest);
+            push_line(w, "  TYPE  LIST GAMES  TO SEE AVAILABLE SIMULATIONS.");
+            return;
+        }
+        launch_game(w, g);
+        return; // phase has changed; don't print trailing blank
+    }
+
+    // ── INTELLIGENCE ──────────────────────────────────────────────────────
+    if (verb == "INTELLIGENCE" || verb == "INTEL" || verb == "THREAT") {
+        push_line(w, "  *** CLASSIFIED -- EYES ONLY -- LEVEL 5 ***");
+        push_line(w, "");
+        // Print the report line-by-line (it may contain \n)
+        const char *report = INTEL_REPORTS[g_intel_idx % INTEL_COUNT];
+        g_intel_idx++;
+        std::string line;
+        for (const char *p = report; ; p++) {
+            if (*p == '\n' || *p == '\0') {
+                push_line(w, "  " + line);
+                line.clear();
+                if (*p == '\0') break;
+            } else {
+                line += *p;
+            }
+        }
+        push_line(w, "");
+        push_line(w, "  END OF REPORT.  DESTROY AFTER READING.");
+        push_line(w, "");
+        return;
+    }
+
+    // ── STATUS ────────────────────────────────────────────────────────────
+    if (verb == "STATUS") {
+        push_line(w, "  WOPR STRATEGIC DEFENSE SYSTEM  REV 4.1.7");
+        push_line(w, "  UPTIME     : 847 DAYS  14 HRS  03 MIN");
+        push_line(w, "  CPU LOAD   : 12.4%");
+        push_line(w, "  SIMULATIONS: 19,432 COMPLETED THIS CYCLE");
+        push_line(w, "");
+        push_line(w, "  DEFCON STATUS    : 3");
+        push_line(w, "  TRIAD READINESS  : GREEN");
+        push_line(w, "  ABM NETWORK      : NOMINAL");
+        push_line(w, "  SATELLITE UPLINK : ACTIVE  (3 OF 4 BIRDS ONLINE)");
+        push_line(w, "");
+        return;
+    }
+
+    // ── WHOAMI ────────────────────────────────────────────────────────────
+    if (verb == "WHOAMI" || verb == "WHO" || cmd == "WHO AM I") {
+        push_line(w, "  USER     : FALKEN, STEPHEN W.  DR.");
+        push_line(w, "  CLEARANCE: TS/SCI  (CODEWORD: CRYSTAL WIND)");
+        push_line(w, "  LAST LOGIN: 1983-06-03  03:14:07 MDT");
+        push_line(w, "  SESSIONS : 1,847");
+        push_line(w, "  NOTE     : ACCOUNT FLAGGED BY NSA -- SEE CASE FILE 7734");
+        push_line(w, "");
+        return;
+    }
+
+    // ── HISTORY ───────────────────────────────────────────────────────────
+    if (verb == "HISTORY") {
+        if (g_cmd_history.size() <= 1) {
+            push_line(w, "  NO HISTORY.");
+        } else {
+            int start = std::max(0, (int)g_cmd_history.size() - 21); // -1 because we just added this cmd
+            for (int i = start; i < (int)g_cmd_history.size() - 1; i++) {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "  %3d  %s", i + 1, g_cmd_history[i].c_str());
+                push_line(w, buf);
+            }
+        }
+        push_line(w, "");
+        return;
+    }
+
+    // ── CLEAR ─────────────────────────────────────────────────────────────
+    if (verb == "CLEAR" || verb == "CLS") {
+        w->lines.clear();
+        push_line(w, "");
+        return;
+    }
+
+    // ── LOGOUT / QUIT / EXIT ──────────────────────────────────────────────
+    if (verb == "LOGOUT" || verb == "QUIT" || verb == "EXIT" || verb == "BYE") {
+        push_line(w, "A STRANGE GAME.");
+        push_line(w, "THE ONLY WINNING MOVE IS NOT TO PLAY.");
+        push_line(w, "");
+        push_line(w, "HOW ABOUT A NICE GAME OF CHESS?");
+        set_phase(w, WoprPhase::FAREWELL);
+        begin_crawl(w, "SESSION TERMINATED.  GOODBYE, PROFESSOR FALKEN.");
+        return;
+    }
+
+    // ── UNKNOWN ───────────────────────────────────────────────────────────
+    push_line(w, "  COMMAND NOT RECOGNIZED: " + verb);
+    push_line(w, "  TYPE  HELP  FOR AVAILABLE COMMANDS.");
+    push_line(w, "");
 }
 
 // ============================================================================
@@ -140,8 +358,10 @@ void wopr_open() {
     WoprState *w = &g_wopr;
     *w = WoprState{};
     w->visible = true;
-    w->lines.reserve(64);
-    g_menu_line_start = -1;
+    w->lines.reserve(128);
+    g_cmd_history.clear();
+    g_history_cursor = -1;
+    g_intel_idx      = 0;
 
     wopr_audio_play_screech();
 
@@ -226,10 +446,11 @@ void wopr_update(double dt) {
             push_line(w, "");
             push_line(w, "  HELLO, PROFESSOR FALKEN.");
             push_line(w, "  LAST LOGIN: 1983-06-03  03:14:07 MDT");
-            show_menu(w);  // sets phase to GAME_MENU — won't fire again
+            enter_shell(w);
         }
         break;
 
+    // CMD_PROMPT is stored in GAME_MENU slot
     case WoprPhase::GAME_MENU:
         break;
 
@@ -240,7 +461,7 @@ void wopr_update(double dt) {
     case WoprPhase::PLAYING_WAR:   wopr_war_update(w, dt);   break;
 
     case WoprPhase::FAREWELL:
-        if (crawl_done(w) && w->phase_timer > 2.0)
+        if (crawl_done(w) && w->phase_timer > 2.5)
             wopr_close();
         break;
 
@@ -249,14 +470,14 @@ void wopr_update(double dt) {
 }
 
 // ============================================================================
-// RENDERING
+// RENDER
 // ============================================================================
 
 void wopr_render(int win_w, int win_h) {
     WoprState *w = &g_wopr;
     if (!w->visible) return;
 
-    const float PAD   = 24.f;
+    const int   PAD   = 24;
     const float SCALE = 1.0f;
     float ch = gl_text_height(SCALE);
     float cw = gl_text_width("M", SCALE);
@@ -304,27 +525,14 @@ void wopr_render(int win_w, int win_h) {
     // ── Terminal log scroll ──────────────────────────────────────────────────
     int total = (int)w->lines.size();
     int crawl_extra = w->crawl_target.empty() ? 0 : 1;
-    int input_extra = (w->phase == WoprPhase::LOGIN_INPUT) ? 1 : 0;
+    // CMD_PROMPT needs one extra line for the input row
+    bool in_shell = (w->phase == WoprPhase::GAME_MENU);
+    int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell) ? 1 : 0;
     int used = total + crawl_extra + input_extra;
     int start_line = std::max(0, used - vis_rows);
 
     float y = y0;
     for (int li = start_line; li < total; li++) {
-        // Highlight selected menu item
-        if (w->phase == WoprPhase::GAME_MENU &&
-            g_menu_line_start >= 0 &&
-            li >= g_menu_line_start &&
-            li < g_menu_line_start + GAME_COUNT) {
-            int idx = li - g_menu_line_start;
-            if (idx == w->menu_sel) {
-                gl_draw_rect(x0 - 2, y, area_w, ch,
-                             0.f, 0.45f, 0.12f, 0.4f);
-                gl_draw_text(w->lines[li].c_str(), x0, y,
-                             0.f, 1.f, 0.5f, 1.f, SCALE);
-                y += ch;
-                continue;
-            }
-        }
         gl_draw_text(w->lines[li].c_str(), x0, y, 0.f, 1.f, 0.27f, 1.f, SCALE);
         y += ch;
     }
@@ -336,7 +544,7 @@ void wopr_render(int win_w, int win_h) {
         y += ch;
     }
 
-    // Input line (login)
+    // Input line
     if (w->phase == WoprPhase::LOGIN_INPUT) {
         std::string prompt;
         if (!w->username_done)
@@ -346,15 +554,11 @@ void wopr_render(int win_w, int win_h) {
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
         gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.27f, 1.f, SCALE);
-    }
-
-    // Controls hint at bottom
-    if (w->phase == WoprPhase::GAME_MENU) {
-        const char *hint = "ARROWS/ENTER SELECT    ESC QUIT";
-        gl_draw_text(hint,
-                     x0 + (area_w - gl_text_width(hint, SCALE)) * 0.5f,
-                     win_h - PAD - ch * 1.5f,
-                     0.f, 0.5f, 0.15f, 1.f, SCALE);
+    } else if (in_shell) {
+        std::string prompt = "WOPR> " + w->input_buf;
+        Uint32 ticks = SDL_GetTicks();
+        if ((ticks / 500) % 2 == 0) prompt += '_';
+        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE); // brighter green for prompt
     }
 
     gl_flush_verts();
@@ -373,10 +577,12 @@ static bool sub_back(WoprState *w) {
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
         default: return false;
     }
-    // Don't call show_menu — just go back to GAME_MENU phase
-    // The lines are already in the buffer from before
-    set_phase(w, WoprPhase::GAME_MENU);
-    w->menu_sel = 0;
+    push_line(w, "");
+    push_line(w, "SIMULATION TERMINATED.");
+    push_line(w, "");
+    w->input_buf.clear();
+    g_history_cursor = -1;
+    set_phase(w, WoprPhase::GAME_MENU); // back to CMD_PROMPT
     return true;
 }
 
@@ -404,23 +610,13 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
         default: break;
     }
 
-    // ESC
+    // ESC always closes overlay (outside sub-games)
     if (sym == SDLK_ESCAPE) {
-        if (w->phase == WoprPhase::GAME_MENU) {
-            push_line(w, "");
-            push_line(w, "A STRANGE GAME.");
-            push_line(w, "THE ONLY WINNING MOVE IS NOT TO PLAY.");
-            push_line(w, "");
-            push_line(w, "HOW ABOUT A NICE GAME OF CHESS?");
-            set_phase(w, WoprPhase::FAREWELL);
-            begin_crawl(w, "CONNECTION CLOSED.  GOODBYE, PROFESSOR FALKEN.");
-        } else {
-            wopr_close();
-        }
+        wopr_close();
         return true;
     }
 
-    // Speed up crawl on any key during login prompts
+    // Speed up crawl on any key during login prompts / connecting
     if (w->phase == WoprPhase::LOGIN_PROMPT || w->phase == WoprPhase::CONNECTING) {
         w->crawl_pos = (int)w->crawl_target.size();
         return true;
@@ -467,24 +663,60 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
         return true;
     }
 
-    // Game menu
+    // CMD_PROMPT (stored as GAME_MENU)
     if (w->phase == WoprPhase::GAME_MENU) {
-        if (sym == SDLK_UP || sym == SDLK_w) {
-            w->menu_sel = (w->menu_sel - 1 + GAME_COUNT) % GAME_COUNT;
+        if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
+            do_command(w, w->input_buf);
+            w->input_buf.clear();
+            g_history_cursor = -1;
             return true;
         }
-        if (sym == SDLK_DOWN || sym == SDLK_s) {
-            w->menu_sel = (w->menu_sel + 1) % GAME_COUNT;
+        if (sym == SDLK_BACKSPACE) {
+            if (!w->input_buf.empty()) w->input_buf.pop_back();
             return true;
         }
-        if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER || sym == SDLK_SPACE) {
-            launch_game(w, GAME_IDS[w->menu_sel]);
+        // Command history navigation
+        if (sym == SDLK_UP) {
+            int hist_size = (int)g_cmd_history.size();
+            if (hist_size > 0) {
+                if (g_history_cursor < 0)
+                    g_history_cursor = hist_size - 1;
+                else if (g_history_cursor > 0)
+                    g_history_cursor--;
+                w->input_buf = g_cmd_history[g_history_cursor];
+            }
             return true;
         }
-        if (sym >= SDLK_1 && sym <= SDLK_1 + GAME_COUNT - 1) {
-            int idx = sym - SDLK_1;
-            w->menu_sel = idx;
-            launch_game(w, GAME_IDS[idx]);
+        if (sym == SDLK_DOWN) {
+            if (g_history_cursor >= 0) {
+                g_history_cursor++;
+                if (g_history_cursor >= (int)g_cmd_history.size()) {
+                    g_history_cursor = -1;
+                    w->input_buf.clear();
+                } else {
+                    w->input_buf = g_cmd_history[g_history_cursor];
+                }
+            }
+            return true;
+        }
+        // Tab completion (verb only)
+        if (sym == SDLK_TAB) {
+            static const char *VERBS[] = {
+                "HELP", "LIST GAMES", "PLAY ", "INTELLIGENCE",
+                "STATUS", "WHOAMI", "HISTORY", "CLEAR", "LOGOUT"
+            };
+            std::string up = to_upper(w->input_buf);
+            for (auto *v : VERBS) {
+                if (std::string(v).find(up) == 0 && up.size() < strlen(v)) {
+                    w->input_buf = v;
+                    break;
+                }
+            }
+            return true;
+        }
+        // Printable character
+        if (text && text[0] >= 32 && text[0] < 127 && w->input_buf.size() < 80) {
+            w->input_buf += (char)toupper((unsigned char)text[0]);
             return true;
         }
         return true;
