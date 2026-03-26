@@ -140,7 +140,6 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
             wopr/zork/demons.c \
             wopr/zork/dgame.c \
             wopr/zork/dinit.c  \
-            wopr/zork/dmain.c \
 	    wopr/zork/dso1.c \
 	    wopr/zork/dso2.c \
 	    wopr/zork/dso3.c \
