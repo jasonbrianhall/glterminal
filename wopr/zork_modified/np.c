@@ -6,11 +6,12 @@
 
 #include <stdio.h>
 #include <ctype.h>
-#include "../zork/funcs.h"
-#include "../zork/vars.h"
+#include "funcs.h"
+#include "vars.h"
 
 extern int system P((const char *));
 extern char *zork_shim_fgets(char *buf, int n);
+extern int g_zork_game_over;
 
 static int lex_ P((char *, int *, int *, int));
 
@@ -19,6 +20,12 @@ void rdline_(char *buffer, int who)
     char *z, *zlast;
 
 L5:
+    /* If game is over, return immediately so the thread can unwind */
+    if (g_zork_game_over) {
+        buffer[0] = '\0';
+        return;
+    }
+
     switch (who + 1) {
 	case 1:  goto L90;
 	case 2:  goto L10;
@@ -29,6 +36,12 @@ L90:
     if (zork_shim_fgets(buffer, 78) == NULL)
 	exit_();
     more_input();
+
+    /* Check again after unblocking in case game ended while waiting */
+    if (g_zork_game_over) {
+        buffer[0] = '\0';
+        return;
+    }
 
     if (buffer[0] == '!') {
 	system(buffer + 1);

@@ -1,0 +1,1 @@
+../zork/funcs.h
