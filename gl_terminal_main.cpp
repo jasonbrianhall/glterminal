@@ -1294,10 +1294,14 @@ int main(int argc, char **argv) {
         bc_tick((float)win_w, (float)win_h, bc_dt);
         if (bc_get_enabled()) needs_render = true;
 
-        // WOPR overlay tick
+        // WOPR overlay tick — cap screen updates at 20 fps to simulate an old monitor
         if (g_wopr.visible) {
             wopr_update(dt);
-            needs_render = true;
+            static uint32_t s_wopr_last_render = 0;
+            if (now - s_wopr_last_render >= 50) {
+                s_wopr_last_render = now;
+                needs_render = true;
+            }
         }
 
         // Eye of Felix tick — always runs when visible, outside the needs_render gate
