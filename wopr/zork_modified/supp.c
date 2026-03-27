@@ -1,15 +1,10 @@
 /* supp.c -- support routines for dungeon */
-/* Modified for WOPR overlay:
- *   more_output() buffers text and flushes complete lines on '\n'.
- *   more_output(NULL) flushes any partial line as a separator.
- *   more_input() flushes any remaining partial line before waiting for input.
- *   zork_shim_fgets() blocks on a semaphore until input is posted.
- *   exit_() sets a flag instead of calling exit().
- */
+/* Modified for WOPR overlay */
 
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <setjmp.h>
 #include <SDL2/SDL.h>
 
 #ifdef unix
@@ -22,7 +17,7 @@
 #include <time.h>
 #endif
 
-#include "../zork/funcs.h"
+#include "funcs.h"
 
 extern void exit P((int));
 extern int  rand P((void));
@@ -33,20 +28,30 @@ extern struct tm *localtime ();
  * Shared I/O surfaces
  * ========================================================================== */
 
-void wopr_zork_push_line(const char *line);   /* implemented in wopr_zork.cpp */
+void wopr_zork_push_line(const char *line);
+void wopr_zork_signal_done(void);
 
 char          zork_input_buf[512];
-int           zork_input_ready = 0;
-int           g_zork_game_over = 0;
-SDL_sem      *zork_input_sem   = NULL;
+int           zork_input_ready  = 0;
+int           g_zork_game_over  = 0;
+SDL_sem      *zork_input_sem    = NULL;
+
+/* longjmp target set in zork_thread_fn before calling zork_main() */
+jmp_buf       zork_exit_jmp;
 
 void zork_shim_init(void)
 {
+    SDL_Log("[ZORK] zork_shim_init");
+    if (zork_input_sem) {
+        SDL_DestroySemaphore(zork_input_sem);
+        zork_input_sem = NULL;
+    }
     zork_input_sem = SDL_CreateSemaphore(0);
 }
 
 void zork_shim_set_input(const char *line)
 {
+    SDL_Log("[ZORK] set_input: '%s'", line);
     strncpy(zork_input_buf, line, sizeof(zork_input_buf) - 1);
     zork_input_buf[sizeof(zork_input_buf) - 1] = '\0';
     zork_input_ready = 1;
@@ -56,39 +61,33 @@ void zork_shim_set_input(const char *line)
 
 char *zork_shim_fgets(char *buf, int n)
 {
+    SDL_Log("[ZORK] fgets: waiting (game_over=%d)", g_zork_game_over);
     if (g_zork_game_over) {
         if (n > 0) buf[0] = '\0';
         return buf;
     }
     if (zork_input_sem)
         SDL_SemWait(zork_input_sem);
-    if (!zork_input_ready) {
+    SDL_Log("[ZORK] fgets: unblocked (ready=%d game_over=%d)", zork_input_ready, g_zork_game_over);
+    if (!zork_input_ready || g_zork_game_over) {
         if (n > 0) buf[0] = '\0';
         return buf;
     }
     strncpy(buf, zork_input_buf, n - 1);
     buf[n - 1] = '\0';
     zork_input_ready = 0;
+    SDL_Log("[ZORK] fgets: returning '%s'", buf);
     return buf;
 }
 
 /* ============================================================================
  * more_output
- *
- * Dungeon builds output in three patterns:
- *   1. more_output("full line\n")
- *   2. more_output(NULL) ... more_output("%d", x) ... more_output("\n")
- *   3. more_output("word ") ... more_output("word\n")
- *
- * more_output(NULL) is used as a line-start sentinel — flush any pending
- * partial line first, then start a new one.
- * Flush on '\n' and also on more_input() before blocking for input.
  * ========================================================================== */
 
-static int  crows      = 24;
-static int  coutput    = 0;
+static int  crows     = 24;
+static int  coutput   = 0;
 static char s_linebuf[4096];
-static int  s_linelen  = 0;
+static int  s_linelen = 0;
 
 static void flush_linebuf(void)
 {
@@ -101,7 +100,9 @@ static void flush_linebuf(void)
 
 void more_init(void)
 {
-    crows = 24;
+    SDL_Log("[ZORK] more_init");
+    crows     = 24;
+    s_linelen = 0;
 }
 
 void more_output(const char *fmt, ...)
@@ -110,7 +111,6 @@ void more_output(const char *fmt, ...)
     int  i;
 
     if (fmt == NULL) {
-        /* NULL is a line separator — flush whatever we have */
         flush_linebuf();
         coutput++;
         return;
@@ -137,7 +137,6 @@ void more_output(const char *fmt, ...)
 
 void more_input(void)
 {
-    /* Flush any partial line before blocking for input */
     flush_linebuf();
     coutput = 0;
 }
@@ -148,11 +147,15 @@ void more_input(void)
 
 void exit_(void)
 {
+    SDL_Log("[ZORK] exit_() called — longjmping out of dungeon");
     flush_linebuf();
-    more_output("The game is over.\n");
     g_zork_game_over = 1;
+    /* Unblock any fgets waiting for input */
     if (zork_input_sem)
         SDL_SemPost(zork_input_sem);
+    /* Jump all the way back to zork_thread_fn, unwinding the entire
+     * dungeon call stack in one shot — no more dungeon code runs */
+    longjmp(zork_exit_jmp, 1);
 }
 
 void itime_(int *hrptr, int *minptr, int *secptr)

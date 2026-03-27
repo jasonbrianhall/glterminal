@@ -6,8 +6,8 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "../zork/funcs.h"
-#include "../zork/vars.h"
+#include "funcs.h"
+#include "vars.h"
 
 #ifndef SEEK_SET
 #define SEEK_SET (0)
@@ -327,6 +327,7 @@ L1000:
 L1100:
     score_(0);
     (void) fclose(dbfile);
+    dbfile = NULL;
     exit_();
 
 } /* jigsup_ */
