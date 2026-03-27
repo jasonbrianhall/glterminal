@@ -36,7 +36,6 @@ static ZorkState *s_active = nullptr;
 extern "C" void wopr_zork_push_line(const char *line)
 {
     if (!s_active || !s_active->wopr) {
-        SDL_Log("[ZORK] push_line: dropping (no active state): %s", line);
         return;
     }
     SDL_LockMutex(s_active->line_mtx);
@@ -48,20 +47,16 @@ extern "C" void wopr_zork_push_line(const char *line)
 static int zork_thread_fn(void *userdata)
 {
     ZorkState *zs = static_cast<ZorkState *>(userdata);
-    SDL_Log("[ZORK] thread started");
 
     if (setjmp(zork_exit_jmp) == 0) {
         // Normal path — run the game
         zork_main();
-        SDL_Log("[ZORK] zork_main returned normally");
     } else {
         // exit_() longjmped here
-        SDL_Log("[ZORK] longjmp caught — dungeon exited cleanly");
     }
 
     g_zork_game_over = 1;
     SDL_SemPost(zs->done_sem);
-    SDL_Log("[ZORK] thread posted done_sem, exiting");
     return 0;
 }
 
@@ -81,10 +76,8 @@ void wopr_zork_enter(WoprState *w)
     zork_input_buf[0] = '\0';
     zork_shim_init();
 
-    SDL_Log("[ZORK] creating thread");
     zs->thread = SDL_CreateThread(zork_thread_fn, "ZorkThread", zs);
     if (!zs->thread) {
-        SDL_Log("[ZORK] thread creation FAILED: %s", SDL_GetError());
         w->lines.push_back("  [ZORK] THREAD CREATION FAILED: " + std::string(SDL_GetError()));
         zs->dead = true;
     }
@@ -97,7 +90,6 @@ void wopr_zork_update(WoprState *w, double /*dt*/)
     if (!zs || zs->dead) return;
 
     if (SDL_SemTryWait(zs->done_sem) == 0) {
-        SDL_Log("[ZORK] update: done, cleaning up");
         zs->dead = true;
 
         w->lines.push_back("");
@@ -106,9 +98,7 @@ void wopr_zork_update(WoprState *w, double /*dt*/)
         w->lines.push_back("");
 
         if (zs->thread) {
-            SDL_Log("[ZORK] update: joining thread");
             SDL_WaitThread(zs->thread, nullptr);
-            SDL_Log("[ZORK] update: thread joined");
             zs->thread = nullptr;
         }
 
@@ -121,7 +111,6 @@ void wopr_zork_update(WoprState *w, double /*dt*/)
         w->sub_state = nullptr;
         w->phase = WoprPhase::GAME_MENU;
         w->input_buf.clear();
-        SDL_Log("[ZORK] update: returned to GAME_MENU");
     }
 }
 
@@ -142,7 +131,6 @@ bool wopr_zork_keydown(WoprState *w, SDL_Keycode sym)
     case SDLK_RETURN:
     case SDLK_KP_ENTER: {
         std::string line = zs->input_buf;
-        SDL_Log("[ZORK] input: '%s'", line.c_str());
         w->lines.push_back("> " + line);
         line += '\n';
         zork_shim_set_input(line.c_str());
@@ -169,7 +157,7 @@ void wopr_zork_text(WoprState *w, const char *text)
     ZorkState *zs = static_cast<ZorkState *>(w->sub_state);
     if (!zs || zs->dead || !text) return;
     for (const char *p = text; *p; ++p) {
-        char c = (char)toupper((unsigned char)*p);
+        char c = (char)((unsigned char)*p);
         zs->input_buf += c;
     }
     w->input_buf = zs->input_buf;
@@ -178,24 +166,19 @@ void wopr_zork_text(WoprState *w, const char *text)
 // ── Free ─────────────────────────────────────────────────────────────────
 void wopr_zork_free(WoprState *w)
 {
-    SDL_Log("[ZORK] free called");
     ZorkState *zs = static_cast<ZorkState *>(w->sub_state);
     if (!zs) {
-        SDL_Log("[ZORK] free: already null");
         return;
     }
 
     if (!zs->dead) {
-        SDL_Log("[ZORK] free: force-stopping thread");
         g_zork_game_over = 1;
         // Unblock fgets if waiting
         zork_shim_set_input("QUIT\n");
     }
 
     if (zs->thread) {
-        SDL_Log("[ZORK] free: joining thread");
         SDL_WaitThread(zs->thread, nullptr);
-        SDL_Log("[ZORK] free: thread joined");
         zs->thread = nullptr;
     }
 
@@ -206,5 +189,4 @@ void wopr_zork_free(WoprState *w)
     SDL_DestroySemaphore(zs->done_sem);
     delete zs;
     w->sub_state = nullptr;
-    SDL_Log("[ZORK] free done");
 }

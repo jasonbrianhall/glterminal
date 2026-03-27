@@ -41,7 +41,6 @@ jmp_buf       zork_exit_jmp;
 
 void zork_shim_init(void)
 {
-    SDL_Log("[ZORK] zork_shim_init");
     if (zork_input_sem) {
         SDL_DestroySemaphore(zork_input_sem);
         zork_input_sem = NULL;
@@ -51,7 +50,6 @@ void zork_shim_init(void)
 
 void zork_shim_set_input(const char *line)
 {
-    SDL_Log("[ZORK] set_input: '%s'", line);
     strncpy(zork_input_buf, line, sizeof(zork_input_buf) - 1);
     zork_input_buf[sizeof(zork_input_buf) - 1] = '\0';
     zork_input_ready = 1;
@@ -61,14 +59,12 @@ void zork_shim_set_input(const char *line)
 
 char *zork_shim_fgets(char *buf, int n)
 {
-    SDL_Log("[ZORK] fgets: waiting (game_over=%d)", g_zork_game_over);
     if (g_zork_game_over) {
         if (n > 0) buf[0] = '\0';
         return buf;
     }
     if (zork_input_sem)
         SDL_SemWait(zork_input_sem);
-    SDL_Log("[ZORK] fgets: unblocked (ready=%d game_over=%d)", zork_input_ready, g_zork_game_over);
     if (!zork_input_ready || g_zork_game_over) {
         if (n > 0) buf[0] = '\0';
         return buf;
@@ -76,7 +72,6 @@ char *zork_shim_fgets(char *buf, int n)
     strncpy(buf, zork_input_buf, n - 1);
     buf[n - 1] = '\0';
     zork_input_ready = 0;
-    SDL_Log("[ZORK] fgets: returning '%s'", buf);
     return buf;
 }
 
@@ -100,7 +95,6 @@ static void flush_linebuf(void)
 
 void more_init(void)
 {
-    SDL_Log("[ZORK] more_init");
     crows     = 24;
     s_linelen = 0;
 }
@@ -147,7 +141,6 @@ void more_input(void)
 
 void exit_(void)
 {
-    SDL_Log("[ZORK] exit_() called — longjmping out of dungeon");
     flush_linebuf();
     g_zork_game_over = 1;
     /* Unblock any fgets waiting for input */
