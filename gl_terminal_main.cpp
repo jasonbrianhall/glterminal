@@ -818,28 +818,35 @@ int main(int argc, char **argv) {
                     break;
                 }
                 if (g_wopr.visible) {
-                    if (wopr_keydown(ev.key.keysym.sym, nullptr)) {
-                        needs_render = true;
-                        break;
-                    }
-                    // Key not consumed (e.g. F11) — fall through to normal handling
+                    wopr_keydown(ev.key.keysym.sym, nullptr);
+                    needs_render = true;
+                    break;
                 }
                 // Still connecting — ignore all normal key input
                 if (!ssh_ready) break;
 #endif
+                // F11 fullscreen — checked before any overlay so it always works
+                if (ev.key.keysym.sym == SDLK_F11) {
+                    bool is_full = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+                    SDL_SetWindowFullscreen(window, is_full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    break;
+                }
+
                 // SFTP console (F4) — forward all keys when visible
 #ifdef USESSH
                 if (g_sftp_console_visible) {
-                    sftp_console_keydown(ev.key.keysym, nullptr);
-                    needs_render = true;
+                    if (sftp_console_keydown(ev.key.keysym, nullptr))
+                        needs_render = true;
+                    else break;  // not consumed (e.g. F11) — fall through
                     break;
                 }
 #endif
                 // SFTP overlay — forward all keys when visible
 #ifdef USESSH
                 if (g_sftp.visible) {
-                    sftp_overlay_keydown(ev.key.keysym.sym);
-                    needs_render = true;
+                    if (sftp_overlay_keydown(ev.key.keysym.sym))
+                        needs_render = true;
+                    else break;  // not consumed (e.g. F11) — fall through
                     break;
                 }
                 // F2 = upload, F3 = download, F4 = SFTP console
@@ -901,6 +908,7 @@ int main(int argc, char **argv) {
                 if (g_pf_overlay.visible) {
                     if (pf_overlay_keydown(ev.key.keysym.sym))
                         needs_render = true;
+                    else break;  // not consumed (e.g. F11) — fall through
                     break;
                 }
 #endif
@@ -912,11 +920,6 @@ int main(int argc, char **argv) {
                 if (g_help_visible) {
                     help_keydown(ev.key.keysym.sym);
                     needs_render = true;
-                    break;
-                }
-                if (ev.key.keysym.sym == SDLK_F11) {
-                    bool is_full = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-                    SDL_SetWindowFullscreen(window, is_full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
                     break;
                 }
                 if (g_menu.visible) { g_menu.visible = false; break; }
