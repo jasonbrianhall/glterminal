@@ -649,6 +649,9 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
     WoprState *w = &g_wopr;
     if (!w->visible) return false;
 
+    // Global hotkeys always pass through to the main loop
+    if (sym == SDLK_F11) return false;
+
     // Sub-games first
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:

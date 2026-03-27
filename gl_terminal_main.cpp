@@ -818,9 +818,11 @@ int main(int argc, char **argv) {
                     break;
                 }
                 if (g_wopr.visible) {
-                    wopr_keydown(ev.key.keysym.sym, nullptr);
-                    needs_render = true;
-                    break;
+                    if (wopr_keydown(ev.key.keysym.sym, nullptr)) {
+                        needs_render = true;
+                        break;
+                    }
+                    // Key not consumed (e.g. F11) — fall through to normal handling
                 }
                 // Still connecting — ignore all normal key input
                 if (!ssh_ready) break;
