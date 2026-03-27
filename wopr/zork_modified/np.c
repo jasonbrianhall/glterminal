@@ -20,11 +20,9 @@ void rdline_(char *buffer, int who)
     char *z, *zlast;
 
 L5:
-    /* If game is over, return immediately so the thread can unwind */
-    if (g_zork_game_over) {
-        buffer[0] = '\0';
-        return;
-    }
+    /* If game is over, unwind the entire call stack via longjmp */
+    if (g_zork_game_over)
+        exit_();
 
     switch (who + 1) {
 	case 1:  goto L90;
@@ -38,10 +36,8 @@ L90:
     more_input();
 
     /* Check again after unblocking in case game ended while waiting */
-    if (g_zork_game_over) {
-        buffer[0] = '\0';
-        return;
-    }
+    if (g_zork_game_over)
+        exit_();
 
     if (buffer[0] == '!') {
 	system(buffer + 1);
