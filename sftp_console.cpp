@@ -891,6 +891,9 @@ bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
 
     SDL_Keycode sym = ks.sym;
 
+    // Global hotkeys always pass through to the main loop
+    if (sym == SDLK_F11) return false;
+
     // Esc — close
     if (sym == SDLK_ESCAPE) { sftp_console_close(); return true; }
 

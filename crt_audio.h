@@ -1,4 +1,5 @@
 #pragma once
+#include <SDL2/SDL.h>
 #include "gl_renderer.h"   // RENDER_MODE_* constants
 
 // ============================================================================
@@ -25,7 +26,13 @@ void fight_audio_cheer(void);
 // radius_frac: current_radius / max_radius (0..1), used to vary pitch
 void bc_audio_bounce(float radius_frac);
 
-// Legacy aliases so existing call sites still compile without changes
+// Returns the SDL audio device ID (0 if not open). Used by WOPR audio.
+SDL_AudioDeviceID term_audio_get_device(void);
+
+// Mix a WOPR modem screech buffer into the audio callback stream.
+// buf must remain valid until playback finishes (wopr_audio.cpp owns it).
+void term_audio_wopr_play(const float *buf, int num_samples);
+void term_audio_wopr_stop(void);
 inline void crt_audio_init(void)            { term_audio_init(); }
 inline void crt_audio_shutdown(void)        { term_audio_shutdown(); }
 inline void crt_audio_set_activity(float l) { term_audio_set_activity(l); }

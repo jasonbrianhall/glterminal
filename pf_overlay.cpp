@@ -191,6 +191,9 @@ void pf_overlay_render(int win_w, int win_h) {
 bool pf_overlay_keydown(SDL_Keycode sym) {
     if (!g_pf_overlay.visible) return false;
 
+    // Global hotkeys always pass through to the main loop
+    if (sym == SDLK_F11) return false;
+
     // --- Input field active: collecting a forward spec ---
     if (g_pf_overlay.input_active) {
         if (sym == SDLK_ESCAPE) {

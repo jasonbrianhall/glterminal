@@ -22,6 +22,7 @@
 #include "kitty_graphics.h"
 #include "font_manager.h"
 #include "image_viewer.h"
+#include "wopr/wopr.h"
 #ifdef USESSH
 #  include "ssh_session.h"
 #  include "sftp_overlay.h"
@@ -288,6 +289,7 @@ int main(int argc, char **argv) {
     apply_theme(0);
     ft_init();
     crt_audio_init();
+    wopr_audio_init();
 
     Terminal term;
     term_init(&term);
@@ -808,22 +810,43 @@ int main(int argc, char **argv) {
                     running = false;
                     break;
                 }
+                // F7/WOPR checked before ssh_ready so it works in local sessions
+                if (ev.key.keysym.sym == SDLK_F7) {
+                    if (g_wopr.visible) wopr_close();
+                    else                wopr_open();
+                    needs_render = true;
+                    break;
+                }
+                if (g_wopr.visible) {
+                    wopr_keydown(ev.key.keysym.sym, nullptr);
+                    needs_render = true;
+                    break;
+                }
                 // Still connecting — ignore all normal key input
                 if (!ssh_ready) break;
 #endif
+                // F11 fullscreen — checked before any overlay so it always works
+                if (ev.key.keysym.sym == SDLK_F11) {
+                    bool is_full = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+                    SDL_SetWindowFullscreen(window, is_full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    break;
+                }
+
                 // SFTP console (F4) — forward all keys when visible
 #ifdef USESSH
                 if (g_sftp_console_visible) {
-                    sftp_console_keydown(ev.key.keysym, nullptr);
-                    needs_render = true;
+                    if (sftp_console_keydown(ev.key.keysym, nullptr))
+                        needs_render = true;
+                    else break;  // not consumed (e.g. F11) — fall through
                     break;
                 }
 #endif
                 // SFTP overlay — forward all keys when visible
 #ifdef USESSH
                 if (g_sftp.visible) {
-                    sftp_overlay_keydown(ev.key.keysym.sym);
-                    needs_render = true;
+                    if (sftp_overlay_keydown(ev.key.keysym.sym))
+                        needs_render = true;
+                    else break;  // not consumed (e.g. F11) — fall through
                     break;
                 }
                 // F2 = upload, F3 = download, F4 = SFTP console
@@ -885,6 +908,7 @@ int main(int argc, char **argv) {
                 if (g_pf_overlay.visible) {
                     if (pf_overlay_keydown(ev.key.keysym.sym))
                         needs_render = true;
+                    else break;  // not consumed (e.g. F11) — fall through
                     break;
                 }
 #endif
@@ -896,11 +920,6 @@ int main(int argc, char **argv) {
                 if (g_help_visible) {
                     help_keydown(ev.key.keysym.sym);
                     needs_render = true;
-                    break;
-                }
-                if (ev.key.keysym.sym == SDLK_F11) {
-                    bool is_full = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-                    SDL_SetWindowFullscreen(window, is_full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
                     break;
                 }
                 if (g_menu.visible) { g_menu.visible = false; break; }
@@ -950,6 +969,12 @@ int main(int argc, char **argv) {
                 }
                 // Drop text input entirely when the SFTP overlay is up
                 if (g_sftp.visible) break;
+                // Forward text to WOPR login fields
+                if (g_wopr.visible) {
+                    wopr_keydown(SDLK_UNKNOWN, ev.text.text);
+                    needs_render = true;
+                    break;
+                }
                 if (use_ssh && ssh_phase == SshPhase::SETUP) {
                     // Visible echo for host/user fields
                     ssh_field_input += ev.text.text;
@@ -1274,6 +1299,16 @@ int main(int argc, char **argv) {
         bc_tick((float)win_w, (float)win_h, bc_dt);
         if (bc_get_enabled()) needs_render = true;
 
+        // WOPR overlay tick — cap screen updates at 20 fps to simulate an old monitor
+        if (g_wopr.visible) {
+            wopr_update(dt);
+            static uint32_t s_wopr_last_render = 0;
+            if (now - s_wopr_last_render >= 50) {
+                s_wopr_last_render = now;
+                needs_render = true;
+            }
+        }
+
         // Eye of Felix tick — always runs when visible, outside the needs_render gate
         if (g_iv.visible) {
             iv_tick((double)bc_dt);
@@ -1335,6 +1370,8 @@ int main(int argc, char **argv) {
             iv_render(win_w, win_h);
             // Help overlay renders last (topmost layer)
             help_render(win_w, win_h);
+            // WOPR overlay — above everything including help
+            if (g_wopr.visible) wopr_render(win_w, win_h);
 
             if (g_use_sdl_renderer)
                 SDL_RenderPresent(g_sdl_renderer);
@@ -1361,6 +1398,7 @@ int main(int argc, char **argv) {
         if (g_sdl_renderer) SDL_DestroyRenderer(g_sdl_renderer);
     }
     SDL_DestroyWindow(window);
+    wopr_audio_shutdown();
     crt_audio_shutdown();
     kitty_shutdown();
     menu_font_shutdown();
