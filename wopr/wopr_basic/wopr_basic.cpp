@@ -109,7 +109,7 @@ void newstmt(void);
 void nextstmt(void);
 void nexttok(void);
 void ongotostmt(void);
-int parenexpr(void);
+double parenexpr(void);
 void pokestmt(void);
 void printstmt(void);
 void printusingstmt(void);
@@ -1076,8 +1076,15 @@ double expression(int minprec) {
         n = vars[getvarindex()];
         nexttok();
     } else if (tok == "@") {
-        nexttok();
-        n = atarry[parenexpr()];
+    nexttok();
+    int idx = (int)parenexpr();   // cast index to int
+    if (idx < 0 || idx >= c_at_max) {
+        printf("(%d, %d) Array index out of range: %d\n",
+               curline, textp, idx);
+        n = 0.0;
+    } else {
+        n = atarry[idx];
+    }
     } else if (tok == "(") {
         n = parenexpr();
     } else {
@@ -1156,20 +1163,20 @@ double expression(int minprec) {
     return n;
 }
 
-int parenexpr(void) {
-  int n = 0;
+double parenexpr(void) {
+    double n = 0.0;
 
-  if (!accept("(")) {
-    printf("(%d, %d) Paren Expr: Expecting '(', found: %s\n", curline, textp,
-           tok.c_str());
-  } else {
-    n = expression(0);
-    if (!accept(")")) {
-      printf("(%d, %d) Paren Expr: Expecting ')', found: %s\n", curline, textp,
-             tok.c_str());
+    if (!accept("(")) {
+        printf("(%d, %d) Paren Expr: Expecting '(', found: %s\n",
+               curline, textp, tok.c_str());
+    } else {
+        n = expression(0);
+        if (!accept(")")) {
+            printf("(%d, %d) Paren Expr: Expecting ')', found: %s\n",
+                   curline, textp, tok.c_str());
+        }
     }
-  }
-  return n;
+    return n;
 }
 
 int rnd(int range) { return rand() % range + 1; }
