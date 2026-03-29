@@ -70,11 +70,11 @@ double atarry[c_at_max];
 string svars[c_maxvars];   // string variables A$..Z$
 
 // DATA/READ/RESTORE support
-vector<int> data_store;
+vector<double> data_store;
 int data_ptr = 0;
 
-int forvar[c_maxvars];
-int forlimit[c_maxvars];
+double forvar[c_maxvars];
+double forlimit[c_maxvars];
 int forline[c_maxvars];
 int forpos[c_maxvars];
 
@@ -86,7 +86,7 @@ void   datastmt(void);
 void   dimstmt(void);
 void   docmd(void);
 bool   expect(const string s);
-int    expression(int minprec);
+double expression(int minprec);
 void   forstmt(void);
 void   getch(void);
 string getfilename(const string action);
@@ -737,8 +737,8 @@ bool accept(const string s) {
     return false;
 }
 
-int expression(int minprec) {
-    int n = 0;
+double expression(int minprec) {
+    double n = 0;
 
     // String comparison: A$ = "x", A$ <> "x", INKEY$ = "", etc.
     // Detect: string-var or string-func followed by = or <>
@@ -753,7 +753,7 @@ int expression(int minprec) {
             return (op == "=") ? (lhs == rhs ? 1 : 0) : (lhs != rhs ? 1 : 0);
         }
         // used in non-comparison context: return length
-        return (int)lhs.size();
+        return lhs.size();
     }
 
     // handle numeric operands, unary operators, functions, variables
@@ -768,27 +768,27 @@ int expression(int minprec) {
                                      else { n = tok[1]; nexttok(); }
                                      expect(")");
     } else if (tok == "len")       { nexttok(); expect("(");
-                                     if (toktype == kIDENT && tok.back() == '$') { n = (int)svars[getsvarindex()].size(); nexttok(); }
-                                     else { n = (int)str_expression().size(); }
+                                     if (toktype == kIDENT && tok.back() == '$') { n = svars[getsvarindex()].size(); nexttok(); }
+                                     else { n = str_expression().size(); }
                                      expect(")");
     } else if (tok == "val")       { nexttok(); expect("("); string s = str_expression(); expect(")"); n = atoi(s.c_str());
     // String comparisons: treat string expr as integer 0, but handle = and <> against string literals
-    } else if (tok == "inkey$")    { nexttok(); n = (int)(getkey(false).empty() ? 0 : 1); // 0=no key
-    } else if (tok == "atn")       { nexttok(); n = (int)(atan((double)parenexpr()) * 1000000);
-    } else if (tok == "cos")       { nexttok(); n = (int)(cos((double)parenexpr() / 1000000.0) * 1000000);
-    } else if (tok == "exp")       { nexttok(); n = (int)(exp((double)parenexpr() / 1000000.0) * 1000000);
+    } else if (tok == "inkey$")    { nexttok(); n = (getkey(false).empty() ? 0 : 1); // 0=no key
+    } else if (tok == "atn")       { nexttok(); n = (atan((double)parenexpr()) * 1000000);
+    } else if (tok == "cos")       { nexttok(); n = (cos((double)parenexpr() / 1000000.0) * 1000000);
+    } else if (tok == "exp")       { nexttok(); n = (exp((double)parenexpr() / 1000000.0) * 1000000);
     } else if (tok == "int")       { nexttok(); n = parenexpr(); // already integer
-    } else if (tok == "log")       { nexttok(); { int v = parenexpr(); n = v > 0 ? (int)(log((double)v) * 1000000) : 0; }
+    } else if (tok == "log")       { nexttok(); { int v = parenexpr(); n = v > 0 ? (log((double)v) * 1000000) : 0; }
     } else if (tok == "peek")      { nexttok(); parenexpr(); n = 0; // stub: returns 0
     } else if (tok == "rnd" || tok == "irnd" ) { nexttok(); n = rnd(parenexpr());
     } else if (tok == "sgn")       { nexttok(); n = parenexpr(); n = (n > 0) - (n < 0);
-    } else if (tok == "sin")       { nexttok(); n = (int)(sin((double)parenexpr() / 1000000.0) * 1000000);
-    } else if (tok == "sqr")       { nexttok(); { int v = parenexpr(); n = v >= 0 ? (int)sqrt((double)v) : 0; }
-    } else if (tok == "tan")       { nexttok(); n = (int)(tan((double)parenexpr() / 1000000.0) * 1000000);
+    } else if (tok == "sin")       { nexttok(); n = (sin((double)parenexpr() / 1000000.0) * 1000000);
+    } else if (tok == "sqr")       { nexttok(); { int v = parenexpr(); n = v >= 0 ? sqrt((double)v) : 0; }
+    } else if (tok == "tan")       { nexttok(); n = (tan((double)parenexpr() / 1000000.0) * 1000000);
     } else if (tok == "usr")       { nexttok(); parenexpr(); n = 0; // stub: returns 0
     } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
         // string variable used in numeric context — treat as its length (unusual but safe)
-        n = (int)svars[tok[0]-'a'].size(); nexttok();
+        n = svars[tok[0]-'a'].size(); nexttok();
     } else if (toktype == kIDENT)  { n = vars[getvarindex()]; nexttok();
     } else if (tok == "@")         { nexttok(); n = atarry[parenexpr()];
     } else if (tok == "(")         { n = parenexpr();
@@ -798,8 +798,8 @@ int expression(int minprec) {
     }
 
     for (;;) {  // while binary operator and precedence of tok >= minprec
-        if        (minprec <= 1 && tok == "or")  { nexttok(); n = n | expression(2);
-        } else if (minprec <= 2 && tok == "and") { nexttok(); n = n & expression(3);
+        if        (minprec <= 1 && tok == "or")  { nexttok(); n = (n != 0 || expression(2) != 0) ? 1.0 : 0.0;
+        } else if (minprec <= 2 && tok == "and") { nexttok(); n = (n != 0 && expression(3) != 0) ? 1.0 : 0.0;
         } else if (minprec <= 4 && tok == "=")   { nexttok(); n = n == expression(5);
         } else if (minprec <= 4 && tok == "<")   { nexttok(); n = n <  expression(5);
         } else if (minprec <= 4 && tok == ">")   { nexttok(); n = n >  expression(5);
@@ -811,7 +811,7 @@ int expression(int minprec) {
         } else if (minprec <= 6 && tok == "*")   { nexttok(); n *= expression(7);
         } else if (minprec <= 6 && tok == "/")   { nexttok(); n /= expression(7);
         } else if (minprec <= 6 && tok == "\\")  { nexttok(); n /= expression(7);
-        } else if (minprec <= 6 && tok == "mod") { nexttok(); n %= expression(7);
+        } else if (minprec <= 6 && tok == "mod") { nexttok(); n = fmod(n, expression(7));
         } else if (minprec <= 8 && tok == "^")   { nexttok(); n = pow(n, expression(9));
         } else { break; }
     }
