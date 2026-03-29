@@ -18,8 +18,30 @@
 #include <string>
 #include <stack>
 #include <vector>
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 using namespace std;
+
+// Read one keypress without waiting for Enter.
+// blocking=true: wait for a key (GET); blocking=false: return "" if no key ready (INKEY$)
+static string getkey(bool blocking) {
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(unsigned)(ICANON | ECHO);
+    newt.c_cc[VMIN]  = blocking ? 1 : 0;
+    newt.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
+    char c = 0;
+    int n = (int)read(STDIN_FILENO, &c, 1);
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    if (n <= 0) return "";
+    return string(1, c);
+}
 
 #ifndef CLK_TCK
     #define CLK_TCK CLOCKS_PER_SEC
@@ -43,8 +65,8 @@ stack<int> gtp_stack;
 
 clock_t timestart;
 
-int vars[c_maxvars+1];
-int atarry[c_at_max];
+double vars[c_maxvars+1];
+double atarry[c_at_max];
 string svars[c_maxvars];   // string variables A$..Z$
 
 // DATA/READ/RESTORE support
@@ -87,6 +109,7 @@ void   ongotostmt(void);
 int    parenexpr(void);
 void   pokestmt(void);
 void   printstmt(void);
+void   printusingstmt(void);
 void   readident(void);
 void   readint(void);
 void   readstmt(void);
@@ -158,6 +181,35 @@ void docmd(void) {
         } else if (tok == "call")      { nexttok(); expression(0); // stub
         } else if (tok == "himem")     { nexttok(); accept(":"); expression(0); // stub
         } else if (tok == "lomem")     { nexttok(); accept(":"); expression(0); // stub
+        } else if (tok == "color")     { nexttok(); // stub: consume up to 3 comma-separated args
+                                         expression(0);
+                                         if (accept(",")) { expression(0);
+                                           if (accept(",")) expression(0); }
+        } else if (tok == "locate")    { nexttok(); // stub: consume row,col[,cursor]
+                                         expression(0);
+                                         if (accept(",")) { expression(0);
+                                           if (accept(",")) expression(0); }
+        } else if (tok == "screen")    { nexttok(); // stub: consume up to 2 args
+                                         expression(0);
+                                         if (accept(",")) expression(0);
+        } else if (tok == "width")     { nexttok(); expression(0); // stub
+        } else if (tok == "key")       { nexttok(); accept("off"); accept("on"); // stub
+        } else if (tok == "def")       { nexttok(); // DEF SEG [= expr] or DEF FN — skip
+                                         if (accept("seg")) { if (accept("=")) expression(0); }
+                                         else skiptoeol(); // DEF FN etc
+        } else if (tok == "defdbl" || tok == "defsng" ||
+                   tok == "defint" || tok == "defstr") { nexttok(); skiptoeol(); // type decls — stub
+        } else if (tok == "line")      { nexttok(); // LINE INPUT "prompt";var$
+                                         accept("input");
+                                         if (toktype == kSTRING) { printf("%s", tok.substr(1).c_str()); nexttok(); accept(";"); accept(","); }
+                                         if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
+                                             int var = getsvarindex(); nexttok();
+                                             getline(cin, svars[var]);
+                                         } else { string tmp; getline(cin, tmp); }
+        } else if (tok == "print")     { nexttok();
+                                         if (tok == "using") { nexttok(); printusingstmt(); }
+                                         else printstmt();
+        } else if (tok == "?")         { nexttok(); printstmt();
         } else if (tok == "for")       { nexttok(); forstmt();
         } else if (tok == "gosub")     { nexttok(); gosubstmt();
         } else if (tok == "goto")      { nexttok(); gotostmt();
@@ -167,7 +219,6 @@ void docmd(void) {
         } else if (tok == "let")       { nexttok();
                                          if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') rassign();
                                          else assign();
-        } else if (tok == "print" || tok == "?") { nexttok(); printstmt();
         } else if (tok == "return")    { nexttok(); returnstmt();
         } else if (tok == "@")         { nexttok(); arrassn();
         } else if (toktype == kIDENT)  {
@@ -234,9 +285,6 @@ string str_expression(void) {
     if (toktype == kSTRING) {
         s = tok.substr(1);   // strip leading "
         nexttok();
-    } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
-        s = svars[getsvarindex()];
-        nexttok();
     } else if (tok == "chr$") {
         nexttok(); s = string(1, (char)parenexpr());
     } else if (tok == "left$") {
@@ -261,6 +309,19 @@ string str_expression(void) {
         else s = (len < 0) ? base.substr(start) : base.substr(start, len);
     } else if (tok == "str$") {
         nexttok(); s = to_string(parenexpr());
+    } else if (tok == "string$") {
+        nexttok(); expect("(");
+        int n = expression(0); expect(",");
+        if (toktype == kSTRING) { char c = tok.size() > 1 ? tok[1] : ' '; nexttok(); s = string(n, c); }
+        else { s = string(n, (char)expression(0)); }
+        expect(")");
+    } else if (tok == "inkey$") {
+        nexttok(); s = getkey(false);
+    } else if (tok == "space$") {
+        nexttok(); s = string(parenexpr(), ' ');
+    } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
+        s = svars[getsvarindex()];
+        nexttok();
     } else {
         printf("(%d, %d) String expr expected, found: %s\n", curline, textp, tok.c_str());
         errors = true;
@@ -343,7 +404,7 @@ void inputstmt(void) {      // "input" [string ","] var
     if (toktype == kSTRING) {
         printf("%s", tok.substr(1).c_str());
         nexttok();
-        expect(",");
+        if (!accept(";")) expect(",");  // accept either ";" or "," after prompt
     } else
         printf("? ");
 
@@ -436,11 +497,14 @@ void printstmt(void) {
         if (toktype == kSTRING) {
             printf("%*s", printwidth, tok.substr(1).c_str());
             nexttok();
+        } else if (tok == "spc") {
+            nexttok(); int n = parenexpr(); printf("%*s", n, "");
+        } else if (tok == "chr$" || tok == "left$" || tok == "right$" || tok == "mid$" ||
+                   tok == "str$" || tok == "string$" || tok == "inkey$" || tok == "space$") {
+            printf("%*s", printwidth, str_expression().c_str());
         } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
             printf("%*s", printwidth, svars[tok[0]-'a'].c_str());
             nexttok();
-        } else if (tok == "chr$" || tok == "left$" || tok == "right$" || tok == "mid$" || tok == "str$") {
-            printf("%*s", printwidth, str_expression().c_str());
         } else {
             printf("%*d", printwidth, expression(0));
         }
@@ -448,6 +512,15 @@ void printstmt(void) {
         if (accept(",") || accept(";")) {printnl = false;} else {break; }
     }
     if (printnl) printf("\n");
+}
+
+// PRINT USING "fmt"; expr — minimal: skip format string, print value(s)
+void printusingstmt(void) {
+    // consume format string
+    if (toktype == kSTRING) nexttok();
+    accept(";"); accept(",");
+    // print remaining items without formatting
+    printstmt();
 }
 
 void datastmt(void) {   // DATA val, val, ... — scan program for all DATA lines at run time
@@ -529,15 +602,14 @@ void pokestmt(void) {   // POKE addr, val — stub (no real memory access)
     // no-op in a hosted interpreter
 }
 
-void getstmt(void) {    // GET var — reads a single keypress (non-blocking stub: reads full line, takes first char)
+void getstmt(void) {    // GET var — blocking single keypress
     if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
         int var = getsvarindex(); nexttok();
-        string st; getline(cin, st);
-        svars[var] = st.empty() ? "" : st.substr(0, 1);
+        svars[var] = getkey(true);
     } else {
         int var = getvarindex(); nexttok();
-        string st; getline(cin, st);
-        vars[var] = st.empty() ? 0 : (int)st[0];
+        string k = getkey(true);
+        vars[var] = k.empty() ? 0 : (int)(unsigned char)k[0];
     }
 }
 
@@ -668,6 +740,22 @@ bool accept(const string s) {
 int expression(int minprec) {
     int n = 0;
 
+    // String comparison: A$ = "x", A$ <> "x", INKEY$ = "", etc.
+    // Detect: string-var or string-func followed by = or <>
+    bool is_strexpr = (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') ||
+                      tok == "inkey$" || tok == "chr$" || tok == "left$" ||
+                      tok == "right$" || tok == "mid$" || tok == "str$" || tok == "string$";
+    if (is_strexpr && minprec == 0) {
+        string lhs = str_expression();
+        if (tok == "=" || tok == "<>") {
+            string op = tok; nexttok();
+            string rhs = str_expression();
+            return (op == "=") ? (lhs == rhs ? 1 : 0) : (lhs != rhs ? 1 : 0);
+        }
+        // used in non-comparison context: return length
+        return (int)lhs.size();
+    }
+
     // handle numeric operands, unary operators, functions, variables
     if        (toktype == kNUMBER) { n = num; nexttok();
     } else if (tok == "-")         { nexttok(); n = -expression(7);
@@ -684,6 +772,8 @@ int expression(int minprec) {
                                      else { n = (int)str_expression().size(); }
                                      expect(")");
     } else if (tok == "val")       { nexttok(); expect("("); string s = str_expression(); expect(")"); n = atoi(s.c_str());
+    // String comparisons: treat string expr as integer 0, but handle = and <> against string literals
+    } else if (tok == "inkey$")    { nexttok(); n = (int)(getkey(false).empty() ? 0 : 1); // 0=no key
     } else if (tok == "atn")       { nexttok(); n = (int)(atan((double)parenexpr()) * 1000000);
     } else if (tok == "cos")       { nexttok(); n = (int)(cos((double)parenexpr() / 1000000.0) * 1000000);
     } else if (tok == "exp")       { nexttok(); n = (int)(exp((double)parenexpr() / 1000000.0) * 1000000);
