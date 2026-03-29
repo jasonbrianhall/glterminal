@@ -577,34 +577,37 @@ void ifstmt(void) {
   }
 }
 
-void inputstmt(void) { // "input" [string ","] var
-  string st;
-  char *endp;
+void inputstmt(void) {
+    string st;
+    char *endp;
 
-  if (toktype == kSTRING) {
-    printf("%s", tok.substr(1).c_str());
-    nexttok();
-    if (!accept(";"))
-      expect(","); // accept either ";" or "," after prompt
-  } else
-    printf("? ");
+    if (toktype == kSTRING) {
+        printf("%s", tok.substr(1).c_str());
+        nexttok();
+        if (!accept(";"))
+            expect(",");
+        printf("? ");   // <-- moved here
+    } else {
+        printf("? ");
+    }
 
-  if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
-    int var = getsvarindex();
-    nexttok();
-    getline(cin, svars[var]);
-  } else {
-    int var = getvarindex();
-    nexttok();
-    getline(cin, st);
-    if (st.empty())
-      vars[var] = 0;
-    else if (isdigit(st[0]) || (st[0] == '-' && st.size() > 1))
-      vars[var] = strtol(st.c_str(), &endp, 10);
-    else
-      vars[var] = st[0];
-  }
+    if (toktype == kIDENT && tok.back() == '$') {
+        int var = getsvarindex();
+        nexttok();
+        getline(cin, svars[var]);
+    } else {
+        int var = getvarindex();
+        nexttok();
+        getline(cin, st);
+        if (st.empty())
+            vars[var] = 0;
+        else if (isdigit(st[0]) || (st[0] == '-' && st.size() > 1))
+            vars[var] = strtod(st.c_str(), &endp);
+        else
+            vars[var] = st[0];
+    }
 }
+
 
 void liststmt(void) {
   for (int i = 1; i < c_maxlines; ++i) {
