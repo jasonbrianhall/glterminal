@@ -143,7 +143,7 @@ int main(int argc, char *argv[]) {
   }
   for (;;) {
     errors = false;
-    printf("WOPR> ");
+    printf("> ");
     getline(cin, pgm[0]);
     if (!pgm[0].empty()) {
       initlex(0);
@@ -377,41 +377,7 @@ void showtime(bool running) {
 void help(void) {
   puts("+----------------------------------------------------------------------"
        "----+");
-  puts("|                WOPR BASIC  -  Shall we play a game?                  "
-       "   |");
-  puts("+----------------------------------------------------------------------"
-       "----+");
-  puts("| bye, clear, cls, end/stop, help, list, load/save, new, run, tron/off "
-       "   |");
-  puts("| call <addr>  himem: <n>  lomem: <n>  (stubs)                         "
-       "   |");
-  puts("| data <n>[,<n>...] / read <var> / restore                             "
-       "   |");
-  puts("| dim @(n)                                                             "
-       "    |");
-  puts("| for <var> = <e1> to <e2> ... next <var>                              "
-       "   |");
-  puts("| get <var>  (reads one char)                                          "
-       "    |");
-  puts("| gosub <e> ... return  /  goto <e>                                    "
-       "   |");
-  puts("| if <e> then <stmt>  /  on <e> goto/gosub <n>[,<n>...]                "
-       "  |");
-  puts("| input [prompt,] <var>  /  <var>=<expr>  /  poke <addr>,<val>         "
-       "   |");
-  puts("| print <expr|str>[,<expr|str>][;]                                     "
-       "   |");
-  puts("| rem <any>  or  ' <any>                                               "
-       "   |");
-  puts("| Operators: ^  * / \\ mod  + -  < <= > >= = <>  not and or            "
-       "   |");
-  puts("| Num vars: a..z   String vars: a$..z$   Array: @(n)                   "
-       "   |");
-  puts("| Num fns:  abs atn cos exp int len log peek rnd sgn sin sqr tan usr "
-       "val  |");
-  puts("| Str fns:  asc chr$ left$ mid$ right$ str$                            "
-       "   |");
-  puts("| Note: trig args/results scaled x1000000 (fixed-point)                "
+  puts("|                           WOPR BASIC                                 "
        "   |");
   puts("+----------------------------------------------------------------------"
        "----+");
@@ -492,8 +458,7 @@ string str_expression(void) {
     s = svars[getsvarindex()];
     nexttok();
   } else {
-    printf("(%d, %d) String expr expected, found: %s\n", curline, textp,
-           tok.c_str());
+    printf("(%d, %d) String expr expected, found: %s\n", curline, textp, tok.c_str());
     errors = true;
   }
   // string concatenation with +
@@ -530,8 +495,7 @@ void arrassn(void) { // array assignment: @(expr) {} = expr
 
   atndx = parenexpr();
   if (!accept("=")) {
-    printf("(%d, %d) Array Assign: Expecting '=', found: %s", curline, textp,
-           tok.c_str());
+    printf("(%d, %d) Array Assign: Expecting '=', found: %s", curline, textp, tok.c_str());
     errors = true;
   } else {
     n = expression(0);
@@ -550,8 +514,7 @@ void forstmt(void) { // for i = expr to expr
   forndx = var;
   forvar[forndx] = vars[var];
   if (!accept("to")) {
-    printf("(%d, %d) For: Expecting 'to', found: %s\n", curline, textp,
-           tok.c_str());
+    printf("(%d, %d) For: Expecting 'to', found: %s\n", curline, textp, tok.c_str());
     errors = true;
   } else {
     n = expression(0);
@@ -669,51 +632,55 @@ void nextstmt(void) {
 }
 
 void printstmt(void) {
-  int printwidth, printnl = true;
+    int printwidth, printnl = true;
 
-  while (tok != ":" && !tok.empty()) {
-    printnl = true;
-    printwidth = 0;
+    while (tok != ":" && !tok.empty()) {
+        printnl = true;
+        printwidth = 0;
 
-    if (accept("#")) {
-      if (num <= 0) {
-        printf("Expecting a print width, found: %s\n", pgm[curline].c_str());
-        return;
-      }
-      printwidth = num;
-      nexttok();
-      if (!accept(",")) {
-        printf("Print: Expecting a ',', found: %s\n", pgm[curline].c_str());
-        return;
-      }
+        if (accept("#")) {
+            if (num <= 0) {
+                printf("Expecting a print width, found: %s\n", pgm[curline].c_str());
+                return;
+            }
+            printwidth = num;
+            nexttok();
+            if (!accept(",")) {
+                printf("Print: Expecting a ',', found: %s\n", pgm[curline].c_str());
+                return;
+            }
+        }
+
+        if (toktype == kSTRING) {
+            printf("%*s", printwidth, tok.substr(1).c_str());
+            nexttok();
+        } else if (tok == "spc") {
+            nexttok();
+            int n = parenexpr();
+            printf("%*s", n, "");
+        } else if (tok == "chr$" || tok == "left$" || tok == "right$" ||
+                   tok == "mid$" || tok == "str$" || tok == "string$" ||
+                   tok == "inkey$" || tok == "space$") {
+            printf("%*s", printwidth, str_expression().c_str());
+        } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
+            printf("%*s", printwidth, svars[tok[0] - 'a'].c_str());
+            nexttok();
+        } else {
+            // REAL FIX: print numeric expressions as double, not int
+            if (printwidth)
+                printf("%*.6g", printwidth, expression(0));
+            else
+                printf("%.6g", expression(0));
+        }
+
+        if (accept(",") || accept(";")) {
+            printnl = false;
+        } else {
+            break;
+        }
     }
-
-    if (toktype == kSTRING) {
-      printf("%*s", printwidth, tok.substr(1).c_str());
-      nexttok();
-    } else if (tok == "spc") {
-      nexttok();
-      int n = parenexpr();
-      printf("%*s", n, "");
-    } else if (tok == "chr$" || tok == "left$" || tok == "right$" ||
-               tok == "mid$" || tok == "str$" || tok == "string$" ||
-               tok == "inkey$" || tok == "space$") {
-      printf("%*s", printwidth, str_expression().c_str());
-    } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
-      printf("%*s", printwidth, svars[tok[0] - 'a'].c_str());
-      nexttok();
-    } else {
-      printf("%*d", printwidth, expression(0));
-    }
-
-    if (accept(",") || accept(";")) {
-      printnl = false;
-    } else {
-      break;
-    }
-  }
-  if (printnl)
-    printf("\n");
+    if (printnl)
+        printf("\n");
 }
 
 // PRINT USING "fmt"; expr — minimal: skip format string, print value(s)
@@ -983,194 +950,210 @@ bool accept(const string s) {
 }
 
 double expression(int minprec) {
-  double n = 0;
+    double n = 0.0;
 
-  // String comparison: A$ = "x", A$ <> "x", INKEY$ = "", etc.
-  // Detect: string-var or string-func followed by = or <>
-  bool is_strexpr =
-      (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') ||
-      tok == "inkey$" || tok == "chr$" || tok == "left$" || tok == "right$" ||
-      tok == "mid$" || tok == "str$" || tok == "string$";
-  if (is_strexpr && minprec == 0) {
-    string lhs = str_expression();
-    if (tok == "=" || tok == "<>") {
-      string op = tok;
-      nexttok();
-      string rhs = str_expression();
-      return (op == "=") ? (lhs == rhs ? 1 : 0) : (lhs != rhs ? 1 : 0);
+    // String comparison: A$ = "x", A$ <> "x", INKEY$ = "", etc.
+    bool is_strexpr =
+        (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') ||
+        tok == "inkey$" || tok == "chr$" || tok == "left$" || tok == "right$" ||
+        tok == "mid$" || tok == "str$" || tok == "string$";
+    if (is_strexpr && minprec == 0) {
+        string lhs = str_expression();
+        if (tok == "=" || tok == "<>") {
+            string op = tok;
+            nexttok();
+            string rhs = str_expression();
+            return (op == "=") ? (lhs == rhs ? 1.0 : 0.0)
+                               : (lhs != rhs ? 1.0 : 0.0);
+        }
+        return (double)lhs.size();
     }
-    // used in non-comparison context: return length
-    return lhs.size();
-  }
 
-  // handle numeric operands, unary operators, functions, variables
-  if (toktype == kNUMBER) {
-    n = num;
-    nexttok();
-  } else if (tok == "-") {
-    nexttok();
-    n = -expression(7);
-  } else if (tok == "+") {
-    nexttok();
-    n = expression(7);
-  } else if (tok == "not") {
-    nexttok();
-    n = !expression(3);
-  } else if (tok == "abs") {
-    nexttok();
-    n = abs(parenexpr());
-  } else if (tok == "asc") {
-    nexttok();
-    expect("(");
-    if (toktype == kSTRING) {
-      n = (unsigned char)tok[1];
-      nexttok();
-    } else if (toktype == kIDENT && tok.back() == '$') {
-      string s = svars[getsvarindex()];
-      nexttok();
-      n = s.empty() ? 0 : (unsigned char)s[0];
+    // prefix / primary
+    if (toktype == kNUMBER) {
+        n = (double)num;
+        nexttok();
+    } else if (tok == "-") {
+        nexttok();
+        n = -expression(7);
+    } else if (tok == "+") {
+        nexttok();
+        n = expression(7);
+    } else if (tok == "not") {
+        nexttok();
+        n = (expression(3) == 0.0) ? 1.0 : 0.0;
+    } else if (tok == "abs") {
+        nexttok();
+        n = fabs(parenexpr());
+    } else if (tok == "asc") {
+        nexttok();
+        expect("(");
+        if (toktype == kSTRING) {
+            n = (unsigned char)tok[1];
+            nexttok();
+        } else if (toktype == kIDENT && tok.back() == '$') {
+            string s = svars[getsvarindex()];
+            nexttok();
+            n = s.empty() ? 0.0 : (unsigned char)s[0];
+        } else {
+            n = (unsigned char)tok[0];
+            nexttok();
+        }
+        expect(")");
+    } else if (tok == "len") {
+        nexttok();
+        expect("(");
+        if (toktype == kIDENT && tok.back() == '$') {
+            n = (double)svars[getsvarindex()].size();
+            nexttok();
+        } else {
+            n = (double)str_expression().size();
+        }
+        expect(")");
+    } else if (tok == "val") {
+        nexttok();
+        expect("(");
+        string s = str_expression();
+        expect(")");
+        char *endp = nullptr;
+        n = strtod(s.c_str(), &endp);
+        if (endp == s.c_str())
+            n = 0.0;
+    } else if (tok == "inkey$") {
+        nexttok();
+        n = getkey(false).empty() ? 0.0 : 1.0;
+    } else if (tok == "atn") {
+        nexttok();
+        n = atan(parenexpr());
+    } else if (tok == "cos") {
+        nexttok();
+        n = cos(parenexpr());
+    } else if (tok == "exp") {
+        nexttok();
+        n = exp(parenexpr());
+    } else if (tok == "int") {
+        nexttok();
+        n = floor(parenexpr());
+    } else if (tok == "log") {
+        nexttok();
+        {
+            double v = parenexpr();
+            n = (v > 0.0) ? log(v) : 0.0;
+        }
+    } else if (tok == "peek") {
+        nexttok();
+        parenexpr();
+        n = 0.0;
+    } else if (tok == "rnd" || tok == "irnd") {
+        nexttok();
+        int r = (int)parenexpr();
+        if (r <= 0) r = 1;
+        n = (double)rnd(r);
+    } else if (tok == "sgn") {
+        nexttok();
+        double v = parenexpr();
+        n = (v > 0.0) ? 1.0 : (v < 0.0 ? -1.0 : 0.0);
+    } else if (tok == "sin") {
+        nexttok();
+        n = sin(parenexpr());
+    } else if (tok == "sqr") {
+        nexttok();
+        {
+            double v = parenexpr();
+            n = (v >= 0.0) ? sqrt(v) : 0.0;
+        }
+    } else if (tok == "tan") {
+        nexttok();
+        n = tan(parenexpr());
+    } else if (tok == "usr") {
+        nexttok();
+        parenexpr();
+        n = 0.0;
+    } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
+        n = (double)svars[tok[0] - 'a'].size();
+        nexttok();
+    } else if (toktype == kIDENT) {
+        n = vars[getvarindex()];
+        nexttok();
+    } else if (tok == "@") {
+        nexttok();
+        n = atarry[parenexpr()];
+    } else if (tok == "(") {
+        n = parenexpr();
     } else {
-      n = tok[1];
-      nexttok();
+        printf("(%d, %d) Syntax error: expecting an operand, found: %s toktype: %d\n",
+               curline, textp, tok.c_str(), toktype);
+        return n;
     }
-    expect(")");
-  } else if (tok == "len") {
-    nexttok();
-    expect("(");
-    if (toktype == kIDENT && tok.back() == '$') {
-      n = svars[getsvarindex()].size();
-      nexttok();
-    } else {
-      n = str_expression().size();
+
+    // infix
+    for (;;) {
+        if (minprec <= 1 && tok == "or") {
+            nexttok();
+            n = ((n != 0.0) || (expression(2) != 0.0)) ? 1.0 : 0.0;
+        } else if (minprec <= 2 && tok == "and") {
+            nexttok();
+            n = ((n != 0.0) && (expression(3) != 0.0)) ? 1.0 : 0.0;
+        } else if (minprec <= 4 && tok == "=") {
+            nexttok();
+            n = (n == expression(5)) ? 1.0 : 0.0;
+        } else if (minprec <= 4 && tok == "<") {
+            nexttok();
+            n = (n < expression(5)) ? 1.0 : 0.0;
+        } else if (minprec <= 4 && tok == ">") {
+            nexttok();
+            n = (n > expression(5)) ? 1.0 : 0.0;
+        } else if (minprec <= 4 && tok == "<>") {
+            nexttok();
+            n = (n != expression(5)) ? 1.0 : 0.0;
+        } else if (minprec <= 4 && tok == "<=") {
+            nexttok();
+            n = (n <= expression(5)) ? 1.0 : 0.0;
+        } else if (minprec <= 4 && tok == ">=") {
+            nexttok();
+            n = (n >= expression(5)) ? 1.0 : 0.0;
+        } else if (minprec <= 5 && tok == "+") {
+            nexttok();
+            n += expression(6);
+        } else if (minprec <= 5 && tok == "-") {
+            nexttok();
+            n -= expression(6);
+        } else if (minprec <= 6 && tok == "*") {
+            nexttok();
+            n *= expression(7);
+        } else if (minprec <= 6 && tok == "/") {
+            nexttok();
+            {
+                double rhs = expression(7);
+                n = (rhs == 0.0) ? 0.0 : n / rhs;
+            }
+        } else if (minprec <= 6 && tok == "\\") {
+            nexttok();
+            {
+                double rhs = expression(7);
+                if (rhs == 0.0) {
+                    n = 0.0;
+                } else {
+                    n = floor(n / rhs);
+                }
+            }
+        } else if (minprec <= 6 && tok == "mod") {
+            nexttok();
+            {
+                double rhs = expression(7);
+                n = fmod(n, rhs);
+            }
+        } else if (minprec <= 8 && tok == "^") {
+            nexttok();
+            // right-associative exponent
+            double rhs = expression(8);
+            n = pow(n, rhs);
+        } else {
+            break;
+        }
     }
-    expect(")");
-  } else if (tok == "val") {
-    nexttok();
-    expect("(");
-    string s = str_expression();
-    expect(")");
-    n = atoi(s.c_str());
-    // String comparisons: treat string expr as integer 0, but handle = and <>
-    // against string literals
-  } else if (tok == "inkey$") {
-    nexttok();
-    n = (getkey(false).empty() ? 0 : 1); // 0=no key
-  } else if (tok == "atn") {
-    nexttok();
-    n = (atan((double)parenexpr()) * 1000000);
-  } else if (tok == "cos") {
-    nexttok();
-    n = (cos((double)parenexpr() / 1000000.0) * 1000000);
-  } else if (tok == "exp") {
-    nexttok();
-    n = (exp((double)parenexpr() / 1000000.0) * 1000000);
-  } else if (tok == "int") {
-    nexttok();
-    n = parenexpr(); // already integer
-  } else if (tok == "log") {
-    nexttok();
-    {
-      int v = parenexpr();
-      n = v > 0 ? (log((double)v) * 1000000) : 0;
-    }
-  } else if (tok == "peek") {
-    nexttok();
-    parenexpr();
-    n = 0; // stub: returns 0
-  } else if (tok == "rnd" || tok == "irnd") {
-    nexttok();
-    n = rnd(parenexpr());
-  } else if (tok == "sgn") {
-    nexttok();
-    n = parenexpr();
-    n = (n > 0) - (n < 0);
-  } else if (tok == "sin") {
-    nexttok();
-    n = (sin((double)parenexpr() / 1000000.0) * 1000000);
-  } else if (tok == "sqr") {
-    nexttok();
-    {
-      int v = parenexpr();
-      n = v >= 0 ? sqrt((double)v) : 0;
-    }
-  } else if (tok == "tan") {
-    nexttok();
-    n = (tan((double)parenexpr() / 1000000.0) * 1000000);
-  } else if (tok == "usr") {
-    nexttok();
-    parenexpr();
-    n = 0; // stub: returns 0
-  } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
-    // string variable used in numeric context — treat as its length (unusual
-    // but safe)
-    n = svars[tok[0] - 'a'].size();
-    nexttok();
-  } else if (toktype == kIDENT) {
-    n = vars[getvarindex()];
-    nexttok();
-  } else if (tok == "@") {
-    nexttok();
-    n = atarry[parenexpr()];
-  } else if (tok == "(") {
-    n = parenexpr();
-  } else {
-    printf(
-        "(%d, %d) Syntax error: expecting an operand, found: %s toktype: %d\n",
-        curline, textp, tok.c_str(), toktype);
+
     return n;
-  }
-
-  for (;;) { // while binary operator and precedence of tok >= minprec
-    if (minprec <= 1 && tok == "or") {
-      nexttok();
-      n = (n != 0 || expression(2) != 0) ? 1.0 : 0.0;
-    } else if (minprec <= 2 && tok == "and") {
-      nexttok();
-      n = (n != 0 && expression(3) != 0) ? 1.0 : 0.0;
-    } else if (minprec <= 4 && tok == "=") {
-      nexttok();
-      n = n == expression(5);
-    } else if (minprec <= 4 && tok == "<") {
-      nexttok();
-      n = n < expression(5);
-    } else if (minprec <= 4 && tok == ">") {
-      nexttok();
-      n = n > expression(5);
-    } else if (minprec <= 4 && tok == "<>") {
-      nexttok();
-      n = n != expression(5);
-    } else if (minprec <= 4 && tok == "<=") {
-      nexttok();
-      n = n <= expression(5);
-    } else if (minprec <= 4 && tok == ">=") {
-      nexttok();
-      n = n >= expression(5);
-    } else if (minprec <= 5 && tok == "+") {
-      nexttok();
-      n += expression(6);
-    } else if (minprec <= 5 && tok == "-") {
-      nexttok();
-      n -= expression(6);
-    } else if (minprec <= 6 && tok == "*") {
-      nexttok();
-      n *= expression(7);
-    } else if (minprec <= 6 && tok == "/") {
-      nexttok();
-      n /= expression(7);
-    } else if (minprec <= 6 && tok == "\\") {
-      nexttok();
-      n /= expression(7);
-    } else if (minprec <= 6 && tok == "mod") {
-      nexttok();
-      n = fmod(n, expression(7));
-    } else if (minprec <= 8 && tok == "^") {
-      nexttok();
-      n = pow(n, expression(9));
-    } else {
-      break;
-    }
-  }
-  return n;
 }
 
 int parenexpr(void) {
