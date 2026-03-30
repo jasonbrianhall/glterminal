@@ -82,6 +82,7 @@ void docmd(void) {
       return;
     } else if (tok == "cls") {
       nexttok();
+      term_cls();
     } else if (tok == "get") {
       nexttok();
       getstmt();
@@ -100,26 +101,33 @@ void docmd(void) {
       accept(":");
       expression(0); // stub
     } else if (tok == "color") {
-      nexttok(); // stub: consume up to 3 comma-separated args
-      expression(0);
+      nexttok();
+      double fg = expression(0);
+      double bg = 0, border = 0;
       if (accept(",")) {
-        expression(0);
+        bg = expression(0);
         if (accept(","))
-          expression(0);
+          border = expression(0);
       }
+      term_color((int)fg, (int)bg);
     } else if (tok == "locate") {
-      nexttok(); // stub: consume row,col[,cursor]
-      expression(0);
+      nexttok();
+      double row = expression(0);
+      double col = 0;
+      double cursor = 1;
       if (accept(",")) {
-        expression(0);
+        col = expression(0);
         if (accept(","))
-          expression(0);
+          cursor = expression(0);
       }
+      term_locate((int)row, (int)col);
     } else if (tok == "screen") {
-      nexttok(); // stub: consume up to 2 args
-      expression(0);
+      nexttok();
+      double mode = expression(0);
+      double colorswitch = 0;
       if (accept(","))
-        expression(0);
+        colorswitch = expression(0);
+      term_screen((int)mode);
     } else if (tok == "width") {
       nexttok();
       expression(0); // stub

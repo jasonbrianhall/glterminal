@@ -12,6 +12,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <vector>
+#include "terminal.h"
 
 using namespace std;
 
