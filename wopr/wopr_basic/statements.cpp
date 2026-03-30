@@ -164,8 +164,16 @@ void ifstmt(void) {
     skiptoeol();
   else {
     accept("then");
-    if (toktype == kNUMBER)
+    // Handle GOTO, GOSUB, or direct line number in IF...THEN statements
+    if (tok == "goto") {
+      nexttok();
       gotostmt();
+    } else if (tok == "gosub") {
+      nexttok();
+      gosubstmt();
+    } else if (toktype == kNUMBER) {
+      gotostmt();
+    }
   }
 }
 
@@ -362,6 +370,8 @@ void returnstmt(void) {
   textp = gtp_stack.top();
   gtp_stack.pop();
   initlex2();
+  // Skip past the GOSUB statement to next statement/line
+  nexttok();
 }
 
 void gotostmt(void) {

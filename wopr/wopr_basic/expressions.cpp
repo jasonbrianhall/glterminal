@@ -3,10 +3,14 @@
 double expression(int minprec) {
     double n = 0.0;
 
-    // String comparison: A$ = "x", A$ <> "x", etc.
-    // Note: inkey$, chr$, etc. are handled separately as regular functions
+    // String comparison: A$ = "x", A$ <> "x", MID$(x,y,z) = "a", etc.
+    // Check if this is a string variable or string function
     bool is_strexpr =
-        (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$');
+        (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') ||
+        tok == "mid$" || tok == "left$" || tok == "right$" || 
+        tok == "chr$" || tok == "str$" || tok == "string$" || 
+        tok == "inkey$" || tok == "space$";
+    
     if (is_strexpr && minprec == 0) {
         string lhs = str_expression();
         if (tok == "=" || tok == "<>") {
