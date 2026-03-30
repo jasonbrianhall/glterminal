@@ -96,8 +96,14 @@ double expression(int minprec) {
         }
     } else if (tok == "peek") {
         nexttok();
-        parenexpr();
-        n = 0.0;
+        int addr = (int)parenexpr();
+        // Simulate BIOS memory for equipment detection (0x410)
+        // Bit 5-4 indicate display type: 11b = 80-column (0x30)
+        if (addr == 0x410) {
+            n = 0x30;  // Report 80-column display available
+        } else {
+            n = 0.0;   // Default to 0 for other addresses
+        }
     } else if (tok == "rnd" || tok == "irnd") {
         nexttok();
         int r = (int)parenexpr();
