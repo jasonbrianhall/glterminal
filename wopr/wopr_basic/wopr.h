@@ -72,6 +72,7 @@ void nexttok(void);
 void getch(void);
 void readstr(void);
 void readint(void);
+void readhex(void);
 void readident(void);
 
 // Parser functions

@@ -74,6 +74,8 @@ begin:
     readstr();
   } else if (tok[0] == '\'') {
     skiptoeol();
+  } else if (tok[0] == '&' && thech == 'H') {
+    readhex();
   } else if (punct.find(tok[0]) != string::npos) {
     toktype = kPUNCT;
     if ((tok[0] == '<' && (thech == '>' || thech == '=')) ||
@@ -118,6 +120,21 @@ void readint(void) {
     getch();
   }
   num = strtol(tok.c_str(), &endp, 10);
+}
+
+void readhex(void) {
+  char *endp;
+  toktype = kNUMBER;
+  // tok already contains '&', add 'H'
+  tok += thech;  // add 'H'
+  getch();
+  // read hex digits
+  while (isxdigit(thech)) {
+    tok += thech;
+    getch();
+  }
+  // parse as hex: skip '&H' prefix
+  num = strtol(tok.c_str() + 2, &endp, 16);
 }
 
 void readident(void) {
