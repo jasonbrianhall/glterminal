@@ -21,6 +21,10 @@ double vars[c_maxvars + 1];
 double atarry[c_at_max];
 string svars[c_maxvars];
 
+// Named array system
+Array arrays[MAX_ARRAYS];
+int array_count = 0;
+
 // Data statement support
 vector<double> data_store;
 int data_ptr = 0;
@@ -77,6 +81,16 @@ int getsvarindex(void) {
   return tok[0] - 'a';
 }
 
+// Get array by name
+Array* get_array(const string& name) {
+  for (int i = 0; i < array_count; i++) {
+    if (arrays[i].name == name) {
+      return &arrays[i];
+    }
+  }
+  return nullptr;
+}
+
 int validlinenum(int n) {
   if (n <= 0 || n > c_maxlines) {
     printf("(%d, %d) Line number out of range", curline, textp);
@@ -87,14 +101,49 @@ int validlinenum(int n) {
 }
 
 void assign(void) {
-  int var;
-
-  var = getvarindex();
+  string name = tok;
+  int var = getvarindex();
   nexttok();
-  expect("=");
-  vars[var] = expression(0);
-  if (tracing)
-    printf("*** %c = %d\n", var + 'a', vars[var]);
+  
+  // Check if this is an array assignment like A(5) = 10 or AMORT(0,1) = 5
+  if (tok == "(") {
+    nexttok();
+    int idx = (int)expression(0);
+    int idx2 = 0;
+    
+    // Handle multi-dimensional arrays
+    if (tok == ",") {
+      nexttok();
+      idx2 = (int)expression(0);
+    }
+    
+    expect(")");
+    expect("=");
+    double val = expression(0);
+    
+    // Find and assign to the array
+    Array* arr = get_array(name);
+    if (arr != nullptr) {
+      // For multi-dimensional arrays stored as linear: row*cols + col
+      int linear_idx = idx * 500 + idx2;  // Simplified for 500-wide arrays
+      
+      if (linear_idx >= 0 && linear_idx < arr->size) {
+        arr->data[linear_idx] = val;
+        if (tracing)
+          printf("*** %s(%d,%d) = %.6g\n", name.c_str(), idx, idx2, val);
+      } else {
+        printf("(%d, %d) Array index out of range: %d\n", curline, textp, linear_idx);
+      }
+    } else {
+      printf("(%d, %d) Array not found: %s\n", curline, textp, name.c_str());
+    }
+  } else {
+    // Regular variable assignment
+    expect("=");
+    vars[var] = expression(0);
+    if (tracing)
+      printf("*** %c = %.6g\n", var + 'a', vars[var]);
+  }
 }
 
 void rassign(void) {
@@ -215,6 +264,40 @@ void inputstmt(void) {
     }
 }
 
+void lineinputstmt(void) {
+    string st;
+    char *endp;
+
+    // LINE INPUT "prompt"; variable  OR  LINE INPUT prompt, variable
+    if (toktype == kSTRING) {
+        // Print the prompt (string without quotes)
+        printf("%s", tok.substr(1).c_str());
+        nexttok();
+        if (!accept(";")) {
+            expect(",");
+        }
+    } else {
+        // No prompt specified, just get the variable
+    }
+
+    // Now read the input
+    if (toktype == kIDENT && tok.back() == '$') {
+        int var = getsvarindex();
+        nexttok();
+        getline(cin, svars[var]);
+    } else {
+        int var = getvarindex();
+        nexttok();
+        getline(cin, st);
+        if (st.empty())
+            vars[var] = 0;
+        else if (isdigit(st[0]) || (st[0] == '-' && st.size() > 1))
+            vars[var] = strtod(st.c_str(), &endp);
+        else
+            vars[var] = st[0];
+    }
+}
+
 void printstmt(void) {
     int printwidth, printnl = true;
 
@@ -303,11 +386,130 @@ void printstmt(void) {
 }
 
 void printusingstmt(void) {
-  if (toktype == kSTRING)
+  string format_str;
+  
+  // Get the format string
+  if (toktype == kSTRING) {
+    format_str = tok.substr(1);  // Remove leading quote
     nexttok();
-  accept(";");
-  accept(",");
-  printstmt();
+  } else {
+    printf("(%d, %d) PRINT USING: Format string required\n", curline, textp);
+    return;
+  }
+  
+  // Expect comma or semicolon
+  if (!accept(";")) {
+    accept(",");
+  }
+  
+  // Parse and apply format to each expression
+  size_t fmt_pos = 0;
+  int item_count = 0;
+  
+  while (tok != ":" && !tok.empty()) {
+    double val = 0.0;
+    string str_val;
+    bool is_string = false;
+    
+    // Get the value to print
+    if (toktype == kSTRING) {
+      str_val = tok.substr(1);
+      is_string = true;
+      nexttok();
+    } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
+      str_val = svars[tok[0] - 'a'];
+      is_string = true;
+      nexttok();
+    } else {
+      val = expression(0);
+      is_string = false;
+    }
+    
+    // Find next format specifier in the format string
+    string fmt_spec = "";
+    bool found_spec = false;
+    size_t spec_start = fmt_pos;
+    
+    while (fmt_pos < format_str.length()) {
+      char c = format_str[fmt_pos];
+      
+      if (c == '#' || c == '0' || c == '.') {
+        if (!found_spec) {
+          found_spec = true;
+          spec_start = fmt_pos;
+        }
+        fmt_spec += c;
+        fmt_pos++;
+        
+        // Check if format specifier is complete
+        if (fmt_pos < format_str.length()) {
+          char next = format_str[fmt_pos];
+          if (next != '#' && next != '0' && next != '.') {
+            break;
+          }
+        } else {
+          break;
+        }
+      } else if (found_spec) {
+        break;  // End of current specifier
+      } else {
+        // Print literal characters
+        printf("%c", c);
+        fmt_pos++;
+      }
+    }
+    
+    // Apply formatting to the value
+    if (found_spec && !is_string) {
+      // Count digits before and after decimal
+      int before_decimal = 0, after_decimal = 0;
+      bool has_decimal = false;
+      
+      for (char c : fmt_spec) {
+        if (c == '.') {
+          has_decimal = true;
+        } else if (!has_decimal) {
+          before_decimal++;
+        } else {
+          after_decimal++;
+        }
+      }
+      
+      // Format the number
+      if (has_decimal) {
+        printf("%*.*f", before_decimal, after_decimal, val);
+      } else {
+        printf("%*d", before_decimal, (int)val);
+      }
+    } else if (found_spec && is_string) {
+      // For strings, use width if available
+      int width = fmt_spec.length();
+      printf("%*s", width, str_val.c_str());
+    } else if (!found_spec && !is_string) {
+      // No format specifier, just print the value
+      printf("%.6g", val);
+    } else if (!found_spec && is_string) {
+      printf("%s", str_val.c_str());
+    }
+    
+    item_count++;
+    
+    // Check for more items to print
+    if (!accept(",") && !accept(";")) {
+      break;
+    }
+  }
+  
+  // Print any remaining format string
+  while (fmt_pos < format_str.length()) {
+    char c = format_str[fmt_pos];
+    if (c != '#' && c != '0' && c != '.') {
+      printf("%c", c);
+    }
+    fmt_pos++;
+  }
+  
+  printf("\n");
 }
 
 void datastmt(void) {
@@ -374,11 +576,75 @@ void readstmt(void) {
 }
 
 void dimstmt(void) {
-  if (tok == "@") {
-    nexttok();
-    parenexpr();
-  } else {
-    skiptoeol();
+  // DIM can handle: DIM A(100), B$(50), C(10,10)
+  // For now, we support single-dimensional arrays: A(100)
+  
+  while (tok != ":" && !tok.empty()) {
+    if (tok == "@") {
+      // Special case: @ array
+      nexttok();
+      parenexpr();
+      if (tok == ",") {
+        nexttok();
+      }
+    } else if (toktype == kIDENT) {
+      // Named array: A(100) or A$(50)
+      string array_name = tok;
+      bool is_string = (tok.back() == '$');
+      
+      if (is_string) {
+        array_name = array_name.substr(0, array_name.length() - 1);  // Remove $
+      }
+      
+      nexttok();
+      
+      // Expect opening parenthesis
+      if (!accept("(")) {
+        printf("(%d, %d) DIM: Expected '(' after array name\n", curline, textp);
+        return;
+      }
+      
+      // Get array size
+      int size = (int)expression(0);
+      
+      // Check for multi-dimensional (for now we only use first dimension)
+      if (accept(",")) {
+        int size2 = (int)expression(0);
+        // For now, treat multi-dimensional as size1 * size2
+        size = size * size2;
+      }
+      
+      // Expect closing parenthesis
+      if (!accept(")")) {
+        printf("(%d, %d) DIM: Expected ')' after array size\n", curline, textp);
+        return;
+      }
+      
+      // Create the array if it doesn't exist
+      bool found = false;
+      for (int i = 0; i < array_count; i++) {
+        if (arrays[i].name == array_name) {
+          // Array already exists, skip
+          found = true;
+          break;
+        }
+      }
+      
+      if (!found && array_count < MAX_ARRAYS) {
+        arrays[array_count].name = array_name;
+        arrays[array_count].size = size;
+        arrays[array_count].is_string = is_string;
+        arrays[array_count].data.resize(size, 0.0);
+        array_count++;
+      }
+      
+      // Handle comma between multiple DIM statements
+      if (tok == ",") {
+        nexttok();
+      }
+    } else {
+      break;
+    }
   }
 }
 

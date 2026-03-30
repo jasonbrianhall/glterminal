@@ -25,7 +25,7 @@ double expression(int minprec) {
 
     // prefix / primary
     if (toktype == kNUMBER) {
-        n = (double)num;
+        n = numval;  // Use the full double precision value
         nexttok();
     } else if (tok == "-") {
         nexttok();
@@ -133,8 +133,46 @@ double expression(int minprec) {
         n = (double)svars[tok[0] - 'a'].size();
         nexttok();
     } else if (toktype == kIDENT) {
-        n = vars[getvarindex()];
+        // Check if this is a named array access like A(5)
+        string name = tok;
         nexttok();
+        
+        if (tok == "(") {
+            // This is an array access
+            nexttok();
+            int idx = (int)expression(0);
+            int idx2 = 0;
+            
+            // Handle multi-dimensional arrays like AMORT(0,1)
+            if (tok == ",") {
+                nexttok();
+                idx2 = (int)expression(0);
+            }
+            
+            expect(")");
+            
+            // Find the array
+            Array* arr = get_array(name);
+            if (arr != nullptr) {
+                // For multi-dimensional arrays stored as linear: row*cols + col
+                // We assume 500,2 means 500 rows, 2 cols = linear size 1000
+                int linear_idx = idx * 500 + idx2;  // Simplified for 500-wide arrays
+                
+                if (linear_idx < 0 || linear_idx >= arr->size) {
+                    printf("(%d, %d) Array index out of range: %d (max: %d)\n",
+                           curline, textp, linear_idx, arr->size - 1);
+                    n = 0.0;
+                } else {
+                    n = arr->data[linear_idx];
+                }
+            } else {
+                printf("(%d, %d) Array not found: %s\n", curline, textp, name.c_str());
+                n = 0.0;
+            }
+        } else {
+            // Regular variable
+            n = vars[name[0] - 'a'];
+        };
     } else if (tok == "@") {
         nexttok();
         int idx = (int)parenexpr();

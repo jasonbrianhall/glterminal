@@ -52,6 +52,28 @@ void docmd(void) {
       nexttok();
       showtime(running);
       return;
+    } else if (tok == "chain") {
+      nexttok();
+      if (toktype == kSTRING) {
+        string filename = tok.substr(1);  // Remove leading quote
+        nexttok();
+        // Optional: line number to GOTO in the new program
+        if (accept(",")) {
+          int target_line = (int)expression(0);
+        }
+        // Load and run the new program
+        tok = "\"";
+        tok += filename;
+        toktype = kSTRING;
+        newstmt();
+        loadstmt();
+        toktype = kIDENT;
+        tok = "run";
+        docmd();
+        exit(0);  // Exit after chaining
+      } else {
+        printf("(%d, %d) CHAIN: Filename required\n", curline, textp);
+      }
     } else if (tok == "clear") {
       nexttok();
       clearvars();
@@ -93,7 +115,6 @@ void docmd(void) {
     } else if (tok == "dim") {
       nexttok();
       dimstmt();
-      return;
     } else if (tok == "poke") {
       nexttok();
       pokestmt();
@@ -172,20 +193,10 @@ void docmd(void) {
       skiptoeol(); // type decls — stub
     } else if (tok == "line") {
       nexttok(); // LINE INPUT "prompt";var$
-      accept("input");
-      if (toktype == kSTRING) {
-        printf("%s", tok.substr(1).c_str());
-        nexttok();
-        accept(";");
-        accept(",");
-      }
-      if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
-        int var = getsvarindex();
-        nexttok();
-        getline(cin, svars[var]);
+      if (accept("input")) {
+        lineinputstmt();
       } else {
-        string tmp;
-        getline(cin, tmp);
+        skiptoeol(); // Unknown LINE command
       }
     } else if (tok == "print") {
       nexttok();
@@ -280,6 +291,9 @@ int main(int argc, char *argv[]) {
     toktype = kIDENT;
     tok = "run";
     docmd();
+    if (debug_log)
+      fclose(debug_log);
+    return 0;  // Exit after running the file
   } else {
     newstmt();
     help();

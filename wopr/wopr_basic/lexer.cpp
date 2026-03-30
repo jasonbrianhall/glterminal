@@ -4,6 +4,7 @@
 toktype_t toktype;
 string tok;
 int num;
+double numval;
 unsigned textp;
 string thelin;
 char thech;
@@ -130,7 +131,34 @@ void readint(void) {
     tok += thech;
     getch();
   }
-  num = strtol(tok.c_str(), &endp, 10);
+  // Handle decimal point for floating point numbers
+  if (thech == '.' && textp < thelin.length() && isdigit(thelin[textp])) {
+    tok += thech;
+    getch();
+    while (isdigit(thech)) {
+      tok += thech;
+      getch();
+    }
+  }
+  // Handle scientific notation (e.g., 1.5E-3)
+  if ((thech == 'E' || thech == 'e') && textp <= thelin.length()) {
+    char next_ch = (textp < thelin.length()) ? thelin[textp] : '\0';
+    if (isdigit(next_ch) || next_ch == '+' || next_ch == '-') {
+      tok += thech;
+      getch();
+      if (thech == '+' || thech == '-') {
+        tok += thech;
+        getch();
+      }
+      while (isdigit(thech)) {
+        tok += thech;
+        getch();
+      }
+    }
+  }
+  // Parse the number - use strtod to handle decimals
+  numval = strtod(tok.c_str(), &endp);
+  num = (int)numval;  // Keep integer version for compatibility
 }
 
 void readhex(void) {

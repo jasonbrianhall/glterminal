@@ -16,12 +16,20 @@
 
 using namespace std;
 
+// Array structure for named arrays
+struct Array {
+  string name;
+  vector<double> data;
+  int size;
+  bool is_string;
+};
+
 // Debug mode
 extern bool debug_mode;
 extern FILE *debug_log;
 
 // Constants
-enum { c_maxlines = 7000, c_at_max = 1000, c_maxvars = 26 };
+enum { c_maxlines = 7000, c_at_max = 1000, c_maxvars = 26, MAX_ARRAYS = 26 };
 
 // Token types
 typedef enum { kNONE, kPUNCT, kIDENT, kNUMBER, kSTRING } toktype_t;
@@ -30,6 +38,7 @@ typedef enum { kNONE, kPUNCT, kIDENT, kNUMBER, kSTRING } toktype_t;
 extern toktype_t toktype;
 extern string tok;
 extern int num;
+extern double numval;
 extern unsigned textp;
 extern string thelin;
 extern char thech;
@@ -50,6 +59,11 @@ extern clock_t timestart;
 extern double vars[c_maxvars + 1];
 extern double atarry[c_at_max];
 extern string svars[c_maxvars];
+
+// Array structure for named arrays
+// Global array declarations
+extern Array arrays[MAX_ARRAYS];
+extern int array_count;
 
 // Data statement support
 extern vector<double> data_store;
@@ -107,12 +121,15 @@ void dimstmt(void);
 void pokestmt(void);
 void getstmt(void);
 void rassign(void);
+void lineinputstmt(void);
 
 // Assignment functions
 void assign(void);
 void arrassn(void);
 int getvarindex(void);
 int getsvarindex(void);
+// Get array by name
+Array* get_array(const string& name);
 
 // Built-in statement functions
 void liststmt(void);
