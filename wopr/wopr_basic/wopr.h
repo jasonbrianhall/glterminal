@@ -46,6 +46,7 @@ extern char thech;
 // Global program state
 extern string pgm[c_maxlines + 1];
 extern int curline;
+extern bool goto_executed;  // Flag set when GOTO/GOSUB changes line
 extern bool errors, tracing, need_colon;
 
 // Stack for gosub/return

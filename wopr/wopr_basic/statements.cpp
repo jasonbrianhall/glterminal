@@ -7,6 +7,7 @@
 // Global program state
 string pgm[c_maxlines + 1];
 int curline;
+bool goto_executed = false;  // Flag set when GOTO/GOSUB changes line
 bool errors, tracing, need_colon;
 
 // Stack for gosub/return
@@ -759,8 +760,10 @@ void returnstmt(void) {
 
 void gotostmt(void) {
   int n = expression(0);
-  if (validlinenum(n))
+  if (validlinenum(n)) {
     initlex(n);
+    goto_executed = true;  // Signal that we've jumped to a new line
+  }
 }
 
 void ongotostmt(void) {

@@ -40,6 +40,8 @@ void docmd(void) {
   bool running = false;
   for (;;) {
     need_colon = true;
+    goto_executed = false;  // Reset flag at start of statement processing
+    
     if (debug_mode && debug_log && curline > 0)
       debug_log_line();
     if (tracing && tok != ":" && !tok.empty() && textp <= thelin.length())
@@ -252,6 +254,12 @@ void docmd(void) {
 
     if (errors)
       return;
+    
+    // If GOTO or GOSUB was executed, break out of this line and process the new line
+    if (goto_executed) {
+      continue;  // Go back to start of main loop with new line
+    }
+    
     if (tok.empty()) {
       while (tok.empty()) {
         if (curline == 0 || curline >= c_maxlines) {
