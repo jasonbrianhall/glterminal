@@ -14,10 +14,34 @@
 
 #include "wopr.h"
 
+bool debug_mode = false;
+FILE *debug_log = nullptr;
+
+void debug_log_line(void) {
+  if (!debug_mode || !debug_log) return;
+  
+  fprintf(debug_log, "Line %d: %s\n", curline, pgm[curline].c_str());
+  fprintf(debug_log, "  Variables: ");
+  for (int i = 0; i < 26; i++) {
+    if (vars[i] != 0.0)
+      fprintf(debug_log, "%c=%.6g ", 'a' + i, vars[i]);
+  }
+  fprintf(debug_log, "\n");
+  fprintf(debug_log, "  Strings: ");
+  for (int i = 0; i < 26; i++) {
+    if (!svars[i].empty())
+      fprintf(debug_log, "%c$=\"%s\" ", 'a' + i, svars[i].c_str());
+  }
+  fprintf(debug_log, "\n");
+  fflush(debug_log);
+}
+
 void docmd(void) {
   bool running = false;
   for (;;) {
     need_colon = true;
+    if (debug_mode && debug_log && curline > 0)
+      debug_log_line();
     if (tracing && tok != ":" && !tok.empty() && textp <= thelin.length())
       printf("[%d] %s %s\n", curline, tok.c_str(),
              thelin.substr(textp - 1).c_str());
@@ -236,10 +260,22 @@ void docmd(void) {
 int main(int argc, char *argv[]) {
   srand((unsigned)time(NULL));
   
-  if (argc > 1) {
+  // Check for -D debug flag
+  int arg_start = 1;
+  if (argc > 1 && string(argv[1]) == "-D") {
+    debug_mode = true;
+    debug_log = fopen("debug.log", "w");
+    if (!debug_log) {
+      fprintf(stderr, "Error: Could not open debug.log for writing\n");
+      return 1;
+    }
+    arg_start = 2;
+  }
+  
+  if (argc > arg_start) {
     toktype = kSTRING;
     tok = "\"";
-    tok += argv[1];
+    tok += argv[arg_start];
     loadstmt();
     toktype = kIDENT;
     tok = "run";
@@ -261,4 +297,7 @@ int main(int argc, char *argv[]) {
         docmd();
     }
   }
+  
+  if (debug_log)
+    fclose(debug_log);
 }

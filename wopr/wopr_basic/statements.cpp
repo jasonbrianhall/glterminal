@@ -160,9 +160,10 @@ void nextstmt(void) {
 
 void ifstmt(void) {
   need_colon = false;
-  if (expression(0) == 0)
-    skiptoeol();
-  else {
+  double cond = expression(0);
+  
+  if (cond != 0) {
+    // Condition is TRUE - execute THEN part
     accept("then");
     // Handle GOTO, GOSUB, or direct line number in IF...THEN statements
     if (tok == "goto") {
@@ -174,6 +175,12 @@ void ifstmt(void) {
     } else if (toktype == kNUMBER) {
       gotostmt();
     }
+    // Otherwise continue with next statement (which will be after the ELSE)
+  } else {
+    // Condition is FALSE - skip THEN, look for ELSE
+    skiptoeol();  // Skip rest of THEN clause
+    // Note: ELSE handling would require parsing the next line or remaining tokens
+    // For now, just skip to end of line
   }
 }
 
@@ -212,7 +219,6 @@ void printstmt(void) {
     int printwidth, printnl = true;
 
     while (tok != ":" && !tok.empty()) {
-        printnl = true;
         printwidth = 0;
 
         if (accept("#")) {
@@ -228,31 +234,68 @@ void printstmt(void) {
             }
         }
 
+        // Handle different types of print items
+        bool printed_something = false;
+        
         if (toktype == kSTRING) {
             printf("%*s", printwidth, tok.substr(1).c_str());
             nexttok();
+            printed_something = true;
         } else if (tok == "spc") {
             nexttok();
             int n = parenexpr();
             printf("%*s", n, "");
+            printed_something = true;
         } else if (tok == "chr$" || tok == "left$" || tok == "right$" ||
                    tok == "mid$" || tok == "str$" || tok == "string$" ||
                    tok == "inkey$" || tok == "space$") {
             printf("%*s", printwidth, str_expression().c_str());
+            printed_something = true;
         } else if (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') {
             printf("%*s", printwidth, svars[tok[0] - 'a'].c_str());
             nexttok();
-        } else {
+            printed_something = true;
+        } else if (toktype == kIDENT || toktype == kNUMBER || tok == "(" || 
+                   tok == "-" || tok == "+" || tok == "not" ||
+                   tok == "abs" || tok == "asc" || tok == "len" || tok == "val" ||
+                   tok == "atn" || tok == "cos" || tok == "exp" || tok == "int" ||
+                   tok == "log" || tok == "peek" || tok == "rnd" || tok == "sgn" ||
+                   tok == "sin" || tok == "sqr" || tok == "tan" || tok == "usr" ||
+                   tok == "@") {
+            // This looks like an expression
             if (printwidth)
                 printf("%*.6g", printwidth, expression(0));
             else
                 printf("%.6g", expression(0));
+            printed_something = true;
+        } else if (tok == ":" || tok.empty()) {
+            // End of statement
+            break;
+        } else {
+            // Unknown token in print statement
+            printf("(%d, %d) Unexpected token in PRINT: %s\n", curline, textp, tok.c_str());
+            break;
         }
 
-        if (accept(",") || accept(";")) {
-            printnl = false;
-        } else {
+        if (!printed_something) {
             break;
+        }
+
+        // Handle separators after the printed item
+        if (tok == ",") {
+            printf("\t");  // Tab for comma separator
+            nexttok();
+            printnl = true;
+        } else if (tok == ";") {
+            // Semicolon means no newline and no space
+            nexttok();
+            printnl = false;
+        } else if (tok == ":" || tok.empty()) {
+            // End of statement
+            break;
+        } else {
+            // Space-separated item - just continue the loop
+            // Don't consume token, just keep processing
         }
     }
     if (printnl)
@@ -359,19 +402,93 @@ void getstmt(void) {
 }
 
 void gosubstmt(void) {
-  gln_stack.push(curline);
-  gtp_stack.push(textp);
-  gotostmt();
+  // At this point, tok contains the line number (as a NUMBER token)
+  if (toktype != kNUMBER) {
+    printf("(%d, %d) GOSUB: expecting line number, found: %s\n", curline, textp, tok.c_str());
+    errors = true;
+    return;
+  }
+  
+  int target_line = num;
+  int save_line = curline;
+  
+  // Consume the line number token to get the position after it
+  nexttok();
+  unsigned save_textp = textp;  // Position AFTER the line number token
+  
+  printf("[GOSUB] Calling line %d from line %d at position %u\n", target_line, save_line, save_textp);
+  printf("[GOSUB] Stack before push (depth=%lu):\n", gln_stack.size());
+  
+  // Print current stack contents
+  stack<int> temp_gln = gln_stack;
+  stack<int> temp_gtp = gtp_stack;
+  int depth = 1;
+  while (!temp_gln.empty()) {
+    printf("  [%d] line=%d, textp=%u\n", depth, temp_gln.top(), temp_gtp.top());
+    temp_gln.pop();
+    temp_gtp.pop();
+    depth++;
+  }
+  
+  gln_stack.push(save_line);
+  gtp_stack.push(save_textp);
+  
+  printf("[GOSUB] Stack after push (depth=%lu):\n", gln_stack.size());
+  temp_gln = gln_stack;
+  temp_gtp = gtp_stack;
+  depth = 1;
+  while (!temp_gln.empty()) {
+    printf("  [%d] line=%d, textp=%u\n", depth, temp_gln.top(), temp_gtp.top());
+    temp_gln.pop();
+    temp_gtp.pop();
+    depth++;
+  }
+  
+  // Now jump to the target line
+  initlex(target_line);
 }
 
 void returnstmt(void) {
-  curline = gln_stack.top();
+  printf("[RETURN] Return statement at line %d, position %u\n", curline, textp);
+  printf("[RETURN] Stack before pop (depth=%lu):\n", gln_stack.size());
+  
+  // Print current stack contents
+  stack<int> temp_gln = gln_stack;
+  stack<int> temp_gtp = gtp_stack;
+  int depth = 1;
+  while (!temp_gln.empty()) {
+    printf("  [%d] line=%d, textp=%u\n", depth, temp_gln.top(), temp_gtp.top());
+    temp_gln.pop();
+    temp_gtp.pop();
+    depth++;
+  }
+  
+  if (gln_stack.empty()) {
+    printf("[RETURN] ERROR - Stack is empty! RETURN without GOSUB\n");
+    printf("RETURN without GOSUB\n");
+    return;
+  }
+  
+  int return_line = gln_stack.top();
+  unsigned return_pos = gtp_stack.top();
   gln_stack.pop();
-  textp = gtp_stack.top();
   gtp_stack.pop();
-  initlex2();
-  // Skip past the GOSUB statement to next statement/line
-  nexttok();
+  
+  printf("[RETURN] Popped: return to line %d, position %u\n", return_line, return_pos);
+  printf("[RETURN] Stack after pop (depth=%lu):\n", gln_stack.size());
+  
+  temp_gln = gln_stack;
+  temp_gtp = gtp_stack;
+  depth = 1;
+  while (!temp_gln.empty()) {
+    printf("  [%d] line=%d, textp=%u\n", depth, temp_gln.top(), temp_gtp.top());
+    temp_gln.pop();
+    temp_gtp.pop();
+    depth++;
+  }
+  
+  // Jump back to the line with the GOSUB call, positioned to continue after the line number
+  initlex_at(return_line, return_pos);
 }
 
 void gotostmt(void) {

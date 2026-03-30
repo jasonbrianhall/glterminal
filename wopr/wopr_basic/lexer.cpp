@@ -39,6 +39,16 @@ void initlex(int n) {
   initlex2();
 }
 
+void initlex_at(int n, unsigned pos) {
+  // Initialize lexer at a specific line and position
+  curline = n;
+  textp = pos;
+  need_colon = false;
+  thelin = pgm[curline];
+  thech = ' ';
+  nexttok();
+}
+
 void initlex2(void) {
   need_colon = false;
   thelin = pgm[curline];
