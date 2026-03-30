@@ -39,7 +39,7 @@ int forpos[c_maxvars];
 void showtime(bool running) {
   if (running) {
     clock_t tt = clock() - timestart;
-    printf("Took %.2f seconds\n", (float)(tt) / (float)CLK_TCK);
+    //printf("Took %.2f seconds\n", (float)(tt) / (float)CLK_TCK);
   }
 }
 
@@ -683,15 +683,11 @@ void gosubstmt(void) {
   nexttok();
   unsigned save_textp = textp;  // Position AFTER the line number token
   
-  printf("[GOSUB] Calling line %d from line %d at position %u\n", target_line, save_line, save_textp);
-  printf("[GOSUB] Stack before push (depth=%lu):\n", gln_stack.size());
-  
   // Print current stack contents
   stack<int> temp_gln = gln_stack;
   stack<int> temp_gtp = gtp_stack;
   int depth = 1;
   while (!temp_gln.empty()) {
-    printf("  [%d] line=%d, textp=%u\n", depth, temp_gln.top(), temp_gtp.top());
     temp_gln.pop();
     temp_gtp.pop();
     depth++;
@@ -700,12 +696,10 @@ void gosubstmt(void) {
   gln_stack.push(save_line);
   gtp_stack.push(save_textp);
   
-  printf("[GOSUB] Stack after push (depth=%lu):\n", gln_stack.size());
   temp_gln = gln_stack;
   temp_gtp = gtp_stack;
   depth = 1;
   while (!temp_gln.empty()) {
-    printf("  [%d] line=%d, textp=%u\n", depth, temp_gln.top(), temp_gtp.top());
     temp_gln.pop();
     temp_gtp.pop();
     depth++;
@@ -716,23 +710,17 @@ void gosubstmt(void) {
 }
 
 void returnstmt(void) {
-  printf("[RETURN] Return statement at line %d, position %u\n", curline, textp);
-  printf("[RETURN] Stack before pop (depth=%lu):\n", gln_stack.size());
-  
   // Print current stack contents
   stack<int> temp_gln = gln_stack;
   stack<int> temp_gtp = gtp_stack;
   int depth = 1;
   while (!temp_gln.empty()) {
-    printf("  [%d] line=%d, textp=%u\n", depth, temp_gln.top(), temp_gtp.top());
     temp_gln.pop();
     temp_gtp.pop();
     depth++;
   }
   
   if (gln_stack.empty()) {
-    printf("[RETURN] ERROR - Stack is empty! RETURN without GOSUB\n");
-    printf("RETURN without GOSUB\n");
     return;
   }
   
@@ -741,14 +729,11 @@ void returnstmt(void) {
   gln_stack.pop();
   gtp_stack.pop();
   
-  printf("[RETURN] Popped: return to line %d, position %u\n", return_line, return_pos);
-  printf("[RETURN] Stack after pop (depth=%lu):\n", gln_stack.size());
   
   temp_gln = gln_stack;
   temp_gtp = gtp_stack;
   depth = 1;
   while (!temp_gln.empty()) {
-    printf("  [%d] line=%d, textp=%u\n", depth, temp_gln.top(), temp_gtp.top());
     temp_gln.pop();
     temp_gtp.pop();
     depth++;
