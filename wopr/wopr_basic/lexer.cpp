@@ -14,13 +14,14 @@ char thech;
 
 // Read one keypress without waiting for Enter.
 // blocking=true: wait for a key (GET); blocking=false: return "" if no key ready
+// For non-blocking, add a small timeout to let keystrokes be captured
 string getkey(bool blocking) {
   struct termios oldt, newt;
   tcgetattr(STDIN_FILENO, &oldt);
   newt = oldt;
   newt.c_lflag &= ~(unsigned)(ICANON | ECHO);
   newt.c_cc[VMIN] = blocking ? 1 : 0;
-  newt.c_cc[VTIME] = 0;
+  newt.c_cc[VTIME] = blocking ? 0 : 1;  // 0.1 sec timeout for non-blocking
   tcsetattr(STDIN_FILENO, TCSANOW, &newt);
 
   char c = 0;
