@@ -3,7 +3,7 @@
 double expression(int minprec) {
     double n = 0.0;
 
-    // String comparison: A$ = "x", A$ <> "x", MID$(x,y,z) = "a", etc.
+    // String comparison: A$ = "x", A$ <> "x", MID$(x,y,z)="a", etc.
     // Check if this is a string variable or string function
     bool is_strexpr =
         (toktype == kIDENT && tok.size() >= 2 && tok.back() == '$') ||
