@@ -16,6 +16,10 @@
 
 using namespace std;
 
+// Debug mode
+extern bool debug_mode;
+extern FILE *debug_log;
+
 // Constants
 enum { c_maxlines = 7000, c_at_max = 1000, c_maxvars = 26 };
 
@@ -68,6 +72,7 @@ int validlinenum(int n);
 
 // Lexer functions
 void initlex(int n);
+void initlex_at(int n, unsigned pos);
 void initlex2(void);
 void nexttok(void);
 void getch(void);
