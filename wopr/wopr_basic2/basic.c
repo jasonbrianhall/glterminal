@@ -1180,9 +1180,9 @@ static int cmd_if(Interp *ip, const char *args) {
             p = then_clause;
         }
         if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
-        /* dispatch the THEN clause; then advance pc past this line */
-        dispatch(ip, p);
-        ip->pc++;
+        /* dispatch the THEN clause; only advance pc if dispatch didn't jump */
+        int jumped = dispatch(ip, p);
+        if (!jumped) ip->pc++;
         return 1;
     } else {
         /* advance past this line regardless */

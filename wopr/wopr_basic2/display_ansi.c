@@ -183,7 +183,12 @@ int display_inkey(void)
 {
     unsigned char c;
     ssize_t n = read(STDIN_FILENO, &c, 1);
-    return (n == 1) ? (int)c : 0;
+    if (n == 1) return (int)c;
+    /* Throttle the polling loop to ~1000 checks/sec so a human keypress
+     * is not raced past by a tight INKEY$ flush loop running at CPU speed.
+     * Real IBM PC BASIC ran at ~4.77 MHz with much slower polling. */
+    usleep(1000);
+    return 0;
 }
 
 /* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
