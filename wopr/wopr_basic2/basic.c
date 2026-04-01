@@ -812,12 +812,21 @@ static int cmd_print(Interp *ip, const char *args) {
         } else {
             mpf_t val; mpf_init2(val,g_prec);
             p = eval_expr(p, val);
-            /* print numeric — use integer form if whole */
             double d = mpf_get_d(val);
             if (d == floor(d) && fabs(d) < 1e15)
                 printf("%.0f", d);
-            else
-                gmp_printf("%.*Ff", PRINT_DIGITS, val);
+            else {
+                /* QBasic default: up to 7 significant digits, strip trailing zeros */
+                char buf[64];
+                snprintf(buf, sizeof buf, "%.7G", d);
+                /* strip trailing zeros after decimal point */
+                if (strchr(buf, '.') && !strchr(buf, 'E')) {
+                    char *end = buf + strlen(buf) - 1;
+                    while (*end == '0') *end-- = '\0';
+                    if (*end == '.') *end = '\0';
+                }
+                printf("%s", buf);
+            }
             mpf_clear(val);
         }
         p = sk(p);
@@ -833,7 +842,6 @@ static int cmd_print(Interp *ip, const char *args) {
 static int cmd_line_input(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
-    /* optional prompt string */
     if (*p == '"') {
         p++;
         while (*p && *p!='"') display_putchar(*p++);
@@ -843,7 +851,6 @@ static int cmd_line_input(Interp *ip, const char *args) {
     char name[MAX_VARNAME];
     read_varname(p, name);
 
-    /* LINE INPUT: read a whole line */
     char linebuf[512];
     display_cursor(1);
     display_getline(linebuf, sizeof linebuf);
@@ -851,6 +858,72 @@ static int cmd_line_input(Interp *ip, const char *args) {
 
     Var *v = var_get(name);
     free(v->str); v->str = str_dup(linebuf);
+    return 0;
+}
+
+/* INPUT ["prompt";] var [, var ...]
+ * Displays prompt (or "? "), reads a line, assigns to each var.
+ * Numeric vars get VAL(), string vars get the raw text. */
+static int cmd_input(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+
+    /* optional prompt string */
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"') display_putchar(*p++);
+        if (*p == '"') p++;
+        p = sk(p);
+        if (*p == ';' || *p == ',') p = sk(p + 1);
+        display_print("? ");
+    } else {
+        display_print("? ");
+    }
+
+    /* read one line */
+    char linebuf[512];
+    display_cursor(1);
+    display_getline(linebuf, sizeof linebuf);
+    display_newline();
+
+    /* assign to each comma-separated variable */
+    /* for simplicity: single var gets the whole line;
+       multiple vars split on commas */
+    char *tok = linebuf;
+    while (*p) {
+        char name[MAX_VARNAME];
+        p = sk(read_varname(sk(p), name));
+
+        /* find end of this token in input */
+        char *comma = strchr(tok, ',');
+        char val_str[256];
+        if (comma) {
+            size_t len = (size_t)(comma - tok);
+            if (len >= sizeof val_str) len = sizeof val_str - 1;
+            memcpy(val_str, tok, len); val_str[len] = '\0';
+            tok = comma + 1;
+        } else {
+            strncpy(val_str, tok, sizeof val_str - 1);
+            val_str[sizeof val_str - 1] = '\0';
+            tok += strlen(tok);
+        }
+
+        /* strip leading/trailing whitespace from token */
+        char *v_start = val_str;
+        while (isspace((unsigned char)*v_start)) v_start++;
+        char *v_end = v_start + strlen(v_start);
+        while (v_end > v_start && isspace((unsigned char)v_end[-1])) *--v_end = '\0';
+
+        Var *v = var_get(name);
+        if (var_is_str_name(name)) {
+            free(v->str); v->str = str_dup(v_start);
+        } else {
+            mpf_set_d(v->num, atof(v_start));
+        }
+
+        p = sk(p);
+        if (*p == ',') p = sk(p + 1); else break;
+    }
     return 0;
 }
 
@@ -1155,6 +1228,7 @@ static const Command commands[] = {
     COMMAND("RETURN",     cmd_return),
     COMMAND("IF",         cmd_if),
     COMMAND("LINE INPUT", cmd_line_input),
+    COMMAND("INPUT",      cmd_input),
     COMMAND("DEF SEG",    cmd_defseg),
     COMMAND("DEF",        cmd_defseg),   /* DEF FN etc — stub */
     COMMAND("DEFDBL",     cmd_defdbl),

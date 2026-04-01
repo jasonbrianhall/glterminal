@@ -37,8 +37,11 @@ void display_newline(void);
 /* INKEY$ — non-blocking: returns 0 if no key waiting, else the char */
 int display_inkey(void);
 
-/* Blocking getchar (for LINE INPUT) */
+/* Blocking getchar (for single char reads) */
 int display_getchar(void);
+
+/* Blocking line read — reads until newline, stores in buf without the newline */
+int display_getline(char *buf, int bufsz);
 
 /* Hide / show cursor  (0 = hide, 1 = show) */
 void display_cursor(int visible);
