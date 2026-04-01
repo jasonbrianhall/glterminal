@@ -186,19 +186,43 @@ int display_inkey(void)
     return (n == 1) ? (int)c : 0;
 }
 
-/* Blocking getchar for LINE INPUT */
-int display_getchar(void)
+/* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
+int display_getline(char *buf, int bufsz)
 {
-    /* temporarily switch to blocking + echo */
     leave_raw();
 
     struct termios cooked = g_orig_termios;
     cooked.c_lflag |= (ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &cooked);
 
-    int c = getchar();
+    /* Use read() directly so we don't fight with stdio buffering */
+    int len = 0;
+    while (len < bufsz - 1) {
+        char c;
+        ssize_t n = read(STDIN_FILENO, &c, 1);
+        if (n <= 0 || c == '\n') break;
+        if (c == '\r') continue;
+        buf[len++] = c;
+    }
+    buf[len] = '\0';
 
-    /* go back to raw */
     enter_raw();
-    return c;
+    return len;
+}
+
+/* Single blocking getchar — kept for compatibility */
+int display_getchar(void)
+{
+    leave_raw();
+
+    struct termios cooked = g_orig_termios;
+    cooked.c_lflag |= (ECHO | ICANON);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &cooked);
+
+    char c = 0;
+    ssize_t nr = read(STDIN_FILENO, &c, 1);
+    (void)nr;
+
+    enter_raw();
+    return (unsigned char)c;
 }

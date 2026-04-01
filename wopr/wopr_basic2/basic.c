@@ -106,9 +106,11 @@ static Var *var_get(const char *name) {
 
 /* Array element access (1-based indices) */
 static mpf_t *arr_num_elem(Var *v, int i, int j) {
-    int idx = (v->ndim == 2) ? ((i-1)*v->dim[1] + (j-1)) : (i-1);
-    if (idx < 0 || idx >= v->dim[0]*(v->ndim==2 ? v->dim[1] : 1))
-        { fprintf(stderr, "Array out of bounds\n"); exit(1); }
+    /* BASIC arrays are 0-based; DIM X(n) creates indices 0..n */
+    int idx = (v->ndim == 2) ? (i * v->dim[1] + j) : i;
+    int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
+    if (idx < 0 || idx >= total)
+        { fprintf(stderr, "Array out of bounds: index %d (size %d)\n", idx, total); exit(1); }
     return &v->arr_num[idx];
 }
 
@@ -390,15 +392,6 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
         else           mpf_sub(result, result, tmp);
         skip_ws_p(ps);
     }
-    /* AND / OR — bitwise on integer values */
-    while (kw_match(ps->p, "AND") || kw_match(ps->p, "OR")) {
-        int is_and = kw_match(ps->p, "AND");
-        ps->p += is_and ? 3 : 2;
-        parse_term_p(ps, tmp);
-        long lv = mpf_get_si(result), rv = mpf_get_si(tmp);
-        mpf_set_si(result, is_and ? (lv & rv) : (lv | rv));
-        skip_ws_p(ps);
-    }
     mpf_clear(tmp);
 }
 
@@ -445,8 +438,21 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     skip_ws_p(ps);
 
     if (*ps->p == '(') {
-        ps->p++; parse_expr_p(ps, result);
-        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        ps->p++;
+        parse_expr_p(ps, result);
+        skip_ws_p(ps);
+        /* handle bitwise AND/OR inside parentheses: (PEEK(...) AND &H30) */
+        while (kw_match(ps->p,"AND") || kw_match(ps->p,"OR")) {
+            int is_and = kw_match(ps->p,"AND");
+            ps->p += is_and ? 3 : 2;
+            mpf_t tmp2; mpf_init2(tmp2,g_prec);
+            parse_expr_p(ps, tmp2);
+            long lv = mpf_get_si(result), rv = mpf_get_si(tmp2);
+            mpf_set_si(result, is_and ? (lv & rv) : (lv | rv));
+            mpf_clear(tmp2);
+            skip_ws_p(ps);
+        }
+        if (*ps->p == ')') ps->p++;
         return;
     }
 
@@ -838,13 +844,9 @@ static int cmd_line_input(Interp *ip, const char *args) {
     read_varname(p, name);
 
     /* LINE INPUT: read a whole line */
-    char linebuf[512]; int li=0;
+    char linebuf[512];
     display_cursor(1);
-    /* temporarily need blocking+echo input */
-    int c;
-    while ((c = display_getchar()) != '\n' && c != EOF && li < (int)sizeof(linebuf)-1)
-        linebuf[li++] = (char)c;
-    linebuf[li]='\0';
+    display_getline(linebuf, sizeof linebuf);
     display_newline();
 
     Var *v = var_get(name);
@@ -925,8 +927,6 @@ static int cmd_return(Interp *ip, const char *args) {
     fprintf(stderr,"RETURN without GOSUB\n"); exit(1);
 }
 
-/* detect if a token starts a string expression:
-   string literal, string variable (ends in $), or string function */
 static int is_str_token(const char *p) {
     p = sk(p);
     if (*p == '"') return 1;
@@ -940,7 +940,6 @@ static int is_str_token(const char *p) {
     if (kw_match(p,"LEFT$"))   return 1;
     if (kw_match(p,"RIGHT$"))  return 1;
     if (kw_match(p,"INPUT$"))  return 1;
-    /* variable ending in $ */
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
         read_varname(p, name);
@@ -949,7 +948,6 @@ static int is_str_token(const char *p) {
     return 0;
 }
 
-/* read INKEY$ or any string expression into buf */
 static const char *eval_str_or_inkey(const char *p, char *buf, int bufsz) {
     p = sk(p);
     if (kw_match(p, "INKEY$")) {
@@ -961,16 +959,64 @@ static const char *eval_str_or_inkey(const char *p, char *buf, int bufsz) {
     return eval_str_expr(p, buf, bufsz);
 }
 
-/* IF expr op expr THEN line|stmt  — handles both numeric and string comparisons */
-static int cmd_if(Interp *ip, const char *args) {
-    const char *p = sk(args);
+/* evaluate one comparison unit — handles:
+ *   (expr op expr)   parenthesized comparison → boolean
+ *   expr op expr     standard comparison
+ *   expr             bare expression, non-zero = true
+ */
+static int eval_one_cmp(const char **pp) {
+    const char *p = sk(*pp);
     int cmp = 0;
 
+    /* parenthesized sub-condition: (lhs op rhs) */
+    if (*p == '(') {
+        p++;
+        /* peek: is there a comparison operator inside? */
+        /* evaluate lhs, check for op */
+        if (is_str_token(p)) {
+            char lhs[1024], rhs[1024];
+            p = sk(eval_str_or_inkey(p, lhs, sizeof lhs));
+            char op2[3] = {p[0],p[1],'\0'}; int oplen=2;
+            if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
+                !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
+            else { op2[1]='\0'; oplen=1; }
+            p = sk(eval_str_or_inkey(sk(p+oplen), rhs, sizeof rhs));
+            int c = strcmp(lhs, rhs);
+            if      (!strcmp(op2,"<>")||!strcmp(op2,"><")) cmp=(c!=0);
+            else if (!strcmp(op2,"<=")||!strcmp(op2,"=<")) cmp=(c<=0);
+            else if (!strcmp(op2,">=")||!strcmp(op2,"=>")) cmp=(c>=0);
+            else if (op2[0]=='<') cmp=(c<0);
+            else if (op2[0]=='>') cmp=(c>0);
+            else                  cmp=(c==0);
+        } else {
+            mpf_t lhs; mpf_init2(lhs,g_prec);
+            p = sk(eval_expr(p, lhs));
+            /* check for comparison operator */
+            char op2[3] = {p[0],p[1],'\0'}; int oplen=2;
+            if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
+                !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
+            else if (p[0]=='<'||p[0]=='>'||p[0]=='=') { op2[1]='\0'; oplen=1; }
+            else { /* bare expression in parens */ cmp=(mpf_sgn(lhs)!=0); mpf_clear(lhs); goto closeparen; }
+            mpf_t rhs; mpf_init2(rhs,g_prec);
+            p = sk(eval_expr(sk(p+oplen), rhs));
+            int c = mpf_cmp(lhs,rhs);
+            if      (!strcmp(op2,"<>")||!strcmp(op2,"><")) cmp=(c!=0);
+            else if (!strcmp(op2,"<=")||!strcmp(op2,"=<")) cmp=(c<=0);
+            else if (!strcmp(op2,">=")||!strcmp(op2,"=>")) cmp=(c>=0);
+            else if (op2[0]=='<') cmp=(c<0);
+            else if (op2[0]=='>') cmp=(c>0);
+            else                  cmp=(c==0);
+            mpf_clears(lhs,rhs,NULL);
+        }
+        closeparen:
+        p = sk(p); if (*p==')') p=sk(p+1);
+        *pp = p;
+        return cmp;
+    }
+
     if (is_str_token(p)) {
-        /* ---- string comparison ---- */
         char lhs[1024], rhs[1024];
         p = sk(eval_str_or_inkey(p, lhs, sizeof lhs));
-        /* operator */
         char op2[3] = {p[0],p[1],'\0'}; int oplen=2;
         if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
             !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
@@ -984,15 +1030,22 @@ static int cmd_if(Interp *ip, const char *args) {
         else if (op2[0]=='>') cmp=(c>0);
         else                  cmp=(c==0);
     } else {
-        /* ---- numeric comparison ---- */
-        mpf_t lhs,rhs; mpf_init2(lhs,g_prec); mpf_init2(rhs,g_prec);
-        p=sk(eval_expr(p,lhs));
-        char op2[3]={p[0],p[1],'\0'}; int oplen=2;
+        mpf_t lhs; mpf_init2(lhs,g_prec);
+        p = sk(eval_expr(p, lhs));
+        /* check for comparison operator */
+        char op2[3] = {p[0],p[1],'\0'}; int oplen=2;
         if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
             !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
-        else { op2[1]='\0'; oplen=1; }
-        p=sk(eval_expr(sk(p+oplen),rhs));
-        int c=mpf_cmp(lhs,rhs);
+        else if (p[0]=='<'||p[0]=='>'||p[0]=='=') { op2[1]='\0'; oplen=1; }
+        else { /* bare numeric condition: non-zero = true */
+            cmp = (mpf_sgn(lhs) != 0);
+            mpf_clear(lhs);
+            *pp = p;
+            return cmp;
+        }
+        mpf_t rhs; mpf_init2(rhs,g_prec);
+        p = sk(eval_expr(sk(p+oplen), rhs));
+        int c = mpf_cmp(lhs,rhs);
         if      (!strcmp(op2,"<>")||!strcmp(op2,"><")) cmp=(c!=0);
         else if (!strcmp(op2,"<=")||!strcmp(op2,"=<")) cmp=(c<=0);
         else if (!strcmp(op2,">=")||!strcmp(op2,"=>")) cmp=(c>=0);
@@ -1001,11 +1054,72 @@ static int cmd_if(Interp *ip, const char *args) {
         else                  cmp=(c==0);
         mpf_clears(lhs,rhs,NULL);
     }
+    *pp = p;
+    return cmp;
+}
 
-    if (!cmp) return 0;
-    if (kw_match(p,"THEN")) p=sk(p+4);
-    if (isdigit((unsigned char)*p)) return cmd_goto(ip,p);
-    return dispatch(ip,p);
+/* find_else: scan p for ELSE outside quotes, return pointer to it or NULL */
+static const char *find_else(const char *p) {
+    int in_str = 0;
+    while (*p) {
+        if (*p == '"') { in_str = !in_str; p++; continue; }
+        if (!in_str && kw_match(p, "ELSE")) return p;
+        p++;
+    }
+    return NULL;
+}
+
+/* IF cond [AND|OR cond ...] THEN stmt[:stmt] [ELSE stmt[:stmt]]
+ *
+ * The 'args' pointer here comes from dispatch_one which has already
+ * stripped the leading "IF" — but because IF consumes the entire
+ * remaining line (including colon-separated trailing statements that
+ * belong to the THEN or ELSE branch), we mark a jump so the caller
+ * does NOT also execute the next colon segment.  We achieve this by
+ * returning 0 normally (no pc jump) but having consumed everything.
+ *
+ * The trick: split_statements already split the line, so 'args' only
+ * contains up to the first unquoted colon.  To get the full line we
+ * use the original g_lines[ip->pc].text.  We re-parse from after "IF".
+ */
+static int cmd_if(Interp *ip, const char *args) {
+    const char *p = sk(args);
+    int result = eval_one_cmp(&p);
+    p = sk(p);
+    while (kw_match(p,"AND") || kw_match(p,"OR")) {
+        int is_and = kw_match(p,"AND");
+        p = sk(p + (is_and ? 3 : 2));
+        int next = eval_one_cmp(&p);
+        result = is_and ? (result && next) : (result || next);
+        p = sk(p);
+    }
+    if (kw_match(p,"THEN")) p = sk(p+4);
+
+    /* Find ELSE boundary in the full remaining text */
+    const char *else_p = find_else(p);
+
+    if (result) {
+        char then_clause[MAX_LINE_LEN];
+        if (else_p) {
+            size_t len = (size_t)(else_p - p);
+            if (len >= MAX_LINE_LEN) len = MAX_LINE_LEN - 1;
+            memcpy(then_clause, p, len); then_clause[len] = '\0';
+            p = then_clause;
+        }
+        if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
+        /* dispatch the THEN clause; then advance pc past this line */
+        dispatch(ip, p);
+        ip->pc++;
+        return 1;
+    } else {
+        /* advance past this line regardless */
+        ip->pc++;
+        if (!else_p) return 1;
+        p = sk(else_p + 4);
+        if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
+        dispatch(ip, p);
+        return 1;
+    }
 }
 
 /* INKEY$ — used in assignments: CMD$ = INKEY$ */
@@ -1060,9 +1174,26 @@ static int split_statements(const char *line, char *segs[], char **buf_out) {
     int n = 0;
     int in_str = 0;
     segs[n++] = buf;
+
+    /* if line starts with REM or ', don't split — it's all a comment */
+    const char *trimmed = buf;
+    while (isspace((unsigned char)*trimmed)) trimmed++;
+    if (strncasecmp(trimmed, "REM", 3) == 0 &&
+        !isalnum((unsigned char)trimmed[3]) && trimmed[3] != '_')
+        return n;
+    if (*trimmed == '\'') return n;
+
     for (char *p = buf; *p; p++) {
         if (*p == '"') in_str = !in_str;
         if (!in_str && *p == ':') {
+            /* check if what follows is a REM — if so, stop splitting */
+            char *rest = p + 1;
+            while (isspace((unsigned char)*rest)) rest++;
+            if (strncasecmp(rest, "REM", 3) == 0 &&
+                !isalnum((unsigned char)rest[3]) && rest[3] != '_') {
+                *p = '\0';
+                break;
+            }
             *p = '\0';
             if (n < MAX_STMTS) segs[n++] = p + 1;
         }
@@ -1070,8 +1201,10 @@ static int split_statements(const char *line, char *segs[], char **buf_out) {
     return n;
 }
 
-/* dispatch_one: dispatch exactly one statement (no colons) */
-static int dispatch_one(Interp *ip, const char *stmt) {
+/* dispatch_one: dispatch exactly one statement (no colons).
+ * For IF statements, 'full_line' gives the complete unsplit line
+ * so THEN/ELSE can consume trailing colon-segments. */
+static int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
     const char *p = sk(stmt);
     if (!*p) return 0;
 
@@ -1081,6 +1214,13 @@ static int dispatch_one(Interp *ip, const char *stmt) {
         if (strncasecmp(p, kw, len) == 0) {
             char next = p[len];
             if (!isalnum((unsigned char)next) && next != '_' && next != '$') {
+                /* For IF: pass the full unsplit line so ELSE works */
+                if (strcasecmp(kw, "IF") == 0 && full_line) {
+                    const char *fl = sk(full_line);
+                    if (strncasecmp(fl, "IF", 2) == 0)
+                        fl = sk(fl + 2);
+                    return commands[i].fn(ip, fl);
+                }
                 return commands[i].fn(ip, sk(p + len));
             }
         }
@@ -1110,7 +1250,7 @@ static int dispatch(Interp *ip, const char *line) {
 
     int jumped = 0;
     for (int i = 0; i < n && !jumped; i++) {
-        jumped = dispatch_one(ip, segs[i]);
+        jumped = dispatch_one(ip, segs[i], (i == 0) ? line : NULL);
     }
 
     free(buf);
