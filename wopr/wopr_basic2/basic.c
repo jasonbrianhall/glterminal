@@ -163,6 +163,7 @@ struct Interp {
  * Forward declarations
  * ================================================================ */
 static int dispatch(Interp *ip, const char *line);
+static int dispatch_multi(Interp *ip, const char *clause);
 static const char *eval_expr(const char *s, mpf_t result);
 static const char *eval_str_expr(const char *s, char *buf, int bufsz);
 static int is_str_token(const char *p);
@@ -929,19 +930,21 @@ static int cmd_print(Interp *ip, const char *args) {
             mpf_t val; mpf_init2(val,g_prec);
             p = eval_expr(p, val);
             double d = mpf_get_d(val);
-            if (d == floor(d) && fabs(d) < 1e15)
-                printf("%.0f", d);
-            else {
-                /* QBasic default: up to 7 significant digits, strip trailing zeros */
+            /* Microsoft BASIC: numbers always printed with a leading space
+               (where the sign would be for positives) and a trailing space */
+            if (d == floor(d) && fabs(d) < 1e15) {
+                if (d >= 0) printf(" %.0f ", d);
+                else        printf("%.0f ", d);
+            } else {
                 char buf[64];
                 snprintf(buf, sizeof buf, "%.7G", d);
-                /* strip trailing zeros after decimal point */
                 if (strchr(buf, '.') && !strchr(buf, 'E')) {
                     char *end = buf + strlen(buf) - 1;
                     while (*end == '0') *end-- = '\0';
                     if (*end == '.') *end = '\0';
                 }
-                printf("%s", buf);
+                if (d >= 0) printf(" %s ", buf);
+                else        printf("%s ", buf);
             }
             mpf_clear(val);
         }
@@ -1298,7 +1301,7 @@ static int cmd_if(Interp *ip, const char *args) {
         }
         if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
         /* dispatch the THEN clause; only advance pc if dispatch didn't jump */
-        int jumped = dispatch(ip, p);
+        int jumped = dispatch_multi(ip, p);
         if (!jumped) ip->pc++;
         return 1;
     } else {
@@ -1307,7 +1310,7 @@ static int cmd_if(Interp *ip, const char *args) {
         if (!else_p) return 1;
         p = sk(else_p + 4);
         if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
-        dispatch(ip, p);
+        dispatch_multi(ip, p);
         return 1;
     }
 }
@@ -1597,19 +1600,21 @@ static int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
 }
 
 /* ================================================================
- * Dispatcher — splits on colons, runs each statement in order.
- * Stops if any statement performs a jump.
+ * Dispatcher — each line is already a single statement (loader split them).
  * ================================================================ */
 static int dispatch(Interp *ip, const char *line) {
+    return dispatch_one(ip, line, line);
+}
+
+/* dispatch_multi: used by cmd_if for THEN/ELSE clauses which may
+ * contain colon-separated statements inline. */
+static int dispatch_multi(Interp *ip, const char *clause) {
     char *segs[MAX_STMTS];
     char *buf;
-    int n = split_statements(line, segs, &buf);
-
+    int n = split_statements(clause, segs, &buf);
     int jumped = 0;
-    for (int i = 0; i < n && !jumped; i++) {
+    for (int i = 0; i < n && !jumped; i++)
         jumped = dispatch_one(ip, segs[i], segs[i]);
-    }
-
     free(buf);
     return jumped;
 }
@@ -1669,7 +1674,16 @@ static void run(void) {
 }
 
 /* ================================================================
- * Loader
+ * Loader — splits colon-separated statements into individual entries.
+ * Each sub-statement gets the same line number as its parent line;
+ * GOTO/GOSUB still work because find_line_idx returns the first entry
+ * with that number, and the pc advances sequentially through the rest.
+ *
+ * Splitting rules:
+ *   - Don't split inside quoted strings
+ *   - If the statement (trimmed) starts with IF, don't split it further
+ *     (IF owns its THEN/ELSE clauses including any colons inside them)
+ *   - Stop splitting at REM or '
  * ================================================================ */
 static void load(const char *filename) {
     FILE *f=fopen(filename,"r");
@@ -1682,10 +1696,64 @@ static void load(const char *filename) {
         if (!*p||!isdigit((unsigned char)*p)) continue;
         int num=(int)strtol(p,&p,10);
         while (isspace((unsigned char)*p)) p++;
-        if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
-        g_lines[g_nlines].linenum=num;
-        strncpy(g_lines[g_nlines].text,p,MAX_LINE_LEN-1);
-        g_nlines++;
+
+        /* Check if the whole line starts with IF — don't split */
+        const char *trimmed = p;
+        int starts_with_if = (strncasecmp(trimmed,"IF",2)==0 &&
+                              !isalnum((unsigned char)trimmed[2]) &&
+                              trimmed[2]!='_');
+
+        if (starts_with_if) {
+            /* Store whole line unsplit */
+            if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
+            g_lines[g_nlines].linenum=num;
+            strncpy(g_lines[g_nlines].text,p,MAX_LINE_LEN-1);
+            g_nlines++;
+        } else {
+            /* Split on unquoted colons, but stop at REM/' and don't split IF sub-stmts */
+            char *seg = p;
+            int in_str = 0;
+            char *c;
+            for (c = p; *c; c++) {
+                if (*c == '"') { in_str = !in_str; continue; }
+                if (in_str) continue;
+                if (*c == ':') {
+                    /* terminate this segment */
+                    *c = '\0';
+                    /* store segment */
+                    if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
+                    g_lines[g_nlines].linenum=num;
+                    strncpy(g_lines[g_nlines].text,seg,MAX_LINE_LEN-1);
+                    g_nlines++;
+                    /* advance to next segment */
+                    seg = c+1;
+                    while (isspace((unsigned char)*seg)) seg++;
+                    /* if next segment is REM or ' or IF, stop splitting */
+                    int is_rem = (strncasecmp(seg,"REM",3)==0 &&
+                                  !isalnum((unsigned char)seg[3]) && seg[3]!='_');
+                    int is_apos = (*seg == '\'');
+                    int is_if  = (strncasecmp(seg,"IF",2)==0 &&
+                                  !isalnum((unsigned char)seg[2]) && seg[2]!='_');
+                    if (is_rem || is_apos || is_if) {
+                        /* store rest as one segment and stop */
+                        if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
+                        g_lines[g_nlines].linenum=num;
+                        strncpy(g_lines[g_nlines].text,seg,MAX_LINE_LEN-1);
+                        g_nlines++;
+                        seg = NULL;
+                        break;
+                    }
+                    c = seg - 1; /* resume scan from new seg */
+                }
+            }
+            /* store final segment */
+            if (seg && *seg) {
+                if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
+                g_lines[g_nlines].linenum=num;
+                strncpy(g_lines[g_nlines].text,seg,MAX_LINE_LEN-1);
+                g_nlines++;
+            }
+        }
     }
     fclose(f);
     qsort(g_lines,g_nlines,sizeof(Line),line_cmp);

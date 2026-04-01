@@ -41,12 +41,11 @@ static const int cga_to_ansi[16] = {
 static void enter_raw(void)
 {
     if (g_raw) return;
-    tcgetattr(STDIN_FILENO, &g_orig_termios);
-    struct termios raw = g_orig_termios;
+    struct termios raw = g_orig_termios;  /* always base off the one-time snapshot */
     raw.c_lflag &= ~(ECHO | ICANON);
     raw.c_cc[VMIN]  = 0;   /* non-blocking */
     raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
     /* make stdin non-blocking */
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
@@ -59,7 +58,7 @@ static void leave_raw(void)
     /* restore blocking */
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_orig_termios);
+    tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
     g_raw = 0;
 }
 
@@ -83,6 +82,7 @@ static void signal_handler(int sig) {
 
 void display_init(void)
 {
+    tcgetattr(STDIN_FILENO, &g_orig_termios);  /* snapshot clean terminal state once */
     enter_raw();
     atexit(cleanup_terminal);
     signal(SIGINT,  signal_handler);
@@ -198,7 +198,7 @@ int display_getline(char *buf, int bufsz)
 
     struct termios cooked = g_orig_termios;
     cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &cooked);
+    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);  /* TCSANOW: don't discard buffered input */
 
     /* Use read() directly so we don't fight with stdio buffering */
     int len = 0;
@@ -222,7 +222,7 @@ int display_getchar(void)
 
     struct termios cooked = g_orig_termios;
     cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &cooked);
+    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
 
     char c = 0;
     ssize_t nr = read(STDIN_FILENO, &c, 1);
