@@ -23,7 +23,6 @@
 // ---------------------------------------------------------------------------
 
 #include "gl_renderer.h"
-#include "sdl_renderer.h"
 #include "ft_font.h"
 #include "term_color.h"
 
@@ -477,11 +476,7 @@ static unsigned char *iv_download_remote(const char *path, size_t &out_size) {
 // ============================================================================
 
 static void iv_free_tex() {
-    if (g_use_sdl_renderer) {
-        if (g_iv.sdl_tex) { SDL_DestroyTexture(g_iv.sdl_tex); g_iv.sdl_tex = nullptr; }
-    } else {
-        if (g_iv.tex) { glDeleteTextures(1, &g_iv.tex); g_iv.tex = 0; }
-    }
+    if (g_iv.tex) { glDeleteTextures(1, &g_iv.tex); g_iv.tex = 0; }
     g_iv.tex_w = g_iv.tex_h = 0;
 }
 
@@ -502,11 +497,7 @@ static void iv_stop_audio() {
 }
 
 static void iv_cdg_free() {
-    if (g_use_sdl_renderer) {
-        if (g_iv.sdl_cdg_tex) { SDL_DestroyTexture(g_iv.sdl_cdg_tex); g_iv.sdl_cdg_tex = nullptr; }
-    } else {
-        if (g_iv.cdg_tex) { glDeleteTextures(1, (GLuint*)&g_iv.cdg_tex); g_iv.cdg_tex = 0; }
-    }
+    if (g_iv.cdg_tex) { glDeleteTextures(1, (GLuint*)&g_iv.cdg_tex); g_iv.cdg_tex = 0; }
     if (g_iv.cdg_display) { cdg_display_free(g_iv.cdg_display); g_iv.cdg_display = nullptr; }
 }
 
@@ -543,30 +534,21 @@ static void iv_cdg_upload_texture() {
             rgba[off+3] = 0xFF;
         }
     }
-    if (g_use_sdl_renderer) {
-        if (g_iv.sdl_cdg_tex) SDL_DestroyTexture(g_iv.sdl_cdg_tex);
-        g_iv.sdl_cdg_tex = SDL_CreateTexture(g_sdl_renderer,
-            SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC,
-            CDG_WIDTH, CDG_HEIGHT);
-        if (g_iv.sdl_cdg_tex)
-            SDL_UpdateTexture(g_iv.sdl_cdg_tex, nullptr, rgba, CDG_WIDTH * 4);
+    if (!g_iv.cdg_tex) {
+        glGenTextures(1, (GLuint*)&g_iv.cdg_tex);
+        glBindTexture(GL_TEXTURE_2D, g_iv.cdg_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, CDG_WIDTH, CDG_HEIGHT, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     } else {
-        if (!g_iv.cdg_tex) {
-            glGenTextures(1, (GLuint*)&g_iv.cdg_tex);
-            glBindTexture(GL_TEXTURE_2D, g_iv.cdg_tex);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, CDG_WIDTH, CDG_HEIGHT, 0,
-                         GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, g_iv.cdg_tex);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CDG_WIDTH, CDG_HEIGHT,
-                            GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-        }
-        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindTexture(GL_TEXTURE_2D, g_iv.cdg_tex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CDG_WIDTH, CDG_HEIGHT,
+                        GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     }
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 // ============================================================================
@@ -614,23 +596,14 @@ static void iv_play_audio(const char *audio_path, const char *label, bool load_c
 
 static void iv_upload_texture(const unsigned char *rgba, int w, int h) {
     iv_free_tex();
-    if (g_use_sdl_renderer) {
-        g_iv.sdl_tex = SDL_CreateTexture(g_sdl_renderer,
-            SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
-        if (g_iv.sdl_tex) {
-            SDL_SetTextureBlendMode(g_iv.sdl_tex, SDL_BLENDMODE_BLEND);
-            SDL_UpdateTexture(g_iv.sdl_tex, nullptr, rgba, w * 4);
-        }
-    } else {
-        glGenTextures(1, &g_iv.tex);
-        glBindTexture(GL_TEXTURE_2D, g_iv.tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
+    glGenTextures(1, &g_iv.tex);
+    glBindTexture(GL_TEXTURE_2D, g_iv.tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glBindTexture(GL_TEXTURE_2D, 0);
     g_iv.tex_w = w;
     g_iv.tex_h = h;
 }
@@ -1054,16 +1027,10 @@ static void fmt_size_iv(uint64_t sz, char *buf, int n) {
 // RENDER
 // ============================================================================
 
-static void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex,
-                               float x, float y, float w, float h) {
-    if (g_use_sdl_renderer) {
-        if (!sdl_tex) return;
-        gl_flush_verts();
-        SDL_FRect dst = { x, y, w, h };
-        SDL_RenderCopyF(g_sdl_renderer, sdl_tex, nullptr, &dst);
-        return;
-    }
-    if (!gl_tex) return;
+static void iv_draw_image_tex(unsigned int tex_id, float x, float y, float w, float h) {
+    if (!tex_id) return;
+
+    gl_flush_verts();
 
     GLint prev_prog;
     glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
@@ -1121,7 +1088,7 @@ static void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex,
     glBindBuffer(GL_ARRAY_BUFFER, s_tex_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, gl_tex);
+    glBindTexture(GL_TEXTURE_2D, tex_id);
     glUniform1i(glGetUniformLocation(s_tex_prog, "tex"), 0);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1132,7 +1099,7 @@ static void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex,
 }
 
 static void iv_draw_image(float x, float y, float w, float h) {
-    iv_draw_image_tex(g_iv.sdl_tex, g_iv.tex, x, y, w, h);
+    iv_draw_image_tex(g_iv.tex, x, y, w, h);
 }
 
 void iv_render(int win_w, int win_h) {
@@ -1275,14 +1242,14 @@ void iv_render(int win_w, int win_h) {
 
         draw_rect(ix, iy, iw, ih, 0.04f, 0.04f, 0.06f, 1.f);
 
-        if (g_iv.cdg_display && (g_use_sdl_renderer ? (bool)g_iv.sdl_cdg_tex : (bool)g_iv.cdg_tex)) {
+        if (g_iv.cdg_display && g_iv.cdg_tex) {
             // CD+G display — render palette texture directly
             float scale = std::min(iw / (float)CDG_WIDTH, ih / (float)CDG_HEIGHT);
             float dw = CDG_WIDTH * scale, dh = CDG_HEIGHT * scale;
             float dx = ix + (iw - dw) * 0.5f;
             float dy = iy + (ih - dh) * 0.5f;
             draw_rect(dx, dy, dw, dh, 0.f, 0.f, 0.f, 1.f);
-            iv_draw_image_tex(g_iv.sdl_cdg_tex, g_iv.cdg_tex, dx, dy, dw, dh);
+            iv_draw_image_tex(g_iv.cdg_tex, dx, dy, dw, dh);
 
             // Playback progress bar at bottom of CDG area
             if (g_iv.audio_playing) {
@@ -1352,7 +1319,7 @@ void iv_render(int win_w, int win_h) {
                          bar_y + 40.f,
                          0.40f, 0.45f, 0.55f, 1.f);
 
-        } else if (g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex) {
+        } else if (g_iv.tex) {
             float scale = std::min(iw / g_iv.tex_w, ih / g_iv.tex_h);
             float dw = g_iv.tex_w * scale, dh = g_iv.tex_h * scale;
             float dx = ix + (iw - dw) * 0.5f, dy = iy + (ih - dh) * 0.5f;
@@ -1386,7 +1353,7 @@ void iv_render(int win_w, int win_h) {
             snprintf(status, sizeof(status), "  \xe2\x99\xab %s   %.1fs%s",
                      g_iv.audio_label, g_iv.audio_position,
                      g_iv.audio_paused ? "  [PAUSED]" : "");
-        } else if (g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex) {
+        } else if (g_iv.tex) {
             snprintf(status, sizeof(status), "  %s   %dx%d px",
                      g_iv.img_label, g_iv.tex_w, g_iv.tex_h);
         } else {
