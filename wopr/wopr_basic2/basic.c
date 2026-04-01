@@ -1268,6 +1268,16 @@ static int split_statements(const char *line, char *segs[], char **buf_out) {
                 *p = '\0';
                 break;
             }
+            /* check if what follows is an IF — stop splitting here so
+             * the entire IF/THEN/ELSE clause (including any trailing
+             * colon-separated statements in THEN or ELSE) is handed to
+             * cmd_if as one unsplit unit. */
+            if (strncasecmp(rest, "IF", 2) == 0 &&
+                !isalnum((unsigned char)rest[2]) && rest[2] != '_') {
+                *p = '\0';
+                if (n < MAX_STMTS) segs[n++] = rest;
+                break;
+            }
             *p = '\0';
             if (n < MAX_STMTS) segs[n++] = p + 1;
         }
@@ -1324,7 +1334,7 @@ static int dispatch(Interp *ip, const char *line) {
 
     int jumped = 0;
     for (int i = 0; i < n && !jumped; i++) {
-        jumped = dispatch_one(ip, segs[i], (i == 0) ? line : NULL);
+        jumped = dispatch_one(ip, segs[i], segs[i]);
     }
 
     free(buf);
