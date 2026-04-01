@@ -22,7 +22,6 @@
 extern void exit P((int));
 extern int  rand P((void));
 extern time_t time P((time_t *));
-extern struct tm *localtime ();
 
 /* ============================================================================
  * Shared I/O surfaces
