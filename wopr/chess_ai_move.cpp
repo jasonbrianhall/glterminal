@@ -13,7 +13,10 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <time.h>
-
+#ifdef _WIN32
+    #include <windows.h>
+#endif
+    
 static void ensure_seeded(void) {
     static bool seeded = false;
     if (!seeded) { srand((unsigned)time(nullptr)); seeded = true; }

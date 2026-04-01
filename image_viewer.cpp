@@ -546,7 +546,7 @@ static void iv_cdg_upload_texture() {
     if (g_use_sdl_renderer) {
         if (g_iv.sdl_cdg_tex) SDL_DestroyTexture(g_iv.sdl_cdg_tex);
         g_iv.sdl_cdg_tex = SDL_CreateTexture(g_sdl_renderer,
-            SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC,
+            SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
             CDG_WIDTH, CDG_HEIGHT);
         if (g_iv.sdl_cdg_tex)
             SDL_UpdateTexture(g_iv.sdl_cdg_tex, nullptr, rgba, CDG_WIDTH * 4);
@@ -616,7 +616,7 @@ static void iv_upload_texture(const unsigned char *rgba, int w, int h) {
     iv_free_tex();
     if (g_use_sdl_renderer) {
         g_iv.sdl_tex = SDL_CreateTexture(g_sdl_renderer,
-            SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
+            SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, w, h);
         if (g_iv.sdl_tex) {
             SDL_SetTextureBlendMode(g_iv.sdl_tex, SDL_BLENDMODE_BLEND);
             SDL_UpdateTexture(g_iv.sdl_tex, nullptr, rgba, w * 4);
@@ -1059,11 +1059,26 @@ static void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex,
     if (g_use_sdl_renderer) {
         if (!sdl_tex) return;
         gl_flush_verts();
-        SDL_FRect dst = { x, y, w, h };
-        SDL_RenderCopyF(g_sdl_renderer, sdl_tex, nullptr, &dst);
+        SDL_Vertex verts[6];
+        auto mkv = [](float vx, float vy, float u, float v) {
+            SDL_Vertex sv{};
+            sv.position.x = vx; sv.position.y = vy;
+            sv.color = {255, 255, 255, 255};
+            sv.tex_coord.x = u; sv.tex_coord.y = v;
+            return sv;
+        };
+        verts[0] = mkv(x,   y,   0.f, 0.f);
+        verts[1] = mkv(x+w, y,   1.f, 0.f);
+        verts[2] = mkv(x+w, y+h, 1.f, 1.f);
+        verts[3] = mkv(x,   y,   0.f, 0.f);
+        verts[4] = mkv(x+w, y+h, 1.f, 1.f);
+        verts[5] = mkv(x,   y+h, 0.f, 1.f);
+        SDL_RenderGeometry(g_sdl_renderer, sdl_tex, verts, 6, nullptr, 0);
         return;
     }
     if (!gl_tex) return;
+
+    gl_flush_verts();
 
     GLint prev_prog;
     glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
