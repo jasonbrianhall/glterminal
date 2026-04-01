@@ -18,6 +18,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <time.h>
 #include <gmp.h>
 #include "display.h"
 
@@ -112,6 +113,14 @@ static mpf_t *arr_num_elem(Var *v, int i, int j) {
     if (idx < 0 || idx >= total)
         { fprintf(stderr, "Array out of bounds: index %d (size %d)\n", idx, total); exit(1); }
     return &v->arr_num[idx];
+}
+
+static char **arr_str_elem(Var *v, int i, int j) {
+    int idx = (v->ndim == 2) ? (i * v->dim[1] + j) : i;
+    int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
+    if (idx < 0 || idx >= total)
+        { fprintf(stderr, "Array out of bounds: index %d (size %d)\n", idx, total); exit(1); }
+    return &v->arr_str[idx];
 }
 
 /* ================================================================
@@ -346,13 +355,31 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
         return p;
     }
 
-    /* String variable */
+    /* String variable (scalar or array) */
     if (isalpha((unsigned char)*p)) {
         char vname[MAX_VARNAME];
         const char *after = read_varname(p, vname);
         if (var_is_str_name(vname)) {
             Var *v = var_get(vname);
-            strncpy(buf, v->str ? v->str : "", bufsz-1);
+            after = sk(after);
+            if (*after == '(' && v->kind == VAR_ARRAY_STR) {
+                after = sk(after+1);
+                mpf_t i1; mpf_init2(i1, g_prec);
+                after = sk(eval_expr(after, i1));
+                int ii = (int)mpf_get_si(i1); mpf_clear(i1);
+                int jj = 1;
+                if (*after == ',') {
+                    after = sk(after+1);
+                    mpf_t i2; mpf_init2(i2, g_prec);
+                    after = sk(eval_expr(after, i2));
+                    jj = (int)mpf_get_si(i2); mpf_clear(i2);
+                }
+                if (*after == ')') after++;
+                char **slot = arr_str_elem(v, ii, jj);
+                strncpy(buf, *slot ? *slot : "", bufsz-1);
+            } else {
+                strncpy(buf, v->str ? v->str : "", bufsz-1);
+            }
             buf[bufsz-1]='\0';
             return after;
         }
@@ -432,6 +459,54 @@ static void parse_power_p(Parser *ps, mpf_t result) {
         mpf_set_d(result, pow(base_d, exp_d));
         mpf_clear(exp);
     }
+}
+
+/* ----------------------------------------------------------------
+ * DEF FN — user-defined functions
+ * ---------------------------------------------------------------- */
+#define MAX_DEF_FN 32
+typedef struct { char name[MAX_VARNAME]; char param[MAX_VARNAME]; char body[MAX_LINE_LEN]; } DefFn;
+static DefFn   g_defn[MAX_DEF_FN];
+static int     g_defn_count = 0;
+
+static int try_eval_defn(Parser *ps, mpf_t result) {
+    /* Match FN followed by at least one alphanumeric (FNA, FNB, FND, etc.) */
+    if (!(toupper((unsigned char)ps->p[0])=='F' && toupper((unsigned char)ps->p[1])=='N'
+          && isalnum((unsigned char)ps->p[2]))) return 0;
+    const char *start = ps->p;
+    const char *p = ps->p + 2;
+    char fname[MAX_VARNAME]; int i = 0;
+    fname[i++] = 'F'; fname[i++] = 'N';
+    while (isalnum((unsigned char)*p) && i < MAX_VARNAME-1) fname[i++] = (char)toupper(*p++);
+    fname[i] = '\0';
+    /* find the definition */
+    DefFn *fn = NULL;
+    for (int k = 0; k < g_defn_count; k++)
+        if (strcasecmp(g_defn[k].name, fname) == 0) { fn = &g_defn[k]; break; }
+    if (!fn) { ps->p = start; return 0; }
+    ps->p = p; skip_ws_p(ps);
+    /* evaluate argument */
+    double arg_val = 0;
+    if (*ps->p == '(') {
+        ps->p++;
+        mpf_t arg; mpf_init2(arg, g_prec);
+        parse_expr_p(ps, arg);
+        arg_val = mpf_get_d(arg);
+        mpf_clear(arg);
+        skip_ws_p(ps);
+        if (*ps->p == ')') ps->p++;
+    }
+    /* temporarily set param variable, evaluate body, restore */
+    Var *pv = NULL;
+    double old_val = 0;
+    if (fn->param[0]) {
+        pv = var_get(fn->param);
+        old_val = mpf_get_d(pv->num);
+        mpf_set_d(pv->num, arg_val);
+    }
+    eval_expr(fn->body, result);
+    if (pv) mpf_set_d(pv->num, old_val);
+    return 1;
 }
 
 static void parse_primary_p(Parser *ps, mpf_t result) {
@@ -540,6 +615,27 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         mpf_set_si(result, (long)strlen(sbuf));
         skip_ws_p(ps); if(*ps->p==')') ps->p++;
         return;
+    }
+
+    /* RND(x) — returns random float in [0,1) regardless of x */
+    if (kw_match(ps->p, "RND")) {
+        ps->p += 3; skip_ws_p(ps);
+        if (*ps->p == '(') {
+            int depth = 1; ps->p++;
+            while (*ps->p && depth > 0) {
+                if (*ps->p == '(') depth++;
+                else if (*ps->p == ')') depth--;
+                ps->p++;
+            }
+        }
+        mpf_set_d(result, (double)rand() / ((double)RAND_MAX + 1.0));
+        return;
+    }
+
+    /* User-defined functions: FNA(x), FNB(x), etc. */
+    if (toupper((unsigned char)ps->p[0])=='F' && toupper((unsigned char)ps->p[1])=='N'
+        && isalnum((unsigned char)ps->p[2])) {
+        if (try_eval_defn(ps, result)) return;
     }
 
     /* Variable or array element */
@@ -718,10 +814,17 @@ static int cmd_dim(Interp *ip, const char *args) {
             if (*p == ')') p++;
             int total = dim1 * dim2;
             if (total > MAX_ARRAY_SIZE) { fprintf(stderr,"Array too large\n"); exit(1); }
-            v->kind = VAR_ARRAY_NUM;
-            v->dim[0] = dim1; v->dim[1] = dim2; v->ndim = ndim;
-            v->arr_num = calloc(total, sizeof(mpf_t));
-            for (int i=0;i<total;i++) { mpf_init2(v->arr_num[i],g_prec); mpf_set_ui(v->arr_num[i],0); }
+            if (var_is_str_name(name)) {
+                v->kind = VAR_ARRAY_STR;
+                v->dim[0] = dim1; v->dim[1] = dim2; v->ndim = ndim;
+                v->arr_str = calloc(total, sizeof(char*));
+                for (int i=0;i<total;i++) v->arr_str[i] = str_dup("");
+            } else {
+                v->kind = VAR_ARRAY_NUM;
+                v->dim[0] = dim1; v->dim[1] = dim2; v->ndim = ndim;
+                v->arr_num = calloc(total, sizeof(mpf_t));
+                for (int i=0;i<total;i++) { mpf_init2(v->arr_num[i],g_prec); mpf_set_ui(v->arr_num[i],0); }
+            }
         }
         p = sk(p);
         if (*p == ',') p = sk(p+1);
@@ -747,7 +850,12 @@ static int cmd_let(Interp *ip, const char *args) {
         char sbuf[1024];
         eval_str_expr(sk(p), sbuf, sizeof sbuf);
         Var *v = var_get(name);
-        free(v->str); v->str = str_dup(sbuf);
+        if (is_arr && v->kind == VAR_ARRAY_STR) {
+            char **slot = arr_str_elem(v, arr_i, arr_j);
+            free(*slot); *slot = str_dup(sbuf);
+        } else {
+            free(v->str); v->str = str_dup(sbuf);
+        }
     } else {
         mpf_t val; mpf_init2(val,g_prec);
         eval_expr(sk(p), val);
@@ -804,6 +912,14 @@ static int cmd_print(Interp *ip, const char *args) {
                 mpf_t n; mpf_init2(n,g_prec); p=eval_expr(sk(p),n);
                 display_spc((int)mpf_get_si(n)); mpf_clear(n);
                 p=sk(p); if(*p==')') p=sk(p+1);
+            } else if (kw_match(p,"TAB")) {
+                p=sk(p+3); if(*p=='(') p++;
+                mpf_t n; mpf_init2(n,g_prec); p=eval_expr(sk(p),n);
+                int col=(int)mpf_get_si(n)-1; mpf_clear(n);
+                p=sk(p); if(*p==')') p=sk(p+1);
+                /* move to column by printing spaces — approximate since we
+                   don't track cursor position; just emit the spaces */
+                if(col>0) display_spc(col);
             } else {
                 char sbuf[1024];
                 p = eval_str_expr(p, sbuf, sizeof sbuf);
@@ -1010,6 +1126,7 @@ static int is_str_token(const char *p) {
     if (kw_match(p,"STR$"))    return 1;
     if (kw_match(p,"SPC"))     return 1;
     if (kw_match(p,"SPACE$"))  return 1;
+    if (kw_match(p,"TAB"))     return 1;
     if (kw_match(p,"LEFT$"))   return 1;
     if (kw_match(p,"RIGHT$"))  return 1;
     if (kw_match(p,"INPUT$"))  return 1;
@@ -1207,6 +1324,155 @@ static int cmd_if(Interp *ip, const char *args) {
  * ================================================================ */
 #define COMMAND(kw,fn) { kw, fn }
 
+/* ----------------------------------------------------------------
+ * DATA / READ / RESTORE support
+ * ---------------------------------------------------------------- */
+#define MAX_DATA_ITEMS 4096
+static char *g_data[MAX_DATA_ITEMS];
+static int   g_data_count = 0;
+static int   g_data_pos   = 0;
+
+/* Called at load time to pre-scan all DATA statements */
+static void prescan_data(void) {
+    for (int li = 0; li < g_nlines; li++) {
+        const char *p = sk(g_lines[li].text);
+        if (!kw_match(p, "DATA")) continue;
+        p = sk(p + 4);
+        while (*p) {
+            /* skip leading whitespace */
+            p = sk(p);
+            char item[512]; int i = 0;
+            if (*p == '"') {
+                p++; /* quoted string */
+                while (*p && *p != '"' && i < (int)sizeof(item)-1) item[i++] = *p++;
+                if (*p == '"') p++;
+            } else {
+                while (*p && *p != ',' && i < (int)sizeof(item)-1) item[i++] = *p++;
+                /* trim trailing whitespace */
+                while (i > 0 && item[i-1] == ' ') i--;
+            }
+            item[i] = '\0';
+            if (g_data_count < MAX_DATA_ITEMS)
+                g_data[g_data_count++] = str_dup(item);
+            p = sk(p);
+            if (*p == ',') p++;
+        }
+    }
+}
+
+static int cmd_data(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0; /* handled at prescan */
+}
+
+static int cmd_restore(Interp *ip, const char *args) {
+    (void)ip; (void)args; g_data_pos = 0; return 0;
+}
+
+static int cmd_read(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    while (*p) {
+        char name[MAX_VARNAME];
+        p = sk(read_varname(sk(p), name));
+        /* parse optional subscript */
+        int arr_i = 0, arr_j = 1, is_arr = 0;
+        if (*p == '(') {
+            is_arr = 1; p = sk(p+1);
+            mpf_t i1; mpf_init2(i1,g_prec);
+            p = sk(eval_expr(p, i1)); arr_i = (int)mpf_get_si(i1); mpf_clear(i1);
+            if (*p==',') { p=sk(p+1); mpf_t i2; mpf_init2(i2,g_prec); p=sk(eval_expr(p,i2)); arr_j=(int)mpf_get_si(i2); mpf_clear(i2); }
+            if (*p==')') p=sk(p+1);
+        }
+        if (g_data_pos >= g_data_count) {
+            fprintf(stderr, "READ: out of data\n"); exit(1);
+        }
+        const char *item = g_data[g_data_pos++];
+        Var *v = var_get(name);
+        if (var_is_str_name(name)) {
+            if (is_arr && v->kind == VAR_ARRAY_STR) {
+                char **slot = arr_str_elem(v, arr_i, arr_j);
+                free(*slot); *slot = str_dup(item);
+            } else {
+                free(v->str); v->str = str_dup(item);
+            }
+        } else {
+            if (is_arr) {
+                mpf_set_d(*arr_num_elem(v, arr_i, arr_j), atof(item));
+            } else {
+                mpf_set_d(v->num, atof(item));
+            }
+        }
+        p = sk(p);
+        if (*p == ',') p = sk(p+1); else break;
+    }
+    return 0;
+}
+
+static int cmd_def(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    /* DEF SEG handled separately; DEF FNx(param) = expr */
+    if (!(toupper((unsigned char)p[0])=='F' && toupper((unsigned char)p[1])=='N'
+          && isalnum((unsigned char)p[2]))) return 0;
+    p += 2; /* skip "FN", leave rest for name reading below */
+    if (g_defn_count >= MAX_DEF_FN) return 0;
+    DefFn *fn = &g_defn[g_defn_count++];
+    /* read function name: FNA, FNB, etc. */
+    int i = 0;
+    fn->name[i++] = 'F'; fn->name[i++] = 'N';
+    while (isalnum((unsigned char)*p) && i < MAX_VARNAME-1) fn->name[i++] = (char)toupper(*p++);
+    fn->name[i] = '\0';
+    p = sk(p);
+    /* parameter name */
+    fn->param[0] = '\0';
+    if (*p == '(') {
+        p = sk(p+1);
+        int j = 0;
+        while (*p && *p != ')' && j < MAX_VARNAME-1) fn->param[j++] = (char)toupper(*p++);
+        fn->param[j] = '\0';
+        if (*p == ')') p++;
+    }
+    p = sk(p);
+    if (*p == '=') p = sk(p+1);
+    strncpy(fn->body, p, MAX_LINE_LEN-1);
+    return 0;
+}
+
+/* Evaluate a user-defined function FNx(arg) — called from parse_primary_p */
+/* ----------------------------------------------------------------
+ * ON x GOTO / ON x GOSUB
+ * ---------------------------------------------------------------- */
+static int cmd_on(Interp *ip, const char *args) {
+    const char *p = sk(args);
+    mpf_t val; mpf_init2(val, g_prec);
+    p = sk(eval_expr(p, val));
+    int idx = (int)mpf_get_d(val); /* 1-based */
+    mpf_clear(val);
+    int is_gosub = 0;
+    if (kw_match(p, "GOSUB")) { is_gosub = 1; p = sk(p+5); }
+    else if (kw_match(p, "GOTO")) { p = sk(p+4); }
+    else return 0;
+    /* collect comma-separated line numbers */
+    int targets[64]; int nt = 0;
+    while (*p && nt < 64) {
+        p = sk(p);
+        if (!isdigit((unsigned char)*p)) break;
+        targets[nt++] = atoi(p);
+        while (isdigit((unsigned char)*p)) p++;
+        p = sk(p);
+        if (*p == ',') p++;
+    }
+    if (idx < 1 || idx > nt) return 0; /* out of range: fall through */
+    char num[32]; snprintf(num, sizeof num, "%d", targets[idx-1]);
+    if (is_gosub) return cmd_gosub(ip, num);
+    return cmd_goto(ip, num);
+}
+
+/* ----------------------------------------------------------------
+ * DEFINT / DEFSNG / DEFDBL / DEFSTR — type declaration stubs
+ * ---------------------------------------------------------------- */
+static int cmd_defint(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
+
 static const Command commands[] = {
     COMMAND("REM",        cmd_rem),
     COMMAND("'",          cmd_rem),
@@ -1230,8 +1496,15 @@ static const Command commands[] = {
     COMMAND("LINE INPUT", cmd_line_input),
     COMMAND("INPUT",      cmd_input),
     COMMAND("DEF SEG",    cmd_defseg),
-    COMMAND("DEF",        cmd_defseg),   /* DEF FN etc — stub */
+    COMMAND("DEF",        cmd_def),
     COMMAND("DEFDBL",     cmd_defdbl),
+    COMMAND("DEFINT",     cmd_defint),
+    COMMAND("DEFSNG",     cmd_defint),
+    COMMAND("DEFSTR",     cmd_defint),
+    COMMAND("ON",         cmd_on),
+    COMMAND("READ",       cmd_read),
+    COMMAND("DATA",       cmd_data),
+    COMMAND("RESTORE",    cmd_restore),
     COMMAND("CHAIN",      cmd_chain),
     { NULL, NULL }
 };
@@ -1427,6 +1700,8 @@ int main(int argc, char **argv) {
     mpf_set_default_prec(g_prec);
     display_init();
     load(argv[1]);
+    prescan_data();
+    srand((unsigned)time(NULL));
     run();
     display_shutdown();
     return 0;
