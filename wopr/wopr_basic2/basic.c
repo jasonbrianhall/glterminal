@@ -154,6 +154,7 @@ struct Interp {
 static int dispatch(Interp *ip, const char *line);
 static const char *eval_expr(const char *s, mpf_t result);
 static const char *eval_str_expr(const char *s, char *buf, int bufsz);
+static int is_str_token(const char *p);
 
 /* ================================================================
  * Utility
@@ -202,6 +203,56 @@ static const char *eval_str_expr(const char *s, char *buf, int bufsz) {
 static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
     p = sk(p);
     buf[0] = '\0';
+
+    /* SPC(n) — n spaces, usable in string context too */
+    if (kw_match(p, "SPC")) {
+        p = sk(p + 3);
+        if (*p == '(') p++;
+        mpf_t n; mpf_init2(n, g_prec);
+        p = eval_expr(sk(p), n);
+        int count = (int)mpf_get_si(n); mpf_clear(n);
+        if (count < 0) count = 0;
+        if (count >= bufsz) count = bufsz - 1;
+        memset(buf, ' ', count); buf[count] = '\0';
+        if (*sk(p) == ')') p = sk(p) + 1;
+        return p;
+    }
+
+    /* LEFT$(str$, n) */
+    if (kw_match(p, "LEFT$")) {
+        p = sk(p + 5);
+        if (*p == '(') p++;
+        char src[1024];
+        p = sk(eval_str_expr(sk(p), src, sizeof src));
+        if (*p == ',') p = sk(p + 1);
+        mpf_t n; mpf_init2(n, g_prec);
+        p = sk(eval_expr(sk(p), n));
+        int len = (int)mpf_get_si(n); mpf_clear(n);
+        if (*sk(p) == ')') p = sk(p) + 1;
+        int srclen = (int)strlen(src);
+        if (len > srclen) len = srclen;
+        if (len >= bufsz) len = bufsz - 1;
+        memcpy(buf, src, len); buf[len] = '\0';
+        return p;
+    }
+
+    /* RIGHT$(str$, n) */
+    if (kw_match(p, "RIGHT$")) {
+        p = sk(p + 6);
+        if (*p == '(') p++;
+        char src[1024];
+        p = sk(eval_str_expr(sk(p), src, sizeof src));
+        if (*p == ',') p = sk(p + 1);
+        mpf_t n; mpf_init2(n, g_prec);
+        p = sk(eval_expr(sk(p), n));
+        int len = (int)mpf_get_si(n); mpf_clear(n);
+        if (*sk(p) == ')') p = sk(p) + 1;
+        int srclen = (int)strlen(src);
+        if (len > srclen) len = srclen;
+        if (len >= bufsz) len = bufsz - 1;
+        memcpy(buf, src + srclen - len, len); buf[len] = '\0';
+        return p;
+    }
 
     /* INKEY$ — non-blocking key read */
     if (kw_match(p, "INKEY$")) {
@@ -339,6 +390,15 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
         else           mpf_sub(result, result, tmp);
         skip_ws_p(ps);
     }
+    /* AND / OR — bitwise on integer values */
+    while (kw_match(ps->p, "AND") || kw_match(ps->p, "OR")) {
+        int is_and = kw_match(ps->p, "AND");
+        ps->p += is_and ? 3 : 2;
+        parse_term_p(ps, tmp);
+        long lv = mpf_get_si(result), rv = mpf_get_si(tmp);
+        mpf_set_si(result, is_and ? (lv & rv) : (lv | rv));
+        skip_ws_p(ps);
+    }
     mpf_clear(tmp);
 }
 
@@ -410,6 +470,18 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     }
 
     /* Built-in numeric functions */
+    /* PEEK(addr) — stub, returns 0 except &H410 reports 80-col CGA */
+    if (kw_match(ps->p, "PEEK")) {
+        ps->p+=4; skip_ws_p(ps); if(*ps->p=='(') ps->p++;
+        mpf_t addr; mpf_init2(addr, g_prec);
+        parse_expr_p(ps, addr);
+        long a = mpf_get_si(addr); mpf_clear(addr);
+        /* &H410 = equipment flags: bits 5-4 = 00 means EGA/VGA (80 col) */
+        long val = (a == 0x410) ? 0x00 : 0;
+        mpf_set_si(result, val);
+        skip_ws_p(ps); if(*ps->p==')') ps->p++;
+        return;
+    }
     /* INT(x) */
     if (kw_match(ps->p, "INT")) {
         ps->p+=3; skip_ws_p(ps); if(*ps->p=='(') ps->p++;
@@ -469,7 +541,31 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         char name[MAX_VARNAME];
         ps->p = read_varname(ps->p, name);
         skip_ws_p(ps);
-        /* Array access: name(i) or name(i,j) */
+
+        /* String-typed name (ends in $) in numeric context — evaluate as
+           string and return 0; handles stray CHR$(...) etc in expressions */
+        if (var_is_str_name(name) || strcasecmp(name,"SPC")==0) {
+            char sbuf[1024];
+            /* if followed by '(' it's a string function call — back up and
+               let eval_str_primary handle it, then return 0 */
+            const char *save = ps->p;
+            char tmp2[1024]; tmp2[0]='\0';
+            /* rewind to start of name */
+            ps->p = save; /* already past name; call str evaluator with full token */
+            /* We can't easily rewind, so just consume args and return 0 */
+            if (*ps->p == '(') {
+                int depth=1; ps->p++;
+                while (*ps->p && depth>0) {
+                    if (*ps->p=='(') depth++;
+                    else if (*ps->p==')') depth--;
+                    ps->p++;
+                }
+            }
+            mpf_set_ui(result, 0);
+            return;
+        }
+
+        /* Numeric array access: name(i) or name(i,j) */
         if (*ps->p == '(') {
             ps->p++;
             mpf_t idx1; mpf_init2(idx1, g_prec);
@@ -506,22 +602,27 @@ static const char *eval_expr(const char *s, mpf_t result) {
 
 /* ================================================================
  * PRINT USING formatter
- * Supports: # digit, . decimal, $ dollar, , comma grouping, + sign
+ * Format chars: # = digit placeholder, . = decimal, $ = dollar sign,
+ *               + = leading sign, , = thousands separator (ignored here)
+ * Field is right-justified to the total width implied by # count.
  * ================================================================ */
 static void print_using(const char *fmt, double val) {
-    /* count # before and after decimal */
-    int before = 0, after = 0, has_dot = 0, has_dollar = 0;
+    int before = 0, after = 0, has_dot = 0, has_dollar = 0, has_plus = 0;
     for (const char *f = fmt; *f; f++) {
-        if (*f == '$') has_dollar = 1;
-        else if (*f == '.') has_dot = 1;
+        if      (*f == '$') has_dollar = 1;
+        else if (*f == '+') has_plus   = 1;
+        else if (*f == '.') has_dot    = 1;
         else if (*f == '#') { if (has_dot) after++; else before++; }
     }
+
     char numbuf[64];
     if (has_dot)
         snprintf(numbuf, sizeof numbuf, "%*.*f", before + after + 1, after, val);
     else
-        snprintf(numbuf, sizeof numbuf, "%*.0f", before, val);
-    if (has_dollar) { display_putchar('$'); }
+        snprintf(numbuf, sizeof numbuf, "%*d", before, (int)val);
+
+    if (has_plus && val >= 0) display_putchar('+');
+    if (has_dollar)           display_putchar('$');
     display_print(numbuf);
 }
 
@@ -548,7 +649,10 @@ static int cmd_end(Interp *ip, const char *args) {
     (void)args; ip->running = 0; return 1;
 }
 
-/* WIDTH n */
+static int cmd_cls(Interp *ip, const char *args) {
+    (void)ip;(void)args; display_cls(); return 0;
+}
+
 static int cmd_width(Interp *ip, const char *args) {
     (void)ip;
     mpf_t n; mpf_init2(n, g_prec);
@@ -558,28 +662,18 @@ static int cmd_width(Interp *ip, const char *args) {
     return 0;
 }
 
-/* CLS */
-static int cmd_cls(Interp *ip, const char *args) {
-    (void)ip;(void)args;
-    display_cls();
-    return 0;
-}
-
-/* COLOR fg [,bg [,border]] */
 static int cmd_color(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
     mpf_t fg, bg; mpf_init2(fg,g_prec); mpf_init2(bg,g_prec);
     mpf_set_ui(bg, 0);
-    p = eval_expr(p, fg);
-    p = sk(p);
+    p = eval_expr(p, fg); p = sk(p);
     if (*p == ',') { p=sk(p+1); p=eval_expr(p,bg); }
     display_color((int)mpf_get_si(fg), (int)mpf_get_si(bg));
     mpf_clears(fg,bg,NULL);
     return 0;
 }
 
-/* LOCATE row, col [, cursor] */
 static int cmd_locate(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
@@ -587,14 +681,13 @@ static int cmd_locate(Interp *ip, const char *args) {
     mpf_set_ui(cur, 1);
     p = sk(eval_expr(p, row)); if (*p==',') p=sk(p+1);
     p = sk(eval_expr(p, col)); p=sk(p);
-    if (*p == ',') { p=sk(p+1); p=eval_expr(p,cur); }
+    if (*p == ',') { p=sk(p+1); eval_expr(p,cur); }
     display_locate((int)mpf_get_si(row), (int)mpf_get_si(col));
     display_cursor((int)mpf_get_si(cur));
     mpf_clears(row,col,cur,NULL);
     return 0;
 }
 
-/* DIM name(d1[,d2]) */
 static int cmd_dim(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
@@ -608,7 +701,7 @@ static int cmd_dim(Interp *ip, const char *args) {
             mpf_t d1; mpf_init2(d1,g_prec);
             p = sk(eval_expr(sk(p), d1));
             int dim1 = (int)mpf_get_si(d1)+1; mpf_clear(d1);
-            int dim2 = 1; int ndim = 1;
+            int dim2 = 1, ndim = 1;
             if (*p == ',') {
                 p = sk(p+1);
                 mpf_t d2; mpf_init2(d2,g_prec);
@@ -630,14 +723,11 @@ static int cmd_dim(Interp *ip, const char *args) {
     return 0;
 }
 
-/* LET / assignment */
 static int cmd_let(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
     char name[MAX_VARNAME];
     p = sk(read_varname(p, name));
-
-    /* Array assignment: name(i[,j]) = expr */
     int arr_i = 0, arr_j = 1, is_arr = 0;
     if (*p == '(') {
         is_arr = 1; p = sk(p+1);
@@ -647,7 +737,6 @@ static int cmd_let(Interp *ip, const char *args) {
         if (*p==')') p=sk(p+1);
     }
     if (*p=='=') p=sk(p+1);
-
     if (var_is_str_name(name)) {
         char sbuf[1024];
         eval_str_expr(sk(p), sbuf, sizeof sbuf);
@@ -668,29 +757,34 @@ static int cmd_let(Interp *ip, const char *args) {
     return 0;
 }
 
-/* PRINT [USING fmt;] items */
+/* PRINT [USING fmt;] items — returns 1 if trailing separator (no newline) */
 static int cmd_print(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
 
-    /* PRINT USING "fmt"; expr [;expr...] */
+    /* PRINT USING "fmt"; expr [;expr...] [;] */
     if (kw_match(p, "USING")) {
         p = sk(p + 5);
-        char fmt[128]; int fi=0;
-        if (*p=='"') { p++; while(*p&&*p!='"'&&fi<(int)sizeof(fmt)-1) fmt[fi++]=*p++; if(*p=='"')p++; }
-        fmt[fi]='\0';
-        p=sk(p); if(*p==';') p=sk(p+1);
-        /* each semicolon-separated value uses the same format */
-        while (*p && *p!='\n') {
-            /* check if it's a string expression or numeric */
-            mpf_t val; mpf_init2(val,g_prec);
-            const char *after = eval_expr(p, val);
+        char fmt[128]; int fi = 0;
+        if (*p == '"') {
+            p++;
+            while (*p && *p != '"' && fi < (int)sizeof(fmt)-1) fmt[fi++] = *p++;
+            if (*p == '"') p++;
+        }
+        fmt[fi] = '\0';
+        p = sk(p);
+        if (*p == ';') p = sk(p + 1);
+
+        int trailing = 0;
+        while (*p) {
+            mpf_t val; mpf_init2(val, g_prec);
+            p = sk(eval_expr(p, val));
             print_using(fmt, mpf_get_d(val));
             mpf_clear(val);
-            p = sk(after);
-            if (*p==';') p=sk(p+1); else break;
+            if (*p == ';') { p = sk(p + 1); trailing = 1; }
+            else           { trailing = 0; break; }
         }
-        display_newline();
+        if (!trailing) display_newline();
         return 0;
     }
 
@@ -698,19 +792,12 @@ static int cmd_print(Interp *ip, const char *args) {
     int trailing_sep = 0;
     while (*p) {
         trailing_sep = 0;
-        if (*p == '"' || kw_match(p,"CHR$") || kw_match(p,"STRING$") ||
-            kw_match(p,"MID$") || kw_match(p,"SPC") || kw_match(p,"STR$") ||
-            (isalpha((unsigned char)*p) && var_is_str_name((
-                /* peek at name */
-                (void)0, ({ char _n[MAX_VARNAME]; read_varname(p,_n); _n; })
-            ))))
-        {
-            /* string item — but SPC is special */
+        if (is_str_token(p)) {
             if (kw_match(p,"SPC")) {
                 p=sk(p+3); if(*p=='(') p++;
                 mpf_t n; mpf_init2(n,g_prec); p=eval_expr(sk(p),n);
                 display_spc((int)mpf_get_si(n)); mpf_clear(n);
-                if(*sk(p)==')') p=sk(p)+1;
+                p=sk(p); if(*p==')') p=sk(p+1);
             } else {
                 char sbuf[1024];
                 p = eval_str_expr(p, sbuf, sizeof sbuf);
@@ -848,6 +935,11 @@ static int is_str_token(const char *p) {
     if (kw_match(p,"STRING$")) return 1;
     if (kw_match(p,"MID$"))    return 1;
     if (kw_match(p,"STR$"))    return 1;
+    if (kw_match(p,"SPC"))     return 1;
+    if (kw_match(p,"SPACE$"))  return 1;
+    if (kw_match(p,"LEFT$"))   return 1;
+    if (kw_match(p,"RIGHT$"))  return 1;
+    if (kw_match(p,"INPUT$"))  return 1;
     /* variable ending in $ */
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
@@ -957,52 +1049,72 @@ static const Command commands[] = {
 };
 
 /* ================================================================
- * Dispatcher — handles colon-separated multi-statements
+ * split_statements: split a line on unquoted colons into segments.
+ * Returns number of segments; fills segs[] with pointers into a
+ * copy of line (caller must free the copy).
  * ================================================================ */
-static int dispatch(Interp *ip, const char *line) {
-    const char *p = sk(line);
+#define MAX_STMTS 32
+static int split_statements(const char *line, char *segs[], char **buf_out) {
+    char *buf = str_dup(line);
+    *buf_out = buf;
+    int n = 0;
+    int in_str = 0;
+    segs[n++] = buf;
+    for (char *p = buf; *p; p++) {
+        if (*p == '"') in_str = !in_str;
+        if (!in_str && *p == ':') {
+            *p = '\0';
+            if (n < MAX_STMTS) segs[n++] = p + 1;
+        }
+    }
+    return n;
+}
+
+/* dispatch_one: dispatch exactly one statement (no colons) */
+static int dispatch_one(Interp *ip, const char *stmt) {
+    const char *p = sk(stmt);
     if (!*p) return 0;
 
-    /* Try each registered command */
-    for (int i=0; commands[i].keyword; i++) {
-        const char *kw=commands[i].keyword;
-        size_t len=strlen(kw);
-        if (strncasecmp(p,kw,len)==0) {
-            char next=p[len];
-            int boundary = !isalnum((unsigned char)next) && next!='_' && next!='$';
-            if (boundary) {
-                int jumped = commands[i].fn(ip, sk(p+len));
-                if (jumped) return 1;
-                /* check for colon-separated next statement */
-                /* (find next non-string colon) */
-                const char *rest = sk(p+len);
-                /* skip past the args of this statement to find ':' */
-                /* simple heuristic: run to next unquoted colon */
-                int in_str=0;
-                while (*rest) {
-                    if (*rest=='"') in_str=!in_str;
-                    if (!in_str && *rest==':') { dispatch(ip, rest+1); break; }
-                    rest++;
-                }
-                return 0;
+    for (int i = 0; commands[i].keyword; i++) {
+        const char *kw = commands[i].keyword;
+        size_t len = strlen(kw);
+        if (strncasecmp(p, kw, len) == 0) {
+            char next = p[len];
+            if (!isalnum((unsigned char)next) && next != '_' && next != '$') {
+                return commands[i].fn(ip, sk(p + len));
             }
         }
     }
 
-    /* Bare assignment or INKEY$ read */
+    /* Bare assignment: var = expr  or  arr(i) = expr */
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
-        const char *after=read_varname(p,name);
-        after=sk(after);
-        /* Array element on left side */
-        if (*after=='(' || *after=='=') {
+        const char *after = read_varname(p, name);
+        after = sk(after);
+        if (*after == '=' || *after == '(')
             return cmd_let(ip, p);
-        }
     }
 
-    /* Unknown — warn and skip */
-    fprintf(stderr,"Warning: unknown: %.60s\n",p);
+    fprintf(stderr, "Warning: unknown: %.60s\n", p);
     return 0;
+}
+
+/* ================================================================
+ * Dispatcher — splits on colons, runs each statement in order.
+ * Stops if any statement performs a jump.
+ * ================================================================ */
+static int dispatch(Interp *ip, const char *line) {
+    char *segs[MAX_STMTS];
+    char *buf;
+    int n = split_statements(line, segs, &buf);
+
+    int jumped = 0;
+    for (int i = 0; i < n && !jumped; i++) {
+        jumped = dispatch_one(ip, segs[i]);
+    }
+
+    free(buf);
+    return jumped;
 }
 
 /* ================================================================

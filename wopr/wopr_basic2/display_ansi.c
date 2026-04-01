@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 
 /* ----------------------------------------------------------------
  * Internal state
@@ -66,19 +67,35 @@ static void leave_raw(void)
  * Public API
  * ---------------------------------------------------------------- */
 
+static void cleanup_terminal(void) {
+    leave_raw();
+    /* Reset all attributes, show cursor, move to bottom */
+    printf("\033[0m\033[?25h\n");
+    fflush(stdout);
+}
+
+static void signal_handler(int sig) {
+    cleanup_terminal();
+    /* Re-raise with default handler so shell gets correct exit status */
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 void display_init(void)
 {
     enter_raw();
-    /* Reset attributes, clear screen */
+    atexit(cleanup_terminal);
+    signal(SIGINT,  signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGSEGV, signal_handler);
+    signal(SIGABRT, signal_handler);
     printf("\033[0m\033[2J\033[H");
     fflush(stdout);
 }
 
 void display_shutdown(void)
 {
-    leave_raw();
-    printf("\033[0m\n");
-    fflush(stdout);
+    /* cleanup_terminal() will be called by atexit — nothing extra needed */
 }
 
 void display_cls(void)
