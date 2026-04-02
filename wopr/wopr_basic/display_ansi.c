@@ -12,6 +12,7 @@
  */
 
 #include "display.h"
+#include "sound.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,7 +84,7 @@ static void signal_handler(int sig) {
 
 void display_init(void)
 {
-    tcgetattr(STDIN_FILENO, &g_orig_termios);  /* snapshot clean terminal state once */
+    tcgetattr(STDIN_FILENO, &g_orig_termios);
     enter_raw();
     atexit(cleanup_terminal);
     signal(SIGTERM, signal_handler);
@@ -91,11 +92,12 @@ void display_init(void)
     signal(SIGABRT, signal_handler);
     printf("\033[0m\033[2J\033[H");
     fflush(stdout);
+    sound_init();
 }
 
 void display_shutdown(void)
 {
-    /* cleanup_terminal() will be called by atexit — nothing extra needed */
+    sound_shutdown();
 }
 
 void display_cls(void)

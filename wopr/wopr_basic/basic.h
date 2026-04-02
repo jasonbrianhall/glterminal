@@ -22,6 +22,7 @@
 #include <gmp.h>
 
 #include "display.h"
+#include "sound.h"
 
 /* ================================================================
  * Configuration constants

@@ -34,7 +34,33 @@ static int cmd_defdbl(Interp *ip, const char *args) { (void)ip;(void)args; retur
 static int cmd_key(Interp *ip, const char *args)    { (void)ip;(void)args; return 0; }
 static int cmd_chain(Interp *ip, const char *args)  { (void)ip;(void)args; return 0; }
 static int cmd_screen(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
-static int cmd_beep(Interp *ip, const char *args)   { (void)ip;(void)args; display_putchar('\a'); fflush(stdout); return 0; }
+static int cmd_beep(Interp *ip, const char *args) {
+    (void)ip; (void)args;
+    sound_beep();
+    return 0;
+}
+
+/* SOUND freq, duration  — freq in Hz, duration in 18.2-tick clock units */
+static int cmd_sound(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    mpf_t freq, dur; mpf_init2(freq, g_prec); mpf_init2(dur, g_prec);
+    p = sk(eval_expr(p, freq));
+    if (*p == ',') p = sk(p + 1);
+    eval_expr(p, dur);
+    sound_tone(mpf_get_d(freq), mpf_get_d(dur));
+    mpf_clears(freq, dur, NULL);
+    return 0;
+}
+
+/* PLAY "mml-string" — GW-BASIC Music Macro Language */
+static int cmd_play(Interp *ip, const char *args) {
+    (void)ip;
+    char mml[1024];
+    eval_str_expr(sk(args), mml, sizeof mml);
+    sound_play(mml);
+    return 0;
+}
 
 /* ================================================================
  * Interpreter control
@@ -900,6 +926,8 @@ const Command commands[] = {
     { "PRINT",      cmd_print    },
     { "CLS",        cmd_cls      },
     { "BEEP",       cmd_beep     },
+    { "SOUND",      cmd_sound    },
+    { "PLAY",       cmd_play     },
     { "COLOR",      cmd_color    },
     { "LOCATE",     cmd_locate   },
     { "WIDTH",      cmd_width    },
