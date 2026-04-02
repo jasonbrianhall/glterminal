@@ -1,0 +1,37 @@
+100 REM 100 DOORS WITH DEBUG
+110 DIM IsDoorOpen(1 TO 100)
+120 LET DoorMax = 100
+
+130 REM INITIALIZE ALL DOORS TO CLOSED
+140 FOR I = 1 TO DoorMax
+150   LET IsDoorOpen(I) = 0
+160 NEXT I
+
+170 PRINT "Starting door toggling..."
+180 PRINT
+
+190 REM MAIN LOOP
+200 FOR I = 1 TO DoorMax
+210   PRINT "PASS"; I; ": toggling every"; I; "th door"
+220   
+230   FOR J = I TO DoorMax STEP I
+240      LET IsDoorOpen(J) = 1 - IsDoorOpen(J)
+250      PRINT "   Door"; J; "->"; 
+260      IF IsDoorOpen(J) = 1 THEN PRINT "OPEN" ELSE PRINT "CLOSED"
+270   NEXT J
+
+280   REM PRINT SNAPSHOT AFTER EACH PASS
+290   PRINT "State after pass"; I; ":";
+300   FOR K = 1 TO DoorMax
+310      IF IsDoorOpen(K) = 1 THEN PRINT K;
+320   NEXT K
+330   PRINT : PRINT
+340 NEXT I
+
+350 PRINT "FINAL OPEN DOORS:"
+360 FOR I = 1 TO DoorMax
+370   IF IsDoorOpen(I) = 1 THEN PRINT I;
+380 NEXT I
+390 PRINT
+400 END
+
