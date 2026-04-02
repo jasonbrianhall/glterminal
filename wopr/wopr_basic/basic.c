@@ -75,6 +75,23 @@ static char *str_dup(const char *s) {
 typedef struct Interp Interp;
 
 /* ================================================================
+ * File handle table — OPEN/CLOSE/INPUT#/PRINT#
+ * ================================================================ */
+#define MAX_FILE_HANDLES 16
+typedef struct {
+    FILE *fp;
+    char  mode;   /* 'I'=input, 'O'=output, 'A'=append, 0=closed */
+} FileHandle;
+static FileHandle g_files[MAX_FILE_HANDLES+1]; /* 1-based */
+
+static FileHandle *fh_get(int n) {
+    if (n < 1 || n > MAX_FILE_HANDLES) {
+        fprintf(stderr, "Bad file number: %d\n", n); exit(1);
+    }
+    return &g_files[n];
+}
+
+/* ================================================================
  * Variable store — numeric (mpf) and string
  * ================================================================ */
 typedef enum { VAR_NUM, VAR_STR, VAR_ARRAY_NUM, VAR_ARRAY_STR } VarKind;
@@ -188,6 +205,9 @@ static int dispatch_multi(Interp *ip, const char *clause);
 static const char *eval_expr(const char *s, mpf_t result);
 static const char *eval_str_expr(const char *s, char *buf, int bufsz);
 static int is_str_token(const char *p);
+static int cmd_input_file(Interp *ip, const char *args);
+static int cmd_print_file(Interp *ip, const char *args);
+static int cmd_line_input_file(Interp *ip, const char *args);
 
 /* ================================================================
  * Utility
@@ -699,6 +719,21 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
+    /* EOF(n) — returns -1 if file #n is at end, 0 otherwise */
+    if (kw_match(ps->p, "EOF")) {
+        ps->p += 3; skip_ws_p(ps);
+        if (*ps->p == '(') ps->p++;
+        if (*ps->p == '#') ps->p++;
+        mpf_t fn; mpf_init2(fn, g_prec);
+        parse_expr_p(ps, fn);
+        int n = (int)mpf_get_si(fn); mpf_clear(fn);
+        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        FileHandle *fh = (n>=1&&n<=MAX_FILE_HANDLES) ? &g_files[n] : NULL;
+        int at_eof = (!fh || !fh->fp || feof(fh->fp)) ? -1 : 0;
+        mpf_set_si(result, at_eof);
+        return;
+    }
+
     /* RND(x) — returns random float in [0,1) regardless of x */
     if (kw_match(ps->p, "RND")) {
         ps->p += 3; skip_ws_p(ps);
@@ -831,7 +866,11 @@ static int cmd_screen(Interp *ip, const char *args) { (void)ip;(void)args; retur
 static int cmd_beep(Interp *ip, const char *args)   { (void)ip;(void)args; display_putchar('\a'); fflush(stdout); return 0; }
 
 static int cmd_end(Interp *ip, const char *args) {
-    (void)args; ip->running = 0; return 1;
+    (void)args; ip->running = 0;
+    /* close any open files */
+    for (int i = 1; i <= MAX_FILE_HANDLES; i++)
+        if (g_files[i].fp) { fclose(g_files[i].fp); g_files[i].fp = NULL; g_files[i].mode = 0; }
+    return 1;
 }
 
 static int cmd_cls(Interp *ip, const char *args) {
@@ -969,6 +1008,9 @@ static int cmd_print(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
 
+    /* PRINT #n — redirect to file output */
+    if (*p == '#') return cmd_print_file(ip, args);
+
     /* PRINT USING "fmt"; expr [;expr...] [;] */
     if (kw_match(p, "USING")) {
         p = sk(p + 5);
@@ -1053,6 +1095,8 @@ static int cmd_print(Interp *ip, const char *args) {
 static int cmd_line_input(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
+    /* LINE INPUT #n — redirect to file */
+    if (*p == '#') return cmd_line_input_file(ip, args);
     if (*p == '"') {
         p++;
         while (*p && *p!='"') display_putchar(*p++);
@@ -1078,6 +1122,8 @@ static int cmd_line_input(Interp *ip, const char *args) {
 static int cmd_input(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
+    /* INPUT #n — redirect to file input */
+    if (*p == '#') return cmd_input_file(ip, args);
 
     /* optional prompt string */
     if (*p == '"') {
@@ -1138,7 +1184,180 @@ static int cmd_input(Interp *ip, const char *args) {
     return 0;
 }
 
-/* FOR var = start TO limit [STEP step] */
+/* ----------------------------------------------------------------
+ * OPEN "filename" FOR INPUT|OUTPUT|APPEND AS #n
+ * ---------------------------------------------------------------- */
+static int cmd_open(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+
+    /* parse filename */
+    char filename[512]; int fi = 0;
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"' && fi < (int)sizeof(filename)-1) filename[fi++] = *p++;
+        if (*p == '"') p++;
+    }
+    filename[fi] = '\0';
+    p = sk(p);
+
+    /* FOR INPUT|OUTPUT|APPEND */
+    char mode_ch = 'O';
+    if (kw_match(p, "FOR")) {
+        p = sk(p + 3);
+        if      (kw_match(p, "INPUT"))  { mode_ch = 'I'; p = sk(p + 5); }
+        else if (kw_match(p, "OUTPUT")) { mode_ch = 'O'; p = sk(p + 6); }
+        else if (kw_match(p, "APPEND")) { mode_ch = 'A'; p = sk(p + 6); }
+    }
+
+    /* AS #n */
+    if (kw_match(p, "AS")) p = sk(p + 2);
+    if (*p == '#') p = sk(p + 1);
+    mpf_t num; mpf_init2(num, g_prec);
+    p = eval_expr(p, num);
+    int n = (int)mpf_get_si(num); mpf_clear(num);
+
+    FileHandle *fh = fh_get(n);
+    if (fh->fp) { fclose(fh->fp); fh->fp = NULL; }
+
+    const char *fmode = (mode_ch=='I') ? "r" : (mode_ch=='A') ? "a" : "w";
+    fh->fp = fopen(filename, fmode);
+    if (!fh->fp) { perror(filename); return 0; }
+    fh->mode = mode_ch;
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ * CLOSE [#n [,#n ...]]  — no args closes all
+ * ---------------------------------------------------------------- */
+static int cmd_close(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    if (!*p) {
+        /* close all */
+        for (int i = 1; i <= MAX_FILE_HANDLES; i++) {
+            if (g_files[i].fp) { fclose(g_files[i].fp); g_files[i].fp = NULL; g_files[i].mode = 0; }
+        }
+        return 0;
+    }
+    while (*p) {
+        if (*p == '#') p = sk(p+1);
+        mpf_t num; mpf_init2(num, g_prec);
+        p = sk(eval_expr(p, num));
+        int n = (int)mpf_get_si(num); mpf_clear(num);
+        FileHandle *fh = fh_get(n);
+        if (fh->fp) { fclose(fh->fp); fh->fp = NULL; fh->mode = 0; }
+        if (*p == ',') p = sk(p+1); else break;
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ * INPUT #n, var [, var ...]
+ * ---------------------------------------------------------------- */
+static int cmd_input_file(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    if (*p == '#') p = sk(p+1);
+    mpf_t num; mpf_init2(num, g_prec);
+    p = sk(eval_expr(p, num));
+    int n = (int)mpf_get_si(num); mpf_clear(num);
+    if (*p == ',') p = sk(p+1);
+
+    FileHandle *fh = fh_get(n);
+    if (!fh->fp || fh->mode != 'I') { fprintf(stderr, "File #%d not open for input\n", n); return 0; }
+
+    while (*p) {
+        char name[MAX_VARNAME];
+        p = sk(read_varname(sk(p), name));
+        char linebuf[512];
+        if (!fgets(linebuf, sizeof linebuf, fh->fp)) linebuf[0] = '\0';
+        /* strip trailing newline */
+        linebuf[strcspn(linebuf, "\r\n")] = '\0';
+        /* for comma-delimited INPUT, strip leading whitespace and quotes */
+        char *val = linebuf;
+        while (isspace((unsigned char)*val)) val++;
+        if (*val == '"') { val++; char *q = strchr(val, '"'); if (q) *q = '\0'; }
+        Var *v = var_get(name);
+        if (var_is_str_name(name)) {
+            free(v->str); v->str = str_dup(val);
+        } else {
+            mpf_set_d(v->num, atof(val));
+        }
+        p = sk(p);
+        if (*p == ',') p = sk(p+1); else break;
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ * PRINT #n, expr [; expr ...]
+ * ---------------------------------------------------------------- */
+static int cmd_print_file(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    if (*p == '#') p = sk(p+1);
+    mpf_t num; mpf_init2(num, g_prec);
+    p = sk(eval_expr(p, num));
+    int n = (int)mpf_get_si(num); mpf_clear(num);
+    if (*p == ',') p = sk(p+1);
+
+    FileHandle *fh = fh_get(n);
+    if (!fh->fp || fh->mode == 'I') { fprintf(stderr, "File #%d not open for output\n", n); return 0; }
+
+    int trailing = 0;
+    while (*p) {
+        trailing = 0;
+        if (is_str_token(p)) {
+            char sbuf[1024];
+            p = eval_str_expr(p, sbuf, sizeof sbuf);
+            fputs(sbuf, fh->fp);
+        } else {
+            mpf_t val; mpf_init2(val, g_prec);
+            p = eval_expr(p, val);
+            double d = mpf_get_d(val); mpf_clear(val);
+            if (d == floor(d) && fabs(d) < 1e15)
+                fprintf(fh->fp, d >= 0 ? " %.0f " : "%.0f ", d);
+            else
+                fprintf(fh->fp, d >= 0 ? " %g " : "%g ", d);
+        }
+        p = sk(p);
+        if (*p == ';') { trailing = 1; p = sk(p+1); }
+        else if (*p == ',') { fputc('\t', fh->fp); trailing = 1; p = sk(p+1); }
+        else break;
+    }
+    if (!trailing) fputc('\n', fh->fp);
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ * LINE INPUT #n, var$
+ * ---------------------------------------------------------------- */
+static int cmd_line_input_file(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    if (*p == '#') p = sk(p+1);
+    mpf_t num; mpf_init2(num, g_prec);
+    p = sk(eval_expr(p, num));
+    int n = (int)mpf_get_si(num); mpf_clear(num);
+    if (*p == ',') p = sk(p+1);
+
+    FileHandle *fh = fh_get(n);
+    if (!fh->fp || fh->mode != 'I') { fprintf(stderr, "File #%d not open for input\n", n); return 0; }
+
+    char name[MAX_VARNAME];
+    read_varname(sk(p), name);
+    char linebuf[512];
+    if (!fgets(linebuf, sizeof linebuf, fh->fp)) linebuf[0] = '\0';
+    linebuf[strcspn(linebuf, "\r\n")] = '\0';
+    Var *v = var_get(name);
+    free(v->str); v->str = str_dup(linebuf);
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ * EOF(#n) — returns -1 if at end of file, 0 otherwise
+ * ---------------------------------------------------------------- */
 static int cmd_for(Interp *ip, const char *args) {
     const char *p = sk(args);
     char vname[MAX_VARNAME];
@@ -1618,6 +1837,8 @@ static const Command commands[] = {
     COMMAND("IF",         cmd_if),
     COMMAND("LINE INPUT", cmd_line_input),
     COMMAND("INPUT",      cmd_input),
+    COMMAND("OPEN",       cmd_open),
+    COMMAND("CLOSE",      cmd_close),
     COMMAND("DEF SEG",    cmd_defseg),
     COMMAND("DEF",        cmd_def),
     COMMAND("DEFDBL",     cmd_defdbl),
@@ -1895,6 +2116,8 @@ static void clear_program(void) {
     g_data_count = 0;
     g_data_pos = 0;
     g_defn_count = 0;
+    for (int i = 1; i <= MAX_FILE_HANDLES; i++)
+        if (g_files[i].fp) { fclose(g_files[i].fp); g_files[i].fp = NULL; g_files[i].mode = 0; }
 }
 
 /* ================================================================
