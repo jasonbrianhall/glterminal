@@ -1493,9 +1493,9 @@ static int cmd_for(Interp *ip, const char *args) {
     mpf_t start,limit,step; mpf_init2(start,g_prec); mpf_init2(limit,g_prec); mpf_init2(step,g_prec);
     mpf_set_ui(step,1);
     p=sk(eval_expr(p,start));
-    if (kw_match(p,"TO")) p=sk(p+2);
+    if (strncasecmp(p,"TO",2)==0) p=sk(p+2);
     p=sk(eval_expr(p,limit));
-    if (kw_match(p,"STEP")) { p=sk(p+4); eval_expr(p,step); }
+    if (strncasecmp(p,"STEP",4)==0) { p=sk(p+4); eval_expr(p,step); }
     Var *v = var_get(vname); mpf_set(v->num, start);
     if (g_ctrl_top>=CTRL_STACK_MAX) { fprintf(stderr,"Stack overflow\n"); exit(1); }
     CtrlFrame *f=&g_ctrl[g_ctrl_top++];
@@ -2173,6 +2173,62 @@ static void run_from(int start_pc) {
  *     (IF owns its THEN/ELSE clauses including any colons inside them)
  *   - Stop splitting at REM or '
  * ================================================================ */
+/* Normalize a BASIC statement: insert spaces after keywords that appear
+ * at a word boundary and are immediately followed by an identifier char.
+ * e.g. "FORI=1TON" -> "FOR I=1 TO N", "NEXTI" -> "NEXT I"
+ *
+ * Critical: only match at word boundaries (prev char non-alnum/non-$/_)
+ * so variable names like "IsDoorOpen" are never split up.
+ */
+static void normalize_kw(const char *src, char *dst, int dstsz) {
+    static const char *kws[] = {
+        "PRINT","INPUT","GOTO","GOSUB","RETURN","THEN","ELSE",
+        "FOR","NEXT","WHILE","WEND","STEP","TO","LET","DIM","DATA",
+        "READ","RESTORE","STOP","REM","ON","DEF",
+        NULL
+    };
+    int di = 0;
+    const char *s = src;
+    int in_str = 0;
+    int prev_alnum = 0;  /* was previous output char alphanumeric/$/_? */
+    while (*s && di < dstsz-1) {
+        if (*s == '"') {
+            in_str = !in_str;
+            dst[di++] = *s++;
+            prev_alnum = 0;
+            continue;
+        }
+        if (in_str) { dst[di++] = *s++; continue; }
+
+        /* Only try keyword match at a word boundary */
+        int matched = 0;
+        if (!prev_alnum) {
+            for (int k = 0; kws[k]; k++) {
+                int len = (int)strlen(kws[k]);
+                if (strncasecmp(s, kws[k], len) == 0) {
+                    char after = s[len];
+                    /* Insert space only if keyword is glued to next identifier */
+                    if (isalnum((unsigned char)after) || after == '$') {
+                        for (int i = 0; i < len && di < dstsz-2; i++)
+                            dst[di++] = s[i];
+                        dst[di++] = ' ';
+                        s += len;
+                        prev_alnum = 0;
+                        matched = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!matched) {
+            char c = *s++;
+            dst[di++] = c;
+            prev_alnum = isalnum((unsigned char)c) || c == '_' || c == '$';
+        }
+    }
+    dst[di] = '\0';
+}
+
 static void load(const char *filename) {
     FILE *f=fopen(filename,"r");
     if (!f) { perror(filename); exit(1); }
@@ -2185,20 +2241,35 @@ static void load(const char *filename) {
         int num=(int)strtol(p,&p,10);
         while (isspace((unsigned char)*p)) p++;
 
+        /* Normalize compact keyword syntax: FORI=1TON -> FOR I=1 TO N */
+        char normbuf[MAX_LINE_LEN];
+        normalize_kw(p, normbuf, sizeof(normbuf));
+        p = normbuf;
+
         /* Check if the whole line starts with IF — don't split */
         const char *trimmed = p;
         int starts_with_if = (strncasecmp(trimmed,"IF",2)==0 &&
                               !isalnum((unsigned char)trimmed[2]) &&
                               trimmed[2]!='_');
 
+        /* store_seg: write a statement into g_lines, expanding '?' -> 'PRINT ' */
+        #define STORE_SEG(lnum, sp) do { \
+            if (g_nlines >= MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); } \
+            g_lines[g_nlines].linenum = (lnum); \
+            const char *_sp = (sp); \
+            while (isspace((unsigned char)*_sp)) _sp++; \
+            if (*_sp == '?') { \
+                snprintf(g_lines[g_nlines].text, MAX_LINE_LEN, "PRINT %s", _sp+1); \
+            } else { \
+                strncpy(g_lines[g_nlines].text, _sp, MAX_LINE_LEN-1); \
+                g_lines[g_nlines].text[MAX_LINE_LEN-1] = '\0'; \
+            } \
+            g_nlines++; \
+        } while(0)
+
         if (starts_with_if) {
-            /* Store whole line unsplit */
-            if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
-            g_lines[g_nlines].linenum=num;
-            strncpy(g_lines[g_nlines].text,p,MAX_LINE_LEN-1);
-            g_nlines++;
+            STORE_SEG(num, p);
         } else {
-            /* Split on unquoted colons, but stop at REM/' and don't split IF sub-stmts */
             char *seg = p;
             int in_str = 0;
             char *c;
@@ -2206,42 +2277,28 @@ static void load(const char *filename) {
                 if (*c == '"') { in_str = !in_str; continue; }
                 if (in_str) continue;
                 if (*c == ':') {
-                    /* terminate this segment */
                     *c = '\0';
-                    /* store segment */
-                    if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
-                    g_lines[g_nlines].linenum=num;
-                    strncpy(g_lines[g_nlines].text,seg,MAX_LINE_LEN-1);
-                    g_nlines++;
-                    /* advance to next segment */
+                    STORE_SEG(num, seg);
                     seg = c+1;
                     while (isspace((unsigned char)*seg)) seg++;
-                    /* if next segment is REM or ' or IF, stop splitting */
                     int is_rem = (strncasecmp(seg,"REM",3)==0 &&
                                   !isalnum((unsigned char)seg[3]) && seg[3]!='_');
                     int is_apos = (*seg == '\'');
                     int is_if  = (strncasecmp(seg,"IF",2)==0 &&
                                   !isalnum((unsigned char)seg[2]) && seg[2]!='_');
                     if (is_rem || is_apos || is_if) {
-                        /* store rest as one segment and stop */
-                        if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
-                        g_lines[g_nlines].linenum=num;
-                        strncpy(g_lines[g_nlines].text,seg,MAX_LINE_LEN-1);
-                        g_nlines++;
+                        STORE_SEG(num, seg);
                         seg = NULL;
                         break;
                     }
-                    c = seg - 1; /* resume scan from new seg */
+                    c = seg - 1;
                 }
             }
-            /* store final segment */
             if (seg && *seg) {
-                if (g_nlines>=MAX_LINES) { fprintf(stderr,"Too many lines\n"); exit(1); }
-                g_lines[g_nlines].linenum=num;
-                strncpy(g_lines[g_nlines].text,seg,MAX_LINE_LEN-1);
-                g_nlines++;
+                STORE_SEG(num, seg);
             }
         }
+        #undef STORE_SEG
     }
     fclose(f);
     qsort(g_lines,g_nlines,sizeof(Line),line_cmp);
