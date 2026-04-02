@@ -151,8 +151,10 @@ static mpf_t *arr_num_elem(Var *v, int i, int j) {
     int oj = j - g_option_base;
     int idx = (v->ndim == 2) ? (oi * v->dim[1] + oj) : oi;
     int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
-    if (idx < 0 || idx >= total)
-        { fprintf(stderr, "Array out of bounds: index %d (size %d)\n", idx, total); exit(1); }
+    if (idx < 0 || idx >= total) {
+        fprintf(stderr, "Array out of bounds: index %d (size %d) -- clamping\n", idx, total);
+        idx = (idx < 0) ? 0 : total - 1;
+    }
     return &v->arr_num[idx];
 }
 
@@ -161,8 +163,10 @@ static char **arr_str_elem(Var *v, int i, int j) {
     int oj = j - g_option_base;
     int idx = (v->ndim == 2) ? (oi * v->dim[1] + oj) : oi;
     int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
-    if (idx < 0 || idx >= total)
-        { fprintf(stderr, "Array out of bounds: index %d (size %d)\n", idx, total); exit(1); }
+    if (idx < 0 || idx >= total) {
+        fprintf(stderr, "Array out of bounds: index %d (size %d) -- clamping\n", idx, total);
+        idx = (idx < 0) ? 0 : total - 1;
+    }
     return &v->arr_str[idx];
 }
 
@@ -806,7 +810,10 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
             }
             if (*ps->p == ')') ps->p++;
             Var *v = var_get(name);
-            if (v->kind != VAR_ARRAY_NUM) { fprintf(stderr,"Not an array: %s\n",name); exit(1); }
+            if (v->kind != VAR_ARRAY_NUM) {
+                fprintf(stderr,"Not an array: %s\n",name);
+                mpf_set_ui(result, 0); return;
+            }
             mpf_set(result, *arr_num_elem(v, i1, i2));
             return;
         }
@@ -1029,21 +1036,43 @@ static int cmd_dim(Interp *ip, const char *args) {
         Var *v = var_find(name);
         if (!v) v = var_create(name);
         if (*p == '(') {
-            p++;
-            mpf_t d1; mpf_init2(d1,g_prec);
-            p = sk(eval_expr(sk(p), d1));
-            int dim1 = (int)mpf_get_si(d1)+1-g_option_base; mpf_clear(d1);
-            int dim2 = 1, ndim = 1;
+            p = sk(p+1);
+
+            /* parse one dimension: either "lo TO hi" or just "hi" */
+            #define PARSE_DIM(out_size) do { \
+                mpf_t _a; mpf_init2(_a, g_prec); \
+                p = sk(eval_expr(sk(p), _a)); \
+                if (kw_match(p, "TO")) { \
+                    /* lo TO hi — discard lo, use hi */ \
+                    mpf_clear(_a); \
+                    p = sk(p + 2); \
+                    mpf_t _b; mpf_init2(_b, g_prec); \
+                    p = sk(eval_expr(sk(p), _b)); \
+                    (out_size) = (int)mpf_get_si(_b) + 1 - g_option_base; \
+                    mpf_clear(_b); \
+                } else { \
+                    (out_size) = (int)mpf_get_si(_a) + 1 - g_option_base; \
+                    mpf_clear(_a); \
+                } \
+            } while(0)
+
+            int dim1, dim2 = 1, ndim = 1;
+            PARSE_DIM(dim1);
             if (*p == ',') {
                 p = sk(p+1);
-                mpf_t d2; mpf_init2(d2,g_prec);
-                p = sk(eval_expr(sk(p),d2));
-                dim2 = (int)mpf_get_si(d2)+1-g_option_base; mpf_clear(d2);
+                PARSE_DIM(dim2);
                 ndim = 2;
             }
+            #undef PARSE_DIM
+
             if (*p == ')') p++;
+            if (dim1 < 1) dim1 = 1;
+            if (dim2 < 1) dim2 = 1;
             int total = dim1 * dim2;
-            if (total > MAX_ARRAY_SIZE) { fprintf(stderr,"Array too large\n"); exit(1); }
+            if (total > MAX_ARRAY_SIZE) {
+                fprintf(stderr, "Array too large: %d elements\n", total);
+                total = MAX_ARRAY_SIZE;
+            }
             if (var_is_str_name(name)) {
                 v->kind = VAR_ARRAY_STR;
                 v->dim[0] = dim1; v->dim[1] = dim2; v->ndim = ndim;
