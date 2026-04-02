@@ -293,6 +293,32 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
         buf[0] = ch ? (char)ch : '\0';
         buf[1] = '\0';
         return p + 6;
+
+    /* TIME$ — current time as "HH:MM:SS" */
+    } else if (kw_match(p, "TIME$")) {
+        time_t t = time(NULL);
+        struct tm *tm = localtime(&t);
+        strftime(buf, bufsz, "%H:%M:%S", tm);
+        return p + 5;
+
+    /* DATE$ — current date as "MM-DD-YYYY" */
+    } else if (kw_match(p, "DATE$")) {
+        time_t t = time(NULL);
+        struct tm *tm = localtime(&t);
+        strftime(buf, bufsz, "%m-%d-%Y", tm);
+        return p + 5;
+
+    /* ENV$("VAR") — read environment variable */
+    } else if (kw_match(p, "ENV$")) {
+        p = sk(p + 4);
+        if (*p == '(') p = sk(p + 1);
+        char varname[256];
+        p = sk(eval_str_expr(p, varname, sizeof varname));
+        if (*p == ')') p++;
+        const char *val = getenv(varname);
+        strncpy(buf, val ? val : "", bufsz - 1);
+        buf[bufsz - 1] = '\0';
+        return p;
     }
 
     /* String literal */
@@ -802,6 +828,7 @@ static int cmd_defdbl(Interp *ip, const char *args) { (void)ip;(void)args; retur
 static int cmd_key(Interp *ip, const char *args)    { (void)ip;(void)args; return 0; }
 static int cmd_chain(Interp *ip, const char *args)  { (void)ip;(void)args; return 0; }
 static int cmd_screen(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
+static int cmd_beep(Interp *ip, const char *args)   { (void)ip;(void)args; display_putchar('\a'); fflush(stdout); return 0; }
 
 static int cmd_end(Interp *ip, const char *args) {
     (void)args; ip->running = 0; return 1;
@@ -1188,6 +1215,9 @@ static int is_str_token(const char *p) {
     p = sk(p);
     if (*p == '"') return 1;
     if (kw_match(p,"INKEY$"))  return 1;
+    if (kw_match(p,"TIME$"))   return 1;
+    if (kw_match(p,"DATE$"))   return 1;
+    if (kw_match(p,"ENV$"))    return 1;
     if (kw_match(p,"CHR$"))    return 1;
     if (kw_match(p,"STRING$")) return 1;
     if (kw_match(p,"MID$"))    return 1;
@@ -1573,6 +1603,7 @@ static const Command commands[] = {
     COMMAND("LET",        cmd_let),
     COMMAND("PRINT",      cmd_print),
     COMMAND("CLS",        cmd_cls),
+    COMMAND("BEEP",       cmd_beep),
     COMMAND("COLOR",      cmd_color),
     COMMAND("LOCATE",     cmd_locate),
     COMMAND("WIDTH",      cmd_width),
