@@ -39,6 +39,7 @@
 #define MAX_ARRAY_SIZE 4096   /* total elements per array */
 
 static mp_bitcnt_t g_prec = DEFAULT_PREC;
+static int g_option_base = 0;  /* OPTION BASE 0 or 1 */
 
 /* ================================================================
  * Break flag — set by SIGINT to stop the interpreter and return
@@ -46,6 +47,7 @@ static mp_bitcnt_t g_prec = DEFAULT_PREC;
  * ================================================================ */
 #include <signal.h>
 volatile sig_atomic_t g_break = 0;
+static int g_cont_pc = -1;   /* pc to resume from for CONT, -1 = not stoppable */
 static void sigint_handler(int sig) {
     (void)sig;
     g_break = 1;
@@ -143,10 +145,11 @@ static Var *var_get(const char *name) {
     return v ? v : var_create(name);
 }
 
-/* Array element access (1-based indices) */
+/* Array element access (1-based or option-base-based indices) */
 static mpf_t *arr_num_elem(Var *v, int i, int j) {
-    /* BASIC arrays are 0-based; DIM X(n) creates indices 0..n */
-    int idx = (v->ndim == 2) ? (i * v->dim[1] + j) : i;
+    int oi = i - g_option_base;
+    int oj = j - g_option_base;
+    int idx = (v->ndim == 2) ? (oi * v->dim[1] + oj) : oi;
     int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
     if (idx < 0 || idx >= total)
         { fprintf(stderr, "Array out of bounds: index %d (size %d)\n", idx, total); exit(1); }
@@ -154,7 +157,9 @@ static mpf_t *arr_num_elem(Var *v, int i, int j) {
 }
 
 static char **arr_str_elem(Var *v, int i, int j) {
-    int idx = (v->ndim == 2) ? (i * v->dim[1] + j) : i;
+    int oi = i - g_option_base;
+    int oj = j - g_option_base;
+    int idx = (v->ndim == 2) ? (oi * v->dim[1] + oj) : oi;
     int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
     if (idx < 0 || idx >= total)
         { fprintf(stderr, "Array out of bounds: index %d (size %d)\n", idx, total); exit(1); }
@@ -865,6 +870,99 @@ static int cmd_chain(Interp *ip, const char *args)  { (void)ip;(void)args; retur
 static int cmd_screen(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
 static int cmd_beep(Interp *ip, const char *args)   { (void)ip;(void)args; display_putchar('\a'); fflush(stdout); return 0; }
 
+/* STOP — like END but sets cont_pc so CONT can resume */
+static int cmd_stop(Interp *ip, const char *args) {
+    (void)args;
+    g_cont_pc = ip->pc + 1;
+    ip->running = 0;
+    display_print("\nBreak\n");
+    return 1;
+}
+
+/* CONT — resume from where we stopped */
+static int cmd_cont(Interp *ip, const char *args) {
+    (void)args;
+    if (g_cont_pc < 0) { display_print("Can't continue\n"); return 0; }
+    ip->pc = g_cont_pc;
+    g_cont_pc = -1;
+    return 1;
+}
+
+/* RANDOMIZE [seed] — seed RNG; no arg uses time */
+static int cmd_randomize(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    if (*p && *p != ':') {
+        mpf_t n; mpf_init2(n, g_prec);
+        eval_expr(p, n);
+        srand((unsigned)mpf_get_si(n));
+        mpf_clear(n);
+    } else {
+        srand((unsigned)time(NULL));
+    }
+    return 0;
+}
+
+/* SWAP var, var — exchange two variables */
+static int cmd_swap(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    char name1[MAX_VARNAME], name2[MAX_VARNAME];
+    p = sk(read_varname(p, name1));
+    if (*p == ',') p = sk(p+1);
+    read_varname(p, name2);
+    Var *a = var_get(name1), *b = var_get(name2);
+    if (var_is_str_name(name1)) {
+        char *tmp = a->str; a->str = b->str; b->str = tmp;
+    } else {
+        mpf_t tmp; mpf_init2(tmp, g_prec);
+        mpf_set(tmp, a->num); mpf_set(a->num, b->num); mpf_set(b->num, tmp);
+        mpf_clear(tmp);
+    }
+    return 0;
+}
+
+/* ERASE arr [, arr ...] — delete arrays (reset to uninitialized) */
+static int cmd_erase(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    while (*p) {
+        char name[MAX_VARNAME];
+        p = sk(read_varname(p, name));
+        Var *v = var_find(name);
+        if (v) {
+            if (v->kind == VAR_ARRAY_NUM && v->arr_num) {
+                int total = v->dim[0] * (v->ndim==2 ? v->dim[1] : 1);
+                for (int i=0;i<total;i++) mpf_clear(v->arr_num[i]);
+                free(v->arr_num); v->arr_num = NULL;
+            } else if (v->kind == VAR_ARRAY_STR && v->arr_str) {
+                int total = v->dim[0] * (v->ndim==2 ? v->dim[1] : 1);
+                for (int i=0;i<total;i++) free(v->arr_str[i]);
+                free(v->arr_str); v->arr_str = NULL;
+            }
+            v->kind = var_is_str_name(name) ? VAR_STR : VAR_NUM;
+            v->ndim = 0;
+        }
+        p = sk(p); if (*p == ',') p = sk(p+1); else break;
+    }
+    return 0;
+}
+
+/* OPTION BASE n — set default array lower bound (0 or 1) */
+static int cmd_option(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    if (kw_match(p, "BASE")) {
+        p = sk(p + 4);
+        mpf_t n; mpf_init2(n, g_prec);
+        eval_expr(p, n);
+        int base = (int)mpf_get_si(n); mpf_clear(n);
+        if (base == 0 || base == 1) g_option_base = base;
+        else fprintf(stderr, "OPTION BASE must be 0 or 1\n");
+    }
+    return 0;
+}
+
 static int cmd_end(Interp *ip, const char *args) {
     (void)args; ip->running = 0;
     /* close any open files */
@@ -934,13 +1032,13 @@ static int cmd_dim(Interp *ip, const char *args) {
             p++;
             mpf_t d1; mpf_init2(d1,g_prec);
             p = sk(eval_expr(sk(p), d1));
-            int dim1 = (int)mpf_get_si(d1)+1; mpf_clear(d1);
+            int dim1 = (int)mpf_get_si(d1)+1-g_option_base; mpf_clear(d1);
             int dim2 = 1, ndim = 1;
             if (*p == ',') {
                 p = sk(p+1);
                 mpf_t d2; mpf_init2(d2,g_prec);
                 p = sk(eval_expr(sk(p),d2));
-                dim2 = (int)mpf_get_si(d2)+1; mpf_clear(d2);
+                dim2 = (int)mpf_get_si(d2)+1-g_option_base; mpf_clear(d2);
                 ndim = 2;
             }
             if (*p == ')') p++;
@@ -1818,7 +1916,12 @@ static const Command commands[] = {
     COMMAND("REM",        cmd_rem),
     COMMAND("'",          cmd_rem),
     COMMAND("END",        cmd_end),
-    COMMAND("STOP",       cmd_end),
+    COMMAND("STOP",       cmd_stop),
+    COMMAND("CONT",       cmd_cont),
+    COMMAND("RANDOMIZE",  cmd_randomize),
+    COMMAND("SWAP",       cmd_swap),
+    COMMAND("ERASE",      cmd_erase),
+    COMMAND("OPTION",     cmd_option),
     COMMAND("LET",        cmd_let),
     COMMAND("PRINT",      cmd_print),
     COMMAND("CLS",        cmd_cls),
@@ -2005,18 +2108,27 @@ static int dispatch_multi(Interp *ip, const char *clause) {
 /* ================================================================
  * Main interpreter loop
  * ================================================================ */
-static void run(void) {
+static void run_from(int start_pc);
+
+static void run(void) { run_from(0); }
+
+static void run_from(int start_pc) {
     g_break = 0;
-    Interp ip = { .pc=0, .running=1 };
+    Interp ip = { .pc=start_pc, .running=1 };
     while (ip.running && ip.pc<g_nlines && !g_break) {
         int old_pc=ip.pc;
         int jumped=dispatch(&ip, g_lines[ip.pc].text);
         if (!jumped) ip.pc=old_pc+1;
     }
     if (g_break) {
+        g_cont_pc = ip.pc;
         display_newline();
         display_print("Break\n");
         g_break = 0;
+    }
+    /* if g_cont_pc was set by STOP, leave it; otherwise clear it */
+    else if (g_cont_pc == -1) {
+        g_cont_pc = -1; /* already -1, nothing to do */
     }
 }
 
@@ -2116,6 +2228,8 @@ static void clear_program(void) {
     g_data_count = 0;
     g_data_pos = 0;
     g_defn_count = 0;
+    g_option_base = 0;
+    g_cont_pc = -1;
     for (int i = 1; i <= MAX_FILE_HANDLES; i++)
         if (g_files[i].fp) { fclose(g_files[i].fp); g_files[i].fp = NULL; g_files[i].mode = 0; }
 }
@@ -2322,6 +2436,10 @@ int main(int argc, char **argv) {
             if (g_nlines == 0) { display_print("No program loaded.\n"); continue; }
             g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0;
             run();
+
+        } else if (strncasecmp(p,"CONT",4)==0 && !isalnum((unsigned char)p[4])) {
+            if (g_cont_pc < 0) { display_print("Can't continue\n"); continue; }
+            run_from(g_cont_pc);
 
         /* ---- LIST [start[-end]] ---- */
         } else if (strncasecmp(p,"LIST",4)==0 && !isalnum((unsigned char)p[4])) {
