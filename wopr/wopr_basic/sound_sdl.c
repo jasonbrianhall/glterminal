@@ -161,20 +161,8 @@ void sound_init(void) {
     SDL_PauseAudioDevice(g_dev, 0); /* start playing */
 }
 
-void sound_shutdown(void) {
-    if (g_dev) { SDL_CloseAudioDevice(g_dev); g_dev = 0; }
-    if (g_cond)  { SDL_DestroyCond(g_cond);   g_cond  = NULL; }
-    if (g_mutex) { SDL_DestroyMutex(g_mutex); g_mutex = NULL; }
-    SDL_QuitSubSystem(SDL_INIT_AUDIO);
-}
-
-/* ================================================================
- * Wait for queue to drain (PLAY MF — foreground mode)
- * ================================================================ */
-static void sound_wait_done(void) {
+void sound_drain(void) {
     if (!g_dev || !g_mutex) return;
-    /* Spin-poll with a short sleep — avoids complex condition logic
-     * while keeping the main thread responsive to g_break. */
     while (1) {
         SDL_LockMutex(g_mutex);
         int empty = (q_count() == 0 && !g_synth.have_note);
@@ -184,12 +172,20 @@ static void sound_wait_done(void) {
     }
 }
 
+void sound_shutdown(void) {
+    sound_drain();  /* wait for queued audio to finish before tearing down */
+    if (g_dev) { SDL_CloseAudioDevice(g_dev); g_dev = 0; }
+    if (g_cond)  { SDL_DestroyCond(g_cond);   g_cond  = NULL; }
+    if (g_mutex) { SDL_DestroyMutex(g_mutex); g_mutex = NULL; }
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+}
+
 /* ================================================================
  * BEEP
  * ================================================================ */
 void sound_beep(void) {
     sound_tone(800.0, 4.55);   /* 4.55 ticks ≈ 0.25 s at 18.2 ticks/s */
-    sound_wait_done();
+    sound_drain();
 }
 
 /* ================================================================
@@ -337,7 +333,7 @@ void sound_play(const char *mml) {
         }
     }
 
-    if (foreground) sound_wait_done();
+    if (foreground) sound_drain();
 }
 
 #endif /* HAVE_SDL */

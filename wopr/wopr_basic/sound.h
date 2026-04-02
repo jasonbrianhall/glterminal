@@ -17,6 +17,11 @@ void sound_init(void);
 /* Shut down audio subsystem.  Called once at exit. */
 void sound_shutdown(void);
 
+/* Block until the note queue is fully drained (all queued SOUND/PLAY
+ * events have finished playing).  Called automatically by sound_shutdown,
+ * but also callable directly when you need to wait before exit. */
+void sound_drain(void);
+
 /* BEEP — 800 Hz for ~0.25 s (same as IBM PC BASIC). */
 void sound_beep(void);
 
