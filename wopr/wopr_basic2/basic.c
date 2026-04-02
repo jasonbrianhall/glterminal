@@ -814,12 +814,22 @@ static int cmd_color(Interp *ip, const char *args) {
 static int cmd_locate(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
-    mpf_t row, col, cur; mpf_init2(row,g_prec); mpf_init2(col,g_prec); mpf_init2(cur,g_prec);
-    mpf_set_ui(cur, 1);
-    p = sk(eval_expr(p, row)); if (*p==',') p=sk(p+1);
-    p = sk(eval_expr(p, col)); p=sk(p);
-    if (*p == ',') { p=sk(p+1); eval_expr(p,cur); }
-    display_locate((int)mpf_get_si(row), (int)mpf_get_si(col));
+    mpf_t row, col, cur;
+    mpf_init2(row,g_prec); mpf_init2(col,g_prec); mpf_init2(cur,g_prec);
+    mpf_set_ui(row, 0); mpf_set_ui(col, 0); mpf_set_ui(cur, 1);
+
+    /* row — optional */
+    if (*p && *p != ',') p = sk(eval_expr(p, row));
+    if (*p == ',') p = sk(p+1); else goto locate_done;
+    /* col — optional */
+    if (*p && *p != ',') p = sk(eval_expr(p, col));
+    if (*p == ',') p = sk(p+1); else goto locate_done;
+    /* cursor — optional */
+    if (*p && *p != ',') p = sk(eval_expr(p, cur));
+
+    locate_done:
+    if (mpf_get_si(row) > 0 || mpf_get_si(col) > 0)
+        display_locate((int)mpf_get_si(row), (int)mpf_get_si(col));
     display_cursor((int)mpf_get_si(cur));
     mpf_clears(row,col,cur,NULL);
     return 0;
@@ -1818,17 +1828,137 @@ static void load(const char *filename) {
 }
 
 /* ================================================================
+ * clear_program: reset all program state for a fresh load
+ * ================================================================ */
+static void clear_program(void) {
+    g_nlines = 0;
+    g_nvar = 0;
+    g_ctrl_top = 0;
+    g_data_count = 0;
+    g_data_pos = 0;
+    g_defn_count = 0;
+}
+
+/* ================================================================
+ * save_program: write loaded lines back out as a .bas file
+ * ================================================================ */
+static void save_program(const char *filename) {
+    /* add .bas extension if missing */
+    char path[512];
+    if (strchr(filename, '.'))
+        snprintf(path, sizeof path, "%s", filename);
+    else
+        snprintf(path, sizeof path, "%s.bas", filename);
+
+    FILE *f = fopen(path, "w");
+    if (!f) { perror(path); return; }
+    int prev = -1;
+    for (int i = 0; i < g_nlines; i++) {
+        if (g_lines[i].linenum != prev) {
+            if (i > 0) fprintf(f, "\n");
+            fprintf(f, "%d %s", g_lines[i].linenum, g_lines[i].text);
+            prev = g_lines[i].linenum;
+        } else {
+            fprintf(f, ": %s", g_lines[i].text);
+        }
+    }
+    if (g_nlines > 0) fprintf(f, "\n");
+    fclose(f);
+    printf("Saved %s\n", path);
+}
+
+/* ================================================================
+ * load_program: clear state and load a .bas file
+ * ================================================================ */
+static void load_program(const char *filename) {
+    char path[512];
+    if (strchr(filename, '.'))
+        snprintf(path, sizeof path, "%s", filename);
+    else
+        snprintf(path, sizeof path, "%s.bas", filename);
+
+    clear_program();
+    load(path);
+    prescan_data();
+    printf("Loaded %s (%d lines)\n", path, g_nlines);
+}
+
+/* ================================================================
  * Entry point
  * ================================================================ */
 int main(int argc, char **argv) {
-    if (argc<2) { fprintf(stderr,"Usage: %s program.bas [bits]\n",argv[0]); return 1; }
-    g_prec=(argc>=3)?(mp_bitcnt_t)atoi(argv[2]):DEFAULT_PREC;
+    g_prec = DEFAULT_PREC;
     mpf_set_default_prec(g_prec);
-    display_init();
-    load(argv[1]);
-    prescan_data();
     srand((unsigned)time(NULL));
-    run();
+    display_init();
+
+    if (argc >= 2) {
+        /* Direct run mode: ./basic program.bas */
+        if (argc >= 3) g_prec = (mp_bitcnt_t)atoi(argv[2]);
+        load(argv[1]);
+        prescan_data();
+        run();
+        display_shutdown();
+        return 0;
+    }
+
+    /* Interactive REPL mode */
+    display_cls();
+    display_print("BASIC Interpreter\n");
+    display_print("Commands: LOAD \"file\", SAVE \"file\", RUN, FILES, EXIT\n\n");
+
+    char line[512];
+    for (;;) {
+        display_print("Ok\n");
+        display_cursor(1);
+        display_getline(line, sizeof line);
+        display_newline();
+
+        /* trim */
+        char *p = line;
+        while (isspace((unsigned char)*p)) p++;
+        if (!*p) continue;
+
+        if (strncasecmp(p, "EXIT", 4) == 0 || strncasecmp(p, "QUIT", 4) == 0 ||
+            strncasecmp(p, "BYE",  3) == 0) {
+            break;
+
+        } else if (strncasecmp(p, "FILES", 5) == 0) {
+            system("ls -1 *.bas 2>/dev/null || echo '(no .bas files found)'");
+
+        } else if (strncasecmp(p, "LOAD", 4) == 0) {
+            p = sk(p + 4);
+            if (*p == '"') p++;
+            char name[256]; int i = 0;
+            while (*p && *p != '"' && !isspace((unsigned char)*p) && i < 255)
+                name[i++] = *p++;
+            name[i] = '\0';
+            if (!*name) { display_print("Usage: LOAD \"filename\"\n"); continue; }
+            load_program(name);
+
+        } else if (strncasecmp(p, "SAVE", 4) == 0) {
+            p = sk(p + 4);
+            if (*p == '"') p++;
+            char name[256]; int i = 0;
+            while (*p && *p != '"' && !isspace((unsigned char)*p) && i < 255)
+                name[i++] = *p++;
+            name[i] = '\0';
+            if (!*name) { display_print("Usage: SAVE \"filename\"\n"); continue; }
+            save_program(name);
+
+        } else if (strncasecmp(p, "RUN", 3) == 0) {
+            if (g_nlines == 0) { display_print("No program loaded.\n"); continue; }
+            /* reset runtime state but keep program */
+            g_nvar = 0;
+            g_ctrl_top = 0;
+            g_data_pos = 0;
+            run();
+
+        } else {
+            display_print("Unknown command. Try: LOAD \"file\", RUN, FILES, SAVE \"file\", EXIT\n");
+        }
+    }
+
     display_shutdown();
     return 0;
 }
