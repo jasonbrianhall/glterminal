@@ -515,6 +515,30 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
 
     if (*ps->p == '(') {
         ps->p++;
+        skip_ws_p(ps);
+        /* Check if this is a string comparison: (str$ op str$) */
+        if (is_str_token(ps->p)) {
+            char lhs[1024], rhs[1024];
+            ps->p = sk(eval_str_expr(ps->p, lhs, sizeof lhs));
+            /* read operator */
+            char op2[3] = {ps->p[0], ps->p[1], '\0'}; int oplen = 2;
+            if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
+                !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
+            else { op2[1]='\0'; oplen=1; }
+            ps->p = sk(ps->p + oplen);
+            ps->p = sk(eval_str_expr(ps->p, rhs, sizeof rhs));
+            int c = strcmp(lhs, rhs), cmp;
+            if      (!strcmp(op2,"<>")||!strcmp(op2,"><")) cmp=(c!=0);
+            else if (!strcmp(op2,"<=")||!strcmp(op2,"=<")) cmp=(c<=0);
+            else if (!strcmp(op2,">=")||!strcmp(op2,"=>")) cmp=(c>=0);
+            else if (op2[0]=='<') cmp=(c<0);
+            else if (op2[0]=='>') cmp=(c>0);
+            else                  cmp=(c==0);
+            mpf_set_si(result, cmp ? -1 : 0); /* MS BASIC: true=-1, false=0 */
+            skip_ws_p(ps);
+            if (*ps->p == ')') ps->p++;
+            return;
+        }
         parse_expr_p(ps, result);
         skip_ws_p(ps);
         /* handle bitwise AND/OR inside parentheses: (PEEK(...) AND &H30) */
@@ -527,6 +551,29 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
             mpf_set_si(result, is_and ? (lv & rv) : (lv | rv));
             mpf_clear(tmp2);
             skip_ws_p(ps);
+        }
+        /* handle numeric comparison operators: (X = 5), (A <> B), etc. */
+        {
+            char op2[3] = {ps->p[0], ps->p[1], '\0'}; int oplen = 2;
+            if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
+                !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
+            else if (ps->p[0]=='<'||ps->p[0]=='>'||ps->p[0]=='=') { op2[1]='\0'; oplen=1; }
+            else oplen = 0;
+            if (oplen > 0) {
+                ps->p = sk(ps->p + oplen);
+                mpf_t rhs; mpf_init2(rhs, g_prec);
+                parse_expr_p(ps, rhs);
+                int c = mpf_cmp(result, rhs), cmp;
+                if      (!strcmp(op2,"<>")||!strcmp(op2,"><")) cmp=(c!=0);
+                else if (!strcmp(op2,"<=")||!strcmp(op2,"=<")) cmp=(c<=0);
+                else if (!strcmp(op2,">=")||!strcmp(op2,"=>")) cmp=(c>=0);
+                else if (op2[0]=='<') cmp=(c<0);
+                else if (op2[0]=='>') cmp=(c>0);
+                else                  cmp=(c==0);
+                mpf_clear(rhs);
+                mpf_set_si(result, cmp ? -1 : 0);
+                skip_ws_p(ps);
+            }
         }
         if (*ps->p == ')') ps->p++;
         return;
