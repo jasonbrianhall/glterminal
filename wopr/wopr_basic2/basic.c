@@ -19,6 +19,9 @@
 #include <ctype.h>
 #include <math.h>
 #include <time.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <gmp.h>
 #include "display.h"
 
@@ -1902,10 +1905,32 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    /* ----------------------------------------------------------------
+     * Helper: parse a quoted or unquoted filename from p, advance p.
+     * ---------------------------------------------------------------- */
+    #define PARSE_FILENAME(dst, src) do { \
+        const char *_q = sk(src); \
+        if (*_q == '"') _q++; \
+        int _i = 0; \
+        while (*_q && *_q != '"' && *_q != ',' && !isspace((unsigned char)*_q) && _i < 255) \
+            (dst)[_i++] = *_q++; \
+        (dst)[_i] = '\0'; \
+        if (*_q == '"') _q++; \
+        (src) = _q; \
+    } while(0)
+
+    /* ----------------------------------------------------------------
+     * Helper: add .bas if no extension present
+     * ---------------------------------------------------------------- */
+    #define BAS_EXT(dst, src) do { \
+        if (strchr((src), '.')) snprintf((dst), sizeof(dst), "%s", (src)); \
+        else snprintf((dst), sizeof(dst), "%s.bas", (src)); \
+    } while(0)
+
     /* Interactive REPL mode */
     display_cls();
-    display_print("BASIC Interpreter\n");
-    display_print("Commands: LOAD \"file\", SAVE \"file\", RUN, FILES, EXIT\n\n");
+    display_print("WOPR BASIC\n");
+    display_print("Type NEW, LOAD, RUN, LIST, FILES, HELP, or SYSTEM to exit.\n\n");
 
     char line[512];
     for (;;) {
@@ -1914,48 +1939,234 @@ int main(int argc, char **argv) {
         display_getline(line, sizeof line);
         display_newline();
 
-        /* trim */
         char *p = line;
         while (isspace((unsigned char)*p)) p++;
         if (!*p) continue;
 
-        if (strncasecmp(p, "EXIT", 4) == 0 || strncasecmp(p, "QUIT", 4) == 0 ||
-            strncasecmp(p, "BYE",  3) == 0) {
+        /* ---- SYSTEM / EXIT / QUIT / BYE ---- */
+        if (strncasecmp(p,"SYSTEM",6)==0 || strncasecmp(p,"EXIT",4)==0 ||
+            strncasecmp(p,"QUIT",4)==0   || strncasecmp(p,"BYE",3)==0) {
             break;
 
-        } else if (strncasecmp(p, "FILES", 5) == 0) {
-            system("ls -1 *.bas 2>/dev/null || echo '(no .bas files found)'");
+        /* ---- NEW ---- */
+        } else if (strncasecmp(p,"NEW",3)==0 && !isalnum((unsigned char)p[3])) {
+            clear_program();
+            display_print("Ok\n");
 
-        } else if (strncasecmp(p, "LOAD", 4) == 0) {
-            p = sk(p + 4);
-            if (*p == '"') p++;
-            char name[256]; int i = 0;
-            while (*p && *p != '"' && !isspace((unsigned char)*p) && i < 255)
-                name[i++] = *p++;
-            name[i] = '\0';
+        /* ---- FILES / DIR ---- */
+        } else if (strncasecmp(p,"FILES",5)==0 || strncasecmp(p,"DIR",3)==0) {
+            const char *pat = sk(p + (strncasecmp(p,"DIR",3)==0 ? 3 : 5));
+            /* list files matching optional pattern, default *.bas */
+            char filter[64] = ".bas";
+            if (*pat == '"') { pat++; }
+            if (*pat && *pat != '"') {
+                /* user gave a pattern; use it as suffix filter */
+                strncpy(filter, pat, 63);
+                char *eq = strchr(filter,'"'); if(eq) *eq='\0';
+            }
+            DIR *d = opendir(".");
+            if (!d) { perror("opendir"); continue; }
+            struct dirent *de;
+            int count = 0;
+            char buf[512]; buf[0]='\0';
+            while ((de = readdir(d))) {
+                if (de->d_name[0] == '.') continue;
+                /* match suffix */
+                const char *nm = de->d_name;
+                size_t nl = strlen(nm), fl = strlen(filter);
+                if (fl && (nl < fl || strcasecmp(nm + nl - fl, filter) != 0)) continue;
+                char entry[64];
+                snprintf(entry, sizeof entry, "  %-20s\n", nm);
+                display_print(entry);
+                count++;
+            }
+            closedir(d);
+            if (!count) display_print("  (no matching files)\n");
+
+        /* ---- KILL "file" ---- */
+        } else if (strncasecmp(p,"KILL",4)==0 && !isalnum((unsigned char)p[4])) {
+            p += 4;
+            char name[256]; PARSE_FILENAME(name, p);
+            char path[512]; BAS_EXT(path, name);
+            if (remove(path) == 0) printf("Deleted %s\n", path);
+            else perror(path);
+
+        /* ---- RENAME "old","new" ---- */
+        } else if (strncasecmp(p,"RENAME",6)==0 && !isalnum((unsigned char)p[6])) {
+            p += 6;
+            char old[256], neo[256];
+            PARSE_FILENAME(old, p);
+            p = sk(p); if (*p==',') p++;
+            PARSE_FILENAME(neo, p);
+            char op[512], np[512]; BAS_EXT(op,old); BAS_EXT(np,neo);
+            if (rename(op, np) == 0) printf("Renamed %s -> %s\n", op, np);
+            else perror(op);
+
+        /* ---- CHDIR / CD ---- */
+        } else if (strncasecmp(p,"CHDIR",5)==0 || strncasecmp(p,"CD",2)==0) {
+            p += strncasecmp(p,"CHDIR",5)==0 ? 5 : 2;
+            char name[256]; PARSE_FILENAME(name, p);
+            if (!*name) { char cwd[512]; getcwd(cwd,sizeof cwd); printf("%s\n",cwd); }
+            else if (chdir(name)!=0) perror(name);
+            else { char cwd[512]; getcwd(cwd,sizeof cwd); printf("%s\n",cwd); }
+
+        /* ---- MKDIR ---- */
+        } else if (strncasecmp(p,"MKDIR",5)==0 && !isalnum((unsigned char)p[5])) {
+            p += 5;
+            char name[256]; PARSE_FILENAME(name, p);
+            if (mkdir(name, 0755)!=0) perror(name);
+            else printf("Created %s\n", name);
+
+        /* ---- RMDIR ---- */
+        } else if (strncasecmp(p,"RMDIR",5)==0 && !isalnum((unsigned char)p[5])) {
+            p += 5;
+            char name[256]; PARSE_FILENAME(name, p);
+            if (rmdir(name)!=0) perror(name);
+            else printf("Removed %s\n", name);
+
+        /* ---- LOAD "file" ---- */
+        } else if (strncasecmp(p,"LOAD",4)==0 && !isalnum((unsigned char)p[4])) {
+            p += 4;
+            char name[256]; PARSE_FILENAME(name, p);
             if (!*name) { display_print("Usage: LOAD \"filename\"\n"); continue; }
             load_program(name);
 
-        } else if (strncasecmp(p, "SAVE", 4) == 0) {
-            p = sk(p + 4);
-            if (*p == '"') p++;
-            char name[256]; int i = 0;
-            while (*p && *p != '"' && !isspace((unsigned char)*p) && i < 255)
-                name[i++] = *p++;
-            name[i] = '\0';
+        /* ---- SAVE "file" ---- */
+        } else if (strncasecmp(p,"SAVE",4)==0 && !isalnum((unsigned char)p[4])) {
+            p += 4;
+            char name[256]; PARSE_FILENAME(name, p);
             if (!*name) { display_print("Usage: SAVE \"filename\"\n"); continue; }
             save_program(name);
 
-        } else if (strncasecmp(p, "RUN", 3) == 0) {
+        /* ---- RUN ---- */
+        } else if (strncasecmp(p,"RUN",3)==0 && !isalnum((unsigned char)p[3])) {
             if (g_nlines == 0) { display_print("No program loaded.\n"); continue; }
-            /* reset runtime state but keep program */
-            g_nvar = 0;
-            g_ctrl_top = 0;
-            g_data_pos = 0;
+            g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0;
             run();
 
+        /* ---- LIST [start[-end]] ---- */
+        } else if (strncasecmp(p,"LIST",4)==0 && !isalnum((unsigned char)p[4])) {
+            p = sk(p+4);
+            int from = 0, to = 999999;
+            if (isdigit((unsigned char)*p)) {
+                from = atoi(p);
+                while (isdigit((unsigned char)*p)) p++;
+                to = from; /* default: just that line */
+                p = sk(p);
+                if (*p == '-') {
+                    p = sk(p+1);
+                    to = isdigit((unsigned char)*p) ? atoi(p) : 999999;
+                } else if (*p == ',') {
+                    p = sk(p+1);
+                    to = isdigit((unsigned char)*p) ? atoi(p) : 999999;
+                } else {
+                    to = 999999; /* LIST n = from line n to end */
+                }
+            }
+            int prev = -1;
+            for (int i = 0; i < g_nlines; i++) {
+                int ln = g_lines[i].linenum;
+                if (ln < from || ln > to) continue;
+                if (ln != prev) {
+                    if (prev != -1) display_print("\n");
+                    char hdr[32]; snprintf(hdr, sizeof hdr, "%d ", ln);
+                    display_print(hdr);
+                    prev = ln;
+                } else {
+                    display_print(": ");
+                }
+                display_print(g_lines[i].text);
+            }
+            if (prev != -1) display_print("\n");
+
+        /* ---- DELETE start[-end] ---- */
+        } else if (strncasecmp(p,"DELETE",6)==0 && !isalnum((unsigned char)p[6])) {
+            p = sk(p+6);
+            if (!isdigit((unsigned char)*p)) { display_print("Usage: DELETE start[-end]\n"); continue; }
+            int from = atoi(p);
+            while (isdigit((unsigned char)*p)) p++;
+            int to = from;
+            p = sk(p);
+            if (*p == '-') { p=sk(p+1); to = isdigit((unsigned char)*p) ? atoi(p) : 999999; }
+            /* remove lines in range */
+            int w = 0;
+            for (int i = 0; i < g_nlines; i++) {
+                if (g_lines[i].linenum < from || g_lines[i].linenum > to)
+                    g_lines[w++] = g_lines[i];
+            }
+            printf("Deleted %d entries.\n", g_nlines - w);
+            g_nlines = w;
+
+        /* ---- RENUM [new_start[,old_start[,step]]] ---- */
+        } else if (strncasecmp(p,"RENUM",5)==0 && !isalnum((unsigned char)p[5])) {
+            p = sk(p+5);
+            int new_start = 10, step = 10;
+            if (isdigit((unsigned char)*p)) { new_start = atoi(p); while(isdigit((unsigned char)*p))p++; }
+            p=sk(p); if(*p==',') p=sk(p+1);
+            if (isdigit((unsigned char)*p)) { /* old_start — ignored, renum whole program */
+                while(isdigit((unsigned char)*p))p++; }
+            p=sk(p); if(*p==',') p=sk(p+1);
+            if (isdigit((unsigned char)*p)) { step = atoi(p); }
+            if (step < 1) step = 10;
+            /* build old->new mapping */
+            int old_nums[MAX_LINES], new_nums[MAX_LINES], nmap = 0;
+            int prev2 = -1;
+            for (int i = 0; i < g_nlines; i++) {
+                if (g_lines[i].linenum != prev2) {
+                    old_nums[nmap] = g_lines[i].linenum;
+                    new_nums[nmap] = new_start + nmap * step;
+                    nmap++;
+                    prev2 = g_lines[i].linenum;
+                }
+            }
+            /* apply new numbers */
+            for (int i = 0; i < g_nlines; i++) {
+                for (int j = 0; j < nmap; j++) {
+                    if (g_lines[i].linenum == old_nums[j]) {
+                        g_lines[i].linenum = new_nums[j];
+                        break;
+                    }
+                }
+                /* patch GOTO/GOSUB/THEN/ELSE line number references in text */
+                char *keywords[] = {"GOTO","GOSUB","THEN","ELSE","RESTORE","RUN", NULL};
+                for (int k = 0; keywords[k]; k++) {
+                    char *kw = strcasestr(g_lines[i].text, keywords[k]);
+                    if (!kw) continue;
+                    char *np2 = kw + strlen(keywords[k]);
+                    while (isspace((unsigned char)*np2)) np2++;
+                    if (!isdigit((unsigned char)*np2)) continue;
+                    int old_target = atoi(np2);
+                    for (int j = 0; j < nmap; j++) {
+                        if (old_nums[j] == old_target) {
+                            /* rebuild the text around the number */
+                            char newnum[16]; snprintf(newnum,sizeof newnum,"%d",new_nums[j]);
+                            char after_num[MAX_LINE_LEN];
+                            char *end_num = np2;
+                            while (isdigit((unsigned char)*end_num)) end_num++;
+                            strncpy(after_num, end_num, MAX_LINE_LEN-1);
+                            snprintf(np2, MAX_LINE_LEN - (np2 - g_lines[i].text),
+                                     "%s%s", newnum, after_num);
+                            break;
+                        }
+                    }
+                }
+            }
+            qsort(g_lines, g_nlines, sizeof(Line), line_cmp);
+            printf("Renumbered %d logical lines starting at %d step %d.\n", nmap, new_start, step);
+
+        /* ---- HELP ---- */
+        } else if (strncasecmp(p,"HELP",4)==0) {
+            display_print(
+                "Program:  NEW  LOAD\"f\"  SAVE\"f\"  RUN  LIST [n[-m]]  DELETE n[-m]  RENUM\n"
+                "Files:    FILES  DIR  KILL\"f\"  RENAME\"old\",\"new\"\n"
+                "Dir:      CHDIR/CD \"path\"  MKDIR \"path\"  RMDIR \"path\"\n"
+                "Shell:    SYSTEM (exit)\n"
+            );
+
         } else {
-            display_print("Unknown command. Try: LOAD \"file\", RUN, FILES, SAVE \"file\", EXIT\n");
+            char msg[128];
+            snprintf(msg, sizeof msg, "Unknown: %s\nType HELP for command list.\n", p);
+            display_print(msg);
         }
     }
 
