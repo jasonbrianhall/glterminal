@@ -40,7 +40,7 @@ ifdef INLINEBASIC
 	GENERATED_HEADERS = $(BASIC_HEADER)
 
 $(BASIC_HEADER): $(INLINEBASIC) ## Convert BASIC file to inline header
-	xxd -i $< > $@
+	xxd -n wopr_basic_program -i $< > $@
 	$(info Embedding BASIC program: $<)
 endif
 
