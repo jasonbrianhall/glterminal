@@ -391,14 +391,13 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
         return p;
     }
 
-    /* MID$(var$, start [,len]) */
+    /* MID$(str_expr, start [,len]) */
     if (kw_match(p, "MID$")) {
         p = sk(p + 4);
         if (*p == '(') p++;
-        char vname[MAX_VARNAME];
-        p = sk(read_varname(sk(p), vname));
-        Var *v = var_get(vname);
-        const char *src = v->str ? v->str : "";
+        char src_buf[1024];
+        p = sk(eval_str_expr(sk(p), src_buf, sizeof src_buf));
+        const char *src = src_buf;
         if (*p == ',') p = sk(p+1);
         mpf_t st; mpf_init2(st, g_prec);
         p = sk(eval_expr(sk(p), st));
