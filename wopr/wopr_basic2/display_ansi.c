@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -85,7 +86,6 @@ void display_init(void)
     tcgetattr(STDIN_FILENO, &g_orig_termios);  /* snapshot clean terminal state once */
     enter_raw();
     atexit(cleanup_terminal);
-    signal(SIGINT,  signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGSEGV, signal_handler);
     signal(SIGABRT, signal_handler);
@@ -205,6 +205,7 @@ int display_getline(char *buf, int bufsz)
     while (len < bufsz - 1) {
         char c;
         ssize_t n = read(STDIN_FILENO, &c, 1);
+        if (n < 0 && errno == EINTR) break; /* SIGINT during read */
         if (n <= 0 || c == '\n') break;
         if (c == '\r') continue;
         buf[len++] = c;

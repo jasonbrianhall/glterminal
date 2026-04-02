@@ -41,6 +41,24 @@
 static mp_bitcnt_t g_prec = DEFAULT_PREC;
 
 /* ================================================================
+ * Break flag — set by SIGINT to stop the interpreter and return
+ * to the REPL prompt instead of exiting.
+ * ================================================================ */
+#include <signal.h>
+volatile sig_atomic_t g_break = 0;
+static void sigint_handler(int sig) {
+    (void)sig;
+    g_break = 1;
+}
+static void install_sigint(void) {
+    struct sigaction sa;
+    sa.sa_handler = sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+}
+
+/* ================================================================
  * String helper
  * ================================================================ */
 static char *str_dup(const char *s) {
@@ -1736,11 +1754,17 @@ static int dispatch_multi(Interp *ip, const char *clause) {
  * Main interpreter loop
  * ================================================================ */
 static void run(void) {
+    g_break = 0;
     Interp ip = { .pc=0, .running=1 };
-    while (ip.running && ip.pc<g_nlines) {
+    while (ip.running && ip.pc<g_nlines && !g_break) {
         int old_pc=ip.pc;
         int jumped=dispatch(&ip, g_lines[ip.pc].text);
         if (!jumped) ip.pc=old_pc+1;
+    }
+    if (g_break) {
+        display_newline();
+        display_print("Break\n");
+        g_break = 0;
     }
 }
 
@@ -1894,6 +1918,7 @@ int main(int argc, char **argv) {
     mpf_set_default_prec(g_prec);
     srand((unsigned)time(NULL));
     display_init();
+    install_sigint();
 
     if (argc >= 2) {
         /* Direct run mode: ./basic program.bas */
@@ -2163,10 +2188,35 @@ int main(int argc, char **argv) {
                 "Shell:    SYSTEM (exit)\n"
             );
 
+        /* ---- Numbered line: add/replace in program ---- */
+        } else if (isdigit((unsigned char)*p)) {
+            int num = (int)strtol(p, (char**)&p, 10);
+            while (isspace((unsigned char)*p)) p++;
+            /* remove existing lines with this number */
+            int w = 0;
+            for (int i = 0; i < g_nlines; i++)
+                if (g_lines[i].linenum != num) g_lines[w++] = g_lines[i];
+            g_nlines = w;
+            /* insert new line if text provided */
+            if (*p) {
+                if (g_nlines >= MAX_LINES) { display_print("Too many lines\n"); continue; }
+                int ins = g_nlines;
+                for (int i = 0; i < g_nlines; i++)
+                    if (g_lines[i].linenum > num) { ins = i; break; }
+                memmove(&g_lines[ins+1], &g_lines[ins], (g_nlines-ins)*sizeof(Line));
+                g_lines[ins].linenum = num;
+                strncpy(g_lines[ins].text, p, MAX_LINE_LEN-1);
+                g_lines[ins].text[MAX_LINE_LEN-1] = '\0';
+                g_nlines++;
+            }
+            continue; /* no Ok prompt, classic BASIC style */
+
+        /* ---- Immediate execution: bare statement with no line number ---- */
         } else {
-            char msg[128];
-            snprintf(msg, sizeof msg, "Unknown: %s\nType HELP for command list.\n", p);
-            display_print(msg);
+            /* try to execute as an immediate statement */
+            Interp ip = { .pc=0, .running=1 };
+            dispatch_one(&ip, p, p);
+            continue;
         }
     }
 
