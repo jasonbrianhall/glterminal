@@ -810,10 +810,22 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
 
     /* SQR(x) */
     if (kw_match(ps->p, "SQR")) {
-        ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        ps->p += 3; skip_ws_p(ps); 
+        if (*ps->p == '(') ps->p++;
+
         parse_expr_p(ps, result);
-        mpf_set_d(result, sqrt(mpf_get_d(result)));
-        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+
+        double d = mpf_get_d(result);
+
+        if (d < 0) {
+            /* BASIC domain error behavior */
+            mpf_set_si(result, 0);   /* or print error, or return -1 */
+        } else {
+            mpf_set_d(result, sqrt(d));
+        }
+
+        skip_ws_p(ps); 
+        if (*ps->p == ')') ps->p++;
         return;
     }
 
@@ -936,12 +948,25 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     }
     /* LOG(x) */
     if (kw_match(ps->p, "LOG")) {
-        ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        ps->p += 3; skip_ws_p(ps); 
+        if (*ps->p == '(') ps->p++;
+
         parse_expr_p(ps, result);
-        mpf_set_d(result, log(mpf_get_d(result)));
-        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+
+        double d = mpf_get_d(result);
+
+        if (d <= 0) {
+            /* BASIC domain error behavior */
+            mpf_set_si(result, 0);   /* or -1, or print error */
+        } else {
+            mpf_set_d(result, log(d));
+        }
+
+        skip_ws_p(ps); 
+        if (*ps->p == ')') ps->p++;
         return;
     }
+
     /* EXP(x) */
     if (kw_match(ps->p, "EXP")) {
         ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
