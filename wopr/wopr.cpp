@@ -31,8 +31,10 @@ static const GameEntry GAMES[] = {
     { "TIC-TAC-TOE",              "TIC",         WoprGame::TIC_TAC_TOE},
     { "MINESWEEPER",              "MINESWEEPER", WoprGame::MINESWEEPER},
     { "ZORK",                     "ZORK",        WoprGame::ZORK       },
+    { "BASIC",                    "BASIC",        WoprGame::BASIC       },
+
 };
-static const int GAME_COUNT = 6;
+static const int GAME_COUNT = 7;
 
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
@@ -224,9 +226,6 @@ static void do_command(WoprState *w, const std::string &raw) {
         push_line(w, "  CLEAR                 CLEAR TERMINAL BUFFER");
         push_line(w, "  LOGOUT / QUIT / EXIT  TERMINATE SESSION");
         push_line(w, "");
-        push_line(w, "  EXAMPLE:  PLAY CHESS");
-        push_line(w, "            PLAY GLOBAL THERMONUCLEAR WAR");
-        push_line(w, "            PLAY ZORK");
         return;
     }
 
@@ -431,6 +430,7 @@ void wopr_close() {
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
         case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
+        case WoprPhase::PLAYING_BASIC:  wopr_basic_free(w);  break;
         default: break;
     }
     wopr_audio_stop();
@@ -520,6 +520,7 @@ void wopr_update(double dt) {
     case WoprPhase::PLAYING_MAZE:  wopr_maze_update(w, dt);  break;
     case WoprPhase::PLAYING_WAR:   wopr_war_update(w, dt);   break;
     case WoprPhase::PLAYING_ZORK:  wopr_zork_update(w, dt);  break;
+    case WoprPhase::PLAYING_BASIC:  wopr_basic_update(w, dt);  break;
 
     case WoprPhase::FAREWELL:
         if (crawl_done(w) && w->phase_timer > 2.5)
