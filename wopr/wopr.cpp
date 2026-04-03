@@ -179,6 +179,15 @@ static void launch_game(WoprState *w, WoprGame game) {
             set_phase(w, WoprPhase::PLAYING_ZORK);
             wopr_zork_enter(w);
             break;
+        case WoprGame::BASIC:
+            push_line(w, "INITIATING: BASIC");
+            push_line(w, "");
+            push_line(w, "  LOADING PROGRAMMING LANGUAGE...");
+            push_line(w, "");
+            set_phase(w, WoprPhase::PLAYING_ZORK);
+            wopr_basic_enter(w);
+            break;
+
         default: break;
     }
 }

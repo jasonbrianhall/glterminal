@@ -28,6 +28,7 @@ enum class WoprPhase {
     PLAYING_MAZE,
     PLAYING_WAR,
     PLAYING_ZORK,
+    PLAYING_BASIC,
     FAREWELL,         // "A STRANGE GAME..." on exit
 };
 
@@ -39,6 +40,7 @@ enum class WoprGame {
     TIC_TAC_TOE,
     MINESWEEPER,
     ZORK,
+    BASIC,
     // Sentinel
     COUNT
 };
@@ -145,3 +147,11 @@ void wopr_zork_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_zork_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_zork_text(WoprState *w, const char *text);
 void wopr_zork_free(WoprState *w);
+
+// BASIC
+void wopr_basic_enter(WoprState *w);
+void wopr_basic_update(WoprState *w, double dt);
+void wopr_basic_render(WoprState *w, int x, int y, int cw, int ch, int cols);
+bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym);
+void wopr_basic_text(WoprState *w, const char *text);
+void wopr_basic_free(WoprState *w);
