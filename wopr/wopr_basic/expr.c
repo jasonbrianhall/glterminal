@@ -480,45 +480,11 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
     mpf_t tmp; mpf_init2(tmp, g_prec);
     parse_term_p(ps, result);
     skip_ws_p(ps);
-    /* Additive: + and - */
     while (*ps->p == '+' || *ps->p == '-') {
-        /* don't steal a unary minus that belongs to the next term */
         char op = *ps->p++;
         parse_term_p(ps, tmp);
         if (op == '+') mpf_add(result, result, tmp);
         else           mpf_sub(result, result, tmp);
-        skip_ws_p(ps);
-    }
-    /* Comparison operators (produce -1/0 BASIC booleans) */
-    char op2[3] = {ps->p[0], ps->p[1], '\0'}; int ol = 2;
-    if      (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
-             !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
-    else if (ps->p[0]=='<'||ps->p[0]=='>'||ps->p[0]=='=') { op2[1]='\0'; ol=1; }
-    else ol = 0;
-    if (ol > 0) {
-        ps->p = sk(ps->p + ol);
-        parse_term_p(ps, tmp);
-        int c = mpf_cmp(result, tmp), cmp;
-        if      (!strcmp(op2,"<>")||!strcmp(op2,"><")) cmp=(c!=0);
-        else if (!strcmp(op2,"<=")||!strcmp(op2,"=<")) cmp=(c<=0);
-        else if (!strcmp(op2,">=")||!strcmp(op2,"=>")) cmp=(c>=0);
-        else if (op2[0]=='<') cmp=(c<0);
-        else if (op2[0]=='>') cmp=(c>0);
-        else                  cmp=(c==0);
-        mpf_set_si(result, cmp ? -1 : 0);
-        skip_ws_p(ps);
-    }
-    /* Bitwise/logical: AND OR XOR (lowest precedence) */
-    while (kw_match(ps->p,"AND") || kw_match(ps->p,"OR") || kw_match(ps->p,"XOR")) {
-        int is_and = kw_match(ps->p,"AND");
-        int is_xor = kw_match(ps->p,"XOR");
-        ps->p += is_and ? 3 : (is_xor ? 3 : 2);
-        skip_ws_p(ps);
-        parse_term_p(ps, tmp);
-        long lv = mpf_get_si(result), rv = mpf_get_si(tmp);
-        if (is_and)      mpf_set_si(result, lv & rv);
-        else if (is_xor) mpf_set_si(result, lv ^ rv);
-        else             mpf_set_si(result, lv | rv);
         skip_ws_p(ps);
     }
     mpf_clear(tmp);
