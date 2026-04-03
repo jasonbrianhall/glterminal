@@ -3,13 +3,6 @@
  *           and program entry point.
  */
 #include "basic.h"
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
-#ifdef INLINEBASIC
-#include "inline_basic.h"
-#endif
 
 /* ================================================================
  * SIGINT handler — sets g_break so the run loop can stop cleanly
@@ -59,7 +52,6 @@ int main(int argc, char **argv) {
     install_sigint();
 
     /* Direct run mode: ./basic program.bas [precision_bits] */
-#ifndef INLINEBASIC
     if (argc >= 2) {
         if (argc >= 3) g_prec = (mp_bitcnt_t)atoi(argv[2]);
         load(argv[1]);
@@ -68,46 +60,6 @@ int main(int argc, char **argv) {
         display_shutdown();
         return 0;
     }
-#else
-char tmpfile_path[512];
-
-#ifdef _WIN32
-    // Windows: use GetTempPath + GetTempFileName
-    char tmpdir[MAX_PATH];
-    GetTempPathA(MAX_PATH, tmpdir);
-    GetTempFileNameA(tmpdir, "WOP", 0, tmpfile_path);
-
-    FILE *dbfile = fopen(tmpfile_path, "wb");
-    if (!dbfile) {
-        fprintf(stderr, "Could not open temp file\n");
-        return 1;
-    }
-
-    fwrite(wopr_basic_program, 1, wopr_basic_program_len, dbfile);
-    fclose(dbfile);
-
-#else
-    // POSIX: use mkstemp
-    strcpy(tmpfile_path, "/tmp/woprXXXXXX");
-    int fd = mkstemp(tmpfile_path);
-    if (fd == -1) {
-        perror("mkstemp");
-        return 1;
-    }
-
-    write(fd, wopr_basic_program, wopr_basic_program_len);
-    close(fd);
-#endif
-
-// NOW replace argv[1] with the filename
-argv[1] = tmpfile_path;
-
-load(argv[1]);
-prescan_data();
-run();
-display_shutdown();
-return 0;
-#endif
 
     /* ----------------------------------------------------------------
      * REPL helper macros

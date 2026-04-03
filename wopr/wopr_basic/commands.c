@@ -212,14 +212,483 @@ static int cmd_locate(Interp *ip, const char *args) {
 }
 
 /* ================================================================
- * DIM
+ * DO ... LOOP [WHILE|UNTIL cond]
+ * WHILE cond ... WEND
+ *
+ * Both use the control stack with a special frame tag.
+ * The loop start pc is stored; on LOOP/WEND we re-evaluate and jump back.
  * ================================================================ */
-static int cmd_dim(Interp *ip, const char *args) {
+
+/* Forward declarations for commands used before their definition */
+static int cmd_dim(Interp *ip, const char *args);
+static int cmd_return(Interp *ip, const char *args);
+
+/* DO [WHILE|UNTIL cond] — push a loop frame pointing at the DO statement */
+static int cmd_do(Interp *ip, const char *args) {
+    /* When LOOP sends us back here, the frame already exists — don't push again.
+     * But we must still re-check any DO WHILE / DO UNTIL condition. */
+    if (g_ctrl_top > 0 &&
+        strcmp(g_ctrl[g_ctrl_top - 1].varname, "\x02" "DO") == 0 &&
+        g_ctrl[g_ctrl_top - 1].line_idx == ip->pc) {
+        const char *p = sk(args);
+        if (kw_match(p, "WHILE") || kw_match(p, "UNTIL")) {
+            int is_until = kw_match(p, "UNTIL");
+            p = sk(p + 5);
+            mpf_t v; mpf_init2(v, g_prec);
+            eval_expr(p, v);
+            int cond = (mpf_sgn(v) != 0);
+            mpf_clear(v);
+            if (is_until) cond = !cond;
+            if (!cond) {
+                /* skip to after matching LOOP */
+                int depth = 1, pc = ip->pc + 1;
+                while (pc < g_nlines && depth > 0) {
+                    const char *t = sk(g_lines[pc].text);
+                    if (kw_match(t, "DO")) depth++;
+                    else if (kw_match(t, "LOOP")) depth--;
+                    pc++;
+                }
+                mpf_clear(g_ctrl[g_ctrl_top - 1].limit);
+                mpf_clear(g_ctrl[g_ctrl_top - 1].step);
+                g_ctrl_top--;
+                ip->pc = pc; return 1;
+            }
+        }
+        return 0;
+    }
+
+    /* First entry: optionally check DO WHILE/UNTIL before pushing */
+    const char *p = sk(args);
+    if (kw_match(p, "WHILE") || kw_match(p, "UNTIL")) {
+        int is_until = kw_match(p, "UNTIL");
+        p = sk(p + 5);
+        mpf_t v; mpf_init2(v, g_prec);
+        eval_expr(p, v);
+        int cond = (mpf_sgn(v) != 0);
+        mpf_clear(v);
+        if (is_until) cond = !cond;
+        if (!cond) {
+            int depth = 1, pc = ip->pc + 1;
+            while (pc < g_nlines && depth > 0) {
+                const char *t = sk(g_lines[pc].text);
+                if (kw_match(t, "DO")) depth++;
+                else if (kw_match(t, "LOOP")) depth--;
+                pc++;
+            }
+            ip->pc = pc; return 1;
+        }
+    }
+
+    if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); exit(1); }
+    CtrlFrame *f = &g_ctrl[g_ctrl_top++];
+    strcpy(f->varname, "\x02" "DO");
+    f->line_idx = ip->pc;
+    mpf_init2(f->limit, g_prec); mpf_set_ui(f->limit, 0);
+    mpf_init2(f->step,  g_prec); mpf_set_ui(f->step,  0);
+    return 0;
+}
+
+/* LOOP [WHILE|UNTIL cond] */
+static int cmd_loop(Interp *ip, const char *args) {
+    /* find the matching DO frame */
+    int fi = g_ctrl_top - 1;
+    while (fi >= 0 && strcmp(g_ctrl[fi].varname, "\x02" "DO") != 0) fi--;
+    if (fi < 0) { fprintf(stderr, "LOOP without DO\n"); exit(1); }
+
+    const char *p = sk(args);
+    int keep_looping = 1;   /* default: infinite loop, need explicit WHILE/UNTIL to stop */
+
+    if (kw_match(p, "WHILE")) {
+        p = sk(p + 5);
+        mpf_t v; mpf_init2(v, g_prec);
+        eval_expr(p, v);
+        keep_looping = (mpf_sgn(v) != 0);
+        mpf_clear(v);
+    } else if (kw_match(p, "UNTIL")) {
+        p = sk(p + 5);
+        mpf_t v; mpf_init2(v, g_prec);
+        eval_expr(p, v);
+        keep_looping = (mpf_sgn(v) == 0);   /* UNTIL: loop while condition is FALSE */
+        mpf_clear(v);
+    }
+
+    if (keep_looping) {
+        /* loop back to the DO line itself — cmd_do will skip if already tracked,
+           and will re-check DO WHILE/UNTIL condition on re-entry */
+        ip->pc = g_ctrl[fi].line_idx;
+        return 1;
+    } else {
+        /* exit — pop frame, return 0 so run loop advances past LOOP line */
+        mpf_clear(g_ctrl[fi].limit); mpf_clear(g_ctrl[fi].step);
+        g_ctrl_top = fi;
+        return 0;
+    }
+}
+
+/* WHILE cond */
+static int cmd_while(Interp *ip, const char *args) {
+    const char *p = sk(args);
+    mpf_t v; mpf_init2(v, g_prec);
+    eval_expr(p, v);
+    int cond = (mpf_sgn(v) != 0);
+    mpf_clear(v);
+
+    if (cond) {
+        /* Only push a new frame if we're not already tracking this WHILE */
+        int already = (g_ctrl_top > 0 &&
+                       strcmp(g_ctrl[g_ctrl_top - 1].varname, "\x03" "WHILE") == 0 &&
+                       g_ctrl[g_ctrl_top - 1].line_idx == ip->pc);
+        if (!already) {
+            if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); exit(1); }
+            CtrlFrame *f = &g_ctrl[g_ctrl_top++];
+            strcpy(f->varname, "\x03" "WHILE");
+            f->line_idx = ip->pc;
+            mpf_init2(f->limit, g_prec); mpf_set_ui(f->limit, 0);
+            mpf_init2(f->step,  g_prec); mpf_set_ui(f->step,  0);
+        }
+        return 0;
+    } else {
+        /* Condition false: pop frame if present, skip to WEND */
+        if (g_ctrl_top > 0 &&
+            strcmp(g_ctrl[g_ctrl_top - 1].varname, "\x03" "WHILE") == 0 &&
+            g_ctrl[g_ctrl_top - 1].line_idx == ip->pc) {
+            mpf_clear(g_ctrl[g_ctrl_top - 1].limit);
+            mpf_clear(g_ctrl[g_ctrl_top - 1].step);
+            g_ctrl_top--;
+        }
+        int depth = 1;
+        int pc = ip->pc + 1;
+        while (pc < g_nlines && depth > 0) {
+            const char *t = sk(g_lines[pc].text);
+            if (kw_match(t, "WHILE")) depth++;
+            else if (kw_match(t, "WEND")) depth--;
+            if (depth > 0) pc++;
+        }
+        ip->pc = pc + 1;
+        return 1;
+    }
+}
+
+/* WEND — jump back to the matching WHILE; WHILE will pop if condition fails */
+static int cmd_wend(Interp *ip, const char *args) {
+    (void)args;
+    int fi = g_ctrl_top - 1;
+    while (fi >= 0 && strcmp(g_ctrl[fi].varname, "\x03" "WHILE") != 0) fi--;
+    if (fi < 0) { fprintf(stderr, "WEND without WHILE\n"); exit(1); }
+    ip->pc = g_ctrl[fi].line_idx;   /* jump to WHILE line — it re-evaluates & pops if done */
+    return 1;
+}
+
+/* ================================================================
+ * SELECT CASE expr
+ *   CASE val [, val ...]
+ *   CASE IS op val
+ *   CASE val TO val
+ *   CASE ELSE
+ * END SELECT
+ * ================================================================ */
+
+/* Forward-scan to find the next CASE or END SELECT at the same depth */
+static int find_next_case(int start_pc) {
+    int depth = 0;
+    for (int pc = start_pc; pc < g_nlines; pc++) {
+        const char *t = sk(g_lines[pc].text);
+        if (kw_match(t, "SELECT")) depth++;
+        else if (kw_match(t, "END") && kw_match(sk(t + 3), "SELECT")) {
+            if (depth == 0) return pc;
+            depth--;
+        } else if (depth == 0 && kw_match(t, "CASE")) return pc;
+    }
+    return g_nlines;
+}
+
+static int cmd_select(Interp *ip, const char *args) {
+    const char *p = sk(args);
+    /* skip optional CASE keyword after SELECT */
+    if (kw_match(p, "CASE")) p = sk(p + 4);
+
+    /* Evaluate the selector — could be string or numeric */
+    char sel_s[1024] = ""; double sel_n = 0; int sel_is_str = 0;
+    if (is_str_token(p)) {
+        eval_str_expr(p, sel_s, sizeof sel_s);
+        sel_is_str = 1;
+    } else {
+        mpf_t v; mpf_init2(v, g_prec);
+        eval_expr(p, v);
+        sel_n = mpf_get_d(v);
+        mpf_clear(v);
+    }
+
+    /* Scan forward through CASE clauses */
+    int pc = ip->pc + 1;
+    while (pc < g_nlines) {
+        const char *t = sk(g_lines[pc].text);
+
+        if (kw_match(t, "END") && kw_match(sk(t + 3), "SELECT")) {
+            ip->pc = pc + 1; return 1;    /* no match — skip to END SELECT */
+        }
+
+        if (!kw_match(t, "CASE")) { pc++; continue; }
+
+        t = sk(t + 4);   /* past CASE */
+
+        /* CASE ELSE always matches */
+        if (kw_match(t, "ELSE")) { ip->pc = pc + 1; return 1; }
+
+        /* Try each comma-separated value list */
+        int matched = 0;
+        while (*t && !matched) {
+            t = sk(t);
+            if (sel_is_str) {
+                char cval[1024];
+                t = eval_str_expr(t, cval, sizeof cval);
+                matched = (strcmp(sel_s, cval) == 0);
+            } else if (kw_match(t, "IS")) {
+                /* CASE IS op val */
+                t = sk(t + 2);
+                char op[3] = {t[0], t[1], '\0'}; int ol = 2;
+                if (!strcmp(op,"<>")||!strcmp(op,"><")||!strcmp(op,"<=")||
+                    !strcmp(op,"=<")||!strcmp(op,">=")||!strcmp(op,"=>")) ;
+                else { op[1] = '\0'; ol = 1; }
+                t = sk(t + ol);
+                mpf_t cv; mpf_init2(cv, g_prec);
+                t = eval_expr(t, cv);
+                double cv_d = mpf_get_d(cv); mpf_clear(cv);
+                if      (!strcmp(op,"<>")||!strcmp(op,"><")) matched=(sel_n!=cv_d);
+                else if (!strcmp(op,"<=")||!strcmp(op,"=<")) matched=(sel_n<=cv_d);
+                else if (!strcmp(op,">=")||!strcmp(op,"=>")) matched=(sel_n>=cv_d);
+                else if (op[0]=='<') matched=(sel_n<cv_d);
+                else if (op[0]=='>') matched=(sel_n>cv_d);
+                else                 matched=(sel_n==cv_d);
+            } else {
+                mpf_t cv; mpf_init2(cv, g_prec);
+                t = eval_expr(t, cv);
+                double lo = mpf_get_d(cv); mpf_clear(cv);
+                t = sk(t);
+                if (kw_match(t, "TO")) {
+                    t = sk(t + 2);
+                    mpf_t cv2; mpf_init2(cv2, g_prec);
+                    t = eval_expr(t, cv2);
+                    double hi = mpf_get_d(cv2); mpf_clear(cv2);
+                    matched = (sel_n >= lo && sel_n <= hi);
+                } else {
+                    matched = (sel_n == lo);
+                }
+            }
+            t = sk(t);
+            if (*t == ',') t = sk(t + 1); else break;
+        }
+
+        if (matched) { ip->pc = pc + 1; return 1; }
+        pc = find_next_case(pc + 1);
+    }
+    ip->pc = pc + 1; return 1;
+}
+
+static int cmd_end_select(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;   /* normal fall-through after a matched CASE */
+}
+
+/* ================================================================
+ * EXIT SUB / EXIT FUNCTION / EXIT FOR / EXIT DO
+ * ================================================================ */
+static int cmd_exit(Interp *ip, const char *args) {
+    const char *p = sk(args);
+    if (kw_match(p, "FOR")) {
+        /* pop to the innermost FOR frame */
+        for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
+            if (g_ctrl[fi].varname[0] != '\x01' &&
+                g_ctrl[fi].varname[0] != '\x02' &&
+                g_ctrl[fi].varname[0] != '\x03') {
+                /* scan forward to NEXT */
+                int depth = 1, pc = ip->pc + 1;
+                while (pc < g_nlines && depth > 0) {
+                    const char *t = sk(g_lines[pc].text);
+                    if (kw_match(t, "FOR")) depth++;
+                    else if (kw_match(t, "NEXT")) depth--;
+                    pc++;
+                }
+                mpf_clear(g_ctrl[fi].limit); mpf_clear(g_ctrl[fi].step);
+                g_ctrl_top = fi;
+                ip->pc = pc; return 1;
+            }
+        }
+    } else if (kw_match(p, "DO")) {
+        /* pop to innermost DO frame, scan forward to LOOP */
+        for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
+            if (strcmp(g_ctrl[fi].varname, "\x02" "DO") == 0) {
+                int depth = 1, pc = ip->pc + 1;
+                while (pc < g_nlines && depth > 0) {
+                    const char *t = sk(g_lines[pc].text);
+                    if (kw_match(t, "DO")) depth++;
+                    else if (kw_match(t, "LOOP")) depth--;
+                    pc++;
+                }
+                mpf_clear(g_ctrl[fi].limit); mpf_clear(g_ctrl[fi].step);
+                g_ctrl_top = fi;
+                ip->pc = pc; return 1;
+            }
+        }
+    } else if (kw_match(p, "SUB") || kw_match(p, "FUNCTION")) {
+        /* unwind to the nearest GOSUB return frame */
+        for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
+            if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0) {
+                ip->pc = g_ctrl[fi].line_idx;
+                mpf_clear(g_ctrl[fi].limit); mpf_clear(g_ctrl[fi].step);
+                g_ctrl_top = fi;
+                return 1;
+            }
+        }
+        ip->running = 0; return 1;
+    }
+    return 0;
+}
+
+/* ================================================================
+ * REDIM — same as DIM for our purposes (we don't track initialisation)
+ * ================================================================ */
+static int cmd_redim(Interp *ip, const char *args) {
+    return cmd_dim(ip, args);
+}
+
+/* ================================================================
+ * ON ERROR GOTO / RESUME — stub implementations
+ * We don't support full error trapping, but we need these to not crash.
+ * ON ERROR GOTO 0 disables any pending handler (no-op for us).
+ * RESUME NEXT advances past the erroring line (no-op in stub).
+ * ================================================================ */
+static int cmd_on_error(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    /* ON ERROR GOTO 0 — disable handler */
+    if (kw_match(p, "GOTO")) {
+        p = sk(p + 4);
+        if (*p == '0' && !isalnum((unsigned char)p[1])) return 0; /* disable */
+        /* Otherwise treat as a regular GOTO to the label/line */
+        return cmd_goto(ip, p);
+    }
+    return 0;
+}
+
+static int cmd_resume(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    /* RESUME NEXT — advance past current line (already done by run loop) */
+    if (kw_match(p, "NEXT")) return 0;
+    /* RESUME — retry current line (just continue for now) */
+    return 0;
+}
+
+/* ================================================================
+ * VIEW PRINT [top TO bottom] — set text viewport (stub: just clear)
+ * ================================================================ */
+static int cmd_view_print(Interp *ip, const char *args) {
+    (void)ip; (void)args;
+    /* TODO: real viewport when we have a graphical backend */
+    return 0;
+}
+
+/* ================================================================
+ * PALETTE — stub (needed when running without graphics)
+ * ================================================================ */
+static int cmd_palette(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+
+/* ================================================================
+ * POKE addr, val — stub
+ * ================================================================ */
+static int cmd_poke(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+
+/* ================================================================
+ * END SUB / END FUNCTION / END SELECT — handled by their parent,
+ * but we need them registered so they don't print "unknown".
+ * END IF is similar.
+ * ================================================================ */
+static int cmd_end_sub(Interp *ip, const char *args) {
+    /* Treat as RETURN — end of an inline sub body */
+    return cmd_return(ip, args);
+}
+
+/* ================================================================
+ * CALL subname [args] — for now, treat as GOSUB to label
+ * ================================================================ */
+static int cmd_call(Interp *ip, const char *args) {
+    const char *p = sk(args);
+    char name[MAX_VARNAME]; int i = 0;
+    while ((isalnum((unsigned char)*p) || *p == '_') && i < MAX_VARNAME - 1)
+        name[i++] = *p++;
+    name[i] = '\0';
+    /* skip argument list — SUBs aren't scoped yet */
+    return cmd_gosub(ip, name);
+}
+
+/* ================================================================
+ * STATIC — variable declaration inside a SUB, treat like DIM
+ * ================================================================ */
+static int cmd_static(Interp *ip, const char *args) {
+    return cmd_dim(ip, args);
+}
+
+
+static int cmd_const(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
     while (*p) {
         char name[MAX_VARNAME];
+        p = sk(read_varname(sk(p), name));
+        p = sk(p);
+        if (*p == '=') p = sk(p + 1);
+        /* string constant? */
+        if (*p == '"') {
+            char val[MAX_LINE_LEN]; int i = 0;
+            p++;
+            while (*p && *p != '"' && i < (int)sizeof(val) - 1) val[i++] = *p++;
+            if (*p == '"') p++;
+            val[i] = '\0';
+            const_set(name, val, 1);
+        } else {
+            /* numeric — store the raw expression text for lazy eval */
+            const char *start = p;
+            /* consume until comma or end (skipping parens) */
+            int depth = 0;
+            while (*p) {
+                if (*p == '(') depth++;
+                else if (*p == ')') { if (depth == 0) break; depth--; }
+                else if (*p == ',' && depth == 0) break;
+                p++;
+            }
+            char val[MAX_LINE_LEN];
+            int len = (int)(p - start);
+            if (len >= (int)sizeof(val)) len = (int)sizeof(val) - 1;
+            memcpy(val, start, len);
+            /* trim trailing whitespace */
+            while (len > 0 && isspace((unsigned char)val[len - 1])) len--;
+            val[len] = '\0';
+            const_set(name, val, 0);
+        }
+        p = sk(p);
+        if (*p == ',') p = sk(p + 1); else break;
+    }
+    return 0;
+}
+
+/* ================================================================
+ * DIM — strip optional AS typename suffix before processing
+ * ================================================================ */
+static int cmd_dim(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    /* SHARED keyword — skip it, all our vars are already global */
+    if (kw_match(p, "SHARED")) p = sk(p + 6);
+    while (*p) {
+        char name[MAX_VARNAME];
         p = sk(read_varname(p, name));
+        /* strip type sigil if present but not already in name */
+        if ((*p == '&' || *p == '!' || *p == '#' || *p == '%') &&
+            name[strlen(name)-1] != '$') p++;
         Var *v = var_find(name);
         if (!v) v = var_create(name);
         if (*p == '(') {
@@ -261,7 +730,17 @@ static int cmd_dim(Interp *ip, const char *args) {
                 for (int i = 0; i < total; i++) { mpf_init2(v->arr_num[i], g_prec); mpf_set_ui(v->arr_num[i], 0); }
             }
         }
-        p = sk(p); if (*p == ',') p = sk(p + 1);
+        p = sk(p);
+        /* skip optional AS typename — e.g. "AS INTEGER", "AS PlayerData" */
+        if (kw_match(p, "AS")) {
+            p = sk(p + 2);
+            /* skip the type name, including optional * size for STRING * n */
+            while (isalnum((unsigned char)*p) || *p == '_') p++;
+            p = sk(p);
+            if (*p == '*') { p = sk(p + 1); while (isdigit((unsigned char)*p)) p++; }
+            p = sk(p);
+        }
+        if (*p == ',') p = sk(p + 1);
     }
     return 0;
 }
@@ -636,15 +1115,26 @@ static int cmd_next(Interp *ip, const char *args) {
 }
 
 int cmd_goto(Interp *ip, const char *args) {
-    int idx = find_line_idx(atoi(sk(args)));
-    if (idx < 0) { fprintf(stderr, "GOTO: line not found: %s\n", args); exit(1); }
+    const char *p = sk(args);
+    int idx;
+    if (isdigit((unsigned char)*p)) {
+        idx = find_line_idx(atoi(p));
+    } else {
+        /* label-based jump: read the identifier and look it up */
+        char lname[MAX_VARNAME]; int i = 0;
+        while ((isalnum((unsigned char)*p) || *p == '_') && i < MAX_VARNAME - 1)
+            lname[i++] = *p++;
+        lname[i] = '\0';
+        idx = find_line_by_label(lname);
+    }
+    if (idx < 0) { fprintf(stderr, "GOTO: target not found: %s\n", sk(args)); exit(1); }
     ip->pc = idx; return 1;
 }
 
 int cmd_gosub(Interp *ip, const char *args) {
     if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); exit(1); }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
-    strcpy(f->varname, "\x01GOSUB");
+    strcpy(f->varname, "\x01" "GOSUB");
     f->line_idx = ip->pc + 1;
     mpf_init2(f->limit, g_prec); mpf_set_ui(f->limit, 0);
     mpf_init2(f->step,  g_prec); mpf_set_ui(f->step,  0);
@@ -654,7 +1144,7 @@ int cmd_gosub(Interp *ip, const char *args) {
 static int cmd_return(Interp *ip, const char *args) {
     (void)args;
     for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
-        if (strcmp(g_ctrl[fi].varname, "\x01GOSUB") == 0) {
+        if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0) {
             ip->pc = g_ctrl[fi].line_idx;
             mpf_clear(g_ctrl[fi].limit); mpf_clear(g_ctrl[fi].step);
             g_ctrl_top = fi; return 1;
@@ -799,6 +1289,7 @@ static int cmd_if(Interp *ip, const char *args) {
             memcpy(then_clause, p, len); then_clause[len] = '\0';
             p = then_clause;
         }
+        /* THEN linenum  — bare number jumps directly */
         if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
         int jumped = dispatch_multi(ip, p);
         if (!jumped) ip->pc++;
@@ -807,6 +1298,7 @@ static int cmd_if(Interp *ip, const char *args) {
         ip->pc++;
         if (!else_p) return 1;
         p = sk(else_p + 4);
+        /* ELSE linenum — bare number jumps directly */
         if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
         dispatch_multi(ip, p);
         return 1;
@@ -913,49 +1405,70 @@ static int cmd_defint(Interp *ip, const char *args) { (void)ip;(void)args; retur
  * Command registration table
  * ================================================================ */
 const Command commands[] = {
-    { "REM",        cmd_rem      },
-    { "'",          cmd_rem      },
-    { "END",        cmd_end      },
-    { "STOP",       cmd_stop     },
-    { "CONT",       cmd_cont     },
-    { "RANDOMIZE",  cmd_randomize},
-    { "SWAP",       cmd_swap     },
-    { "ERASE",      cmd_erase    },
-    { "OPTION",     cmd_option   },
-    { "LET",        cmd_let      },
-    { "PRINT",      cmd_print    },
-    { "CLS",        cmd_cls      },
-    { "BEEP",       cmd_beep     },
-    { "SOUND",      cmd_sound    },
-    { "PLAY",       cmd_play     },
-    { "COLOR",      cmd_color    },
-    { "LOCATE",     cmd_locate   },
-    { "WIDTH",      cmd_width    },
-    { "SCREEN",     cmd_screen   },
-    { "KEY",        cmd_key      },
-    { "DIM",        cmd_dim      },
-    { "FOR",        cmd_for      },
-    { "NEXT",       cmd_next     },
-    { "GOTO",       cmd_goto     },
-    { "GOSUB",      cmd_gosub    },
-    { "RETURN",     cmd_return   },
-    { "IF",         cmd_if       },
-    { "LINE INPUT", cmd_line_input},
-    { "INPUT",      cmd_input    },
-    { "OPEN",       cmd_open     },
-    { "CLOSE",      cmd_close    },
-    { "DEF SEG",    cmd_defseg   },
-    { "DEF",        cmd_def      },
-    { "DEFDBL",     cmd_defdbl   },
-    { "DEFINT",     cmd_defint   },
-    { "DEFSNG",     cmd_defint   },
-    { "DEFSTR",     cmd_defint   },
-    { "ON",         cmd_on       },
-    { "READ",       cmd_read     },
-    { "DATA",       cmd_data     },
-    { "RESTORE",    cmd_restore  },
-    { "CHAIN",      cmd_chain    },
-    { NULL,         NULL         }
+    { "REM",        cmd_rem        },
+    { "'",          cmd_rem        },
+    { "END SELECT", cmd_end_select },
+    { "END SUB",    cmd_end_sub    },
+    { "END FUNCTION",cmd_end_sub   },
+    { "END IF",     cmd_rem        },
+    { "END",        cmd_end        },
+    { "EXIT",       cmd_exit       },
+    { "STOP",       cmd_stop       },
+    { "CONT",       cmd_cont       },
+    { "RANDOMIZE",  cmd_randomize  },
+    { "SWAP",       cmd_swap       },
+    { "ERASE",      cmd_erase      },
+    { "OPTION",     cmd_option     },
+    { "CONST",      cmd_const      },
+    { "LET",        cmd_let        },
+    { "PRINT",      cmd_print      },
+    { "CLS",        cmd_cls        },
+    { "BEEP",       cmd_beep       },
+    { "SOUND",      cmd_sound      },
+    { "PLAY",       cmd_play       },
+    { "COLOR",      cmd_color      },
+    { "LOCATE",     cmd_locate     },
+    { "WIDTH",      cmd_width      },
+    { "SCREEN",     cmd_screen     },
+    { "KEY",        cmd_key        },
+    { "PALETTE",    cmd_palette    },
+    { "POKE",       cmd_poke       },
+    { "VIEW PRINT", cmd_view_print },
+    { "VIEW",       cmd_rem        },
+    { "REDIM",      cmd_redim      },
+    { "DIM",        cmd_dim        },
+    { "STATIC",     cmd_static     },
+    { "FOR",        cmd_for        },
+    { "NEXT",       cmd_next       },
+    { "DO",         cmd_do         },
+    { "LOOP",       cmd_loop       },
+    { "WHILE",      cmd_while      },
+    { "WEND",       cmd_wend       },
+    { "SELECT",     cmd_select     },
+    { "CASE",       cmd_rem        },  /* consumed by cmd_select scan; skip if reached */
+    { "GOTO",       cmd_goto       },
+    { "GOSUB",      cmd_gosub      },
+    { "RETURN",     cmd_return     },
+    { "CALL",       cmd_call       },
+    { "IF",         cmd_if         },
+    { "LINE INPUT", cmd_line_input },
+    { "INPUT",      cmd_input      },
+    { "OPEN",       cmd_open       },
+    { "CLOSE",      cmd_close      },
+    { "DEF SEG",    cmd_defseg     },
+    { "DEF",        cmd_def        },
+    { "DEFDBL",     cmd_defdbl     },
+    { "DEFINT",     cmd_defint     },
+    { "DEFSNG",     cmd_defint     },
+    { "DEFSTR",     cmd_defint     },
+    { "ON ERROR",   cmd_on_error   },
+    { "ON",         cmd_on         },
+    { "RESUME",     cmd_resume     },
+    { "READ",       cmd_read       },
+    { "DATA",       cmd_data       },
+    { "RESTORE",    cmd_restore    },
+    { "CHAIN",      cmd_chain      },
+    { NULL,         NULL           }
 };
 
 /* ================================================================

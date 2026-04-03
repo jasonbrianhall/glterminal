@@ -102,6 +102,7 @@ extern int  g_nlines;
 
 int  line_cmp(const void *a, const void *b);
 int  find_line_idx(int num);
+int  find_line_by_label(const char *name);
 void normalize_kw(const char *src, char *dst, int dstsz);
 void load(const char *filename);
 void save_program(const char *filename);
@@ -159,8 +160,10 @@ int          kw_match(const char *p, const char *kw);
 int          is_str_token(const char *p);
 
 /* ================================================================
- * Expression evaluators (expr.c)
+ * CONST table (expr.c)
  * ================================================================ */
+void const_clear(void);
+void const_set(const char *name, const char *value, int is_str);
 const char *eval_expr(const char *s, mpf_t result);
 const char *eval_str_expr(const char *s, char *buf, int bufsz);
 const char *eval_str_or_inkey(const char *p, char *buf, int bufsz);
