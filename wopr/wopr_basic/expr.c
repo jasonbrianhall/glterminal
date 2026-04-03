@@ -480,7 +480,9 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
     mpf_t tmp; mpf_init2(tmp, g_prec);
     mpf_t rhs; mpf_init2(rhs, g_prec);
 
-    /* first: additive expression (same as before) */
+    /* -----------------------------------------
+     * 1. Parse left additive expression
+     * ----------------------------------------- */
     parse_term_p(ps, result);
     skip_ws_p(ps);
     while (*ps->p == '+' || *ps->p == '-') {
@@ -491,73 +493,124 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
         skip_ws_p(ps);
     }
 
-    /* then: optional relational comparison */
+    /* -----------------------------------------
+     * 2. STRING comparison (must run BEFORE numeric)
+     * ----------------------------------------- */
     skip_ws_p(ps);
-    char op[3] = {0,0,0};
-    int  oplen = 0;
+    if (is_str_token(ps->p)) {
+        char lhs[1024], rhs_s[1024];
 
-    if (*ps->p == '<' || *ps->p == '>' || *ps->p == '=') {
-        op[0] = ps->p[0];
-        op[1] = ps->p[1];
-        op[2] = '\0';
+        /* parse left string */
+        ps->p = sk(eval_str_expr(ps->p, lhs, sizeof lhs));
+        skip_ws_p(ps);
+
+        /* detect operator */
+        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        int oplen = 0;
 
         if (!strcmp(op,"<>") || !strcmp(op,"><") ||
             !strcmp(op,"<=") || !strcmp(op,"=<") ||
             !strcmp(op,">=") || !strcmp(op,"=>")) {
             oplen = 2;
-        } else {
-            oplen = 1;
+        } else if (ps->p[0]=='<' || ps->p[0]=='>' || ps->p[0]=='=') {
             op[1] = '\0';
+            oplen = 1;
         }
-    }
 
-    if (oplen > 0) {
-        ps->p += oplen;
-        skip_ws_p(ps);
+        if (oplen > 0) {
+            ps->p += oplen;
+            skip_ws_p(ps);
 
-        /* parse RHS as another additive expression */
-        parse_term_p(ps, rhs);
-        skip_ws_p(ps);
-        while (*ps->p == '+' || *ps->p == '-') {
-            char aop = *ps->p++;
-            parse_term_p(ps, tmp);
-            if (aop == '+') mpf_add(rhs, rhs, tmp);
-            else            mpf_sub(rhs, rhs, tmp);
+            /* parse right string */
+            ps->p = sk(eval_str_expr(ps->p, rhs_s, sizeof rhs_s));
+
+            int c = strcmp(lhs, rhs_s);
+            int cmp;
+
+            if (!strcmp(op,"<>") || !strcmp(op,"><"))      cmp = (c != 0);
+            else if (!strcmp(op,"<=") || !strcmp(op,"=<")) cmp = (c <= 0);
+            else if (!strcmp(op,">=") || !strcmp(op,"=>")) cmp = (c >= 0);
+            else if (op[0]=='<')                           cmp = (c < 0);
+            else if (op[0]=='>')                           cmp = (c > 0);
+            else                                           cmp = (c == 0);
+
+            mpf_set_si(result, cmp ? -1 : 0);
             skip_ws_p(ps);
         }
+    }
+    else {
+        /* -----------------------------------------
+         * 3. NUMERIC comparison
+         * ----------------------------------------- */
+        skip_ws_p(ps);
+        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        int oplen = 0;
 
-        int c = mpf_cmp(result, rhs);
-        int cmp;
-        if (!strcmp(op,"<>") || !strcmp(op,"><"))      cmp = (c != 0);
-        else if (!strcmp(op,"<=") || !strcmp(op,"=<")) cmp = (c <= 0);
-        else if (!strcmp(op,">=") || !strcmp(op,"=>")) cmp = (c >= 0);
-        else if (op[0] == '<')                         cmp = (c < 0);
-        else if (op[0] == '>')                         cmp = (c > 0);
-        else                                           cmp = (c == 0);
+        if (!strcmp(op,"<>") || !strcmp(op,"><") ||
+            !strcmp(op,"<=") || !strcmp(op,"=<") ||
+            !strcmp(op,">=") || !strcmp(op,"=>")) {
+            oplen = 2;
+        } else if (ps->p[0]=='<' || ps->p[0]=='>' || ps->p[0]=='=') {
+            op[1] = '\0';
+            oplen = 1;
+        }
 
-        mpf_set_si(result, cmp ? -1 : 0);
+        if (oplen > 0) {
+            ps->p += oplen;
+            skip_ws_p(ps);
+
+            /* parse RHS additive */
+            parse_term_p(ps, rhs);
+            skip_ws_p(ps);
+            while (*ps->p=='+' || *ps->p=='-') {
+                char aop = *ps->p++;
+                parse_term_p(ps, tmp);
+                if (aop=='+') mpf_add(rhs,rhs,tmp);
+                else          mpf_sub(rhs,rhs,tmp);
+                skip_ws_p(ps);
+            }
+
+            int c = mpf_cmp(result, rhs);
+            int cmp;
+
+            if (!strcmp(op,"<>") || !strcmp(op,"><"))      cmp = (c != 0);
+            else if (!strcmp(op,"<=") || !strcmp(op,"=<")) cmp = (c <= 0);
+            else if (!strcmp(op,">=") || !strcmp(op,"=>")) cmp = (c >= 0);
+            else if (op[0]=='<')                           cmp = (c < 0);
+            else if (op[0]=='>')                           cmp = (c > 0);
+            else                                           cmp = (c == 0);
+
+            mpf_set_si(result, cmp ? -1 : 0);
+            skip_ws_p(ps);
+        }
     }
 
-    /* finally: chain AND / OR / XOR on boolean (-1/0) values */
+    /* -----------------------------------------
+     * 4. Boolean chaining (AND / OR / XOR)
+     * ----------------------------------------- */
     skip_ws_p(ps);
-    while (kw_match(ps->p, "AND") || kw_match(ps->p, "OR") || kw_match(ps->p, "XOR")) {
-        int is_and = kw_match(ps->p, "AND");
-        int is_xor = kw_match(ps->p, "XOR");
+    while (kw_match(ps->p,"AND") || kw_match(ps->p,"OR") || kw_match(ps->p,"XOR")) {
+        int is_and = kw_match(ps->p,"AND");
+        int is_xor = kw_match(ps->p,"XOR");
+
         ps->p += is_and ? 3 : (is_xor ? 3 : 2);
         skip_ws_p(ps);
 
-        /* RHS is a full expression (relational + logical) */
         parse_expr_p(ps, rhs);
+
         long lv = mpf_get_si(result);
         long rv = mpf_get_si(rhs);
-        mpf_set_si(result, is_and ? (lv & rv) : (is_xor ? (lv ^ rv) : (lv | rv)));
+
+        if (is_and)      mpf_set_si(result, lv & rv);
+        else if (is_xor) mpf_set_si(result, lv ^ rv);
+        else             mpf_set_si(result, lv | rv);
+
         skip_ws_p(ps);
     }
 
     mpf_clear(tmp);
     mpf_clear(rhs);
 }
-
 
 static void parse_term_p(Parser *ps, mpf_t result) {
     mpf_t tmp; mpf_init2(tmp, g_prec);
