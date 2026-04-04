@@ -20,6 +20,8 @@ void wopr_basic_signal_done(void);
 extern char     basic_input_buf[512];
 extern int      basic_input_ready;
 extern int      g_basic_game_over;
+extern int      g_basic_waiting_input;
+extern int      g_basic_suppress_newline;
 extern SDL_sem *basic_input_sem;
 
 /* Longjmp target set in basic_thread_fn before calling basic_main() */

@@ -150,17 +150,29 @@ void display_width(int cols)
 
 void display_print(const char *s)
 {
+    /* Suppress REPL overhead strings the WOPR UI doesn't show */
+    if (strcmp(s, "Ok\n") == 0) return;
+    if (strncmp(s, "WOPR BASIC", 10) == 0) return;
+    if (strncmp(s, "Type NEW,", 9) == 0) return;
+    /* Any real output clears the post-getline suppress so we don't
+     * accidentally eat a newline that belongs to program output */
+    g_basic_suppress_newline = 0;
     wopr_basic_push_line(s);
 }
 
 void display_putchar(int c)
 {
+    g_basic_suppress_newline = 0;
     char tmp[2] = { (char)c, 0 };
     wopr_basic_push_line(tmp);
 }
 
 void display_newline(void)
 {
+    if (g_basic_suppress_newline) {
+        g_basic_suppress_newline = 0;
+        return;
+    }
     wopr_basic_push_line("\n");
 }
 
@@ -199,8 +211,11 @@ int display_inkey(void)
 /* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
 int display_getline(char *buf, int bufsz)
 {
-    /* Felix Terminal: block on SDL semaphore and pull from BASIC shim */
     basic_shim_fgets(buf, bufsz);
+    /* main.c calls display_newline() immediately after this — suppress it.
+     * The flag is cleared by any intervening display_print/putchar, so it
+     * only fires if the very next output call is that echo newline. */
+    g_basic_suppress_newline = 1;
     SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);
 }

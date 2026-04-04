@@ -25,9 +25,11 @@ void wopr_basic_push_line(const char *line);
 void wopr_basic_signal_done(void);
 
 char          basic_input_buf[512];
-int           basic_input_ready  = 0;
-int           g_basic_game_over  = 0;
-SDL_sem      *basic_input_sem    = NULL;
+int           basic_input_ready         = 0;
+int           g_basic_game_over         = 0;
+int           g_basic_waiting_input     = 0;
+int           g_basic_suppress_newline  = 0;
+SDL_sem      *basic_input_sem           = NULL;
 
 /* longjmp target set in basic_thread_fn before calling basic_main() */
 jmp_buf       basic_exit_jmp;
@@ -69,14 +71,18 @@ char *basic_shim_fgets(char *buf, int n)
 
     if (basic_input_sem) {
         SDL_Log("Waiting on semaphore");
+        g_basic_waiting_input = 1;
         SDL_SemWait(basic_input_sem);
+        g_basic_waiting_input = 0;
         SDL_Log("Woke from semaphore: ready=%d game_over=%d",
                 basic_input_ready, g_basic_game_over);
     } else {
         SDL_Log("No semaphore, polling");
+        g_basic_waiting_input = 1;
         while (!basic_input_ready && !g_basic_game_over) {
             SDL_Delay(10);
         }
+        g_basic_waiting_input = 0;
         SDL_Log("Exited poll: ready=%d game_over=%d",
                 basic_input_ready, g_basic_game_over);
     }
@@ -193,9 +199,7 @@ int basic_printf(const char *fmt, ...)
     char buf[4096];
 
     if (fmt == NULL) {
-        // BASIC uses this to flush pending output; you can ignore or handle it
-        wopr_basic_push_line("");
-        return 0;
+        return 0;  /* was fflush(stdout) — no-op in WOPR mode */
     }
 
     // Format into buf

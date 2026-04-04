@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cctype>
 #include <setjmp.h>
+#include <signal.h>
 
 // ── BASIC C entry points ────────────────────────────────────────────────
 extern "C" {
@@ -14,6 +15,9 @@ extern "C" {
     extern char    basic_input_buf[];
     extern int     basic_input_ready;
     extern int     g_basic_game_over;
+    extern int     g_basic_waiting_input;
+    extern int     g_basic_suppress_newline;
+    extern volatile sig_atomic_t g_break;
     extern jmp_buf basic_exit_jmp;
 
     void basic_shim_init(void);
@@ -32,15 +36,33 @@ struct basicState {
 
 static basicState *s_active = nullptr;
 
-// ── Output callback called by supp.c ─────────────────────────────────────
-extern "C" void wopr_basic_push_line(const char *line)
+// ── Output callback ───────────────────────────────────────────────────────
+static std::string s_out_buf;
+static const int   MAX_WOPR_LINES = 500;
+
+extern "C" void wopr_basic_push_line(const char *text)
 {
-    if (!s_active || !s_active->wopr) {
-        return;
+    if (!s_active || !s_active->wopr || !text) return;
+    for (const char *p = text; *p; ++p) {
+        if (*p == '\n') {
+            SDL_LockMutex(s_active->line_mtx);
+            auto &lines = s_active->wopr->lines;
+            lines.push_back(s_out_buf);
+            if ((int)lines.size() > MAX_WOPR_LINES)
+                lines.erase(lines.begin(), lines.begin() + (lines.size() - MAX_WOPR_LINES));
+            SDL_UnlockMutex(s_active->line_mtx);
+            s_out_buf.clear();
+        } else {
+            s_out_buf += *p;
+        }
     }
-    SDL_LockMutex(s_active->line_mtx);
-    s_active->wopr->lines.push_back(std::string(line));
-    SDL_UnlockMutex(s_active->line_mtx);
+}
+
+bool wopr_basic_is_waiting_input(WoprState *w)
+{
+    basicState *zs = static_cast<basicState *>(w->sub_state);
+    if (!zs || zs->dead) return false;
+    return g_basic_waiting_input != 0;
 }
 
 // ── Game thread ───────────────────────────────────────────────────────────
@@ -48,17 +70,23 @@ static int basic_thread_fn(void *userdata)
 {
     basicState *zs = static_cast<basicState *>(userdata);
 
+    SDL_Log("[basic] thread start");
+
     if (setjmp(basic_exit_jmp) == 0) {
-        // Normal path — run the game
+        SDL_Log("[basic] calling basic_main()");
         basic_main();
+        SDL_Log("[basic] basic_main() returned normally");
     } else {
-        // exit_() longjmped here
+        SDL_Log("[basic] longjmp from exit_()");
     }
 
     g_basic_game_over = 1;
+    SDL_Log("[basic] posting done_sem");
     SDL_SemPost(zs->done_sem);
+    SDL_Log("[basic] thread end");
     return 0;
 }
+
 
 // ── Enter ─────────────────────────────────────────────────────────────────
 void wopr_basic_enter(WoprState *w)
@@ -71,9 +99,11 @@ void wopr_basic_enter(WoprState *w)
     w->sub_state   = zs;
     s_active       = zs;
 
-    g_basic_game_over  = 0;
-    basic_input_ready  = 0;
-    basic_input_buf[0] = '\0';
+    g_basic_game_over        = 0;
+    basic_input_ready        = 0;
+    basic_input_buf[0]       = '\0';
+    g_basic_suppress_newline = 0;
+    s_out_buf.clear();
     basic_shim_init();
 
     zs->thread = SDL_CreateThread(basic_thread_fn, "basicThread", zs);
@@ -127,6 +157,18 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs || zs->dead) return false;
 
+    // Ctrl+C — interrupt running program
+    if (sym == SDLK_c) {
+        const Uint8 *ks = SDL_GetKeyboardState(NULL);
+        if (ks[SDL_SCANCODE_LCTRL] || ks[SDL_SCANCODE_RCTRL]) {
+            g_break = 1;
+            basic_shim_set_input("\n");
+            return true;
+        }
+    }
+
+    if (!g_basic_waiting_input) return true;
+
     switch (sym) {
     case SDLK_RETURN:
     case SDLK_KP_ENTER: {
@@ -155,11 +197,9 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
 void wopr_basic_text(WoprState *w, const char *text)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
-    if (!zs || zs->dead || !text) return;
-    for (const char *p = text; *p; ++p) {
-        char c = (char)((unsigned char)*p);
-        zs->input_buf += c;
-    }
+    if (!zs || zs->dead || !text || !g_basic_waiting_input) return;
+    for (const char *p = text; *p; ++p)
+        zs->input_buf += (char)((unsigned char)*p);
     w->input_buf = zs->input_buf;
 }
 

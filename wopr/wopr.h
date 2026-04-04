@@ -153,5 +153,6 @@ void wopr_basic_enter(WoprState *w);
 void wopr_basic_update(WoprState *w, double dt);
 void wopr_basic_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym);
+bool wopr_basic_is_waiting_input(WoprState *w);
 void wopr_basic_text(WoprState *w, const char *text);
 void wopr_basic_free(WoprState *w);

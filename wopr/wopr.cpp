@@ -186,7 +186,7 @@ static void launch_game(WoprState *w, WoprGame game) {
             push_line(w, "");
             push_line(w, "  LOADING PROGRAMMING LANGUAGE...");
             push_line(w, "");
-            set_phase(w, WoprPhase::PLAYING_ZORK);
+            set_phase(w, WoprPhase::PLAYING_BASIC);
             wopr_basic_enter(w);
             break;
 
@@ -590,7 +590,9 @@ void wopr_render(int win_w, int win_h) {
     int crawl_extra = w->crawl_target.empty() ? 0 : 1;
     bool in_shell   = (w->phase == WoprPhase::GAME_MENU);
     bool in_zork    = (w->phase == WoprPhase::PLAYING_ZORK);
-    int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell || in_zork) ? 1 : 0;
+    bool in_basic   = (w->phase == WoprPhase::PLAYING_BASIC);
+    bool basic_wants_input = in_basic && wopr_basic_is_waiting_input(w);
+    int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell || in_zork || basic_wants_input) ? 1 : 0;
     int used        = total + crawl_extra + input_extra;
     int start_line  = std::max(0, used - vis_rows);
 
@@ -627,6 +629,11 @@ void wopr_render(int win_w, int win_h) {
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
         gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
+    } else if (basic_wants_input) {
+        std::string prompt = "> " + w->input_buf;
+        Uint32 ticks = SDL_GetTicks();
+        if ((ticks / 500) % 2 == 0) prompt += '_';
+        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
     }
 
     gl_flush_verts();
@@ -644,6 +651,7 @@ static bool sub_back(WoprState *w) {
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
         case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
+        case WoprPhase::PLAYING_BASIC: wopr_basic_free(w); break;
         default: return false;
     }
     push_line(w, "");
@@ -684,6 +692,11 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
             if (text && *text)
                 wopr_zork_text(w, text);
             return wopr_zork_keydown(w, sym);
+        case WoprPhase::PLAYING_BASIC:
+            if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
+            if (text && *text)
+                wopr_basic_text(w, text);
+            return wopr_basic_keydown(w, sym);
         default: break;
     }
 
