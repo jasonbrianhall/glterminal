@@ -4,6 +4,9 @@
 #include "basic.h"
 #include <time.h>
 
+#include "basic_print.h"
+#define printf(...) basic_printf(__VA_ARGS__)
+
 /* ================================================================
  * Global state
  * ================================================================ */

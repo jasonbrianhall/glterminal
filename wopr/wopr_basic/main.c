@@ -11,6 +11,10 @@
 #include "inline_basic.h"
 #endif
 
+
+#include "basic_print.h"
+#define printf(...) basic_printf(__VA_ARGS__)
+
 /* ================================================================
  * SIGINT handler — sets g_break so the run loop can stop cleanly
  * ================================================================ */

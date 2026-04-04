@@ -34,7 +34,7 @@ endif
 # --------------------------------------------------------------------
 # SOURCES
 # --------------------------------------------------------------------
-SRCS = main.c vars.c expr.c program.c commands.c display_ansi.c
+SRCS = main.c vars.c expr.c program.c commands.c display_ansi.c basic_print.c
 OBJS = $(SRCS:.c=.o) $(SOUND_OBJ)
 
 # --------------------------------------------------------------------

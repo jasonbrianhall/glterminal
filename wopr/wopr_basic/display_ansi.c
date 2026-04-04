@@ -24,6 +24,9 @@
 #include <sys/ioctl.h>
 #include <signal.h>
 
+#include "basic_print.h"
+#define printf(...) basic_printf(__VA_ARGS__)
+
 /* ----------------------------------------------------------------
  * Internal state
  * ---------------------------------------------------------------- */
