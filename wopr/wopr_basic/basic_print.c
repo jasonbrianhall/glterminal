@@ -12,3 +12,8 @@ int basic_printf(const char *fmt, ...)
     return r;
 }
 
+char *basic_fgets(char *buf, int size, FILE *fp)
+{
+    return fgets(buf, size, fp);
+}
+
