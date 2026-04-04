@@ -168,41 +168,23 @@ int basic_rnd_(int maxval)
 int basic_printf(const char *fmt, ...)
 {
     char buf[4096];
-    int  i;
 
     if (fmt == NULL) {
-        flush_linebuf();
-        coutput++;
+        // BASIC uses this to flush pending output; you can ignore or handle it
+        wopr_basic_push_line("");
         return 0;
     }
 
-    {
-        va_list ap;
-        va_start(ap, fmt);
-        vsnprintf(buf, sizeof(buf), fmt, ap);
-        va_end(ap);
-    }
+    // Format into buf
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
 
-    for (i = 0; buf[i] != '\0'; i++) {
-        if (buf[i] == '\n') {
-            flush_linebuf();
-        } else {
-            if (s_linelen < (int)sizeof(s_linebuf) - 1)
-                s_linebuf[s_linelen++] = buf[i];
-        }
-    }
+    // Push the entire formatted string directly to WOPR
+    wopr_basic_push_line(buf);
 
-    return 0;  // or strlen(buf) if you care
-}
-
-
-char *basic_fgets(char *buf, int size, FILE *fp)
-{
-    printf("Hello\n");
-    (void)fp;              // unused
-    flush_linebuf();       // finish any pending output line
-    coutput = 0;
-    return basic_shim_fgets(buf, size);
+    return 0;
 }
 
 
