@@ -168,14 +168,15 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
 	    wopr/zork/verbs.c \
 	    wopr/zork/villns.c \
 	    wopr/wopr_basic/commands.c \
-            wopr/wopr_basic/display_ansi.c \
+            wopr/wopr_basic_modified/display_ansi.c \
             wopr/wopr_basic/expr.c \
             wopr/wopr_basic/program.c \
             wopr/wopr_basic/sound_null.c \
             wopr/wopr_basic/sound_sdl.c \
             wopr/wopr_basic/vars.c \
             wopr/wopr_basic_modified/main.c \
-            wopr/wopr_basic/vars.c \
+            wopr/wopr_basic_modified/basic_print.c \
+            wopr/wopr_basic/vars.c
 
 
 
