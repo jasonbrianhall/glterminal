@@ -174,8 +174,9 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
             wopr/wopr_basic/sound_null.c \
             wopr/wopr_basic/sound_sdl.c \
             wopr/wopr_basic/vars.c \
-            wopr/wopr_basic/basic_shim.c \
-            wopr/wopr_basic/wopr_main.c
+            wopr/wopr_basic_modified/main.c \
+            wopr/wopr_basic/vars.c \
+
 
 
 SRCS_WOPR = wopr/wopr.cpp                \
