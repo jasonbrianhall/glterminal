@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <signal.h>
+#include <SDL2/SDL.h>
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
@@ -135,8 +136,11 @@ void display_color(int fg, int bg)
 
 void display_width(int cols)
 {
-    g_width = cols;
+    return;
     /* Ask terminal to switch column mode if supported */
+
+    g_width = cols;
+
     if (cols == 40)
         printf("\033[?3h");   /* DECCOLM 40-col — works on some terminals */
     else
@@ -146,29 +150,23 @@ void display_width(int cols)
 
 void display_print(const char *s)
 {
-    fputs(s, stdout);
-    fflush(stdout);
+    wopr_basic_push_line(s);
 }
 
 void display_putchar(int c)
 {
-    putchar(c);
-    fflush(stdout);
+    char tmp[2] = { (char)c, 0 };
+    wopr_basic_push_line(tmp);
 }
 
 void display_newline(void)
 {
-    putchar('\n');
-    fflush(stdout);
+    wopr_basic_push_line("\n");
 }
 
 void display_cursor(int visible)
 {
-    if (visible)
-        printf("\033[?25h");
-    else
-        printf("\033[?25l");
-    fflush(stdout);
+    return;
 }
 
 void display_spc(int n)
@@ -203,22 +201,20 @@ int display_getline(char *buf, int bufsz)
 {
     /* Felix Terminal: block on SDL semaphore and pull from BASIC shim */
     basic_shim_fgets(buf, bufsz);
+    SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);
 }
 
 /* Single blocking getchar — kept for compatibility */
 int display_getchar(void)
 {
-    leave_raw();
+    char buf[2] = {0};
 
-    struct termios cooked = g_orig_termios;
-    cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
+    // Block until a line arrives
+    basic_shim_fgets(buf, sizeof(buf));
+    SDL_Log("Returning Buffer 2 %s\n", buf);
 
-    char c = 0;
-    ssize_t nr = read(STDIN_FILENO, &c, 1);
-    (void)nr;
-
-    enter_raw();
-    return (unsigned char)c;
+    // Return the first character of that line
+    return (unsigned char)buf[0];
 }
+
