@@ -10,6 +10,7 @@
 #ifdef INLINEBASIC
 #include "inline_basic.h"
 #endif
+#include <SDL2/SDL.h>
 
 /* ================================================================
  * SIGINT handler — sets g_break so the run loop can stop cleanly
@@ -51,63 +52,13 @@ void run_from(int start_pc) {
 /* ================================================================
  * main — direct-run or interactive REPL
  * ================================================================ */
-int basic_main(int argc, char **argv) {
+int basic_main(void) {
+    SDL_Log("[basic] inside basic_main() top");
     g_prec = DEFAULT_PREC;
     mpf_set_default_prec(g_prec);
     srand((unsigned)time(NULL));
     display_init();
-    install_sigint();
-
-    /* Direct run mode: ./basic program.bas [precision_bits] */
-#ifndef INLINEBASIC
-    if (argc >= 2) {
-        if (argc >= 3) g_prec = (mp_bitcnt_t)atoi(argv[2]);
-        load(argv[1]);
-        prescan_data();
-        run();
-        display_shutdown();
-        return 0;
-    }
-#else
-char tmpfile_path[512];
-
-#ifdef _WIN32
-    // Windows: use GetTempPath + GetTempFileName
-    char tmpdir[MAX_PATH];
-    GetTempPathA(MAX_PATH, tmpdir);
-    GetTempFileNameA(tmpdir, "WOP", 0, tmpfile_path);
-
-    FILE *dbfile = fopen(tmpfile_path, "wb");
-    if (!dbfile) {
-        fprintf(stderr, "Could not open temp file\n");
-        return 1;
-    }
-
-    fwrite(wopr_basic_program, 1, wopr_basic_program_len, dbfile);
-    fclose(dbfile);
-
-#else
-    // POSIX: use mkstemp
-    strcpy(tmpfile_path, "/tmp/woprXXXXXX");
-    int fd = mkstemp(tmpfile_path);
-    if (fd == -1) {
-        perror("mkstemp");
-        return 1;
-    }
-
-    write(fd, wopr_basic_program, wopr_basic_program_len);
-    close(fd);
-#endif
-
-// NOW replace argv[1] with the filename
-argv[1] = tmpfile_path;
-
-load(argv[1]);
-prescan_data();
-run();
-display_shutdown();
-return 0;
-#endif
+    SDL_Log("[basic] Display Init");
 
     /* ----------------------------------------------------------------
      * REPL helper macros
@@ -131,6 +82,8 @@ return 0;
     /* ----------------------------------------------------------------
      * Interactive REPL
      * ---------------------------------------------------------------- */
+    SDL_Log("[basic] Display CLS");
+
     display_cls();
     display_print("WOPR BASIC\n");
     display_print("Type NEW, LOAD, RUN, LIST, FILES, HELP, or SYSTEM to exit.\n\n");
