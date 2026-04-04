@@ -16,7 +16,7 @@
 #else
 #include <time.h>
 #endif
-
+#include <SDL2/SDL.h>
 /* ============================================================================
  * Shared I/O surfaces
  * ========================================================================== */
@@ -43,35 +43,58 @@ void basic_shim_init(void)
 
 void basic_shim_set_input(const char *line)
 {
+    SDL_Log("basic_shim_set_input called with '%s'", line);
     strncpy(basic_input_buf, line, sizeof(basic_input_buf) - 1);
     basic_input_buf[sizeof(basic_input_buf) - 1] = '\0';
     basic_input_ready = 1;
-    if (basic_input_sem)
+    if (basic_input_sem) {
+        SDL_Log("Posting semaphore %p", (void*)basic_input_sem);
         SDL_SemPost(basic_input_sem);
+    } else {
+        SDL_Log("NO semaphore to post");
+    }
 }
+
 
 char *basic_shim_fgets(char *buf, int n)
 {
+    SDL_Log("In Fgets: sem=%p ready=%d game_over=%d",
+            (void*)basic_input_sem, basic_input_ready, g_basic_game_over);
+
     if (g_basic_game_over) {
+        SDL_Log("Game over (early)");
         if (n > 0) buf[0] = '\0';
         return buf;
     }
+
     if (basic_input_sem) {
+        SDL_Log("Waiting on semaphore");
         SDL_SemWait(basic_input_sem);
+        SDL_Log("Woke from semaphore: ready=%d game_over=%d",
+                basic_input_ready, g_basic_game_over);
     } else {
-        /* Semaphore not yet initialised — poll slowly rather than busy-spin */
-        while (!basic_input_ready && !g_basic_game_over)
+        SDL_Log("No semaphore, polling");
+        while (!basic_input_ready && !g_basic_game_over) {
             SDL_Delay(10);
+        }
+        SDL_Log("Exited poll: ready=%d game_over=%d",
+                basic_input_ready, g_basic_game_over);
     }
+
     if (!basic_input_ready || g_basic_game_over) {
+        SDL_Log("No input ready after wait: ready=%d game_over=%d",
+                basic_input_ready, g_basic_game_over);
         if (n > 0) buf[0] = '\0';
         return buf;
     }
+
     strncpy(buf, basic_input_buf, n - 1);
     buf[n - 1] = '\0';
     basic_input_ready = 0;
+    SDL_Log("Returned Buffer is '%s'", buf);
     return buf;
 }
+
 
 /* ============================================================================
  * more_output
