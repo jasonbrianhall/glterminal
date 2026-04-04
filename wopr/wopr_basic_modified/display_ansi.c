@@ -87,6 +87,8 @@ static void signal_handler(int sig) {
 
 void display_init(void)
 {
+    basic_shim_init();   /* Felix BASIC shim init */
+
     tcgetattr(STDIN_FILENO, &g_orig_termios);
     enter_raw();
     atexit(cleanup_terminal);
@@ -199,26 +201,9 @@ int display_inkey(void)
 /* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
 int display_getline(char *buf, int bufsz)
 {
-    leave_raw();
-
-    struct termios cooked = g_orig_termios;
-    cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);  /* TCSANOW: don't discard buffered input */
-
-    /* Use read() directly so we don't fight with stdio buffering */
-    int len = 0;
-    while (len < bufsz - 1) {
-        char c;
-        ssize_t n = read(STDIN_FILENO, &c, 1);
-        if (n < 0 && errno == EINTR) break; /* SIGINT during read */
-        if (n <= 0 || c == '\n') break;
-        if (c == '\r') continue;
-        buf[len++] = c;
-    }
-    buf[len] = '\0';
-
-    enter_raw();
-    return len;
+    /* Felix Terminal: block on SDL semaphore and pull from BASIC shim */
+    basic_shim_fgets(buf, bufsz);
+    return (int)strlen(buf);
 }
 
 /* Single blocking getchar — kept for compatibility */
