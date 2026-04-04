@@ -5,8 +5,6 @@
 #include "basic.h"
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
-#define fgets(...) basic_fgets(__VA_ARGS__)
-
 
 /* ================================================================
  * PRINT USING formatter
