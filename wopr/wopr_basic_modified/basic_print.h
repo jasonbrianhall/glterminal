@@ -19,6 +19,10 @@ void wopr_basic_flush_partial(void);
 void wopr_basic_cls(void);
 void wopr_basic_color(int fg);
 
+/* Single-key (INKEY$) buffer — fed by wopr_basic_post_key, read by display_inkey */
+void wopr_basic_post_key(char c);
+int  wopr_basic_get_key(void);   /* returns -1 if empty, else char */
+
 /* Input state */
 extern char     basic_input_buf[512];
 extern int      basic_input_ready;
