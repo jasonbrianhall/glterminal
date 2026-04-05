@@ -100,6 +100,7 @@ char *basic_shim_fgets(char *buf, int n)
     strncpy(buf, basic_input_buf, n - 1);
     buf[n - 1] = '\0';
     basic_input_ready = 0;
+    g_basic_suppress_newline = 1;
     SDL_Log("Returned Buffer is '%s'", buf);
     return buf;
 }

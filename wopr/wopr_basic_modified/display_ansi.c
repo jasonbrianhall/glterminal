@@ -113,18 +113,13 @@ void display_cls(void)
 
 void display_locate(int row, int col)
 {
-    /* LOCATE in a scrolling terminal: flush current partial line and
-     * pad with blank lines to approximate the requested row.
-     * Column is ignored — BASIC games rarely need pixel-exact positioning. */
-    (void)col;
+    (void)row; (void)col;
     wopr_basic_flush_partial();
-    /* We can't truly position in a scroll buffer, so just ensure we're
-     * on a new line. Row-based padding would fight the scroll, so skip it. */
 }
 
 void display_color(int fg, int bg)
 {
-    (void)bg;   /* background colour not supported in WOPR terminal */
+    (void)bg;
     wopr_basic_color(fg);
 }
 
@@ -174,8 +169,7 @@ void display_cursor(int visible)
 
 void display_spc(int n)
 {
-    for (int i = 0; i < n; i++) putchar(' ');
-    fflush(stdout);
+    for (int i = 0; i < n; i++) wopr_basic_push_line(" ");
 }
 
 int display_get_width(void)
@@ -186,15 +180,12 @@ int display_get_width(void)
     return g_width;
 }
 
-/* INKEY$ — non-blocking */
+/* INKEY$ — non-blocking: returns 0 if no key, else the char */
 int display_inkey(void)
 {
-    unsigned char c;
-    ssize_t n = read(STDIN_FILENO, &c, 1);
-    if (n == 1) return (int)c;
-    /* Throttle the polling loop to ~1000 checks/sec so a human keypress
-     * is not raced past by a tight INKEY$ flush loop running at CPU speed.
-     * Real IBM PC BASIC ran at ~4.77 MHz with much slower polling. */
+    int c = wopr_basic_get_key();
+    if (c >= 0) return c;
+    /* Throttle polling to ~1000 checks/sec */
     usleep(1000);
     return 0;
 }
