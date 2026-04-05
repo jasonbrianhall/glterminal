@@ -400,7 +400,7 @@ void gfx_open(int mode)
 
     const ModeDesc *m = &g_modes[mode];
     g_mode = mode; g_w = m->w; g_h = m->h;
-    g_fg = m->colours-1; g_bg = 0;
+    g_fg = 7; g_bg = 0;
     g_cur_row=0; g_cur_col=0;
     g_pen_x=0; g_pen_y=0; g_pen_col=1;
 
