@@ -9,7 +9,7 @@ ifeq ($(TARGET),windows)
     BUILDDIR   = build/windows
     EXE        = $(BUILDDIR)/basic.exe
     CFLAGS     = -O2 -Wall -std=c11 -DWIN32 -D_WIN32
-    LDFLAGS    = -lgmp -lm
+    LDFLAGS    = -lgmp -lm -mconsole
 else
     CC         = gcc
     PKG_CONFIG = pkg-config
