@@ -30,6 +30,9 @@ void sound_beep(void);
  *   duration : clock ticks at 18.2 ticks/sec (matches GW-BASIC) */
 void sound_tone(double freq, double duration_ticks);
 
+/* Stop all audio immediately, clearing the queue without waiting. */
+void sound_stop(void);
+
 /* PLAY "mml-string"
  * Implements the GW-BASIC Music Macro Language subset:
  *   Oc        set octave 0-6

@@ -88,7 +88,8 @@ static void signal_handler(int sig) {
 
 void display_init(void)
 {
-    basic_shim_init();   /* Felix BASIC shim init */
+    /* basic_shim_init() is called by wopr_basic_enter() before the thread
+     * starts — do NOT call it here. */
 
     tcgetattr(STDIN_FILENO, &g_orig_termios);
     enter_raw();
@@ -96,14 +97,40 @@ void display_init(void)
     signal(SIGTERM, signal_handler);
     signal(SIGSEGV, signal_handler);
     signal(SIGABRT, signal_handler);
-    printf("\033[0m\033[2J\033[H");
-    fflush(stdout);
-    sound_init();
+    /* sound_init() is called by wopr_basic_enter() on the main thread */
 }
 
 void display_shutdown(void)
 {
-    sound_shutdown();
+    /* sound_shutdown() is called by wopr_basic_free() on the main thread */
+}
+
+void display_cls(void)
+{
+    printf("\033[2J\033[H");
+    fflush(stdout);
+}
+
+void display_locate(int row, int col)
+{
+    if (row < 1) row = 1;
+    if (col < 1) col = 1;
+    printf("\033[%d;%dH", row, col);
+    fflush(stdout);
+}
+
+void display_color(int fg, int bg)
+{
+    /* clamp */
+    if (fg < 0 || fg > 15) fg = 7;
+    if (bg < 0 || bg > 15) bg = 0;
+
+    int bold   = (fg >= 8) ? 1 : 0;
+    int fg_idx = cga_to_ansi[fg & 7];
+    int bg_idx = cga_to_ansi[bg & 7];
+
+    printf("\033[%d;%d;%dm", bold, 30 + fg_idx, 40 + bg_idx);
+    fflush(stdout);
 }
 
 void display_cls(void)
@@ -125,16 +152,7 @@ void display_color(int fg, int bg)
 
 void display_width(int cols)
 {
-    return;
-    /* Ask terminal to switch column mode if supported */
-
-    g_width = cols;
-
-    if (cols == 40)
-        printf("\033[?3h");   /* DECCOLM 40-col — works on some terminals */
-    else
-        printf("\033[?3l");   /* DECCOLM 80-col */
-    fflush(stdout);
+    (void)cols;
 }
 
 void display_print(const char *s)
@@ -164,7 +182,7 @@ void display_newline(void)
 
 void display_cursor(int visible)
 {
-    return;
+    (void)visible;
 }
 
 void display_spc(int n)
@@ -174,23 +192,17 @@ void display_spc(int n)
 
 int display_get_width(void)
 {
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
-        return ws.ws_col;
     return g_width;
 }
 
-/* INKEY$ — non-blocking: returns 0 if no key, else the char */
 int display_inkey(void)
 {
     int c = wopr_basic_get_key();
     if (c >= 0) return c;
-    /* Throttle polling to ~1000 checks/sec */
     usleep(1000);
     return 0;
 }
 
-/* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
 int display_getline(char *buf, int bufsz)
 {
     basic_shim_fgets(buf, bufsz);
@@ -199,16 +211,10 @@ int display_getline(char *buf, int bufsz)
     return (int)strlen(buf);
 }
 
-/* Single blocking getchar — kept for compatibility */
 int display_getchar(void)
 {
     char buf[2] = {0};
-
-    // Block until a line arrives
     basic_shim_fgets(buf, sizeof(buf));
-    SDL_Log("Returning Buffer 2 %s\n", buf);
-
-    // Return the first character of that line
     return (unsigned char)buf[0];
 }
 
