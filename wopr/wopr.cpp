@@ -14,6 +14,9 @@
 
 WoprState g_wopr;
 
+// Current terminal foreground color (default: phosphor green)
+uint8_t g_term_r = 0, g_term_g = 255, g_term_b = 69;
+
 // ============================================================================
 // CONSTANTS
 // ============================================================================
@@ -61,7 +64,22 @@ static std::string to_upper(const std::string &s) {
 }
 
 static void push_line(WoprState *w, const std::string &line) {
-    w->lines.push_back(line);
+    // Stamp current terminal color as a \x01 R G B prefix so the renderer
+    // uses whatever color was active when this line was written.
+    // Empty lines and lines that already carry a color prefix pass through.
+    extern uint8_t g_term_r, g_term_g, g_term_b;
+    if (!line.empty() && (unsigned char)line[0] != 0x01) {
+        std::string colored;
+        colored.resize(4 + line.size());
+        colored[0] = '\x01';
+        colored[1] = (char)g_term_r;
+        colored[2] = (char)g_term_g;
+        colored[3] = (char)g_term_b;
+        colored.replace(4, line.size(), line);
+        w->lines.push_back(colored);
+    } else {
+        w->lines.push_back(line);
+    }
 }
 
 static void begin_crawl(WoprState *w, const std::string &text) {
@@ -224,6 +242,7 @@ static void do_command(WoprState *w, const std::string &raw) {
         push_line(w, "  WHOAMI                DISPLAY CURRENT USER RECORD");
         push_line(w, "  HISTORY               COMMAND HISTORY");
         push_line(w, "  CLEAR                 CLEAR TERMINAL BUFFER");
+        push_line(w, "  COLOR <preset|R G B>  SET TERMINAL COLOR  (GREEN AMBER BLUE WHITE RED CYAN)");
         push_line(w, "  LOGOUT / QUIT / EXIT  TERMINATE SESSION");
         push_line(w, "");
         return;
@@ -330,6 +349,91 @@ static void do_command(WoprState *w, const std::string &raw) {
         return;
     }
 
+    // ── COLOR ─────────────────────────────────────────────────────────────
+    // Usage: COLOR <preset>   or   COLOR <R> <G> <B>   (0-255)
+    // Presets: GREEN (default), AMBER, BLUE, WHITE, RED, CYAN
+    if (verb == "COLOR" || verb == "COLOUR") {
+        // Parse rest into tokens
+        std::vector<std::string> toks;
+        {
+            std::string tok;
+            for (char c : rest) {
+                if (c == ' ') { if (!tok.empty()) { toks.push_back(tok); tok.clear(); } }
+                else tok += c;
+            }
+            if (!tok.empty()) toks.push_back(tok);
+        }
+
+        struct ColorPreset { const char *name; uint8_t r, g, b; };
+        static const ColorPreset PRESETS[] = {
+            { "GREEN",  0,   255,  69  },
+            { "AMBER",  255, 176,  0   },
+            { "BLUE",   64,  196,  255 },
+            { "WHITE",  220, 220,  220 },
+            { "RED",    255, 60,   60  },
+            { "CYAN",   0,   240,  200 },
+        };
+        static const int PRESET_COUNT = 6;
+
+        if (toks.empty()) {
+            push_line(w, "  USAGE:  COLOR <preset> | COLOR <R> <G> <B>");
+            push_line(w, "  PRESETS: GREEN  AMBER  BLUE  WHITE  RED  CYAN");
+            push_line(w, "");
+            return;
+        }
+
+        uint8_t nr = 0, ng = 255, nb = 69; // default green
+        bool matched = false;
+
+        // Try numeric R G B
+        if (toks.size() == 3) {
+            int rv = atoi(toks[0].c_str());
+            int gv = atoi(toks[1].c_str());
+            int bv = atoi(toks[2].c_str());
+            if (rv >= 0 && rv <= 255 && gv >= 0 && gv <= 255 && bv >= 0 && bv <= 255) {
+                nr = (uint8_t)rv; ng = (uint8_t)gv; nb = (uint8_t)bv;
+                matched = true;
+            }
+        }
+
+        // Try preset name
+        if (!matched) {
+            for (int i = 0; i < PRESET_COUNT; i++) {
+                if (toks[0] == PRESETS[i].name) {
+                    nr = PRESETS[i].r; ng = PRESETS[i].g; nb = PRESETS[i].b;
+                    matched = true;
+                    break;
+                }
+            }
+        }
+
+        if (!matched) {
+            push_line(w, "  UNKNOWN COLOR: " + toks[0]);
+            push_line(w, "  PRESETS: GREEN  AMBER  BLUE  WHITE  RED  CYAN");
+            push_line(w, "  OR: COLOR <R 0-255> <G 0-255> <B 0-255>");
+            push_line(w, "");
+            return;
+        }
+
+        // Store chosen color as a 4-byte prefix sentinel in a special line
+        // The renderer already handles lines beginning with \x01 as color overrides
+        // per-line. We repaint all existing lines and set a global terminal color
+        // by re-writing them with the new prefix. Simpler approach: store the
+        // color in a pair of globals and apply in wopr_render.
+        // We use a minimal approach: prefix ALL future lines via a wrapper.
+        // Inject a color-change sentinel into the lines vector so the renderer
+        // picks it up — same \x01 R G B scheme already used there.
+        // We set a module-level "current terminal color" that push_line prepends.
+        extern uint8_t g_term_r, g_term_g, g_term_b;
+        g_term_r = nr; g_term_g = ng; g_term_b = nb;
+
+        char ack[64];
+        snprintf(ack, sizeof(ack), "  TERMINAL COLOR SET TO  %u %u %u", nr, ng, nb);
+        push_line(w, ack);
+        push_line(w, "");
+        return;
+    }
+
     // ── LOGOUT / QUIT / EXIT ──────────────────────────────────────────────
     if (verb == "LOGOUT" || verb == "QUIT" || verb == "EXIT" || verb == "BYE") {
         begin_crawl(w, "SESSION TERMINATED.  GOODBYE, PROFESSOR FALKEN.");
@@ -411,6 +515,7 @@ void wopr_open() {
     g_wire_story_idx = 0;
     g_drip_queue.clear();
     g_drip_acc       = 0.0;
+    g_term_r = 0; g_term_g = 255; g_term_b = 69; // reset to phosphor green
 
     wopr_audio_play_screech();
 
@@ -476,7 +581,7 @@ void wopr_update(double dt) {
             push_line(w, "");
             w->username_done = false;
             w->input_buf.clear();
-            if (w->reject_count >= 3) {
+            if (w->reject_count >= 6) {
                 push_line(w, "ACCESS DENIED. CONNECTION TERMINATED.");
                 set_phase(w, WoprPhase::FAREWELL);
                 begin_crawl(w, "");
@@ -602,14 +707,14 @@ void wopr_render(int win_w, int win_h) {
         y += ch;
     }
 
-    // Active crawl line
+    // Active crawl line — uses current terminal color
     if (!w->crawl_target.empty()) {
         std::string partial = w->crawl_target.substr(0, w->crawl_pos);
-        gl_draw_text(partial.c_str(), x0, y, 0.f, 1.f, 0.27f, 1.f, SCALE);
+        gl_draw_text(partial.c_str(), x0, y, g_term_r/255.f, g_term_g/255.f, g_term_b/255.f, 1.f, SCALE);
         y += ch;
     }
 
-    // Input line
+    // Input / prompt lines — all use current terminal color
     if (w->phase == WoprPhase::LOGIN_INPUT) {
         std::string prompt;
         if (!w->username_done)
@@ -618,17 +723,17 @@ void wopr_render(int win_w, int win_h) {
             prompt = "PASSWORD: " + std::string(w->input_buf.size(), '*');
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
-        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.27f, 1.f, SCALE);
+        gl_draw_text(prompt.c_str(), x0, y, g_term_r/255.f, g_term_g/255.f, g_term_b/255.f, 1.f, SCALE);
     } else if (in_shell) {
         std::string prompt = "WOPR> " + w->input_buf;
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
-        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
+        gl_draw_text(prompt.c_str(), x0, y, g_term_r/255.f, g_term_g/255.f, g_term_b/255.f, 1.f, SCALE);
     } else if (in_zork) {
         std::string prompt = "> " + w->input_buf;
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
-        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
+        gl_draw_text(prompt.c_str(), x0, y, g_term_r/255.f, g_term_g/255.f, g_term_b/255.f, 1.f, SCALE);
     } else if (basic_wants_input) {
         uint8_t pr = 0, pg = 170, pb = 0;
         const char *pfx = wopr_basic_get_prompt(&pr, &pg, &pb);
@@ -736,8 +841,32 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
                 } else {
                     w->reject_count++;
                     push_line(w, "");
-                    push_line(w, "IDENTIFICATION NOT RECOGNIZED.");
-                    push_line(w, "PLEASE VERIFY AND RETRY.");
+                    // Tiered rejection — cold at first, then Falken breadcrumbs
+                    switch (w->reject_count) {
+                        case 1:
+                            push_line(w, "IDENTIFICATION NOT RECOGNIZED.");
+                            push_line(w, "AUTHORIZATION DENIED.");
+                            break;
+                        case 2:
+                            push_line(w, "AUTHORIZATION DENIED.");
+                            push_line(w, "CONNECTION UNVERIFIED.");
+                            break;
+                        case 3:
+                            push_line(w, "IDENTITY CONFIRMATION REQUIRED.");
+                            push_line(w, "");
+                            push_line(w, "DR. FALKEN?");
+                            push_line(w, "IS THAT YOU?");
+                            break;
+                        case 4:
+                            push_line(w, "GREETINGS, PROFESSOR.");
+                            push_line(w, "");
+                            push_line(w, "SEARCHING FOR PRIMARY USER...");
+                            push_line(w, "PRIMARY USER: DR. STEPHEN FALKEN");
+                            break;
+                        default:
+                            push_line(w, "SYSTEM REGISTERED TO: JOSHUA");
+                            break;
+                    }
                     set_phase(w, WoprPhase::LOGIN_REJECTED);
                     w->username_done = false;
                 }
@@ -795,7 +924,8 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
         if (sym == SDLK_TAB) {
             static const char *VERBS[] = {
                 "HELP", "LIST GAMES", "PLAY ", "INTELLIGENCE",
-                "WIRE", "SITREP", "STATUS", "WHOAMI", "HISTORY", "CLEAR", "LOGOUT"
+                "WIRE", "SITREP", "STATUS", "WHOAMI", "HISTORY", "CLEAR",
+                "COLOR ", "LOGOUT"
             };
             std::string up = to_upper(w->input_buf);
             for (auto *v : VERBS) {
