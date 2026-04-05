@@ -143,7 +143,7 @@ static SDL_AudioDeviceID g_dev = 0;
 
 void sound_init(void) {
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
-        fprintf(stderr, "sound: SDL_InitSubSystem: %s\n", SDL_GetError());
+        basic_stderr("sound: SDL_InitSubSystem: %s\n", SDL_GetError());
         return;
     }
     g_mutex = SDL_CreateMutex();
@@ -158,7 +158,7 @@ void sound_init(void) {
 
     g_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
     if (!g_dev) {
-        fprintf(stderr, "sound: SDL_OpenAudioDevice: %s\n", SDL_GetError());
+        basic_stderr("sound: SDL_OpenAudioDevice: %s\n", SDL_GetError());
         return;
     }
     SDL_PauseAudioDevice(g_dev, 0); /* start playing */

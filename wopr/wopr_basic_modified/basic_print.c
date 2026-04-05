@@ -218,4 +218,23 @@ int basic_printf(const char *fmt, ...)
     return 0;
 }
 
+int basic_stderr(const char *fmt, ...)
+{
+    char buf[4096];
+
+    if (fmt == NULL) {
+        return 0;
+    }
+
+    // Format into buf
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    // Push the entire formatted string directly to WOPR
+    wopr_basic_push_line(buf);
+
+    return 0;
+}
 
