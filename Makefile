@@ -172,7 +172,7 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
             wopr/wopr_basic/expr.c \
             wopr/wopr_basic/program.c \
             wopr/wopr_basic/sound_null.c \
-            wopr/wopr_basic/sound_sdl.c \
+            wopr/wopr_basic_modified/sound_sdl.c \
             wopr/wopr_basic/vars.c \
             wopr/wopr_basic_modified/main.c \
             wopr/wopr_basic_modified/basic_print.c \
