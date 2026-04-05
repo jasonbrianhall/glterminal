@@ -34,10 +34,10 @@ static const GameEntry GAMES[] = {
     { "TIC-TAC-TOE",              "TIC",         WoprGame::TIC_TAC_TOE},
     { "MINESWEEPER",              "MINESWEEPER", WoprGame::MINESWEEPER},
     { "ZORK",                     "ZORK",        WoprGame::ZORK       },
-    { "BASIC",                    "BASIC",        WoprGame::BASIC       },
-
+    { "BASIC",                    "BASIC",       WoprGame::BASIC      },
+    { "WIZARD'S CASTLE",          "WIZARD",      WoprGame::WIZARD     },
 };
-static const int GAME_COUNT = 7;
+static const int GAME_COUNT = 8;
 
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
@@ -206,6 +206,14 @@ static void launch_game(WoprState *w, WoprGame game) {
             push_line(w, "");
             set_phase(w, WoprPhase::PLAYING_BASIC);
             wopr_basic_enter(w);
+            break;
+        case WoprGame::WIZARD:
+            push_line(w, "INITIATING: WIZARD'S CASTLE");
+            push_line(w, "");
+            push_line(w, "  LOADING ADVENTURE SIMULATION...");
+            push_line(w, "");
+            set_phase(w, WoprPhase::PLAYING_BASIC);
+            wopr_wizard_enter(w);
             break;
 
         default: break;

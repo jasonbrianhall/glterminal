@@ -41,6 +41,7 @@ enum class WoprGame {
     MINESWEEPER,
     ZORK,
     BASIC,
+    WIZARD,
     // Sentinel
     COUNT
 };
@@ -82,6 +83,9 @@ struct WoprState {
 };
 
 extern WoprState g_wopr;
+
+// Current terminal foreground color — set via COLOR command
+extern uint8_t g_term_r, g_term_g, g_term_b;
 
 // ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -157,3 +161,6 @@ bool wopr_basic_is_waiting_input(WoprState *w);
 const char *wopr_basic_get_prompt(uint8_t *r, uint8_t *g, uint8_t *b);
 void wopr_basic_text(WoprState *w, const char *text);
 void wopr_basic_free(WoprState *w);
+
+// Wizard's Castle (BASIC program, shares the BASIC sub-game machinery)
+void wopr_wizard_enter(WoprState *w);
