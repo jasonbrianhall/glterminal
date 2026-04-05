@@ -18,11 +18,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
+#ifdef _WIN32
+#include <SDL2/SDL.h>
+#endif
+
+#ifndef _WIN32
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <signal.h>
+#endif
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
@@ -30,8 +36,10 @@
 /* ----------------------------------------------------------------
  * Internal state
  * ---------------------------------------------------------------- */
+#ifndef _WIN32
 static struct termios g_orig_termios;
 static int g_raw = 0;
+#endif
 static int g_width = 80;
 
 /* CGA index → ANSI colour number (for fg: 30+n, bg: 40+n) */
@@ -43,15 +51,15 @@ static const int cga_to_ansi[16] = {
 /* ----------------------------------------------------------------
  * Raw mode helpers
  * ---------------------------------------------------------------- */
+#ifndef _WIN32
 static void enter_raw(void)
 {
     if (g_raw) return;
-    struct termios raw = g_orig_termios;  /* always base off the one-time snapshot */
+    struct termios raw = g_orig_termios;
     raw.c_lflag &= ~(ECHO | ICANON);
-    raw.c_cc[VMIN]  = 0;   /* non-blocking */
+    raw.c_cc[VMIN]  = 0;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-    /* make stdin non-blocking */
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
     g_raw = 1;
@@ -60,12 +68,15 @@ static void enter_raw(void)
 static void leave_raw(void)
 {
     if (!g_raw) return;
-    /* restore blocking */
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
     tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
     g_raw = 0;
 }
+#else
+static void enter_raw(void) {}
+static void leave_raw(void) {}
+#endif
 
 /* ----------------------------------------------------------------
  * Public API
@@ -87,14 +98,18 @@ static void signal_handler(int sig) {
 
 void display_init(void)
 {
+#ifndef _WIN32
     tcgetattr(STDIN_FILENO, &g_orig_termios);
+#endif
     enter_raw();
     atexit(cleanup_terminal);
     signal(SIGTERM, signal_handler);
     signal(SIGSEGV, signal_handler);
     signal(SIGABRT, signal_handler);
+#ifndef _WIN32
     printf("\033[0m\033[2J\033[H");
     fflush(stdout);
+#endif
     sound_init();
 }
 
@@ -177,40 +192,43 @@ void display_spc(int n)
 
 int display_get_width(void)
 {
+#ifndef _WIN32
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
         return ws.ws_col;
+#endif
     return g_width;
 }
 
 /* INKEY$ — non-blocking */
 int display_inkey(void)
 {
+#ifndef _WIN32
     unsigned char c;
     ssize_t n = read(STDIN_FILENO, &c, 1);
     if (n == 1) return (int)c;
-    /* Throttle the polling loop to ~1000 checks/sec so a human keypress
-     * is not raced past by a tight INKEY$ flush loop running at CPU speed.
-     * Real IBM PC BASIC ran at ~4.77 MHz with much slower polling. */
     usleep(1000);
+#else
+    SDL_Delay(1);
+#endif
     return 0;
 }
 
 /* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
 int display_getline(char *buf, int bufsz)
 {
+#ifndef _WIN32
     leave_raw();
 
     struct termios cooked = g_orig_termios;
     cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);  /* TCSANOW: don't discard buffered input */
+    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
 
-    /* Use read() directly so we don't fight with stdio buffering */
     int len = 0;
     while (len < bufsz - 1) {
         char c;
         ssize_t n = read(STDIN_FILENO, &c, 1);
-        if (n < 0 && errno == EINTR) break; /* SIGINT during read */
+        if (n < 0 && errno == EINTR) break;
         if (n <= 0 || c == '\n') break;
         if (c == '\r') continue;
         buf[len++] = c;
@@ -219,11 +237,18 @@ int display_getline(char *buf, int bufsz)
 
     enter_raw();
     return len;
+#else
+    if (!fgets(buf, bufsz, stdin)) { buf[0] = '\0'; return 0; }
+    int len = (int)strlen(buf);
+    if (len > 0 && buf[len-1] == '\n') buf[--len] = '\0';
+    return len;
+#endif
 }
 
 /* Single blocking getchar — kept for compatibility */
 int display_getchar(void)
 {
+#ifndef _WIN32
     leave_raw();
 
     struct termios cooked = g_orig_termios;
@@ -236,4 +261,8 @@ int display_getchar(void)
 
     enter_raw();
     return (unsigned char)c;
+#else
+    int c = getchar();
+    return (c == EOF) ? 0 : (unsigned char)c;
+#endif
 }

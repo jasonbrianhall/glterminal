@@ -5,6 +5,18 @@
 #include "basic.h"
 #ifdef _WIN32
 #include <windows.h>
+#include <ctype.h>
+static char *strcasestr(const char *haystack, const char *needle) {
+    if (!*needle) return (char *)haystack;
+    for (; *haystack; haystack++) {
+        if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle)) {
+            const char *h = haystack, *n = needle;
+            while (*h && *n && tolower((unsigned char)*h) == tolower((unsigned char)*n)) { h++; n++; }
+            if (!*n) return (char *)haystack;
+        }
+    }
+    return NULL;
+}
 #endif
 
 #ifdef INLINEBASIC
@@ -24,11 +36,15 @@ static void sigint_handler(int sig) {
 }
 
 static void install_sigint(void) {
+#ifndef _WIN32
     struct sigaction sa;
     sa.sa_handler = sigint_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
+#else
+    signal(SIGINT, sigint_handler);
+#endif
 }
 
 /* ================================================================
@@ -201,7 +217,13 @@ return 0;
 
         } else if (strncasecmp(p,"MKDIR",5)==0 && !isalnum((unsigned char)p[5])) {
             p += 5; char name[256]; PARSE_FILENAME(name, p);
-            if (mkdir(name, 0755)!=0) perror(name); else printf("Created %s\n", name);
+            if (
+#ifdef _WIN32
+                mkdir(name)
+#else
+                mkdir(name, 0755)
+#endif
+                != 0) perror(name); else printf("Created %s\n", name);
 
         } else if (strncasecmp(p,"RMDIR",5)==0 && !isalnum((unsigned char)p[5])) {
             p += 5; char name[256]; PARSE_FILENAME(name, p);
