@@ -630,10 +630,12 @@ void wopr_render(int win_w, int win_h) {
         if ((ticks / 500) % 2 == 0) prompt += '_';
         gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
     } else if (basic_wants_input) {
-        std::string prompt = w->input_buf;
+        uint8_t pr = 0, pg = 170, pb = 0;
+        const char *pfx = wopr_basic_get_prompt(&pr, &pg, &pb);
+        std::string prompt = std::string(pfx) + w->input_buf;
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
-        gl_draw_text(prompt.c_str(), x0, y, 0.f, 170.f/255.f, 0.f, 1.f, SCALE);
+        gl_draw_text(prompt.c_str(), x0, y, pr/255.f, pg/255.f, pb/255.f, 1.f, SCALE);
     }
 
     gl_flush_verts();

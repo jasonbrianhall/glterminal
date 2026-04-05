@@ -154,6 +154,6 @@ void wopr_basic_update(WoprState *w, double dt);
 void wopr_basic_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym);
 bool wopr_basic_is_waiting_input(WoprState *w);
-bool wopr_basic_last_line_is_prompt(WoprState *w);
+const char *wopr_basic_get_prompt(uint8_t *r, uint8_t *g, uint8_t *b);
 void wopr_basic_text(WoprState *w, const char *text);
 void wopr_basic_free(WoprState *w);

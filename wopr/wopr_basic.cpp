@@ -52,6 +52,8 @@ struct basicState {
 static basicState *s_active = nullptr;
 static uint8_t     s_fg_r = 0, s_fg_g = 170, s_fg_b = 0;
 static std::string s_out_buf;
+static std::string s_prompt_buf;
+static uint8_t     s_prompt_r = 0, s_prompt_g = 170, s_prompt_b = 0;
 static const int   MAX_WOPR_LINES = 500;
 
 // ── INKEY$ ring buffer ────────────────────────────────────────────────────
@@ -97,12 +99,15 @@ extern "C" void wopr_basic_push_line(const char *text)
 extern "C" void wopr_basic_flush_partial(void)
 {
     if (!s_active || !s_active->wopr || s_out_buf.empty()) return;
-    commit_line();
+    s_prompt_buf = s_out_buf;
+    s_prompt_r = s_fg_r; s_prompt_g = s_fg_g; s_prompt_b = s_fg_b;
+    s_out_buf.clear();
 }
 extern "C" void wopr_basic_cls(void)
 {
     if (!s_active || !s_active->wopr) return;
     s_out_buf.clear();
+    s_prompt_buf.clear();
     SDL_LockMutex(s_active->line_mtx);
     s_active->wopr->lines.clear();
     SDL_UnlockMutex(s_active->line_mtx);
@@ -117,6 +122,11 @@ bool wopr_basic_is_waiting_input(WoprState *w)
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs || zs->dead) return false;
     return g_basic_waiting_input != 0;
+}
+const char *wopr_basic_get_prompt(uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    *r = s_prompt_r; *g = s_prompt_g; *b = s_prompt_b;
+    return s_prompt_buf.c_str();
 }
 
 // ── Game thread ───────────────────────────────────────────────────────────
@@ -148,6 +158,7 @@ void wopr_basic_enter(WoprState *w)
     g_basic_game_over = 0; basic_input_ready = 0; basic_input_buf[0] = '\0';
     g_basic_suppress_newline = 0;
     s_out_buf.clear();
+    s_prompt_buf.clear();
     s_fg_r = 0; s_fg_g = 170; s_fg_b = 0;
     basic_shim_init();
     sound_init();   /* audio init on main thread */
@@ -195,9 +206,11 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
     if (g_basic_waiting_input) {
         switch (sym) {
         case SDLK_RETURN: case SDLK_KP_ENTER: {
-            std::string line = zs->input_buf;
-            w->lines.push_back(make_colored_line(line, s_fg_r, s_fg_g, s_fg_b));
-            line += '\n'; basic_shim_set_input(line.c_str());
+            std::string typed = zs->input_buf;
+            std::string full = s_prompt_buf + typed;
+            w->lines.push_back(make_colored_line(full, s_prompt_r, s_prompt_g, s_prompt_b));
+            s_prompt_buf.clear();
+            typed += '\n'; basic_shim_set_input(typed.c_str());
             zs->input_buf.clear(); w->input_buf.clear(); return true;
         }
         case SDLK_BACKSPACE:
