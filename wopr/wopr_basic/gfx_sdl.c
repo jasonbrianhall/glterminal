@@ -373,15 +373,21 @@ static void draw_char_at(int row, int col, unsigned char ch, int fg, int bg)
 {
     int cw = g_w / g_modes[g_mode].cols;
     int rh = g_h / g_modes[g_mode].rows;
-    int px = col*cw, py = row*rh;
-    for (int y=0;y<rh;y++) {
-        uint8_t bits = g_font[ch][y<8?y:7];
-        for (int x=0;x<cw;x++) {
-            int bit = 7-(x*8/cw);
-            put_px(px+x, py+y, (bits>>bit)&1 ? fg : bg);
+
+    int px = col * cw;
+    int py = row * rh;
+
+    for (int y = 0; y < rh; y++) {
+        int src_y = (y * 8) / rh;          /* vertical scaling 0..rh → 0..7 */
+        uint8_t bits = g_font[ch][src_y];
+
+        for (int x = 0; x < cw; x++) {
+            int bit = 7 - (x * 8 / cw);    /* horizontal scaling */
+            put_px(px + x, py + y, (bits >> bit) & 1 ? fg : bg);
         }
     }
 }
+
 
 /* ================================================================
  * gfx.h implementation
