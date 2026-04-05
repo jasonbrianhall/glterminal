@@ -28,6 +28,7 @@ enum class WoprPhase {
     PLAYING_MAZE,
     PLAYING_WAR,
     PLAYING_ZORK,
+    PLAYING_BASIC,
     FAREWELL,         // "A STRANGE GAME..." on exit
 };
 
@@ -39,6 +40,8 @@ enum class WoprGame {
     TIC_TAC_TOE,
     MINESWEEPER,
     ZORK,
+    BASIC,
+    WIZARD,
     // Sentinel
     COUNT
 };
@@ -80,6 +83,9 @@ struct WoprState {
 };
 
 extern WoprState g_wopr;
+
+// Current terminal foreground color — set via COLOR command
+extern uint8_t g_term_r, g_term_g, g_term_b;
 
 // ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -145,3 +151,16 @@ void wopr_zork_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_zork_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_zork_text(WoprState *w, const char *text);
 void wopr_zork_free(WoprState *w);
+
+// BASIC
+void wopr_basic_enter(WoprState *w);
+void wopr_basic_update(WoprState *w, double dt);
+void wopr_basic_render(WoprState *w, int x, int y, int cw, int ch, int cols);
+bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym);
+bool wopr_basic_is_waiting_input(WoprState *w);
+const char *wopr_basic_get_prompt(uint8_t *r, uint8_t *g, uint8_t *b);
+void wopr_basic_text(WoprState *w, const char *text);
+void wopr_basic_free(WoprState *w);
+
+// Wizard's Castle (BASIC program, shares the BASIC sub-game machinery)
+void wopr_wizard_enter(WoprState *w);

@@ -19,9 +19,7 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
-#ifdef _WIN32
 #include <SDL2/SDL.h>
-#endif
 
 #ifndef _WIN32
 #include <termios.h>
@@ -55,11 +53,12 @@ static const int cga_to_ansi[16] = {
 static void enter_raw(void)
 {
     if (g_raw) return;
-    struct termios raw = g_orig_termios;
+    struct termios raw = g_orig_termios;  /* always base off the one-time snapshot */
     raw.c_lflag &= ~(ECHO | ICANON);
-    raw.c_cc[VMIN]  = 0;
+    raw.c_cc[VMIN]  = 0;   /* non-blocking */
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    /* make stdin non-blocking */
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
     g_raw = 1;
@@ -68,6 +67,7 @@ static void enter_raw(void)
 static void leave_raw(void)
 {
     if (!g_raw) return;
+    /* restore blocking */
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
     tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
@@ -98,6 +98,9 @@ static void signal_handler(int sig) {
 
 void display_init(void)
 {
+    /* basic_shim_init() is called by wopr_basic_enter() before the thread
+     * starts — do NOT call it here. */
+
 #ifndef _WIN32
     tcgetattr(STDIN_FILENO, &g_orig_termios);
 #endif
@@ -106,163 +109,100 @@ void display_init(void)
     signal(SIGTERM, signal_handler);
     signal(SIGSEGV, signal_handler);
     signal(SIGABRT, signal_handler);
-#ifndef _WIN32
-    printf("\033[0m\033[2J\033[H");
-    fflush(stdout);
-#endif
-    sound_init();
+    /* sound_init() is called by wopr_basic_enter() on the main thread */
 }
 
 void display_shutdown(void)
 {
-    sound_shutdown();
+    /* sound_shutdown() is called by wopr_basic_free() on the main thread */
 }
 
 void display_cls(void)
 {
-    printf("\033[2J\033[H");
-    fflush(stdout);
+    wopr_basic_cls();
 }
 
 void display_locate(int row, int col)
 {
-    if (row < 1) row = 1;
-    if (col < 1) col = 1;
-    printf("\033[%d;%dH", row, col);
-    fflush(stdout);
+    (void)row; (void)col;
+    wopr_basic_flush_partial();
 }
 
 void display_color(int fg, int bg)
 {
-    /* clamp */
-    if (fg < 0 || fg > 15) fg = 7;
-    if (bg < 0 || bg > 15) bg = 0;
-
-    int bold   = (fg >= 8) ? 1 : 0;
-    int fg_idx = cga_to_ansi[fg & 7];
-    int bg_idx = cga_to_ansi[bg & 7];
-
-    printf("\033[%d;%d;%dm", bold, 30 + fg_idx, 40 + bg_idx);
-    fflush(stdout);
+    (void)bg;
+    wopr_basic_color(fg);
 }
 
 void display_width(int cols)
 {
-    g_width = cols;
-    /* Ask terminal to switch column mode if supported */
-    if (cols == 40)
-        printf("\033[?3h");   /* DECCOLM 40-col — works on some terminals */
-    else
-        printf("\033[?3l");   /* DECCOLM 80-col */
-    fflush(stdout);
+    (void)cols;
 }
 
 void display_print(const char *s)
 {
-    fputs(s, stdout);
-    fflush(stdout);
+    if (strcmp(s, "Ok\n") == 0) return;
+    if (strncmp(s, "WOPR BASIC", 10) == 0) return;
+    if (strncmp(s, "Type NEW,", 9) == 0) return;
+    g_basic_suppress_newline = 0;
+    wopr_basic_push_line(s);
 }
 
 void display_putchar(int c)
 {
-    putchar(c);
-    fflush(stdout);
+    g_basic_suppress_newline = 0;
+    char tmp[2] = { (char)c, 0 };
+    wopr_basic_push_line(tmp);
 }
 
 void display_newline(void)
 {
-    putchar('\n');
-    fflush(stdout);
+    if (g_basic_suppress_newline) {
+        g_basic_suppress_newline = 0;
+        return;
+    }
+    wopr_basic_push_line("\n");
 }
 
 void display_cursor(int visible)
 {
-    if (visible)
-        printf("\033[?25h");
-    else
-        printf("\033[?25l");
-    fflush(stdout);
+    (void)visible;
 }
 
 void display_spc(int n)
 {
-    for (int i = 0; i < n; i++) putchar(' ');
-    fflush(stdout);
+    for (int i = 0; i < n; i++) wopr_basic_push_line(" ");
 }
 
 int display_get_width(void)
 {
-#ifndef _WIN32
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
-        return ws.ws_col;
-#endif
     return g_width;
 }
 
-/* INKEY$ — non-blocking */
 int display_inkey(void)
 {
-#ifndef _WIN32
-    unsigned char c;
-    ssize_t n = read(STDIN_FILENO, &c, 1);
-    if (n == 1) return (int)c;
-    usleep(1000);
-#else
+    int c = wopr_basic_get_key();
+    if (c >= 0) return c;
+#ifdef _WIN32
     SDL_Delay(1);
+#else
+    usleep(1000);
 #endif
     return 0;
 }
 
-/* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
 int display_getline(char *buf, int bufsz)
 {
-#ifndef _WIN32
-    leave_raw();
-
-    struct termios cooked = g_orig_termios;
-    cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
-
-    int len = 0;
-    while (len < bufsz - 1) {
-        char c;
-        ssize_t n = read(STDIN_FILENO, &c, 1);
-        if (n < 0 && errno == EINTR) break;
-        if (n <= 0 || c == '\n') break;
-        if (c == '\r') continue;
-        buf[len++] = c;
-    }
-    buf[len] = '\0';
-
-    enter_raw();
-    return len;
-#else
-    if (!fgets(buf, bufsz, stdin)) { buf[0] = '\0'; return 0; }
-    int len = (int)strlen(buf);
-    if (len > 0 && buf[len-1] == '\n') buf[--len] = '\0';
-    return len;
-#endif
+    basic_shim_fgets(buf, bufsz);
+    g_basic_suppress_newline = 1;
+    SDL_Log("Returning Buffer %s\n", buf);
+    return (int)strlen(buf);
 }
 
-/* Single blocking getchar — kept for compatibility */
 int display_getchar(void)
 {
-#ifndef _WIN32
-    leave_raw();
-
-    struct termios cooked = g_orig_termios;
-    cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
-
-    char c = 0;
-    ssize_t nr = read(STDIN_FILENO, &c, 1);
-    (void)nr;
-
-    enter_raw();
-    return (unsigned char)c;
-#else
-    int c = getchar();
-    return (c == EOF) ? 0 : (unsigned char)c;
-#endif
+    char buf[2] = {0};
+    basic_shim_fgets(buf, sizeof(buf));
+    return (unsigned char)buf[0];
 }
+
