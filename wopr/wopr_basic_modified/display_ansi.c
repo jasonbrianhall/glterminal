@@ -18,12 +18,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
+#include <SDL2/SDL.h>
+
+#ifndef _WIN32
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <signal.h>
-#include <SDL2/SDL.h>
+#endif
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
@@ -31,8 +34,10 @@
 /* ----------------------------------------------------------------
  * Internal state
  * ---------------------------------------------------------------- */
+#ifndef _WIN32
 static struct termios g_orig_termios;
 static int g_raw = 0;
+#endif
 static int g_width = 80;
 
 /* CGA index → ANSI colour number (for fg: 30+n, bg: 40+n) */
@@ -44,6 +49,7 @@ static const int cga_to_ansi[16] = {
 /* ----------------------------------------------------------------
  * Raw mode helpers
  * ---------------------------------------------------------------- */
+#ifndef _WIN32
 static void enter_raw(void)
 {
     if (g_raw) return;
@@ -67,6 +73,10 @@ static void leave_raw(void)
     tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
     g_raw = 0;
 }
+#else
+static void enter_raw(void) {}
+static void leave_raw(void) {}
+#endif
 
 /* ----------------------------------------------------------------
  * Public API
@@ -91,7 +101,9 @@ void display_init(void)
     /* basic_shim_init() is called by wopr_basic_enter() before the thread
      * starts — do NOT call it here. */
 
+#ifndef _WIN32
     tcgetattr(STDIN_FILENO, &g_orig_termios);
+#endif
     enter_raw();
     atexit(cleanup_terminal);
     signal(SIGTERM, signal_handler);
@@ -171,7 +183,11 @@ int display_inkey(void)
 {
     int c = wopr_basic_get_key();
     if (c >= 0) return c;
+#ifdef _WIN32
+    SDL_Delay(1);
+#else
     usleep(1000);
+#endif
     return 0;
 }
 
