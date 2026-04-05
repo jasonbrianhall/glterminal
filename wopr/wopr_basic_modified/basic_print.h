@@ -15,6 +15,9 @@ extern "C" {
 /* Provided by the Felix/WOPR overlay */
 void wopr_basic_push_line(const char *line);
 void wopr_basic_signal_done(void);
+void wopr_basic_flush_partial(void);
+void wopr_basic_cls(void);
+void wopr_basic_color(int fg);
 
 /* Input state */
 extern char     basic_input_buf[512];
@@ -23,10 +26,6 @@ extern int      g_basic_game_over;
 extern int      g_basic_waiting_input;
 extern int      g_basic_suppress_newline;
 extern SDL_sem *basic_input_sem;
-
-/* Flush any partial (non-newline-terminated) output line before blocking.
- * Call this just before SDL_SemWait so prompt text appears above the cursor. */
-void wopr_basic_flush_partial(void);
 
 /* Longjmp target set in basic_thread_fn before calling basic_main() */
 extern jmp_buf  basic_exit_jmp;

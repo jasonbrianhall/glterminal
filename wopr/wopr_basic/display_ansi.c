@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <signal.h>
+#include <SDL2/SDL.h>
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
@@ -87,6 +88,8 @@ static void signal_handler(int sig) {
 
 void display_init(void)
 {
+    basic_shim_init();   /* Felix BASIC shim init */
+
     tcgetattr(STDIN_FILENO, &g_orig_termios);
     enter_raw();
     atexit(cleanup_terminal);
@@ -105,36 +108,28 @@ void display_shutdown(void)
 
 void display_cls(void)
 {
-    printf("\033[2J\033[H");
-    fflush(stdout);
+    wopr_basic_cls();
 }
 
 void display_locate(int row, int col)
 {
-    if (row < 1) row = 1;
-    if (col < 1) col = 1;
-    printf("\033[%d;%dH", row, col);
-    fflush(stdout);
+    (void)row; (void)col;
+    wopr_basic_flush_partial();
 }
 
 void display_color(int fg, int bg)
 {
-    /* clamp */
-    if (fg < 0 || fg > 15) fg = 7;
-    if (bg < 0 || bg > 15) bg = 0;
-
-    int bold   = (fg >= 8) ? 1 : 0;
-    int fg_idx = cga_to_ansi[fg & 7];
-    int bg_idx = cga_to_ansi[bg & 7];
-
-    printf("\033[%d;%d;%dm", bold, 30 + fg_idx, 40 + bg_idx);
-    fflush(stdout);
+    (void)bg;
+    wopr_basic_color(fg);
 }
 
 void display_width(int cols)
 {
-    g_width = cols;
+    return;
     /* Ask terminal to switch column mode if supported */
+
+    g_width = cols;
+
     if (cols == 40)
         printf("\033[?3h");   /* DECCOLM 40-col — works on some terminals */
     else
@@ -144,35 +139,37 @@ void display_width(int cols)
 
 void display_print(const char *s)
 {
-    fputs(s, stdout);
-    fflush(stdout);
+    if (strcmp(s, "Ok\n") == 0) return;
+    if (strncmp(s, "WOPR BASIC", 10) == 0) return;
+    if (strncmp(s, "Type NEW,", 9) == 0) return;
+    g_basic_suppress_newline = 0;
+    wopr_basic_push_line(s);
 }
 
 void display_putchar(int c)
 {
-    putchar(c);
-    fflush(stdout);
+    g_basic_suppress_newline = 0;
+    char tmp[2] = { (char)c, 0 };
+    wopr_basic_push_line(tmp);
 }
 
 void display_newline(void)
 {
-    putchar('\n');
-    fflush(stdout);
+    if (g_basic_suppress_newline) {
+        g_basic_suppress_newline = 0;
+        return;
+    }
+    wopr_basic_push_line("\n");
 }
 
 void display_cursor(int visible)
 {
-    if (visible)
-        printf("\033[?25h");
-    else
-        printf("\033[?25l");
-    fflush(stdout);
+    return;
 }
 
 void display_spc(int n)
 {
-    for (int i = 0; i < n; i++) putchar(' ');
-    fflush(stdout);
+    for (int i = 0; i < n; i++) wopr_basic_push_line(" ");
 }
 
 int display_get_width(void)
@@ -183,15 +180,12 @@ int display_get_width(void)
     return g_width;
 }
 
-/* INKEY$ — non-blocking */
+/* INKEY$ — non-blocking: returns 0 if no key, else the char */
 int display_inkey(void)
 {
-    unsigned char c;
-    ssize_t n = read(STDIN_FILENO, &c, 1);
-    if (n == 1) return (int)c;
-    /* Throttle the polling loop to ~1000 checks/sec so a human keypress
-     * is not raced past by a tight INKEY$ flush loop running at CPU speed.
-     * Real IBM PC BASIC ran at ~4.77 MHz with much slower polling. */
+    int c = wopr_basic_get_key();
+    if (c >= 0) return c;
+    /* Throttle polling to ~1000 checks/sec */
     usleep(1000);
     return 0;
 }
@@ -199,41 +193,22 @@ int display_inkey(void)
 /* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
 int display_getline(char *buf, int bufsz)
 {
-    leave_raw();
-
-    struct termios cooked = g_orig_termios;
-    cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);  /* TCSANOW: don't discard buffered input */
-
-    /* Use read() directly so we don't fight with stdio buffering */
-    int len = 0;
-    while (len < bufsz - 1) {
-        char c;
-        ssize_t n = read(STDIN_FILENO, &c, 1);
-        if (n < 0 && errno == EINTR) break; /* SIGINT during read */
-        if (n <= 0 || c == '\n') break;
-        if (c == '\r') continue;
-        buf[len++] = c;
-    }
-    buf[len] = '\0';
-
-    enter_raw();
-    return len;
+    basic_shim_fgets(buf, bufsz);
+    g_basic_suppress_newline = 1;
+    SDL_Log("Returning Buffer %s\n", buf);
+    return (int)strlen(buf);
 }
 
 /* Single blocking getchar — kept for compatibility */
 int display_getchar(void)
 {
-    leave_raw();
+    char buf[2] = {0};
 
-    struct termios cooked = g_orig_termios;
-    cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
+    // Block until a line arrives
+    basic_shim_fgets(buf, sizeof(buf));
+    SDL_Log("Returning Buffer 2 %s\n", buf);
 
-    char c = 0;
-    ssize_t nr = read(STDIN_FILENO, &c, 1);
-    (void)nr;
-
-    enter_raw();
-    return (unsigned char)c;
+    // Return the first character of that line
+    return (unsigned char)buf[0];
 }
+
