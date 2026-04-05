@@ -166,7 +166,7 @@ static int is_label_def(const char *p, char *name_out) {
  * ================================================================ */
 void load(const char *filename) {
     FILE *f = fopen(filename, "r");
-    if (!f) { perror(filename); exit(1); }
+    if (!f) { perror(filename); return; }
 
     label_clear();
 
