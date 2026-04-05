@@ -281,7 +281,7 @@ static int cmd_do(Interp *ip, const char *args) {
         }
     }
 
-    if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); exit(1); }
+    if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strcpy(f->varname, "\x02" "DO");
     f->line_idx = ip->pc;
@@ -295,7 +295,7 @@ static int cmd_loop(Interp *ip, const char *args) {
     /* find the matching DO frame */
     int fi = g_ctrl_top - 1;
     while (fi >= 0 && strcmp(g_ctrl[fi].varname, "\x02" "DO") != 0) fi--;
-    if (fi < 0) { fprintf(stderr, "LOOP without DO\n"); exit(1); }
+    if (fi < 0) { fprintf(stderr, "LOOP without DO\n"); return -1; }
 
     const char *p = sk(args);
     int keep_looping = 1;   /* default: infinite loop, need explicit WHILE/UNTIL to stop */
@@ -341,7 +341,7 @@ static int cmd_while(Interp *ip, const char *args) {
                        strcmp(g_ctrl[g_ctrl_top - 1].varname, "\x03" "WHILE") == 0 &&
                        g_ctrl[g_ctrl_top - 1].line_idx == ip->pc);
         if (!already) {
-            if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); exit(1); }
+            if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); return -1; }
             CtrlFrame *f = &g_ctrl[g_ctrl_top++];
             strcpy(f->varname, "\x03" "WHILE");
             f->line_idx = ip->pc;
@@ -376,7 +376,7 @@ static int cmd_wend(Interp *ip, const char *args) {
     (void)args;
     int fi = g_ctrl_top - 1;
     while (fi >= 0 && strcmp(g_ctrl[fi].varname, "\x03" "WHILE") != 0) fi--;
-    if (fi < 0) { fprintf(stderr, "WEND without WHILE\n"); exit(1); }
+    if (fi < 0) { fprintf(stderr, "WEND without WHILE\n"); return -1; }
     ip->pc = g_ctrl[fi].line_idx;   /* jump to WHILE line — it re-evaluates & pops if done */
     return 1;
 }
@@ -1086,7 +1086,7 @@ static int cmd_for(Interp *ip, const char *args) {
     p = sk(eval_expr(p, limit));
     if (strncasecmp(p, "STEP", 4) == 0) { p = sk(p + 4); eval_expr(p, step); }
     Var *v = var_get(vname); mpf_set(v->num, start);
-    if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); exit(1); }
+    if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strncpy(f->varname, vname, MAX_VARNAME - 1);
     mpf_init2(f->limit, g_prec); mpf_set(f->limit, limit);
@@ -1104,7 +1104,7 @@ static int cmd_next(Interp *ip, const char *args) {
     if (*vname) {
         for (fi = g_ctrl_top - 1; fi >= 0; fi--)
             if (strcasecmp(g_ctrl[fi].varname, vname) == 0) break;
-        if (fi < 0) { fprintf(stderr, "NEXT without FOR: %s\n", vname); exit(1); }
+        if (fi < 0) { fprintf(stderr, "NEXT without FOR: %s\n", vname); return -1 ; }
     }
     CtrlFrame *f = &g_ctrl[fi];
     Var *cv = var_get(f->varname);
@@ -1129,12 +1129,12 @@ int cmd_goto(Interp *ip, const char *args) {
         lname[i] = '\0';
         idx = find_line_by_label(lname);
     }
-    if (idx < 0) { fprintf(stderr, "GOTO: target not found: %s\n", sk(args)); exit(1); }
+    if (idx < 0) { fprintf(stderr, "GOTO: target not found: %s\n", sk(args)); return -1; }
     ip->pc = idx; return 1;
 }
 
 int cmd_gosub(Interp *ip, const char *args) {
-    if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); exit(1); }
+    if (g_ctrl_top >= CTRL_STACK_MAX) { fprintf(stderr, "Stack overflow\n"); return-1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strcpy(f->varname, "\x01" "GOSUB");
     f->line_idx = ip->pc + 1;
@@ -1152,7 +1152,7 @@ static int cmd_return(Interp *ip, const char *args) {
             g_ctrl_top = fi; return 1;
         }
     }
-    fprintf(stderr, "RETURN without GOSUB\n"); exit(1);
+    fprintf(stderr, "RETURN without GOSUB\n"); return -1;
 }
 
 /* ================================================================
@@ -1327,7 +1327,7 @@ static int cmd_read(Interp *ip, const char *args) {
             if (*p==',') { p=sk(p+1); mpf_t i2; mpf_init2(i2,g_prec); p=sk(eval_expr(p,i2)); arr_j=(int)mpf_get_si(i2); mpf_clear(i2); }
             if (*p==')') p = sk(p + 1);
         }
-        if (g_data_pos >= g_data_count) { fprintf(stderr, "READ: out of data\n"); exit(1); }
+        if (g_data_pos >= g_data_count) { fprintf(stderr, "READ: out of data\n"); return -1; }
         const char *item = g_data[g_data_pos++];
         Var *v = var_get(name);
         if (var_is_str_name(name)) {
