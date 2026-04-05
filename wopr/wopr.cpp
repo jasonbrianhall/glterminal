@@ -591,7 +591,7 @@ void wopr_render(int win_w, int win_h) {
     float y = y0;
     for (int li = start_line; li < total; li++) {
         const char *line = w->lines[li].c_str();
-        float lr = 0.f, lg = 1.f, lb = 0.27f;   // default green
+        float lr = 0.f, lg = 1.f, lb = 0.27f;
         if (line[0] == '\x01') {
             lr = (uint8_t)line[1] / 255.f;
             lg = (uint8_t)line[2] / 255.f;
@@ -630,10 +630,10 @@ void wopr_render(int win_w, int win_h) {
         if ((ticks / 500) % 2 == 0) prompt += '_';
         gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
     } else if (basic_wants_input) {
-        std::string prompt = "> " + w->input_buf;
+        std::string prompt = w->input_buf;
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
-        gl_draw_text(prompt.c_str(), x0, y, 0.f, 1.f, 0.6f, 1.f, SCALE);
+        gl_draw_text(prompt.c_str(), x0, y, 0.f, 170.f/255.f, 0.f, 1.f, SCALE);
     }
 
     gl_flush_verts();

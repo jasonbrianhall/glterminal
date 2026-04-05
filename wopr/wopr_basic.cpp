@@ -196,7 +196,7 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
         switch (sym) {
         case SDLK_RETURN: case SDLK_KP_ENTER: {
             std::string line = zs->input_buf;
-            w->lines.push_back(make_colored_line("> " + line, s_fg_r, s_fg_g, s_fg_b));
+            w->lines.push_back(make_colored_line(line, s_fg_r, s_fg_g, s_fg_b));
             line += '\n'; basic_shim_set_input(line.c_str());
             zs->input_buf.clear(); w->input_buf.clear(); return true;
         }
@@ -232,7 +232,7 @@ void wopr_basic_free(WoprState *w)
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs) return;
     if (!zs->dead) { g_basic_game_over = 1; basic_shim_set_input("QUIT\n"); }
-    sound_shutdown(); /* clears queue and tears down on main thread */
+    sound_shutdown();
     if (zs->thread) { SDL_WaitThread(zs->thread, nullptr); zs->thread = nullptr; }
     if (s_active == zs) s_active = nullptr;
     SDL_DestroyMutex(zs->line_mtx); SDL_DestroySemaphore(zs->done_sem);
