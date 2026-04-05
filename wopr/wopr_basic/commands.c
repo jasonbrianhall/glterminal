@@ -35,7 +35,15 @@ static int cmd_defseg(Interp *ip, const char *args) { (void)ip;(void)args; retur
 static int cmd_defdbl(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
 static int cmd_key(Interp *ip, const char *args)    { (void)ip;(void)args; return 0; }
 static int cmd_chain(Interp *ip, const char *args)  { (void)ip;(void)args; return 0; }
-static int cmd_screen(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
+static int cmd_screen(Interp *ip, const char *args) {
+    (void)ip;
+    mpf_t n; mpf_init2(n, g_prec);
+    eval_expr(sk(args), n);
+    int mode = (int)mpf_get_si(n);
+    mpf_clear(n);
+    display_set_screen(mode);
+    return 0;
+}
 static int cmd_beep(Interp *ip, const char *args) {
     (void)ip; (void)args;
     sound_beep();
@@ -591,10 +599,25 @@ static int cmd_view_print(Interp *ip, const char *args) {
 }
 
 /* ================================================================
- * PALETTE — stub (needed when running without graphics)
+ * PALETTE [index, colour_number]
  * ================================================================ */
 static int cmd_palette(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
+    (void)ip;
+    const char *p = sk(args);
+    if (!*p || *p == ':') return 0;
+    mpf_t idx, col;
+    mpf_init2(idx, g_prec); mpf_init2(col, g_prec);
+    p = sk(eval_expr(p, idx)); if (*p == ',') p = sk(p + 1);
+    eval_expr(p, col);
+    int i  = (int)mpf_get_si(idx);
+    int cn = (int)mpf_get_si(col);
+    mpf_clears(idx, col, NULL);
+    /* Encode: QuickBASIC uses a packed 18-bit RGB (6 bits per channel) */
+    int r = ((cn >>  0) & 63) * 4;
+    int g2= ((cn >>  8) & 63) * 4;
+    int b = ((cn >> 16) & 63) * 4;
+    display_palette(i, r, g2, b);
+    return 0;
 }
 
 /* ================================================================
@@ -1404,6 +1427,188 @@ static int cmd_on(Interp *ip, const char *args) {
 static int cmd_defint(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
 
 /* ================================================================
+ * Graphics commands — PSET, LINE, CIRCLE, PAINT, DRAW, PRESET, POINT
+ * All are no-ops when display_sdl is not compiled (ANSI mode stubs).
+ * ================================================================ */
+
+/* Helper: parse an optional (x,y) or STEP(x,y) coordinate pair.
+   Returns the colour argument position.  Sets *stepped if STEP seen. */
+static const char *parse_coord(const char *p, int *x, int *y, int *stepped)
+{
+    *stepped = 0;
+    p = sk(p);
+    if (kw_match(p, "STEP")) { *stepped = 1; p = sk(p + 4); }
+    if (*p == '(') p = sk(p + 1);
+    mpf_t a, b; mpf_init2(a, g_prec); mpf_init2(b, g_prec);
+    p = sk(eval_expr(p, a)); *x = (int)mpf_get_si(a);
+    if (*p == ',') { p = sk(p + 1); eval_expr(p, b); }
+    *y = (int)mpf_get_si(b);
+    while (*p && *p != ')') p++;
+    if (*p == ')') p++;
+    mpf_clears(a, b, NULL);
+    return p;
+}
+
+/* PSET (x,y) [,colour]
+   PRESET (x,y) [,colour]  (PRESET defaults to background colour) */
+static int cmd_pset(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    int is_preset = 0;
+    if (kw_match(p, "PRESET")) { is_preset = 1; p = sk(p + 6); }
+    int x, y, stepped;
+    p = parse_coord(p, &x, &y, &stepped);
+    if (stepped) { int px, py; display_get_pen(&px, &py); x += px; y += py; }
+    int colour = is_preset ? 0 : -1;
+    p = sk(p);
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t c; mpf_init2(c, g_prec);
+        eval_expr(p, c); colour = (int)mpf_get_si(c); mpf_clear(c);
+    }
+    display_pset(x, y, colour);
+    return 0;
+}
+
+/* LINE [(x1,y1)]-(x2,y2) [,colour [,B|BF [,style]]] */
+static int cmd_line(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    int x1, y1, x2, y2, stepped;
+
+    /* Optional start point */
+    if (*p == '(' || kw_match(p, "STEP")) {
+        p = parse_coord(p, &x1, &y1, &stepped);
+        if (stepped) { int px, py; display_get_pen(&px, &py); x1 += px; y1 += py; }
+    } else {
+        display_get_pen(&x1, &y1);  /* omitted: use current pen */
+    }
+
+    p = sk(p);
+    if (*p == '-') p = sk(p + 1);
+
+    p = parse_coord(p, &x2, &y2, &stepped);
+    if (stepped) { x2 += x1; y2 += y1; }
+
+    int colour = -1;
+    int style  = 0;  /* 0=line, 1=B, 2=BF */
+
+    p = sk(p);
+    if (*p == ',') {
+        p = sk(p + 1);
+        if (*p != ',') {
+            mpf_t c; mpf_init2(c, g_prec);
+            p = sk(eval_expr(p, c)); colour = (int)mpf_get_si(c); mpf_clear(c);
+        }
+        p = sk(p);
+        if (*p == ',') {
+            p = sk(p + 1);
+            if (toupper((unsigned char)*p) == 'B') {
+                p++;
+                if (toupper((unsigned char)*p) == 'F') { style = 2; p++; }
+                else style = 1;
+            }
+        }
+    }
+    display_line(x1, y1, x2, y2, colour, style);
+    return 0;
+}
+
+/* CIRCLE (cx,cy), r [,colour [,start [,end [,aspect]]]] */
+static int cmd_circle(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    int cx, cy, stepped;
+    p = parse_coord(p, &cx, &cy, &stepped);
+    if (stepped) { int px, py; display_get_pen(&px, &py); cx += px; cy += py; }
+
+    p = sk(p); if (*p == ',') p = sk(p + 1);
+
+    mpf_t rv; mpf_init2(rv, g_prec);
+    p = sk(eval_expr(p, rv)); int r = (int)mpf_get_si(rv); mpf_clear(rv);
+
+    int colour = -1; double start = -1, end = -1, aspect = -1;
+    p = sk(p);
+    if (*p == ',') { p = sk(p+1);
+        if (*p != ',') {
+            mpf_t c; mpf_init2(c,g_prec); p=sk(eval_expr(p,c));
+            colour=(int)mpf_get_si(c); mpf_clear(c);
+        }
+        p=sk(p); if (*p==',') { p=sk(p+1);
+            if (*p!=',') {
+                mpf_t a; mpf_init2(a,g_prec); p=sk(eval_expr(p,a));
+                start=mpf_get_d(a); mpf_clear(a);
+                if (start < 0) start = -start; /* GW-BASIC: negative = draw radius */
+            }
+            p=sk(p); if (*p==',') { p=sk(p+1);
+                if (*p!=',') {
+                    mpf_t a; mpf_init2(a,g_prec); p=sk(eval_expr(p,a));
+                    end=mpf_get_d(a); mpf_clear(a);
+                    if (end < 0) end = -end;
+                }
+                p=sk(p); if (*p==',') { p=sk(p+1);
+                    mpf_t a; mpf_init2(a,g_prec); eval_expr(p,a);
+                    aspect=mpf_get_d(a); mpf_clear(a);
+                }
+            }
+        }
+    }
+    display_circle(cx, cy, r, colour, aspect, start, end, 0);
+    return 0;
+}
+
+/* PAINT (x,y) [,paint_colour [,border_colour]] */
+static int cmd_paint(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    int x, y, stepped;
+    p = parse_coord(p, &x, &y, &stepped);
+    if (stepped) { int px, py; display_get_pen(&px, &py); x += px; y += py; }
+    int paint_c = -1, border_c = -1;
+    p = sk(p);
+    if (*p == ',') { p=sk(p+1);
+        if (*p != ',') {
+            mpf_t c; mpf_init2(c,g_prec); p=sk(eval_expr(p,c));
+            paint_c=(int)mpf_get_si(c); mpf_clear(c);
+        }
+        p=sk(p); if (*p==',') { p=sk(p+1);
+            mpf_t c; mpf_init2(c,g_prec); eval_expr(p,c);
+            border_c=(int)mpf_get_si(c); mpf_clear(c);
+        }
+    }
+    if (paint_c  < 0) paint_c  = 1;
+    if (border_c < 0) border_c = paint_c;
+    display_paint(x, y, paint_c, border_c);
+    return 0;
+}
+
+/* DRAW "string" */
+static int cmd_draw(Interp *ip, const char *args) {
+    (void)ip;
+    char s[2048];
+    eval_str_expr(sk(args), s, sizeof s);
+    display_draw(s);
+    return 0;
+}
+
+/* PRESET (x,y) [,colour] */
+static int cmd_preset(Interp *ip, const char *args) {
+    /* Delegate to cmd_pset with "PRESET" prefix baked in */
+    char buf[512];
+    snprintf(buf, sizeof buf, "PRESET %s", sk(args));
+    return cmd_pset(ip, buf);
+}
+
+/* VIEW [SCREEN] [(x1,y1)-(x2,y2) [,fill [,border]]] */
+/* For now we implement VIEW (without PRINT) as a stub — real viewport
+   clipping would require passing clip rect into every draw call. */
+static int cmd_view(Interp *ip, const char *args) {
+    (void)ip; (void)args;
+    /* TODO: set graphics viewport */
+    return 0;
+}
+
+/* ================================================================
  * Command registration table
  * ================================================================ */
 const Command commands[] = {
@@ -1434,9 +1639,15 @@ const Command commands[] = {
     { "SCREEN",     cmd_screen     },
     { "KEY",        cmd_key        },
     { "PALETTE",    cmd_palette    },
+    { "PSET",       cmd_pset       },
+    { "PRESET",     cmd_preset     },
+    { "LINE",       cmd_line       },
+    { "CIRCLE",     cmd_circle     },
+    { "PAINT",      cmd_paint      },
+    { "DRAW",       cmd_draw       },
     { "POKE",       cmd_poke       },
     { "VIEW PRINT", cmd_view_print },
-    { "VIEW",       cmd_rem        },
+    { "VIEW",       cmd_view       },
     { "REDIM",      cmd_redim      },
     { "DIM",        cmd_dim        },
     { "STATIC",     cmd_static     },

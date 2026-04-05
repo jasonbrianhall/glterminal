@@ -793,6 +793,34 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
+    /* POINT(x,y) — return colour of pixel */
+    if (kw_match(ps->p, "POINT")) {
+        ps->p += 5; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        mpf_t ax, ay; mpf_init2(ax, g_prec); mpf_init2(ay, g_prec);
+        parse_expr_p(ps, ax);
+        skip_ws_p(ps); if (*ps->p == ',') { ps->p++; parse_expr_p(ps, ay); }
+        int pv = display_point((int)mpf_get_si(ax), (int)mpf_get_si(ay));
+        mpf_clears(ax, ay, NULL);
+        mpf_set_si(result, pv);
+        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        return;
+    }
+
+    /* POS(x) — current text cursor column (1-based) */
+    if (kw_match(ps->p, "POS")) {
+        ps->p += 3; skip_ws_p(ps);
+        if (*ps->p == '(') { ps->p++; skip_ws_p(ps); if (*ps->p==')') ps->p++; }
+        mpf_set_si(result, 1);  /* stub: always column 1 in ANSI mode */
+        return;
+    }
+
+    /* CSRLIN — current text cursor row (1-based) */
+    if (kw_match(ps->p, "CSRLIN")) {
+        ps->p += 6;
+        mpf_set_si(result, 1);  /* stub */
+        return;
+    }
+
     /* INT(x) */
     if (kw_match(ps->p, "INT")) {
         ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;

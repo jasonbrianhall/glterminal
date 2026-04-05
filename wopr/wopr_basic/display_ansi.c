@@ -13,6 +13,7 @@
 
 #include "display.h"
 #include "sound.h"
+#include "gfx.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,12 +121,14 @@ void display_shutdown(void)
 
 void display_cls(void)
 {
+    if (gfx_is_open()) { gfx_cls(0); return; }
     printf("\033[2J\033[H");
     fflush(stdout);
 }
 
 void display_locate(int row, int col)
 {
+    if (gfx_is_open()) { gfx_locate(row, col); return; }
     if (row < 1) row = 1;
     if (col < 1) col = 1;
     printf("\033[%d;%dH", row, col);
@@ -134,14 +137,12 @@ void display_locate(int row, int col)
 
 void display_color(int fg, int bg)
 {
-    /* clamp */
     if (fg < 0 || fg > 15) fg = 7;
     if (bg < 0 || bg > 15) bg = 0;
-
+    if (gfx_is_open()) { gfx_color(fg, bg); return; }
     int bold   = (fg >= 8) ? 1 : 0;
     int fg_idx = cga_to_ansi[fg & 7];
     int bg_idx = cga_to_ansi[bg & 7];
-
     printf("\033[%d;%d;%dm", bold, 30 + fg_idx, 40 + bg_idx);
     fflush(stdout);
 }
@@ -149,34 +150,43 @@ void display_color(int fg, int bg)
 void display_width(int cols)
 {
     g_width = cols;
-    /* Ask terminal to switch column mode if supported */
+    if (gfx_is_open()) return;  /* gfx modes have fixed resolution */
     if (cols == 40)
-        printf("\033[?3h");   /* DECCOLM 40-col — works on some terminals */
+        printf("\033[?3h");
     else
-        printf("\033[?3l");   /* DECCOLM 80-col */
+        printf("\033[?3l");
     fflush(stdout);
 }
 
 void display_print(const char *s)
 {
+    if (gfx_is_open()) {
+        for (const char *p = s; *p; p++)
+            gfx_print_char((unsigned char)*p, -1, -1);
+        gfx_flush();
+        return;
+    }
     fputs(s, stdout);
     fflush(stdout);
 }
 
 void display_putchar(int c)
 {
+    if (gfx_is_open()) { gfx_print_char((unsigned char)c, -1, -1); gfx_flush(); return; }
     putchar(c);
     fflush(stdout);
 }
 
 void display_newline(void)
 {
+    if (gfx_is_open()) { gfx_print_char('\n', -1, -1); gfx_flush(); return; }
     putchar('\n');
     fflush(stdout);
 }
 
 void display_cursor(int visible)
 {
+    if (gfx_is_open()) { gfx_cursor(visible); return; }
     if (visible)
         printf("\033[?25h");
     else
@@ -186,12 +196,18 @@ void display_cursor(int visible)
 
 void display_spc(int n)
 {
+    if (gfx_is_open()) {
+        for (int i = 0; i < n; i++) gfx_print_char(' ', -1, -1);
+        gfx_flush();
+        return;
+    }
     for (int i = 0; i < n; i++) putchar(' ');
     fflush(stdout);
 }
 
 int display_get_width(void)
 {
+    if (gfx_is_open()) return gfx_get_cols();
 #ifndef _WIN32
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
@@ -200,23 +216,11 @@ int display_get_width(void)
     return g_width;
 }
 
-/* INKEY$ — non-blocking */
-int display_inkey(void)
-{
-#ifndef _WIN32
-    unsigned char c;
-    ssize_t n = read(STDIN_FILENO, &c, 1);
-    if (n == 1) return (int)c;
-    usleep(1000);
-#else
-    SDL_Delay(1);
-#endif
-    return 0;
-}
 
-/* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
+/* Blocking line read */
 int display_getline(char *buf, int bufsz)
 {
+    if (gfx_is_open()) return gfx_getline(buf, bufsz);
 #ifndef _WIN32
     leave_raw();
 
@@ -245,9 +249,10 @@ int display_getline(char *buf, int bufsz)
 #endif
 }
 
-/* Single blocking getchar — kept for compatibility */
+/* Single blocking getchar */
 int display_getchar(void)
 {
+    if (gfx_is_open()) return gfx_getchar();
 #ifndef _WIN32
     leave_raw();
 
@@ -266,3 +271,56 @@ int display_getchar(void)
     return (c == EOF) ? 0 : (unsigned char)c;
 #endif
 }
+
+/* ================================================================
+ * Graphics dispatch — delegate to gfx_sdl when a screen is open,
+ * stub out silently otherwise.  display_ansi.c stays text-only.
+ * ================================================================ */
+
+void display_set_screen(int mode)
+{
+    if (mode == 0) {
+        if (gfx_is_open()) gfx_close();
+        /* Return terminal to normal */
+#ifndef _WIN32
+        printf("\033[0m\033[2J\033[H");
+        fflush(stdout);
+#endif
+    } else {
+        gfx_open(mode);
+    }
+}
+
+int display_get_screen(void) { return gfx_is_open() ? gfx_get_mode() : 0; }
+
+/* For INKEY$: when a gfx window is open, poll it; else poll the terminal */
+int display_inkey(void)
+{
+    if (gfx_is_open()) return gfx_inkey();
+    /* original ANSI non-blocking read */
+#ifndef _WIN32
+    unsigned char c;
+    ssize_t n = read(STDIN_FILENO, &c, 1);
+    if (n == 1) return (int)c;
+    usleep(1000);
+#else
+    SDL_Delay(1);
+#endif
+    return 0;
+}
+
+/* Graphics primitives: forward to gfx layer */
+void display_pset(int x, int y, int c)                          { gfx_pset(x,y,c); }
+int  display_point(int x, int y)                                { return gfx_point(x,y); }
+void display_line(int x1,int y1,int x2,int y2,int c,int s)     { gfx_line(x1,y1,x2,y2,c,s); }
+void display_circle(int cx,int cy,int r,int c,
+                    double asp,double sa,double ea,int fill)
+{
+    gfx_circle(cx,cy,r,c,asp,sa,ea);
+    if (fill) gfx_paint(cx,cy,c<0?1:c,c<0?1:c);
+}
+void display_paint(int x,int y,int pc,int bc)                   { gfx_paint(x,y,pc,bc); }
+void display_draw(const char *s)                                 { gfx_draw(s); }
+void display_palette(int i,int r,int g,int b)                   { gfx_palette(i,r,g,b); }
+void display_get_pen(int *x,int *y)                             { gfx_get_pen(x,y); }
+void display_set_pen(int x,int y,int c)                         { gfx_set_pen(x,y,c); }
