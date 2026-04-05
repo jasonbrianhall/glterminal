@@ -40,7 +40,7 @@ void const_set(const char *name, const char *value, int is_str) {
             return;
         }
     }
-    if (g_nconsts >= MAX_CONSTS) { fprintf(stderr, "Too many CONSTs\n"); return; }
+    if (g_nconsts >= MAX_CONSTS) { basic_stderr("Too many CONSTs\n"); return; }
     strncpy(g_consts[g_nconsts].name,  name,  MAX_VARNAME  - 1);
     strncpy(g_consts[g_nconsts].value, value, MAX_LINE_LEN - 1);
     g_consts[g_nconsts].is_str = is_str;
@@ -58,7 +58,7 @@ static ConstEntry *const_find(const char *name) {
  * ================================================================ */
 char *str_dup(const char *s) {
     char *d = malloc(strlen(s) + 1);
-    if (!d) { fprintf(stderr, "OOM\n"); exit(1); }
+    if (!d) { basic_stderr("OOM\n"); exit(1); }
     strcpy(d, s);
     return d;
 }
@@ -630,7 +630,7 @@ static void parse_term_p(Parser *ps, mpf_t result) {
                             parse_unary_p(ps, tmp);
                             if (op == '*') mpf_mul(result, result, tmp);
                             else {
-                                if (mpf_sgn(tmp) == 0) { fprintf(stderr, "Division by zero\n"); exit(1); }
+                                if (mpf_sgn(tmp) == 0) { basic_stderr("Division by zero\n"); exit(1); }
                                 mpf_div(result, result, tmp);
                             }
                             skip_ws_p(ps); continue; }
@@ -638,7 +638,7 @@ static void parse_term_p(Parser *ps, mpf_t result) {
         parse_unary_p(ps, tmp);
         long lv = (long)mpf_get_d(result);
         long rv = (long)mpf_get_d(tmp);
-        if (rv == 0) { fprintf(stderr, "Division by zero\n"); exit(1); }
+        if (rv == 0) { basic_stderr("Division by zero\n"); exit(1); }
         mpf_set_si(result, is_mod ? (lv % rv) : (lv / rv));
         skip_ws_p(ps);
     }
@@ -1089,7 +1089,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
-    fprintf(stderr, "Parse error near: \"%.20s\"\n", ps->p);
+    basic_stderr("Parse error near: \"%.20s\"\n", ps->p);
     exit(1);
 }
 

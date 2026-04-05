@@ -83,7 +83,7 @@ char tmpfile_path[512];
 
     FILE *dbfile = fopen(tmpfile_path, "wb");
     if (!dbfile) {
-        fprintf(stderr, "Could not open temp file\n");
+        basic_stderr("Could not open temp file\n");
         return 1;
     }
 

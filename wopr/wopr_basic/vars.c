@@ -20,7 +20,7 @@ FileHandle g_files[MAX_FILE_HANDLES + 1];  /* 1-based */
  * ================================================================ */
 FileHandle *fh_get(int n) {
     if (n < 1 || n > MAX_FILE_HANDLES) {
-        fprintf(stderr, "Bad file number: %d\n", n); exit(1);
+        basic_stderr("Bad file number: %d\n", n); exit(1);
     }
     return &g_files[n];
 }
@@ -39,7 +39,7 @@ Var *var_find(const char *name) {
 }
 
 Var *var_create(const char *name) {
-    if (g_nvar >= MAX_VARS) { fprintf(stderr, "Too many variables\n"); exit(1); }
+    if (g_nvar >= MAX_VARS) { basic_stderr("Too many variables\n"); exit(1); }
     Var *v = &g_vars[g_nvar++];
     memset(v, 0, sizeof(*v));
     strncpy(v->name, name, MAX_VARNAME - 1);
@@ -68,7 +68,7 @@ mpf_t *arr_num_elem(Var *v, int i, int j) {
     int idx = (v->ndim == 2) ? (oi * v->dim[1] + oj) : oi;
     int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
     if (idx < 0 || idx >= total) {
-        fprintf(stderr, "Array out of bounds: index %d (size %d) -- clamping\n", idx, total);
+        basic_stderr("Array out of bounds: index %d (size %d) -- clamping\n", idx, total);
         idx = (idx < 0) ? 0 : total - 1;
     }
     return &v->arr_num[idx];
@@ -80,7 +80,7 @@ char **arr_str_elem(Var *v, int i, int j) {
     int idx = (v->ndim == 2) ? (oi * v->dim[1] + oj) : oi;
     int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
     if (idx < 0 || idx >= total) {
-        fprintf(stderr, "Array out of bounds: index %d (size %d) -- clamping\n", idx, total);
+        basic_stderr("Array out of bounds: index %d (size %d) -- clamping\n", idx, total);
         idx = (idx < 0) ? 0 : total - 1;
     }
     return &v->arr_str[idx];

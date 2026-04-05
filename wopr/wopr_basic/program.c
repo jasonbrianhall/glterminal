@@ -37,7 +37,7 @@ static int   g_nlabels = 0;
 static void label_clear(void) { g_nlabels = 0; }
 
 static void label_add(const char *name, int linenum) {
-    if (g_nlabels >= MAX_LABELS) { fprintf(stderr, "Too many labels\n"); return; }
+    if (g_nlabels >= MAX_LABELS) { basic_stderr("Too many labels\n"); return; }
     strncpy(g_labels[g_nlabels].name, name, MAX_VARNAME - 1);
     g_labels[g_nlabels].name[MAX_VARNAME - 1] = '\0';
     g_labels[g_nlabels].linenum = linenum;
@@ -204,7 +204,7 @@ void load(const char *filename) {
                                   trimmed[2] != '_');
 
             #define STORE_SEG(lnum, sp) do { \
-                if (g_nlines >= MAX_LINES) { fprintf(stderr, "Too many lines\n"); exit(1); } \
+                if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
                 g_lines[g_nlines].linenum = (lnum); \
                 const char *_sp = (sp); \
                 while (isspace((unsigned char)*_sp)) _sp++; \
@@ -299,7 +299,7 @@ void load(const char *filename) {
 
         /* Helper: store one statement and assign/register its pseudo-number. */
         #define STORE_FREE(sp) do { \
-            if (g_nlines >= MAX_LINES) { fprintf(stderr, "Too many lines\n"); exit(1); } \
+            if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
             pseudo++; \
             /* flush any pending labels to point here */ \
             for (int _li = 0; _li < pending_count; _li++) \
