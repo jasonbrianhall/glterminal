@@ -211,7 +211,7 @@ static void font_init(void)
  * Screen mode descriptors
  * ================================================================ */
 typedef struct { int w, h, cols, rows, colours; } ModeDesc;
-static const ModeDesc g_modes[10] = {
+static const ModeDesc g_modes[29] = {
     {  640,400, 80,25,16}, /* 0 — not used here, just for indexing */
     {  320,200, 40,25, 4},
     {  640,200, 80,25, 2},
@@ -222,6 +222,25 @@ static const ModeDesc g_modes[10] = {
     {  320,200, 40,25,16},
     {  640,200, 80,25,16},
     {  640,350, 80,43,16},
+    { 640, 350, 80, 43,  2},   /* EGA/VGA - Monochrome */
+    { 640, 480, 80, 30,  2},   /* VGA/MCGA - Monochrome */
+    /* 12 */ { 640, 480, 80, 30, 16},   /* VGA */
+    /* 13 */ { 320, 200, 40, 25, 256},  /* VGA/MCGA */
+    /* 14 */ { 320, 200, 40, 25, 16},   /* Plantronics Colorplus (PCP) */
+    /* 15 */ { 640, 200, 80, 25,  4},   /* Plantronics Colorplus (PCP) */
+    /* 16 */ { 640, 480, 80, 30, 256},  /* Professional Graphics Controller (PGC) */
+    /* 17 */ { 640, 480, 80, 30, 256},  /* IBM 8514/A */
+    /* 18 */ { 640, 480, 80, 30, 16},   /* JEGA */
+    /* 19 */ { 640, 480, 80, 30, 16},   /* JEGA - Text mode variant */
+    /* 20 */ { 512, 480, 64, 30, 256},  /* TIGA */
+    /* 21 */ { 640, 400, 80, 25, 256},  /* SVGA */
+    /* 22 */ { 640, 480, 80, 30, 256},  /* SVGA */
+    /* 23 */ { 800, 600, 100, 37, 256}, /* SVGA */
+    /* 24 */ { 160, 200, 20, 25, 16},   /* Tandy / PCjr */
+    /* 25 */ { 320, 200, 40, 25, 16},   /* Tandy / PCjr */
+    /* 26 */ { 640, 200, 80, 25,  4},   /* Tandy / PCjr */
+    /* 27 */ { 640, 200, 80, 25, 16},   /* Tandy Video II or ETGA */
+    /* 28 */ { 720, 350, 80, 25,  2}    /* OGA */
 };
 
 /* ================================================================
@@ -281,7 +300,7 @@ static void do_flush(void)
         px[i] = 0xFF000000u|((uint32_t)c.r<<16)|((uint32_t)c.g<<8)|c.b;
     }
     /* Draw cursor: a 2-pixel-tall underline at the current text position */
-    if (g_cursor_visible && g_mode >= 1 && g_mode <= 9) {
+    if (g_cursor_visible && g_mode >= 1 && g_mode <= 28) {
         const ModeDesc *m = &g_modes[g_mode];
         int cw = g_w / m->cols;
         int rh = g_h / m->rows;
@@ -370,7 +389,7 @@ static void draw_char_at(int row, int col, unsigned char ch, int fg, int bg)
 
 void gfx_open(int mode)
 {
-    if (mode<1||mode>9) mode=1;
+    if (mode<1||mode>28) mode=1;
     font_init();
 
     const ModeDesc *m = &g_modes[mode];
@@ -428,7 +447,7 @@ void gfx_close(void)
 
 int gfx_is_open(void)  { return g_win != NULL; }
 int gfx_get_mode(void) { return g_mode; }
-int gfx_get_cols(void) { return g_mode >= 1 && g_mode <= 9 ? g_modes[g_mode].cols : 80; }
+int gfx_get_cols(void) { return g_mode >= 1 && g_mode <= 28 ? g_modes[g_mode].cols : 80; }
 
 void gfx_palette(int idx, int r, int g, int b)
 {

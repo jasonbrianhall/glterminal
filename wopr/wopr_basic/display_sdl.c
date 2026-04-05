@@ -2,7 +2,7 @@
  * display_sdl.c — SDL2 display backend for the BASIC interpreter.
  *
  * Implements display.h for both text mode (SCREEN 0) and the standard
- * CGA/EGA/VGA graphics modes (SCREEN 1-9).
+ * CGA/EGA/VGA graphics modes (SCREEN 1-28).
  *
  * Screen mode table (matching GW-BASIC / QBASIC):
  *   0  — 80×25 text, 16 colours (default)
@@ -15,7 +15,7 @@
  *   7  — 320×200, 16-colour EGA
  *   8  — 640×200, 16-colour EGA
  *   9  — 640×350, 16-colour EGA
- *
+ *   ...
  * Text rendering uses a built-in 8×8 IBM CP437 bitmap font.
  *
  * Build: compiled automatically when HAVE_SDL is defined (via Makefile).
@@ -239,17 +239,36 @@ typedef struct {
     int text_mode;       /* 1 = text-only mode */
 } ScreenMode;
 
-static const ScreenMode screen_modes[10] = {
-    /* 0 */ {  640, 400, 80, 25, 16, 1 },
-    /* 1 */ {  320, 200, 40, 25,  4, 0 },
-    /* 2 */ {  640, 200, 80, 25,  2, 0 },
-    /* 3 */ {  720, 348, 90, 43,  2, 0 },
-    /* 4 */ {  320, 200, 40, 25,  4, 0 },
-    /* 5 */ {  320, 200, 40, 25,  4, 0 },
-    /* 6 */ {  640, 200, 80, 25,  2, 0 },
-    /* 7 */ {  320, 200, 40, 25, 16, 0 },
-    /* 8 */ {  640, 200, 80, 25, 16, 0 },
-    /* 9 */ {  640, 350, 80, 43, 16, 0 },
+static const ScreenMode screen_modes[29] = {
+    /*  0 */ { 720, 350, 80, 25, 16, 1 },   /* Text mode (All) - 720x350 effective, 16/64 colors */
+    /*  1 */ { 320, 200, 40, 25,  4, 0 },   /* CGA/EGA/VGA/MCGA */
+    /*  2 */ { 640, 200, 80, 25,  2, 0 },   /* CGA/EGA/VGA/MCGA */
+    /*  3 */ { 720, 348, 90, 43,  2, 0 },   /* Hercules (HGC) / HICC InColor */
+    /*  4 */ { 640, 400, 80, 25,  2, 0 },   /* Olivetti / AT&T */
+    /*  5 */ { 160, 100, 20, 12, 16, 0 },   /* CGA (rare low-res) */
+    /*  6 */ { 160, 200, 20, 25, 16, 0 },   /* CGA (rare low-res) */
+    /*  7 */ { 320, 200, 40, 25, 16, 0 },   /* EGA/VGA */
+    /*  8 */ { 640, 200, 80, 25, 16, 0 },   /* EGA/VGA */
+    /*  9 */ { 640, 350, 80, 43, 16, 0 },   /* EGA/VGA - 64 colors with >64KB VRAM */
+    /* 10 */ { 640, 350, 80, 43,  2, 0 },   /* EGA/VGA - Monochrome */
+    /* 11 */ { 640, 480, 80, 30,  2, 0 },   /* VGA/MCGA - Monochrome */
+    /* 12 */ { 640, 480, 80, 30, 16, 0 },   /* VGA */
+    /* 13 */ { 320, 200, 40, 25, 256, 0 },  /* VGA/MCGA */
+    /* 14 */ { 320, 200, 40, 25, 16, 0 },   /* Plantronics Colorplus (PCP) */
+    /* 15 */ { 640, 200, 80, 25,  4, 0 },   /* Plantronics Colorplus (PCP) */
+    /* 16 */ { 640, 480, 80, 30, 256, 0 },  /* Professional Graphics Controller (PGC) */
+    /* 17 */ { 640, 480, 80, 30, 256, 0 },  /* IBM 8514/A */
+    /* 18 */ { 640, 480, 80, 30, 16, 0 },   /* JEGA */
+    /* 19 */ { 640, 480, 80, 30, 16, 1 },   /* JEGA - Text mode variant */
+    /* 20 */ { 512, 480, 64, 30, 256, 0 },  /* TIGA */
+    /* 21 */ { 640, 400, 80, 25, 256, 0 },  /* SVGA */
+    /* 22 */ { 640, 480, 80, 30, 256, 0 },  /* SVGA */
+    /* 23 */ { 800, 600, 100, 37, 256, 0 }, /* SVGA */
+    /* 24 */ { 160, 200, 20, 25, 16, 0 },   /* Tandy / PCjr */
+    /* 25 */ { 320, 200, 40, 25, 16, 0 },   /* Tandy / PCjr */
+    /* 26 */ { 640, 200, 80, 25,  4, 0 },   /* Tandy / PCjr */
+    /* 27 */ { 640, 200, 80, 25, 16, 0 },   /* Tandy Video II or ETGA */
+    /* 28 */ { 720, 350, 80, 25,  2, 0 }    /* OGA */
 };
 
 /* ================================================================
@@ -667,7 +686,7 @@ int display_getline(char *buf, int bufsz)
  * ================================================================ */
 void display_set_screen(int mode)
 {
-    if (mode < 0 || mode > 9) mode = 0;
+    if (mode < 0 || mode > 28) mode = 0;
     g_screen = mode;
     memcpy(g_palette, cga16, sizeof(cga16));
 
