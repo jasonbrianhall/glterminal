@@ -175,12 +175,11 @@ void sound_drain(void) {
     }
 }
 
-/* Clear the note queue immediately without waiting for playback to finish. */
 void sound_stop(void) {
     if (!g_dev || !g_mutex) return;
     SDL_LockMutex(g_mutex);
     g_q_head = g_q_tail = 0;
-    g_synth.have_note   = 0;
+    g_synth.have_note    = 0;
     g_synth.samples_left = 0;
     g_synth.gap_left     = 0;
     SDL_CondSignal(g_cond);
@@ -188,12 +187,10 @@ void sound_stop(void) {
 }
 
 void sound_shutdown(void) {
-    /* Don't drain — just stop immediately so the BASIC thread doesn't hang
-     * waiting for queued audio to finish when the user exits. */
     sound_stop();
-    if (g_dev) { SDL_CloseAudioDevice(g_dev); g_dev = 0; }
-    if (g_cond)  { SDL_DestroyCond(g_cond);   g_cond  = NULL; }
-    if (g_mutex) { SDL_DestroyMutex(g_mutex); g_mutex = NULL; }
+    if (g_dev)   { SDL_CloseAudioDevice(g_dev); g_dev = 0; }
+    if (g_cond)  { SDL_DestroyCond(g_cond);     g_cond  = NULL; }
+    if (g_mutex) { SDL_DestroyMutex(g_mutex);   g_mutex = NULL; }
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 

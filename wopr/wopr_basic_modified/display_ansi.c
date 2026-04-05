@@ -107,34 +107,6 @@ void display_shutdown(void)
 
 void display_cls(void)
 {
-    printf("\033[2J\033[H");
-    fflush(stdout);
-}
-
-void display_locate(int row, int col)
-{
-    if (row < 1) row = 1;
-    if (col < 1) col = 1;
-    printf("\033[%d;%dH", row, col);
-    fflush(stdout);
-}
-
-void display_color(int fg, int bg)
-{
-    /* clamp */
-    if (fg < 0 || fg > 15) fg = 7;
-    if (bg < 0 || bg > 15) bg = 0;
-
-    int bold   = (fg >= 8) ? 1 : 0;
-    int fg_idx = cga_to_ansi[fg & 7];
-    int bg_idx = cga_to_ansi[bg & 7];
-
-    printf("\033[%d;%d;%dm", bold, 30 + fg_idx, 40 + bg_idx);
-    fflush(stdout);
-}
-
-void display_cls(void)
-{
     wopr_basic_cls();
 }
 

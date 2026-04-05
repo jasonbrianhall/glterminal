@@ -10,6 +10,7 @@
 
 extern "C" {
 #include "sound.h"
+void sound_stop(void);  /* clear queue immediately without blocking drain */
 }
 
 // ── BASIC C entry points ────────────────────────────────────────────────
