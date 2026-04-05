@@ -17,8 +17,9 @@ int basic_stderr(const char *fmt, ...)
     va_list ap;
     va_start(ap, fmt);
 
-    int r = vprintf(fmt, ap);
+    int r = vfprintf(stderr, fmt, ap);
 
     va_end(ap);
     return r;
 }
+
