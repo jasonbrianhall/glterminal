@@ -549,14 +549,6 @@ void wopr_render(int win_w, int win_h) {
     // Full-screen dark background
     gl_draw_rect(0, 0, (float)win_w, (float)win_h, 0.f, 0.f, 0.f, 0.92f);
 
-    // Green border
-    gl_draw_rect(PAD - 4, PAD - 4,
-                 win_w - 2*(PAD-4), win_h - 2*(PAD-4),
-                 0.f, 0.55f, 0.15f, 1.f);
-    gl_draw_rect(PAD, PAD,
-                 win_w - 2*PAD, win_h - 2*PAD,
-                 0.f, 0.f, 0.f, 1.f);
-
     float x0     = PAD + 8;
     float y0     = PAD + 8;
     float area_w = win_w - 2*(PAD + 8);

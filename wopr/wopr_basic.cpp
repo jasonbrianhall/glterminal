@@ -58,6 +58,20 @@ extern "C" void wopr_basic_push_line(const char *text)
     }
 }
 
+// Flush any partial line accumulated so far (called before blocking on input,
+// so prompt text like "YOUR CHOICE?" appears before the input cursor).
+extern "C" void wopr_basic_flush_partial(void)
+{
+    if (!s_active || !s_active->wopr || s_out_buf.empty()) return;
+    SDL_LockMutex(s_active->line_mtx);
+    auto &lines = s_active->wopr->lines;
+    lines.push_back(s_out_buf);
+    if ((int)lines.size() > MAX_WOPR_LINES)
+        lines.erase(lines.begin(), lines.begin() + (lines.size() - MAX_WOPR_LINES));
+    SDL_UnlockMutex(s_active->line_mtx);
+    s_out_buf.clear();
+}
+
 bool wopr_basic_is_waiting_input(WoprState *w)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
@@ -157,7 +171,6 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs || zs->dead) return false;
 
-    // Ctrl+C — interrupt running program
     if (sym == SDLK_c) {
         const Uint8 *ks = SDL_GetKeyboardState(NULL);
         if (ks[SDL_SCANCODE_LCTRL] || ks[SDL_SCANCODE_RCTRL]) {

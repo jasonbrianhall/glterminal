@@ -6,6 +6,7 @@
 #include <string.h>
 #include <setjmp.h>
 #include <SDL2/SDL.h>
+#include "basic_print.h"
 
 #ifdef unix
 #include <sys/types.h>
@@ -71,6 +72,7 @@ char *basic_shim_fgets(char *buf, int n)
 
     if (basic_input_sem) {
         SDL_Log("Waiting on semaphore");
+        wopr_basic_flush_partial();  /* flush "YOUR CHOICE?" etc. before showing cursor */
         g_basic_waiting_input = 1;
         SDL_SemWait(basic_input_sem);
         g_basic_waiting_input = 0;
@@ -78,6 +80,7 @@ char *basic_shim_fgets(char *buf, int n)
                 basic_input_ready, g_basic_game_over);
     } else {
         SDL_Log("No semaphore, polling");
+        wopr_basic_flush_partial();
         g_basic_waiting_input = 1;
         while (!basic_input_ready && !g_basic_game_over) {
             SDL_Delay(10);

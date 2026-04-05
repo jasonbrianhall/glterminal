@@ -24,6 +24,10 @@ extern int      g_basic_waiting_input;
 extern int      g_basic_suppress_newline;
 extern SDL_sem *basic_input_sem;
 
+/* Flush any partial (non-newline-terminated) output line before blocking.
+ * Call this just before SDL_SemWait so prompt text appears above the cursor. */
+void wopr_basic_flush_partial(void);
+
 /* Longjmp target set in basic_thread_fn before calling basic_main() */
 extern jmp_buf  basic_exit_jmp;
 

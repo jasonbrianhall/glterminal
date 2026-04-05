@@ -108,30 +108,19 @@ void display_shutdown(void)
 
 void display_cls(void)
 {
-    printf("\033[2J\033[H");
-    fflush(stdout);
+    /* no-op in WOPR mode — CLS would leak "\033[2J\033[H" as literal text */
 }
 
 void display_locate(int row, int col)
 {
-    if (row < 1) row = 1;
-    if (col < 1) col = 1;
-    printf("\033[%d;%dH", row, col);
-    fflush(stdout);
+    (void)row; (void)col;
+    /* no-op in WOPR mode */
 }
 
 void display_color(int fg, int bg)
 {
-    /* clamp */
-    if (fg < 0 || fg > 15) fg = 7;
-    if (bg < 0 || bg > 15) bg = 0;
-
-    int bold   = (fg >= 8) ? 1 : 0;
-    int fg_idx = cga_to_ansi[fg & 7];
-    int bg_idx = cga_to_ansi[bg & 7];
-
-    printf("\033[%d;%d;%dm", bold, 30 + fg_idx, 40 + bg_idx);
-    fflush(stdout);
+    (void)fg; (void)bg;
+    /* no-op in WOPR mode */
 }
 
 void display_width(int cols)
@@ -150,12 +139,9 @@ void display_width(int cols)
 
 void display_print(const char *s)
 {
-    /* Suppress REPL overhead strings the WOPR UI doesn't show */
     if (strcmp(s, "Ok\n") == 0) return;
     if (strncmp(s, "WOPR BASIC", 10) == 0) return;
     if (strncmp(s, "Type NEW,", 9) == 0) return;
-    /* Any real output clears the post-getline suppress so we don't
-     * accidentally eat a newline that belongs to program output */
     g_basic_suppress_newline = 0;
     wopr_basic_push_line(s);
 }
@@ -212,9 +198,6 @@ int display_inkey(void)
 int display_getline(char *buf, int bufsz)
 {
     basic_shim_fgets(buf, bufsz);
-    /* main.c calls display_newline() immediately after this — suppress it.
-     * The flag is cleared by any intervening display_print/putchar, so it
-     * only fires if the very next output call is that echo newline. */
     g_basic_suppress_newline = 1;
     SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);
