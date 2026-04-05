@@ -547,7 +547,7 @@ void wopr_render(int win_w, int win_h) {
     if (cw < 1.f) cw = 10.f;
 
     // Full-screen dark background
-    gl_draw_rect(0, 0, (float)win_w, (float)win_h, 0.f, 0.f, 0.f, 0.92f);
+    gl_draw_rect(0, 0, (float)win_w, (float)win_h, 0.f, 0.f, 0.f, 1.0f);
 
     float x0     = PAD + 8;
     float y0     = PAD + 8;
