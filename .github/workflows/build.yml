@@ -55,6 +55,7 @@ jobs:
           mingw64-opus mingw64-opusfile \
           mingw64-taglib.noarch \
           mingw64-glew \
+          mingw64-gmp \
           wine \
           zip unzip \
           ImageMagick \
