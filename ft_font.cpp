@@ -232,7 +232,7 @@ float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
 
     FT_UInt gi = FT_Get_Char_Index(face, cp);
     if (!gi) {
-        if (cp > 0x7F) SDL_Log("[Glyph] cp=U+%04X not in face '%s'\n", cp, face->family_name);
+        //if (cp > 0x7F) SDL_Log("[Glyph] cp=U+%04X not in face '%s'\n", cp, face->family_name);
         return 0.f;
     }
     int load_err = FT_Load_Glyph(face, gi, load_flags);
