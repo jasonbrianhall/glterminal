@@ -27,6 +27,9 @@ static char *strcasestr(const char *haystack, const char *needle) {
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+/* Optional: if set before basic_main(), auto-load and run this .bas file */
+char g_autoload_path[512] = {0};
+
 /* ================================================================
  * SIGINT handler — sets g_break so the run loop can stop cleanly
  * ================================================================ */
@@ -106,6 +109,16 @@ int basic_main(void) {
     display_cls();
     display_print("WOPR BASIC\n");
     display_print("Type NEW, LOAD, RUN, LIST, FILES, HELP, or SYSTEM to exit.\n\n");
+
+    /* Auto-load and run a program if one was queued (e.g. Wizard's Castle) */
+    if (g_autoload_path[0]) {
+        load_program(g_autoload_path);
+        g_autoload_path[0] = '\0';
+        if (g_nlines > 0) {
+            g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0;
+            run();
+        }
+    }
 
     char line[512];
     for (;;) {
