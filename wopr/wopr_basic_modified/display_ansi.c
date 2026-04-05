@@ -108,19 +108,24 @@ void display_shutdown(void)
 
 void display_cls(void)
 {
-    /* no-op in WOPR mode — CLS would leak "\033[2J\033[H" as literal text */
+    wopr_basic_cls();
 }
 
 void display_locate(int row, int col)
 {
-    (void)row; (void)col;
-    /* no-op in WOPR mode */
+    /* LOCATE in a scrolling terminal: flush current partial line and
+     * pad with blank lines to approximate the requested row.
+     * Column is ignored — BASIC games rarely need pixel-exact positioning. */
+    (void)col;
+    wopr_basic_flush_partial();
+    /* We can't truly position in a scroll buffer, so just ensure we're
+     * on a new line. Row-based padding would fight the scroll, so skip it. */
 }
 
 void display_color(int fg, int bg)
 {
-    (void)fg; (void)bg;
-    /* no-op in WOPR mode */
+    (void)bg;   /* background colour not supported in WOPR terminal */
+    wopr_basic_color(fg);
 }
 
 void display_width(int cols)

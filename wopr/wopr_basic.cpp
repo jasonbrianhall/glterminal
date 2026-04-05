@@ -1,4 +1,4 @@
-// wopr_basic.cpp — WOPR sub-game wrapper for Dungeon (basic)
+// wopr_basic.cpp — WOPR sub-game wrapper for BASIC
 
 #include "wopr.h"
 #include <SDL2/SDL.h>
@@ -24,6 +24,49 @@ extern "C" {
     void basic_shim_set_input(const char *line);
 }
 
+// ── Line encoding ─────────────────────────────────────────────────────────
+// Lines in w->lines may begin with a private control prefix:
+//
+//   \x01 R G B   — colored text line  (3 float bytes encoded as uint8 0-255)
+//   \x02         — CLS marker         (render loop clears screen up to this)
+//
+// All other lines are plain text drawn in the default green.
+
+static const char COLOR_PREFIX = '\x01';
+static const char CLS_MARKER   = '\x02';
+
+static std::string make_colored_line(const std::string &text,
+                                     uint8_t r, uint8_t g, uint8_t b)
+{
+    std::string s;
+    s += COLOR_PREFIX;
+    s += (char)r;
+    s += (char)g;
+    s += (char)b;
+    s += text;
+    return s;
+}
+
+// ── CGA colour → RGB (0-255) ─────────────────────────────────────────────
+static const uint8_t CGA_RGB[16][3] = {
+    {  0,   0,   0}, // 0 Black
+    {  0,   0, 170}, // 1 Blue
+    {  0, 170,   0}, // 2 Green
+    {  0, 170, 170}, // 3 Cyan
+    {170,   0,   0}, // 4 Red
+    {170,   0, 170}, // 5 Magenta
+    {170, 170,   0}, // 6 Brown
+    {170, 170, 170}, // 7 Light Grey
+    { 85,  85,  85}, // 8 Dark Grey
+    { 85,  85, 255}, // 9 Light Blue
+    { 85, 255,  85}, // 10 Light Green
+    { 85, 255, 255}, // 11 Light Cyan
+    {255,  85,  85}, // 12 Light Red
+    {255,  85, 255}, // 13 Light Magenta
+    {255, 255,  85}, // 14 Yellow
+    {255, 255, 255}, // 15 White
+};
+
 // ── Per-instance state ────────────────────────────────────────────────────
 struct basicState {
     SDL_Thread *thread   = nullptr;
@@ -36,42 +79,64 @@ struct basicState {
 
 static basicState *s_active = nullptr;
 
-// ── Output callback ───────────────────────────────────────────────────────
+// Current output color (CGA index, default 2 = green)
+static uint8_t s_fg_r = 0, s_fg_g = 170, s_fg_b = 0;
 static std::string s_out_buf;
 static const int   MAX_WOPR_LINES = 500;
 
-extern "C" void wopr_basic_push_line(const char *text)
+// ── Commit s_out_buf as a completed line ──────────────────────────────────
+static void commit_line(void)
 {
-    if (!s_active || !s_active->wopr || !text) return;
-    for (const char *p = text; *p; ++p) {
-        if (*p == '\n') {
-            SDL_LockMutex(s_active->line_mtx);
-            auto &lines = s_active->wopr->lines;
-            lines.push_back(s_out_buf);
-            if ((int)lines.size() > MAX_WOPR_LINES)
-                lines.erase(lines.begin(), lines.begin() + (lines.size() - MAX_WOPR_LINES));
-            SDL_UnlockMutex(s_active->line_mtx);
-            s_out_buf.clear();
-        } else {
-            s_out_buf += *p;
-        }
-    }
-}
-
-// Flush any partial line accumulated so far (called before blocking on input,
-// so prompt text like "YOUR CHOICE?" appears before the input cursor).
-extern "C" void wopr_basic_flush_partial(void)
-{
-    if (!s_active || !s_active->wopr || s_out_buf.empty()) return;
+    if (!s_active || !s_active->wopr) { s_out_buf.clear(); return; }
     SDL_LockMutex(s_active->line_mtx);
     auto &lines = s_active->wopr->lines;
-    lines.push_back(s_out_buf);
+    lines.push_back(make_colored_line(s_out_buf, s_fg_r, s_fg_g, s_fg_b));
     if ((int)lines.size() > MAX_WOPR_LINES)
         lines.erase(lines.begin(), lines.begin() + (lines.size() - MAX_WOPR_LINES));
     SDL_UnlockMutex(s_active->line_mtx);
     s_out_buf.clear();
 }
 
+// ── Output callback called by display_ansi.c ─────────────────────────────
+extern "C" void wopr_basic_push_line(const char *text)
+{
+    if (!s_active || !s_active->wopr || !text) return;
+    for (const char *p = text; *p; ++p) {
+        if (*p == '\n') {
+            commit_line();
+        } else {
+            s_out_buf += *p;
+        }
+    }
+}
+
+// ── Flush partial line (called before blocking on input) ──────────────────
+extern "C" void wopr_basic_flush_partial(void)
+{
+    if (!s_active || !s_active->wopr || s_out_buf.empty()) return;
+    commit_line();
+}
+
+// ── CLS: clear all lines ──────────────────────────────────────────────────
+extern "C" void wopr_basic_cls(void)
+{
+    if (!s_active || !s_active->wopr) return;
+    s_out_buf.clear();
+    SDL_LockMutex(s_active->line_mtx);
+    s_active->wopr->lines.clear();
+    SDL_UnlockMutex(s_active->line_mtx);
+}
+
+// ── COLOR: set current fg color from CGA index ───────────────────────────
+extern "C" void wopr_basic_color(int fg)
+{
+    if (fg < 0 || fg > 15) fg = 7;
+    s_fg_r = CGA_RGB[fg][0];
+    s_fg_g = CGA_RGB[fg][1];
+    s_fg_b = CGA_RGB[fg][2];
+}
+
+// ── Is BASIC blocked waiting for input? ──────────────────────────────────
 bool wopr_basic_is_waiting_input(WoprState *w)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
@@ -118,6 +183,7 @@ void wopr_basic_enter(WoprState *w)
     basic_input_buf[0]       = '\0';
     g_basic_suppress_newline = 0;
     s_out_buf.clear();
+    s_fg_r = 0; s_fg_g = 170; s_fg_b = 0;  // default green
     basic_shim_init();
 
     zs->thread = SDL_CreateThread(basic_thread_fn, "basicThread", zs);
@@ -186,7 +252,7 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
     case SDLK_RETURN:
     case SDLK_KP_ENTER: {
         std::string line = zs->input_buf;
-        w->lines.push_back("> " + line);
+        w->lines.push_back(make_colored_line("> " + line, s_fg_r, s_fg_g, s_fg_b));
         line += '\n';
         basic_shim_set_input(line.c_str());
         zs->input_buf.clear();

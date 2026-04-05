@@ -590,7 +590,15 @@ void wopr_render(int win_w, int win_h) {
 
     float y = y0;
     for (int li = start_line; li < total; li++) {
-        gl_draw_text(w->lines[li].c_str(), x0, y, 0.f, 1.f, 0.27f, 1.f, SCALE);
+        const char *line = w->lines[li].c_str();
+        float lr = 0.f, lg = 1.f, lb = 0.27f;   // default green
+        if (line[0] == '\x01') {
+            lr = (uint8_t)line[1] / 255.f;
+            lg = (uint8_t)line[2] / 255.f;
+            lb = (uint8_t)line[3] / 255.f;
+            line += 4;
+        }
+        gl_draw_text(line, x0, y, lr, lg, lb, 1.f, SCALE);
         y += ch;
     }
 

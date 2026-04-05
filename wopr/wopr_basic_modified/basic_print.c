@@ -72,7 +72,7 @@ char *basic_shim_fgets(char *buf, int n)
 
     if (basic_input_sem) {
         SDL_Log("Waiting on semaphore");
-        wopr_basic_flush_partial();  /* flush "YOUR CHOICE?" etc. before showing cursor */
+        wopr_basic_flush_partial();
         g_basic_waiting_input = 1;
         SDL_SemWait(basic_input_sem);
         g_basic_waiting_input = 0;
@@ -202,7 +202,7 @@ int basic_printf(const char *fmt, ...)
     char buf[4096];
 
     if (fmt == NULL) {
-        return 0;  /* was fflush(stdout) — no-op in WOPR mode */
+        return 0;
     }
 
     // Format into buf
