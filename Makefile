@@ -107,7 +107,7 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
-               -lopengl32 -lpng -lz -lwinmm -mwindows -lSDL2_mixer -lshlwapi \
+               -lopengl32 -lpng -lz -lwinmm -mwindows -lSDL2_mixer -lshlwapi -lgmp \
                -s -Wl,--gc-sections -flto
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
