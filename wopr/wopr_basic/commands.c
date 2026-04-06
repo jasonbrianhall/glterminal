@@ -176,15 +176,35 @@ static int cmd_option(Interp *ip, const char *args) {
  * Display commands
  * ================================================================ */
 static int cmd_cls(Interp *ip, const char *args) {
-    (void)ip; (void)args; display_cls(); return 0;
+    (void)ip;
+    /* CLS [n] — optional argument (0=full, 1=graphics viewport, 2=text area);
+     * we treat all variants as a full clear since we have no separate viewports. */
+    const char *p = sk(args);
+    if (*p && *p != ':' && *p != '\'') {
+        mpf_t n; mpf_init2(n, g_prec);
+        eval_expr(p, n);
+        mpf_clear(n);
+    }
+    display_cls();
+    return 0;
 }
 
 static int cmd_width(Interp *ip, const char *args) {
     (void)ip;
+    const char *p = sk(args);
     mpf_t n; mpf_init2(n, g_prec);
-    eval_expr(sk(args), n);
+    p = sk(eval_expr(p, n));
     display_width((int)mpf_get_si(n));
     mpf_clear(n);
+    /* optional second arg: rows — consume and ignore */
+    if (*p == ',') {
+        p = sk(p + 1);
+        if (*p && *p != ':' && *p != '\'') {
+            mpf_t r; mpf_init2(r, g_prec);
+            eval_expr(p, r);
+            mpf_clear(r);
+        }
+    }
     return 0;
 }
 
@@ -1608,10 +1628,55 @@ static int cmd_view(Interp *ip, const char *args) {
     return 0;
 }
 
+/* SLEEP n — pause for n seconds */
+static int cmd_sleep(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    mpf_t n; mpf_init2(n, g_prec);
+    eval_expr(p, n);
+    double secs = mpf_get_d(n);
+    mpf_clear(n);
+    if (secs > 0) {
+#ifdef _WIN32
+        SDL_Delay((Uint32)(secs * 1000.0));
+#else
+        struct timespec ts;
+        ts.tv_sec  = (time_t)secs;
+        ts.tv_nsec = (long)((secs - (long)secs) * 1e9);
+        nanosleep(&ts, NULL);
+#endif
+    }
+    return 0;
+}
+
+/* SYSTEM — exit the interpreter (same as END but named SYSTEM) */
+static int cmd_system(Interp *ip, const char *args) {
+    return cmd_end(ip, args);
+}
+
+/* DECLARE SUB/FUNCTION — forward declaration stub, ignored at runtime */
+static int cmd_declare(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+
+/* KILL "filename" — delete a file */
+static int cmd_kill(Interp *ip, const char *args) {
+    (void)ip;
+    char fname[512];
+    eval_str_expr(sk(args), fname, sizeof fname);
+    if (remove(fname) != 0)
+        basic_stderr("KILL: could not delete \"%s\"\n", fname);
+    return 0;
+}
+
 /* ================================================================
  * Command registration table
  * ================================================================ */
 const Command commands[] = {
+    { "SLEEP",       cmd_sleep      },
+    { "SYSTEM",      cmd_system     },
+    { "DECLARE",     cmd_declare    },
+    { "KILL",        cmd_kill       },
     { "REM",        cmd_rem        },
     { "'",          cmd_rem        },
     { "END SELECT", cmd_end_select },
