@@ -185,6 +185,34 @@ int cmd_goto(Interp *ip, const char *args);
 int cmd_gosub(Interp *ip, const char *args);
 
 /* ================================================================
+ * TYPE / END TYPE — user-defined struct types
+ * ================================================================ */
+#define MAX_TYPE_DEFS    32
+#define MAX_TYPE_FIELDS  64
+#define MAX_TYPE_NAMELEN 64
+
+typedef struct {
+    char name[MAX_TYPE_NAMELEN];
+    int  is_str;    /* 1 = string field, 0 = numeric */
+} TypeField;
+
+typedef struct {
+    char      name[MAX_TYPE_NAMELEN];
+    TypeField fields[MAX_TYPE_FIELDS];
+    int       nfields;
+} TypeDef;
+
+extern TypeDef g_typedefs[MAX_TYPE_DEFS];
+extern int     g_ntypedefs;
+
+TypeDef *type_find(const char *name);
+void     prescan_types(void);
+
+/* Mangle "varbase(idx).field" into a flat variable name.
+ * idx < 0 means scalar (no subscript).  Result stored in out (size >= MAX_VARNAME). */
+void type_mangle(const char *base, int idx, const char *field, char *out, int outsz);
+
+/* ================================================================
  * Main interpreter loop (main.c)
  * ================================================================ */
 void run(void);

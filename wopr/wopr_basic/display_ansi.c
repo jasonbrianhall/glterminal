@@ -150,11 +150,9 @@ void display_color(int fg, int bg)
 void display_width(int cols)
 {
     g_width = cols;
-    if (gfx_is_open()) return;  /* gfx modes have fixed resolution */
-    if (cols == 40)
-        printf("\033[?3h");
-    else
-        printf("\033[?3l");
+    if (gfx_is_open()) return;
+    /* Modern terminals don't support \033[?3h (40-column mode).
+     * Just record the width; the program manages its own layout. */
     fflush(stdout);
 }
 
@@ -222,7 +220,9 @@ int display_getline(char *buf, int bufsz)
 {
     if (gfx_is_open()) return gfx_getline(buf, bufsz);
 #ifndef _WIN32
-    leave_raw();
+    /* Unconditionally ensure stdin is blocking + canonical for line input */
+    int fd_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, fd_flags & ~O_NONBLOCK);
 
     struct termios cooked = g_orig_termios;
     cooked.c_lflag |= (ECHO | ICANON);
@@ -232,14 +232,21 @@ int display_getline(char *buf, int bufsz)
     while (len < bufsz - 1) {
         char c;
         ssize_t n = read(STDIN_FILENO, &c, 1);
-        if (n < 0 && errno == EINTR) break;
+        if (n < 0 && errno == EINTR) continue;
         if (n <= 0 || c == '\n') break;
         if (c == '\r') continue;
         buf[len++] = c;
     }
     buf[len] = '\0';
 
-    enter_raw();
+    /* Restore raw+nonblocking if that's what we had before */
+    if (g_raw) {
+        struct termios raw = g_orig_termios;
+        raw.c_lflag &= ~(ECHO | ICANON);
+        raw.c_cc[VMIN] = 0; raw.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+        fcntl(STDIN_FILENO, F_SETFL, fd_flags | O_NONBLOCK);
+    }
     return len;
 #else
     if (!fgets(buf, bufsz, stdin)) { buf[0] = '\0'; return 0; }
@@ -254,17 +261,24 @@ int display_getchar(void)
 {
     if (gfx_is_open()) return gfx_getchar();
 #ifndef _WIN32
-    leave_raw();
+    int fd_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, fd_flags & ~O_NONBLOCK);
 
     struct termios cooked = g_orig_termios;
     cooked.c_lflag |= (ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
 
     char c = 0;
-    ssize_t nr = read(STDIN_FILENO, &c, 1);
-    (void)nr;
+    ssize_t nr;
+    do { nr = read(STDIN_FILENO, &c, 1); } while (nr < 0 && errno == EINTR);
 
-    enter_raw();
+    if (g_raw) {
+        struct termios raw = g_orig_termios;
+        raw.c_lflag &= ~(ECHO | ICANON);
+        raw.c_cc[VMIN] = 0; raw.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+        fcntl(STDIN_FILENO, F_SETFL, fd_flags | O_NONBLOCK);
+    }
     return (unsigned char)c;
 #else
     int c = getchar();

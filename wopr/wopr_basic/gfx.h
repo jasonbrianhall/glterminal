@@ -54,6 +54,15 @@ void gfx_flush(void);
 /* Non-blocking key poll (mirrors display_inkey for the SDL window) */
 int gfx_inkey(void);
 
+/* GET (x1,y1)-(x2,y2): capture rectangle of pixels into buf (row-major, palette indices).
+ * buf must hold at least (x2-x1+1)*(y2-y1+1) ints.  Returns actual pixel count. */
+int  gfx_get_rect(int x1, int y1, int x2, int y2, int *buf);
+
+/* PUT (x,y), buf, mode: blit pixel buffer captured by gfx_get_rect.
+ * w,h are the original rectangle dimensions.
+ * mode: 0=PSET (overwrite), 1=XOR, 2=OR, 3=AND, 4=PRESET (inverted) */
+void gfx_put_rect(int x, int y, int w, int h, const int *buf, int mode);
+
 /* Blocking reads — used when a graphics screen is active */
 int  gfx_getchar(void);
 int  gfx_getline(char *buf, int bufsz);

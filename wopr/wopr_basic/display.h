@@ -104,4 +104,12 @@ void display_palette(int index, int r, int g, int b);
 void display_get_pen(int *x, int *y);
 void display_set_pen(int x, int y, int colour);   /* colour<0 = keep current */
 
+/* GET (x1,y1)-(x2,y2), buf — capture screen rect; returns pixel count.
+ * buf must hold at least (x2-x1+1)*(y2-y1+1) ints (palette indices). */
+int  display_get_rect(int x1, int y1, int x2, int y2, int *buf);
+
+/* PUT (x,y), buf, w, h, mode — blit pixel buffer captured by display_get_rect.
+ * mode: 0=PSET, 1=XOR, 2=OR, 3=AND, 4=PRESET */
+void display_put_rect(int x, int y, int w, int h, const int *buf, int mode);
+
 #endif /* DISPLAY_H */
