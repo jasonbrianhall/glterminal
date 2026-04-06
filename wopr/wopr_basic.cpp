@@ -48,7 +48,10 @@ struct basicState {
     WoprState  *wopr     = nullptr;
     std::string input_buf;
     bool        dead     = false;
+
+    bool        requires_upper = false;
 };
+
 static basicState *s_active = nullptr;
 static uint8_t     s_fg_r = 0, s_fg_g = 170, s_fg_b = 0;
 static std::string s_out_buf;
@@ -65,10 +68,19 @@ extern "C" void wopr_basic_post_key(char c)
 {
     if (!s_key_mtx) return;
     SDL_LockMutex(s_key_mtx);
+
+    basicState *zs = s_active;
+    if (zs && zs->requires_upper)
+        c = (char)std::toupper((unsigned char)c);
+
     int next = (s_key_tail + 1) % 16;
-    if (next != s_key_head) { s_key_buf[s_key_tail] = c; s_key_tail = next; }
+    if (next != s_key_head) {
+        s_key_buf[s_key_tail] = c;
+        s_key_tail = next;
+    }
     SDL_UnlockMutex(s_key_mtx);
 }
+
 extern "C" int wopr_basic_get_key(void)
 {
     if (!s_key_mtx) return -1;
@@ -152,7 +164,7 @@ void wopr_basic_enter(WoprState *w)
     zs->line_mtx   = SDL_CreateMutex();
     zs->done_sem   = SDL_CreateSemaphore(0);
     zs->wopr = w; w->sub_state = zs; s_active = zs;
-
+    zs->requires_upper = false;
     if (!s_key_mtx) s_key_mtx = SDL_CreateMutex();
     s_key_head = s_key_tail = 0;
     g_basic_game_over = 0; basic_input_ready = 0; basic_input_buf[0] = '\0';
@@ -231,11 +243,18 @@ void wopr_basic_text(WoprState *w, const char *text)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs || zs->dead || !text) return;
+
     if (g_basic_waiting_input) {
-        for (const char *p = text; *p; ++p) zs->input_buf += (char)((unsigned char)*p);
+        for (const char *p = text; *p; ++p) {
+            char c = *p;
+            if (zs->requires_upper)
+                c = (char)std::toupper((unsigned char)c);
+            zs->input_buf += c;
+        }
         w->input_buf = zs->input_buf;
     } else {
-        for (const char *p = text; *p; ++p) wopr_basic_post_key(*p);
+        for (const char *p = text; *p; ++p)
+            wopr_basic_post_key(*p);
     }
 }
 
@@ -292,7 +311,7 @@ void wopr_wizard_enter(WoprState *w)
     zs->line_mtx   = SDL_CreateMutex();
     zs->done_sem   = SDL_CreateSemaphore(0);
     zs->wopr = w; w->sub_state = zs; s_active = zs;
-
+    zs->requires_upper = true;
     if (!s_key_mtx) s_key_mtx = SDL_CreateMutex();
     s_key_head = s_key_tail = 0;
     g_basic_game_over = 0; basic_input_ready = 0; basic_input_buf[0] = '\0';
