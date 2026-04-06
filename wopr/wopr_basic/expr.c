@@ -381,6 +381,57 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
         return p;
     }
 
+    /* Struct field string read: name.field$ or name(idx).field$ */
+    if (isalpha((unsigned char)*p)) {
+        const char *save2 = p;
+        char base2[MAX_VARNAME]; int bi2 = 0;
+        while ((isalnum((unsigned char)*p) || *p == '_') && bi2 < MAX_VARNAME - 1)
+            base2[bi2++] = (char)toupper((unsigned char)*p++);
+        base2[bi2] = '\0';
+        p = sk(p);
+        char idx2_str[32] = "";
+        if (*p == '(') {
+            p = sk(p + 1);
+            mpf_t vi; mpf_init2(vi, g_prec);
+            p = sk(eval_expr(p, vi));
+            int id1 = (int)mpf_get_si(vi); mpf_clear(vi);
+            snprintf(idx2_str, sizeof idx2_str, "%d", id1);
+            if (*p == ',') {
+                p = sk(p + 1);
+                mpf_t vi2; mpf_init2(vi2, g_prec);
+                p = sk(eval_expr(p, vi2));
+                int id2 = (int)mpf_get_si(vi2); mpf_clear(vi2);
+                char t2[16]; snprintf(t2, sizeof t2, ",%d", id2);
+                strncat(idx2_str, t2, sizeof idx2_str - strlen(idx2_str) - 1);
+            }
+            if (*p == ')') p++;
+            p = sk(p);
+        }
+        if (*p == '.') {
+            p = sk(p + 1);
+            char field2[MAX_VARNAME]; int fi2 = 0;
+            while ((isalnum((unsigned char)*p) || *p == '_') && fi2 < MAX_VARNAME - 1)
+                field2[fi2++] = (char)toupper((unsigned char)*p++);
+            field2[fi2] = '\0';
+            if (fi2) {
+                /* Try string flat var: BASE.IDX.FIELD$ or BASE.FIELD$ */
+                char flatname2[MAX_VARNAME], sname2[MAX_VARNAME];
+                if (idx2_str[0])
+                    snprintf(flatname2, sizeof flatname2, "%s.%s.%s", base2, idx2_str, field2);
+                else
+                    snprintf(flatname2, sizeof flatname2, "%s.%s", base2, field2);
+                snprintf(sname2, sizeof sname2, "%s$", flatname2);
+                Var *vs2 = var_find(sname2);
+                if (vs2) { strncpy(buf, vs2->str ? vs2->str : "", bufsz-1); buf[bufsz-1]='\0'; return p; }
+                /* numeric field in string context */
+                Var *vn2 = var_find(flatname2);
+                if (vn2) { snprintf(buf, bufsz, "%g", mpf_get_d(vn2->num)); return p; }
+                buf[0] = '\0'; return p;
+            }
+        }
+        p = save2; /* not a field access, fall through */
+    }
+
     /* String variable (scalar or array element) — check CONST table first */
     if (isalpha((unsigned char)*p)) {
         char vname[MAX_VARNAME];
@@ -446,11 +497,44 @@ int is_str_token(const char *p) {
     if (kw_match(p, "OCT$"))    return 1;
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
-        read_varname(p, name);
+        const char *after = read_varname(p, name);
         if (var_is_str_name(name)) return 1;
         /* check CONST table for string constants */
         ConstEntry *ce = const_find(name);
         if (ce && ce->is_str) return 1;
+        /* struct field: scan for (idx).field$ or .field$ */
+        after = sk(after);
+        if (*after == '(') {
+            int depth = 1; after++;
+            while (*after && depth > 0) {
+                if (*after == '(') depth++;
+                else if (*after == ')') depth--;
+                after++;
+            }
+            after = sk(after);
+        }
+        if (*after == '.') {
+            after = sk(after + 1);
+            char field[MAX_VARNAME]; int fi = 0;
+            while ((isalnum((unsigned char)*after) || *after == '_') && fi < MAX_VARNAME - 1)
+                field[fi++] = (char)toupper((unsigned char)*after++);
+            field[fi] = '\0';
+            /* Build flat name and check if the string variant exists */
+            char flatname[MAX_VARNAME], sname[MAX_VARNAME];
+            snprintf(flatname, sizeof flatname, "%s.%s", name, field);
+            snprintf(sname, sizeof sname, "%s$", flatname);
+            if (var_find(sname)) return 1;
+            /* Check typedef to see if field is a string */
+            /* Walk all typedefs */
+            for (int ti = 0; ti < g_ntypedefs; ti++) {
+                TypeDef *td = &g_typedefs[ti];
+                for (int tfi = 0; tfi < td->nfields; tfi++) {
+                    if (strcasecmp(td->fields[tfi].name, field) == 0)
+                        return td->fields[tfi].is_str;
+                }
+            }
+        }
+        return 0;
     }
     return 0;
 }
@@ -1035,6 +1119,67 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         toupper((unsigned char)ps->p[1]) == 'N' &&
         isalnum((unsigned char)ps->p[2])) {
         if (try_eval_defn(ps, result)) return;
+    }
+
+    /* Struct field read: name.field or name(idx).field
+     * Flat encoding: "BASE.IDX.FIELD" (numeric) or "BASE.IDX.FIELD$" (string)
+     * We detect this by peeking ahead for a dot after the name or closing paren */
+    if (isalpha((unsigned char)*ps->p)) {
+        const char *save = ps->p;
+        char base[MAX_VARNAME]; int bi = 0;
+        while ((isalnum((unsigned char)*ps->p) || *ps->p == '_') && bi < MAX_VARNAME - 1)
+            base[bi++] = (char)toupper((unsigned char)*ps->p++);
+        base[bi] = '\0';
+        skip_ws_p(ps);
+
+        /* optional array index */
+        char idx_str[32] = "";
+        if (*ps->p == '(') {
+            ps->p++; skip_ws_p(ps);
+            mpf_t v; mpf_init2(v, g_prec);
+            parse_expr_p(ps, v);
+            int idx1 = (int)mpf_get_si(v); mpf_clear(v);
+            snprintf(idx_str, sizeof idx_str, "%d", idx1);
+            skip_ws_p(ps);
+            if (*ps->p == ',') {
+                ps->p++; skip_ws_p(ps);
+                mpf_t v2; mpf_init2(v2, g_prec);
+                parse_expr_p(ps, v2);
+                int idx2 = (int)mpf_get_si(v2); mpf_clear(v2);
+                char tmp2[16]; snprintf(tmp2, sizeof tmp2, ",%d", idx2);
+                strncat(idx_str, tmp2, sizeof idx_str - strlen(idx_str) - 1);
+                skip_ws_p(ps);
+            }
+            if (*ps->p == ')') ps->p++;
+            skip_ws_p(ps);
+        }
+
+        if (*ps->p == '.') {
+            ps->p++; skip_ws_p(ps);
+            char field[MAX_VARNAME]; int fi = 0;
+            while ((isalnum((unsigned char)*ps->p) || *ps->p == '_') && fi < MAX_VARNAME - 1)
+                field[fi++] = (char)toupper((unsigned char)*ps->p++);
+            field[fi] = '\0';
+            if (fi) {
+                char flatname[MAX_VARNAME];
+                if (idx_str[0])
+                    snprintf(flatname, sizeof flatname, "%s.%s.%s", base, idx_str, field);
+                else
+                    snprintf(flatname, sizeof flatname, "%s.%s", base, field);
+                /* try numeric flat var first, then string */
+                Var *v = var_find(flatname);
+                if (v) { mpf_set(result, v->num); return; }
+                /* try string variant */
+                char sname[MAX_VARNAME];
+                snprintf(sname, sizeof sname, "%s$", flatname);
+                Var *vs = var_find(sname);
+                if (vs) { mpf_set_ui(result, 0); return; } /* string in numeric context = 0 */
+                /* not found: return 0 */
+                mpf_set_ui(result, 0); return;
+            }
+        }
+        /* not a dot-field expression: restore and fall through */
+        ps->p = save;
     }
 
     /* Variable or array element — check CONST table first */

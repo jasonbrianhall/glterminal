@@ -131,6 +131,38 @@ extern CtrlFrame g_ctrl[CTRL_STACK_MAX];
 extern int       g_ctrl_top;
 
 /* ================================================================
+ * TYPE / struct definitions
+ *
+ * TYPE PlayerData
+ *   PNam AS STRING * 17
+ *   XCoor AS DOUBLE
+ * END TYPE
+ *
+ * We store each TYPE definition as a list of field names (in order).
+ * At runtime, TYPE variables are "flat": PDat(1).PNam is stored as
+ * the variable "PDAT.1.PNAM" (for array element) or "PDAT.PNAM"
+ * (for scalar).  This avoids a full struct runtime.
+ * ================================================================ */
+#define MAX_TYPE_DEFS   32
+#define MAX_TYPE_FIELDS 64
+
+typedef struct {
+    char name[MAX_VARNAME];
+    int  is_str;   /* 1 = string field, 0 = numeric */
+} TypeField;
+
+typedef struct {
+    char      name[MAX_VARNAME];
+    TypeField fields[MAX_TYPE_FIELDS];
+    int       nfields;
+} TypeDef;
+
+extern TypeDef g_typedefs[MAX_TYPE_DEFS];
+extern int     g_ntypedefs;
+
+TypeDef *typedef_find(const char *name);
+
+/* ================================================================
  * DEF FN store
  * ================================================================ */
 typedef struct {
