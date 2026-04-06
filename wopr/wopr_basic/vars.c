@@ -13,6 +13,15 @@
 Var  g_vars[MAX_VARS];
 int  g_nvar = 0;
 
+TypeDef g_typedefs[MAX_TYPE_DEFS];
+int     g_ntypedefs = 0;
+
+TypeDef *typedef_find(const char *name) {
+    for (int i = 0; i < g_ntypedefs; i++)
+        if (strcasecmp(g_typedefs[i].name, name) == 0) return &g_typedefs[i];
+    return NULL;
+}
+
 FileHandle g_files[MAX_FILE_HANDLES + 1];  /* 1-based */
 
 /* ================================================================

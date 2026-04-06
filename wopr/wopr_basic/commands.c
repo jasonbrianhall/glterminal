@@ -167,16 +167,71 @@ static int cmd_option(Interp *ip, const char *args) {
 /* ================================================================
  * Display commands
  * ================================================================ */
+static int cmd_system(Interp *ip, const char *args) {
+    (void)args;
+    ip->running = 0;
+    /* longjmp out if available (WOPR context), otherwise just stop */
+#ifdef INLINEBASIC
+    extern void basic_exit_(void);
+    basic_exit_();
+#endif
+    return 1;
+}
+
+static int cmd_sleep(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    double secs = 1.0;
+    if (*p && *p != ':') {
+        mpf_t n; mpf_init2(n, g_prec);
+        eval_expr(p, n);
+        secs = mpf_get_d(n);
+        mpf_clear(n);
+    }
+    if (secs > 0) {
+#ifdef _WIN32
+        Sleep((DWORD)(secs * 1000));
+#else
+        struct timespec ts;
+        ts.tv_sec  = (time_t)secs;
+        ts.tv_nsec = (long)((secs - (long)secs) * 1e9);
+        nanosleep(&ts, NULL);
+#endif
+    }
+    return 0;
+}
+
+static int cmd_kill(Interp *ip, const char *args) {
+    (void)ip;
+    char filename[512] = "";
+    const char *p = sk(args);
+    if (*p == '"') p++;
+    int i = 0;
+    while (*p && *p != '"' && i < (int)sizeof(filename) - 1) filename[i++] = *p++;
+    filename[i] = '\0';
+    if (filename[0]) remove(filename);
+    return 0;
+}
+
 static int cmd_cls(Interp *ip, const char *args) {
     (void)ip; (void)args; display_cls(); return 0;
 }
 
 static int cmd_width(Interp *ip, const char *args) {
     (void)ip;
+    const char *p = sk(args);
     mpf_t n; mpf_init2(n, g_prec);
-    eval_expr(sk(args), n);
-    display_width((int)mpf_get_si(n));
+    p = sk(eval_expr(p, n));
+    int cols = (int)mpf_get_si(n);
     mpf_clear(n);
+    /* skip optional second argument (rows) */
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t r; mpf_init2(r, g_prec);
+        eval_expr(p, r);
+        mpf_clear(r);
+    }
+    display_width(cols);
     return 0;
 }
 
@@ -224,6 +279,7 @@ static int cmd_locate(Interp *ip, const char *args) {
 /* Forward declarations for commands used before their definition */
 static int cmd_dim(Interp *ip, const char *args);
 static int cmd_return(Interp *ip, const char *args);
+static const char *parse_field_varname(const char *p, char *out);
 
 /* DO [WHILE|UNTIL cond] — push a loop frame pointing at the DO statement */
 static int cmd_do(Interp *ip, const char *args) {
@@ -736,11 +792,53 @@ static int cmd_dim(Interp *ip, const char *args) {
         /* skip optional AS typename — e.g. "AS INTEGER", "AS PlayerData" */
         if (kw_match(p, "AS")) {
             p = sk(p + 2);
-            /* skip the type name, including optional * size for STRING * n */
-            while (isalnum((unsigned char)*p) || *p == '_') p++;
+            /* read the type name */
+            char typename[MAX_VARNAME]; int tni = 0;
+            while ((isalnum((unsigned char)*p) || *p == '_') && tni < MAX_VARNAME - 1)
+                typename[tni++] = (char)toupper((unsigned char)*p++);
+            typename[tni] = '\0';
             p = sk(p);
             if (*p == '*') { p = sk(p + 1); while (isdigit((unsigned char)*p)) p++; }
             p = sk(p);
+
+            /* If it's a user-defined TYPE, create flat field variables */
+            TypeDef *td = typedef_find(typename);
+            if (td) {
+                /* Determine the array size (if any) for this var */
+                int arr_count = 1, arr_base = g_option_base;
+                Var *base_v = var_find(name);
+                if (base_v && (base_v->kind == VAR_ARRAY_NUM || base_v->kind == VAR_ARRAY_STR)) {
+                    arr_count = base_v->dim[0] * (base_v->ndim == 2 ? base_v->dim[1] : 1);
+                    arr_base  = 0; /* already-created arrays are 0-based internally */
+                }
+
+                for (int ai = 0; ai < arr_count; ai++) {
+                    int elem_idx = arr_base + ai;
+                    for (int fi = 0; fi < td->nfields; fi++) {
+                        char flatname[MAX_VARNAME];
+                        if (arr_count > 1)
+                            snprintf(flatname, sizeof flatname, "%s.%d.%s",
+                                     name, elem_idx, td->fields[fi].name);
+                        else
+                            snprintf(flatname, sizeof flatname, "%s.%s",
+                                     name, td->fields[fi].name);
+
+                        if (td->fields[fi].is_str) {
+                            char sname[MAX_VARNAME];
+                            snprintf(sname, sizeof sname, "%s$", flatname);
+                            if (!var_find(sname)) {
+                                Var *fv = var_create(sname);
+                                (void)fv;
+                            }
+                        } else {
+                            if (!var_find(flatname)) {
+                                Var *fv = var_create(flatname);
+                                (void)fv;
+                            }
+                        }
+                    }
+                }
+            }
         }
         if (*p == ',') p = sk(p + 1);
     }
@@ -753,6 +851,41 @@ static int cmd_dim(Interp *ip, const char *args) {
 static int cmd_let(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
+
+    /* Check for struct field access: identifier optionally followed by (idx).field */
+    {
+        const char *save = p;
+        char flatname[MAX_VARNAME];
+        const char *after = parse_field_varname(p, flatname);
+        if (after) {
+            after = sk(after);
+            if (*after == '=') {
+                /* It's a field assignment */
+                after = sk(after + 1);
+                int is_str = (flatname[strlen(flatname)-1] == '$') ||
+                             strrchr(flatname, '.') != NULL;
+                /* Determine by trying string eval if it looks like a string */
+                if (is_str_token(after)) {
+                    char sbuf[1024];
+                    eval_str_expr(after, sbuf, sizeof sbuf);
+                    /* store as string — append $ sigil if not present */
+                    char sname[MAX_VARNAME];
+                    snprintf(sname, sizeof sname, "%s$", flatname);
+                    Var *v = var_get(sname);
+                    free(v->str); v->str = str_dup(sbuf);
+                } else {
+                    mpf_t val; mpf_init2(val, g_prec);
+                    eval_expr(after, val);
+                    Var *v = var_get(flatname);
+                    mpf_set(v->num, val);
+                    mpf_clear(val);
+                }
+                return 0;
+            }
+        }
+        p = save;
+    }
+
     char name[MAX_VARNAME];
     p = sk(read_varname(p, name));
     int arr_i = 0, arr_j = 1, is_arr = 0;
@@ -1071,8 +1204,89 @@ static int cmd_line_input_file(Interp *ip, const char *args) {
 }
 
 /* ================================================================
- * FOR / NEXT / GOTO / GOSUB / RETURN
+ * GET/PUT graphics — stubs for CLI mode.
+ * In a real graphical backend these would capture/blit screen rects.
  * ================================================================ */
+static int cmd_get_graphics(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+static int cmd_put_graphics(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+static int cmd_draw(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+static int cmd_circle(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+static int cmd_line_gfx(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+static int cmd_paint(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+
+/* ================================================================
+ * PSET (x, y) [, color] — stub
+ * ================================================================ */
+static int cmd_pset(Interp *ip, const char *args) {
+    (void)ip; (void)args; return 0;
+}
+
+/* ================================================================
+ * Utility: build a flat variable name for struct field access.
+ * "PDat(2).PNam" → "PDAT.2.PNAM"
+ * "Settings.UseSound" → "SETTINGS.USESOUND"
+ * Result written into out (must be MAX_VARNAME bytes).
+ * Returns pointer past the parsed text, or NULL on failure.
+ * ================================================================ */
+static const char *parse_field_varname(const char *p, char *out) {
+    /* read base name */
+    char base[MAX_VARNAME]; int bi = 0;
+    while ((isalnum((unsigned char)*p) || *p == '_') && bi < MAX_VARNAME - 1)
+        base[bi++] = (char)toupper((unsigned char)*p++);
+    base[bi] = '\0';
+    if (!bi) return NULL;
+
+    /* optional array index */
+    char idx_str[32] = "";
+    if (*p == '(') {
+        p = sk(p + 1);
+        mpf_t v; mpf_init2(v, g_prec);
+        p = sk(eval_expr(p, v));
+        int idx1 = (int)mpf_get_si(v);
+        mpf_clear(v);
+        snprintf(idx_str, sizeof idx_str, "%d", idx1);
+        if (*p == ',') {
+            p = sk(p + 1);
+            mpf_t v2; mpf_init2(v2, g_prec);
+            p = sk(eval_expr(p, v2));
+            int idx2 = (int)mpf_get_si(v2);
+            mpf_clear(v2);
+            char tmp2[16]; snprintf(tmp2, sizeof tmp2, ",%d", idx2);
+            strncat(idx_str, tmp2, sizeof idx_str - strlen(idx_str) - 1);
+        }
+        if (*p == ')') p++;
+    }
+    p = sk(p);
+    if (*p != '.') return NULL;
+    p = sk(p + 1);
+
+    /* read field name */
+    char field[MAX_VARNAME]; int fi = 0;
+    while ((isalnum((unsigned char)*p) || *p == '_') && fi < MAX_VARNAME - 1)
+        field[fi++] = (char)toupper((unsigned char)*p++);
+    field[fi] = '\0';
+    if (!fi) return NULL;
+
+    /* build flat name: BASE.IDX.FIELD or BASE.FIELD */
+    if (idx_str[0])
+        snprintf(out, MAX_VARNAME, "%s.%s.%s", base, idx_str, field);
+    else
+        snprintf(out, MAX_VARNAME, "%s.%s", base, field);
+
+    return p;
+}
 static int cmd_for(Interp *ip, const char *args) {
     const char *p = sk(args);
     char vname[MAX_VARNAME];
@@ -1409,6 +1623,15 @@ static int cmd_defint(Interp *ip, const char *args) { (void)ip;(void)args; retur
 const Command commands[] = {
     { "REM",        cmd_rem        },
     { "'",          cmd_rem        },
+    { "SYSTEM",     cmd_system     },
+    { "SLEEP",      cmd_sleep      },
+    { "KILL",       cmd_kill       },
+    { "GET",        cmd_get_graphics },
+    { "PUT",        cmd_put_graphics },
+    { "DRAW",       cmd_draw       },
+    { "CIRCLE",     cmd_circle     },
+    { "PSET",       cmd_pset       },
+    { "PAINT",      cmd_paint      },
     { "END SELECT", cmd_end_select },
     { "END SUB",    cmd_end_sub    },
     { "END FUNCTION",cmd_end_sub   },
@@ -1454,6 +1677,7 @@ const Command commands[] = {
     { "CALL",       cmd_call       },
     { "IF",         cmd_if         },
     { "LINE INPUT", cmd_line_input },
+    { "LINE",       cmd_line_gfx   },
     { "INPUT",      cmd_input      },
     { "OPEN",       cmd_open       },
     { "CLOSE",      cmd_close      },
@@ -1524,12 +1748,26 @@ int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
         }
     }
 
-    /* Bare assignment: var = expr or arr(i) = expr */
+    /* Bare assignment: var = expr, arr(i) = expr, or var.field = expr */
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
         const char *after = read_varname(p, name);
         after = sk(after);
         if (*after == '=' || *after == '(') return cmd_let(ip, p);
+        /* struct field: name.field = ... or name(i).field = ... */
+        if (*after == '.') return cmd_let(ip, p);
+        /* array then dot: name(idx).field */
+        if (*after == '(' ) {
+            /* scan past parens */
+            int depth = 1; after++;
+            while (*after && depth > 0) {
+                if (*after == '(') depth++;
+                else if (*after == ')') depth--;
+                after++;
+            }
+            after = sk(after);
+            if (*after == '.') return cmd_let(ip, p);
+        }
     }
 
     basic_stderr("Warning: unknown: %.60s\n", p);

@@ -185,6 +185,7 @@ void load(const char *filename) {
 
     /* ---- NUMBERED path ---- */
     if (numbered) {
+        int inside_type_n = 0;
         while (fgets(buf, sizeof buf, f)) {
             buf[strcspn(buf, "\r\n")] = '\0';
             char *p = buf;
@@ -198,6 +199,44 @@ void load(const char *filename) {
             normalize_kw(p, normbuf, sizeof normbuf);
             p = normbuf;
 
+            /* TYPE block handling for numbered programs */
+            if (strncasecmp(p, "END TYPE", 8) == 0 && !isalnum((unsigned char)p[8])) {
+                inside_type_n = 0; continue;
+            }
+            if (strncasecmp(p, "TYPE ", 5) == 0) {
+                inside_type_n = 1;
+                if (g_ntypedefs < MAX_TYPE_DEFS) {
+                    const char *tp = p + 5;
+                    while (isspace((unsigned char)*tp)) tp++;
+                    TypeDef *td = &g_typedefs[g_ntypedefs++];
+                    memset(td, 0, sizeof(*td));
+                    int ti = 0;
+                    while ((isalnum((unsigned char)*tp) || *tp == '_') && ti < MAX_VARNAME - 1)
+                        td->name[ti++] = (char)toupper((unsigned char)*tp++);
+                    td->name[ti] = '\0';
+                }
+                continue;
+            }
+            if (inside_type_n) {
+                if (g_ntypedefs > 0) {
+                    TypeDef *td = &g_typedefs[g_ntypedefs - 1];
+                    if (td->nfields < MAX_TYPE_FIELDS) {
+                        TypeField *tf = &td->fields[td->nfields];
+                        int fi = 0;
+                        const char *fp = p;
+                        while ((isalnum((unsigned char)*fp) || *fp == '_') && fi < MAX_VARNAME - 1)
+                            tf->name[fi++] = (char)toupper((unsigned char)*fp++);
+                        tf->name[fi] = '\0';
+                        while (isspace((unsigned char)*fp)) fp++;
+                        if (strncasecmp(fp, "AS", 2) == 0) {
+                            fp += 2; while (isspace((unsigned char)*fp)) fp++;
+                            tf->is_str = (strncasecmp(fp, "STRING", 6) == 0) ? 1 : 0;
+                        }
+                        if (tf->name[0]) td->nfields++;
+                    }
+                }
+                continue;
+            }
             const char *trimmed = p;
             int starts_with_if = (strncasecmp(trimmed, "IF", 2) == 0 &&
                                   !isalnum((unsigned char)trimmed[2]) &&
@@ -275,10 +314,44 @@ void load(const char *filename) {
         if (*p == '$')  continue;
         if (strncasecmp(p, "DECLARE ", 8) == 0) continue;
 
-        /* TYPE...END TYPE blocks: skip entirely (fields become variables at runtime) */
+        /* TYPE...END TYPE blocks: record field definitions, don't store as lines */
         if (strncasecmp(p, "END TYPE", 8) == 0) { inside_type = 0; continue; }
-        if (strncasecmp(p, "TYPE ",    5) == 0) { inside_type = 1; continue; }
-        if (inside_type) continue;
+        if (strncasecmp(p, "TYPE ", 5) == 0 && !isalnum((unsigned char)p[5-1+1])) {
+            inside_type = 1;
+            /* register the type name */
+            if (g_ntypedefs < MAX_TYPE_DEFS) {
+                const char *tp = p + 5;
+                while (isspace((unsigned char)*tp)) tp++;
+                TypeDef *td = &g_typedefs[g_ntypedefs++];
+                memset(td, 0, sizeof(*td));
+                int ti = 0;
+                while ((isalnum((unsigned char)*tp) || *tp == '_') && ti < MAX_VARNAME - 1)
+                    td->name[ti++] = (char)toupper((unsigned char)*tp++);
+                td->name[ti] = '\0';
+            }
+            continue;
+        }
+        if (inside_type) {
+            /* Parse "FieldName AS STRING * n" or "FieldName AS DOUBLE" etc. */
+            if (g_ntypedefs > 0) {
+                TypeDef *td = &g_typedefs[g_ntypedefs - 1];
+                if (td->nfields < MAX_TYPE_FIELDS) {
+                    TypeField *tf = &td->fields[td->nfields];
+                    int fi = 0;
+                    while ((isalnum((unsigned char)*p) || *p == '_') && fi < MAX_VARNAME - 1)
+                        tf->name[fi++] = (char)toupper((unsigned char)*p++);
+                    tf->name[fi] = '\0';
+                    /* check AS STRING vs numeric */
+                    while (isspace((unsigned char)*p)) p++;
+                    if (strncasecmp(p, "AS", 2) == 0) {
+                        p += 2; while (isspace((unsigned char)*p)) p++;
+                        tf->is_str = (strncasecmp(p, "STRING", 6) == 0) ? 1 : 0;
+                    }
+                    if (tf->name[0]) td->nfields++;
+                }
+            }
+            continue;
+        }
 
         /* bare label definition? */
         char lname[MAX_VARNAME];
