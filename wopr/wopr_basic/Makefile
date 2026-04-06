@@ -29,10 +29,12 @@ ifneq ($(SDL_LIBS),)
     CFLAGS    += $(SDL_CFLAGS) -DHAVE_SDL
     LDFLAGS   += $(SDL_LIBS)
     SOUND_SRC  = sound_sdl.c
-    $(info SDL2 found — building with audio support)
+    GFX_SRC    = gfx_sdl.c
+    $(info SDL2 found — building with audio + SCREEN 1-9 graphics support)
 else
     SOUND_SRC  = sound_null.c
-    $(info SDL2 not found — building without audio support)
+    GFX_SRC    = gfx_null.c
+    $(info SDL2 not found — building text-only \(no audio or SCREEN 1-9\))
 endif
 
 # --------------------------------------------------------------------
@@ -51,7 +53,7 @@ endif
 # --------------------------------------------------------------------
 # SOURCES → per-target object paths
 # --------------------------------------------------------------------
-SRCS = main.c vars.c expr.c program.c commands.c display_ansi.c basic_print.c $(SOUND_SRC)
+SRCS = main.c vars.c expr.c program.c commands.c type.c display_ansi.c $(GFX_SRC) basic_print.c $(SOUND_SRC)
 OBJS = $(patsubst %.c,$(BUILDDIR)/%.o,$(SRCS))
 
 # --------------------------------------------------------------------

@@ -26,4 +26,6 @@ void gfx_flush(void)                           { }
 int  gfx_inkey(void)                           { return 0; }
 int  gfx_getchar(void)                         { return 0; }
 int  gfx_getline(char *b, int n)               { (void)b;(void)n; return 0; }
+int  gfx_get_rect(int a,int b2,int c,int d,int *buf){ (void)a;(void)b2;(void)c;(void)d;(void)buf; return 0; }
+void gfx_put_rect(int a,int b2,int c,int d,const int *buf,int m){ (void)a;(void)b2;(void)c;(void)d;(void)buf;(void)m; }
 #endif

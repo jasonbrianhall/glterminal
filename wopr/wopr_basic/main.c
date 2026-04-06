@@ -84,6 +84,7 @@ int main(int argc, char **argv) {
         if (argc >= 3) g_prec = (mp_bitcnt_t)atoi(argv[2]);
         load(argv[1]);
         prescan_data();
+        prescan_types();
         run();
         display_shutdown();
         return 0;
@@ -124,6 +125,7 @@ argv[1] = tmpfile_path;
 
 load(argv[1]);
 prescan_data();
+prescan_types();
 run();
 display_shutdown();
 return 0;

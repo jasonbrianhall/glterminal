@@ -401,6 +401,7 @@ void clear_program(void) {
     g_data_count  = 0;
     g_data_pos    = 0;
     g_defn_count  = 0;
+    g_ntypedefs   = 0;
     g_option_base = 0;
     g_cont_pc     = -1;
     label_clear();
@@ -449,5 +450,6 @@ void load_program(const char *filename) {
     clear_program();
     load(path);
     prescan_data();
+    prescan_types();
     printf("Loaded %s (%d lines)\n", path, g_nlines);
 }

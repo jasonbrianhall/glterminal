@@ -324,3 +324,5 @@ void display_draw(const char *s)                                 { gfx_draw(s); 
 void display_palette(int i,int r,int g,int b)                   { gfx_palette(i,r,g,b); }
 void display_get_pen(int *x,int *y)                             { gfx_get_pen(x,y); }
 void display_set_pen(int x,int y,int c)                         { gfx_set_pen(x,y,c); }
+int  display_get_rect(int x1,int y1,int x2,int y2,int *buf)    { return gfx_get_rect(x1,y1,x2,y2,buf); }
+void display_put_rect(int x,int y,int w,int h,const int *buf,int mode) { gfx_put_rect(x,y,w,h,buf,mode); }

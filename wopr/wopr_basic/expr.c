@@ -393,6 +393,36 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
             return after;
         }
 
+        /* Struct field on a non-$ base: base(i).Field$ or base.Field$ */
+        if (!var_is_str_name(vname)) {
+            const char *q = after;
+            int arr_idx = -1;
+            if (*q == '(') {
+                q = sk(q + 1);
+                mpf_t idx; mpf_init2(idx, g_prec);
+                q = sk(eval_expr(q, idx));
+                arr_idx = (int)mpf_get_si(idx); mpf_clear(idx);
+                /* skip 2nd dim if present */
+                if (*q == ',') { q = sk(q+1); mpf_t i2; mpf_init2(i2,g_prec); q=sk(eval_expr(q,i2)); mpf_clear(i2); }
+                if (*q == ')') q++;
+                q = sk(q);
+            }
+            if (*q == '.') {
+                q++;
+                char field[MAX_VARNAME]; int fi = 0;
+                while ((isalnum((unsigned char)*q) || *q == '_') && fi < MAX_VARNAME-2)
+                    field[fi++] = (char)toupper((unsigned char)*q++);
+                if (*q == '$') { field[fi++] = '$'; q++; }
+                field[fi] = '\0';
+                char mangled[MAX_VARNAME];
+                type_mangle(vname, arr_idx, field, mangled, sizeof mangled);
+                Var *v = var_get(mangled);
+                strncpy(buf, v->str ? v->str : "", bufsz - 1);
+                buf[bufsz - 1] = '\0';
+                return q;
+            }
+        }
+
         if (var_is_str_name(vname)) {
             Var *v = var_get(vname);
             p = after;
@@ -404,6 +434,22 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
                 int aj = 1;
                 if (*p == ',') { p=sk(p+1); mpf_t i2; mpf_init2(i2,g_prec); p=sk(eval_expr(p,i2)); aj=(int)mpf_get_si(i2); mpf_clear(i2); }
                 if (*p == ')') p++;
+                /* struct field on a string array: name$(i).field$ — unusual but handle */
+                p = sk(p);
+                if (*p == '.') {
+                    p++;
+                    char field[MAX_VARNAME]; int fi = 0;
+                    while ((isalnum((unsigned char)*p) || *p == '_') && fi < MAX_VARNAME-2)
+                        field[fi++] = (char)toupper((unsigned char)*p++);
+                    if (*p == '$') { field[fi++] = '$'; p++; }
+                    field[fi] = '\0';
+                    char mangled[MAX_VARNAME];
+                    type_mangle(vname, ai, field, mangled, sizeof mangled);
+                    Var *mv = var_get(mangled);
+                    strncpy(buf, mv->str ? mv->str : "", bufsz - 1);
+                    buf[bufsz - 1] = '\0';
+                    return p;
+                }
                 if (v->kind == VAR_ARRAY_STR) {
                     char **slot = arr_str_elem(v, ai, aj);
                     strncpy(buf, *slot ? *slot : "", bufsz - 1);
@@ -446,11 +492,22 @@ int is_str_token(const char *p) {
     if (kw_match(p, "OCT$"))    return 1;
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
-        read_varname(p, name);
+        const char *after = read_varname(p, name);
         if (var_is_str_name(name)) return 1;
         /* check CONST table for string constants */
         ConstEntry *ce = const_find(name);
         if (ce && ce->is_str) return 1;
+        /* struct field access: name.Field$ or name(i).Field$ */
+        const char *q = after;
+        if (*q == '(') {   /* skip subscript */
+            int depth = 1; q++;
+            while (*q && depth > 0) { if (*q=='(') depth++; else if (*q==')') depth--; q++; }
+        }
+        if (*q == '.') {
+            q++;
+            while (isalnum((unsigned char)*q) || *q == '_') q++;
+            if (*q == '$') return 1;
+        }
     }
     return 0;
 }
@@ -1068,14 +1125,12 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     /* Variable or array element — check CONST table first */
     if (isalpha((unsigned char)*ps->p)) {
         char name[MAX_VARNAME];
-        const char *name_start = ps->p;
         ps->p = read_varname(ps->p, name);
         skip_ws_p(ps);
 
         /* CONST lookup (numeric) — before treating as a variable */
         ConstEntry *ce = const_find(name);
         if (ce && !ce->is_str) {
-            /* evaluate the stored expression (handles NOT TRUE etc.) */
             eval_expr(ce->value, result);
             return;
         }
@@ -1089,14 +1144,22 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
                     ps->p++;
                 }
             }
+            /* struct field on a string-named base — unlikely but skip */
+            if (*ps->p == '.') {
+                ps->p++;
+                while (isalnum((unsigned char)*ps->p) || *ps->p == '_' || *ps->p == '$') ps->p++;
+            }
             mpf_set_ui(result, 0);
             return;
         }
+
+        /* Optional array subscript */
+        int arr_idx = -1;
         if (*ps->p == '(') {
             ps->p++;
             mpf_t idx1; mpf_init2(idx1, g_prec);
             parse_expr_p(ps, idx1);
-            int i1 = (int)mpf_get_si(idx1); mpf_clear(idx1);
+            arr_idx = (int)mpf_get_si(idx1); mpf_clear(idx1);
             int i2 = 1;
             skip_ws_p(ps);
             if (*ps->p == ',') {
@@ -1105,13 +1168,42 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
                 parse_expr_p(ps, idx2);
                 i2 = (int)mpf_get_si(idx2); mpf_clear(idx2);
                 skip_ws_p(ps);
+                /* 2-D array — no struct field; fall through to arr_num_elem */
+                if (*ps->p == ')') ps->p++;
+                Var *v = var_get(name);
+                if (v->kind != VAR_ARRAY_NUM) { mpf_set_ui(result, 0); return; }
+                mpf_set(result, *arr_num_elem(v, arr_idx, i2));
+                return;
             }
             if (*ps->p == ')') ps->p++;
-            Var *v = var_get(name);
-            if (v->kind != VAR_ARRAY_NUM) { mpf_set_ui(result, 0); return; }
-            mpf_set(result, *arr_num_elem(v, i1, i2));
+            skip_ws_p(ps);
+        }
+
+        /* Struct field access: name.field or name(i).field */
+        if (*ps->p == '.') {
+            ps->p++;
+            char field[MAX_VARNAME]; int fi = 0;
+            while ((isalnum((unsigned char)*ps->p) || *ps->p == '_') && fi < MAX_VARNAME-2)
+                field[fi++] = (char)toupper((unsigned char)*ps->p++);
+            if (*ps->p == '$') field[fi++] = '$';
+            field[fi] = '\0';
+            if (field[fi-1] == '$') ps->p++;   /* consume $ only if we stored it */
+            char mangled[MAX_VARNAME];
+            type_mangle(name, arr_idx, field, mangled, sizeof mangled);
+            Var *v = var_get(mangled);
+            mpf_set(result, v->num);
             return;
         }
+
+        /* Plain array element */
+        if (arr_idx >= 0) {
+            Var *v = var_get(name);
+            if (v->kind != VAR_ARRAY_NUM) { mpf_set_ui(result, 0); return; }
+            mpf_set(result, *arr_num_elem(v, arr_idx, 1));
+            return;
+        }
+
+        /* Plain scalar */
         Var *v = var_get(name);
         mpf_set(result, v->num);
         return;

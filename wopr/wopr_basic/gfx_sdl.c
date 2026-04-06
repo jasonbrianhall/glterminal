@@ -778,4 +778,41 @@ int gfx_getline(char *buf, int bufsz)
     return len;
 }
 
+int gfx_get_rect(int x1, int y1, int x2, int y2, int *buf)
+{
+    if (!g_pixels) return 0;
+    if (x1 > x2) { int t = x1; x1 = x2; x2 = t; }
+    if (y1 > y2) { int t = y1; y1 = y2; y2 = t; }
+    int w = x2 - x1 + 1, h = y2 - y1 + 1;
+    int n = 0;
+    for (int ry = 0; ry < h; ry++)
+        for (int rx = 0; rx < w; rx++)
+            buf[n++] = get_px(x1 + rx, y1 + ry);
+    return n;
+}
+
+void gfx_put_rect(int x, int y, int w, int h, const int *buf, int mode)
+{
+    if (!g_pixels) return;
+    int n = 0;
+    for (int ry = 0; ry < h; ry++) {
+        for (int rx = 0; rx < w; rx++) {
+            int src = buf[n++] & 15;
+            int dx = x + rx, dy = y + ry;
+            if (dx < 0 || dx >= g_w || dy < 0 || dy >= g_h) continue;
+            int dst = get_px(dx, dy);
+            int out;
+            switch (mode) {
+            case 1:  out = dst ^ src; break;   /* XOR */
+            case 2:  out = dst | src; break;   /* OR  */
+            case 3:  out = dst & src; break;   /* AND */
+            case 4:  out = src ^ 15;  break;   /* PRESET (inverted) */
+            default: out = src;       break;   /* PSET */
+            }
+            put_px(dx, dy, out);
+        }
+    }
+    do_flush();
+}
+
 #endif /* HAVE_SDL */

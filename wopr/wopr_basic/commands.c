@@ -177,16 +177,11 @@ static int cmd_option(Interp *ip, const char *args) {
  * ================================================================ */
 static int cmd_cls(Interp *ip, const char *args) {
     (void)ip;
-    /* CLS [n] — optional argument (0=full, 1=graphics viewport, 2=text area);
-     * we treat all variants as a full clear since we have no separate viewports. */
     const char *p = sk(args);
     if (*p && *p != ':' && *p != '\'') {
-        mpf_t n; mpf_init2(n, g_prec);
-        eval_expr(p, n);
-        mpf_clear(n);
+        mpf_t n; mpf_init2(n, g_prec); eval_expr(p, n); mpf_clear(n);
     }
-    display_cls();
-    return 0;
+    display_cls(); return 0;
 }
 
 static int cmd_width(Interp *ip, const char *args) {
@@ -194,15 +189,11 @@ static int cmd_width(Interp *ip, const char *args) {
     const char *p = sk(args);
     mpf_t n; mpf_init2(n, g_prec);
     p = sk(eval_expr(p, n));
-    display_width((int)mpf_get_si(n));
-    mpf_clear(n);
-    /* optional second arg: rows — consume and ignore */
-    if (*p == ',') {
-        p = sk(p + 1);
+    display_width((int)mpf_get_si(n)); mpf_clear(n);
+    if (*p == ',') {   /* optional rows argument — consume and ignore */
+        p = sk(p+1);
         if (*p && *p != ':' && *p != '\'') {
-            mpf_t r; mpf_init2(r, g_prec);
-            eval_expr(p, r);
-            mpf_clear(r);
+            mpf_t r; mpf_init2(r, g_prec); eval_expr(p, r); mpf_clear(r);
         }
     }
     return 0;
@@ -618,9 +609,10 @@ static int cmd_view_print(Interp *ip, const char *args) {
     return 0;
 }
 
-/* ================================================================
- * PALETTE [index, colour_number]
- * ================================================================ */
+/* PALETTE [index, colour_number]
+ * colour_number is an EGA palette value 0-63, encoded as RGBrgb:
+ *   bit 5=R-high, 4=G-high, 3=B-high, 2=r-low, 1=g-low, 0=b-low
+ * Each channel: high-bit gives 170, low-bit gives 85.  Both=255, none=0. */
 static int cmd_palette(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
@@ -632,10 +624,10 @@ static int cmd_palette(Interp *ip, const char *args) {
     int i  = (int)mpf_get_si(idx);
     int cn = (int)mpf_get_si(col);
     mpf_clears(idx, col, NULL);
-    /* Encode: QuickBASIC uses a packed 18-bit RGB (6 bits per channel) */
-    int r = ((cn >>  0) & 63) * 4;
-    int g2= ((cn >>  8) & 63) * 4;
-    int b = ((cn >> 16) & 63) * 4;
+    /* EGA colour 0-63: bits RGBrgb */
+    int r = ((cn >> 5) & 1) * 170 + ((cn >> 2) & 1) * 85;
+    int g2= ((cn >> 4) & 1) * 170 + ((cn >> 1) & 1) * 85;
+    int b = ((cn >> 3) & 1) * 170 + ((cn >> 0) & 1) * 85;
     display_palette(i, r, g2, b);
     return 0;
 }
@@ -798,7 +790,9 @@ static int cmd_let(Interp *ip, const char *args) {
     const char *p = sk(args);
     char name[MAX_VARNAME];
     p = sk(read_varname(p, name));
-    int arr_i = 0, arr_j = 1, is_arr = 0;
+    int arr_i = -1, arr_j = 1, is_arr = 0;
+
+    /* Optional array subscript: name(i) or name(i,j) */
     if (*p == '(') {
         is_arr = 1; p = sk(p + 1);
         mpf_t i1; mpf_init2(i1, g_prec);
@@ -806,6 +800,33 @@ static int cmd_let(Interp *ip, const char *args) {
         if (*p == ',') { p=sk(p+1); mpf_t i2; mpf_init2(i2,g_prec); p=sk(eval_expr(p,i2)); arr_j=(int)mpf_get_si(i2); mpf_clear(i2); }
         if (*p == ')') p = sk(p + 1);
     }
+
+    /* Struct field access: varname.field or varname(i).field */
+    if (*p == '.') {
+        p = sk(p + 1);
+        char field[MAX_VARNAME]; int fi = 0;
+        while ((isalnum((unsigned char)*p) || *p == '_') && fi < MAX_VARNAME - 2)
+            field[fi++] = (char)toupper((unsigned char)*p++);
+        if (*p == '$') field[fi++] = '$';
+        field[fi] = '\0';
+        if (*p == '$') p++;
+        p = sk(p);
+        if (*p == '=') p = sk(p + 1);
+        /* Mangle into a flat variable name */
+        char mangled[MAX_VARNAME];
+        type_mangle(name, is_arr ? arr_i : -1, field, mangled, sizeof mangled);
+        if (var_is_str_name(mangled)) {
+            char sbuf[1024]; eval_str_expr(sk(p), sbuf, sizeof sbuf);
+            Var *v = var_get(mangled); free(v->str); v->str = str_dup(sbuf);
+        } else {
+            mpf_t val; mpf_init2(val, g_prec);
+            eval_expr(sk(p), val);
+            Var *v = var_get(mangled); mpf_set(v->num, val);
+            mpf_clear(val);
+        }
+        return 0;
+    }
+
     if (*p == '=') p = sk(p + 1);
     if (var_is_str_name(name)) {
         char sbuf[1024];
@@ -884,20 +905,20 @@ static int cmd_print(Interp *ip, const char *args) {
             mpf_t val; mpf_init2(val, g_prec);
             p = eval_expr(p, val);
             double d = mpf_get_d(val);
+            char nbuf[64];
             if (d == floor(d) && fabs(d) < 1e15) {
-                if (d >= 0) printf(" %.0f ", d);
-                else        printf("%.0f ", d);
+                snprintf(nbuf, sizeof nbuf, d >= 0 ? " %.0f " : "%.0f ", d);
             } else {
-                char buf[64];
-                snprintf(buf, sizeof buf, "%.7G", d);
-                if (strchr(buf, '.') && !strchr(buf, 'E')) {
-                    char *end = buf + strlen(buf) - 1;
+                char tmp[64];
+                snprintf(tmp, sizeof tmp, "%.7G", d);
+                if (strchr(tmp, '.') && !strchr(tmp, 'E')) {
+                    char *end = tmp + strlen(tmp) - 1;
                     while (*end == '0') *end-- = '\0';
                     if (*end == '.') *end = '\0';
                 }
-                if (d >= 0) printf(" %s ", buf);
-                else        printf("%s ", buf);
+                snprintf(nbuf, sizeof nbuf, d >= 0 ? " %s " : "%s ", tmp);
             }
+            display_print(nbuf);
             mpf_clear(val);
         }
         p = sk(p);
@@ -1628,14 +1649,100 @@ static int cmd_view(Interp *ip, const char *args) {
     return 0;
 }
 
+/* ================================================================
+ * TYPE / END TYPE — pre-scanned; these lines are no-ops at runtime.
+ * ================================================================ */
+static int cmd_type(Interp *ip, const char *args)     { (void)ip;(void)args; return 0; }
+static int cmd_end_type(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
+
+/* ================================================================
+ * GET (x1,y1)-(x2,y2), array& — capture screen rect into integer array
+ * PUT (x,y), array& [, PSET|XOR|OR|AND|PRESET] — blit saved rect
+ *
+ * Array layout: arr(0)=width, arr(1)=height, arr(2..)=palette pixels.
+ * ================================================================ */
+static int cmd_get_gfx(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    int x1, y1, x2, y2, stepped;
+    p = parse_coord(p, &x1, &y1, &stepped);
+    p = sk(p); if (*p == '-') p = sk(p + 1);
+    p = parse_coord(p, &x2, &y2, &stepped);
+    p = sk(p); if (*p == ',') p = sk(p + 1);
+
+    char aname[MAX_VARNAME];
+    p = sk(read_varname(sk(p), aname));
+    if (*p == '&') p++;   /* strip LONG sigil */
+
+    if (x1 > x2) { int t=x1; x1=x2; x2=t; }
+    if (y1 > y2) { int t=y1; y1=y2; y2=t; }
+    int w = x2-x1+1, h = y2-y1+1, npix = w*h, total = npix+2;
+
+    Var *v = var_find(aname);
+    if (!v) v = var_create(aname);
+    if (v->kind != VAR_ARRAY_NUM || v->dim[0] < total) {
+        if (v->kind == VAR_ARRAY_NUM && v->arr_num) {
+            for (int i=0;i<v->dim[0];i++) mpf_clear(v->arr_num[i]);
+            free(v->arr_num);
+        }
+        v->kind=VAR_ARRAY_NUM; v->ndim=1; v->dim[0]=total; v->dim[1]=1;
+        v->arr_num = calloc(total, sizeof(mpf_t));
+        for (int i=0;i<total;i++) { mpf_init2(v->arr_num[i],g_prec); mpf_set_ui(v->arr_num[i],0); }
+    }
+    int *buf = malloc(npix * sizeof(int));
+    display_get_rect(x1, y1, x2, y2, buf);
+    mpf_set_si(v->arr_num[0], w);
+    mpf_set_si(v->arr_num[1], h);
+    for (int i=0;i<npix;i++) mpf_set_si(v->arr_num[i+2], buf[i]);
+    free(buf);
+    return 0;
+}
+
+static int cmd_put_gfx(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    int x, y, stepped;
+    p = parse_coord(p, &x, &y, &stepped);
+    if (stepped) { int px2,py2; display_get_pen(&px2,&py2); x+=px2; y+=py2; }
+    p = sk(p); if (*p == ',') p = sk(p + 1);
+
+    char aname[MAX_VARNAME];
+    p = sk(read_varname(sk(p), aname));
+    if (*p == '&') p++;
+
+    Var *v = var_find(aname);
+    if (!v || v->kind != VAR_ARRAY_NUM || v->dim[0] < 2) return 0;
+
+    int w = (int)mpf_get_si(v->arr_num[0]);
+    int h = (int)mpf_get_si(v->arr_num[1]);
+    int npix = w*h;
+
+    int mode = 0;   /* PSET */
+    p = sk(p);
+    if (*p == ',') {
+        p = sk(p+1);
+        if      (kw_match(p,"XOR"))    mode=1;
+        else if (kw_match(p,"OR"))     mode=2;
+        else if (kw_match(p,"AND"))    mode=3;
+        else if (kw_match(p,"PRESET")) mode=4;
+    }
+
+    int stored = v->dim[0]-2;
+    if (npix > stored) npix = stored;
+    int *buf = malloc(npix * sizeof(int));
+    for (int i=0;i<npix;i++) buf[i]=(int)mpf_get_si(v->arr_num[i+2]);
+    display_put_rect(x, y, w, h, buf, mode);
+    free(buf);
+    return 0;
+}
+
 /* SLEEP n — pause for n seconds */
 static int cmd_sleep(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
     mpf_t n; mpf_init2(n, g_prec);
     eval_expr(p, n);
-    double secs = mpf_get_d(n);
-    mpf_clear(n);
+    double secs = mpf_get_d(n); mpf_clear(n);
     if (secs > 0) {
 #ifdef _WIN32
         SDL_Delay((Uint32)(secs * 1000.0));
@@ -1649,23 +1756,18 @@ static int cmd_sleep(Interp *ip, const char *args) {
     return 0;
 }
 
-/* SYSTEM — exit the interpreter (same as END but named SYSTEM) */
-static int cmd_system(Interp *ip, const char *args) {
-    return cmd_end(ip, args);
-}
+/* SYSTEM — exit interpreter */
+static int cmd_system(Interp *ip, const char *args) { return cmd_end(ip, args); }
 
-/* DECLARE SUB/FUNCTION — forward declaration stub, ignored at runtime */
-static int cmd_declare(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
-}
+/* DECLARE SUB/FUNCTION — forward declaration, ignored at runtime */
+static int cmd_declare(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
 
 /* KILL "filename" — delete a file */
-static int cmd_kill(Interp *ip, const char *args) {
+static int cmd_kill_file(Interp *ip, const char *args) {
     (void)ip;
     char fname[512];
     eval_str_expr(sk(args), fname, sizeof fname);
-    if (remove(fname) != 0)
-        basic_stderr("KILL: could not delete \"%s\"\n", fname);
+    if (remove(fname) != 0) basic_stderr("KILL: could not delete \"%s\"\n", fname);
     return 0;
 }
 
@@ -1673,23 +1775,27 @@ static int cmd_kill(Interp *ip, const char *args) {
  * Command registration table
  * ================================================================ */
 const Command commands[] = {
+    { "REM",         cmd_rem        },
+    { "'",           cmd_rem        },
+    { "END SELECT",  cmd_end_select },
+    { "END SUB",     cmd_end_sub    },
+    { "END FUNCTION",cmd_end_sub    },
+    { "END TYPE",    cmd_end_type   },
+    { "END IF",      cmd_rem        },
+    { "END",         cmd_end        },
+    { "EXIT",        cmd_exit       },
+    { "STOP",        cmd_stop       },
+    { "CONT",        cmd_cont       },
     { "SLEEP",       cmd_sleep      },
     { "SYSTEM",      cmd_system     },
     { "DECLARE",     cmd_declare    },
-    { "KILL",        cmd_kill       },
-    { "REM",        cmd_rem        },
-    { "'",          cmd_rem        },
-    { "END SELECT", cmd_end_select },
-    { "END SUB",    cmd_end_sub    },
-    { "END FUNCTION",cmd_end_sub   },
-    { "END IF",     cmd_rem        },
-    { "END",        cmd_end        },
-    { "EXIT",       cmd_exit       },
-    { "STOP",       cmd_stop       },
-    { "CONT",       cmd_cont       },
-    { "RANDOMIZE",  cmd_randomize  },
-    { "SWAP",       cmd_swap       },
-    { "ERASE",      cmd_erase      },
+    { "KILL",        cmd_kill_file  },
+    { "TYPE",        cmd_type       },
+    { "GET",         cmd_get_gfx    },
+    { "PUT",         cmd_put_gfx    },
+    { "RANDOMIZE",   cmd_randomize  },
+    { "SWAP",        cmd_swap       },
+    { "ERASE",       cmd_erase      },
     { "OPTION",     cmd_option     },
     { "CONST",      cmd_const      },
     { "LET",        cmd_let        },
@@ -1800,12 +1906,14 @@ int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
         }
     }
 
-    /* Bare assignment: var = expr or arr(i) = expr */
+    /* Bare assignment: var = expr, arr(i) = expr, or struct.field = expr */
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
         const char *after = read_varname(p, name);
         after = sk(after);
         if (*after == '=' || *after == '(') return cmd_let(ip, p);
+        /* struct field: name.field = or name(i).field = */
+        if (*after == '.') return cmd_let(ip, p);
     }
 
     basic_stderr("Warning: unknown: %.60s\n", p);
