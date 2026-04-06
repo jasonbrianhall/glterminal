@@ -1056,12 +1056,31 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
 
     /* EXP(x) */
     if (kw_match(ps->p, "EXP")) {
-        ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        ps->p += 3;
+        skip_ws_p(ps);
+        if (*ps->p == '(') ps->p++;
+
         parse_expr_p(ps, result);
-        mpf_set_d(result, exp(mpf_get_d(result)));
-        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+
+        double d = mpf_get_d(result);
+        const double EXP_OVERFLOW_LIMIT  = 709.782712893384;
+        const double EXP_UNDERFLOW_LIMIT = -745.0;
+
+        double e;
+        if (d > EXP_OVERFLOW_LIMIT) {
+            e = -1.0;
+        } else if (d < EXP_UNDERFLOW_LIMIT) {
+            e = 0.0;
+        } else {
+            e = exp(d);
+        }
+        mpf_set_d(result, e);
+
+        skip_ws_p(ps);
+        if (*ps->p == ')') ps->p++;
         return;
     }
+
     /* SGN(x) */
     if (kw_match(ps->p, "SGN")) {
         ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
