@@ -29,7 +29,9 @@ SDL_Renderer *g_sdl_renderer     = nullptr;
 
 static SDL_Texture *s_term_tex      = nullptr;
 static SDL_Texture *s_composite_tex = nullptr;
+SDL_Texture *s_basic_tex     = nullptr;  // persistent BASIC graphics layer
 static int          s_tex_w = 0, s_tex_h = 0;
+bool                s_basic_has_content = false;
 
 // ============================================================================
 // INTERNAL HELPERS
@@ -67,12 +69,20 @@ void sdl_init_renderer(int w, int h) {
     s_tex_w = w; s_tex_h = h;
     if (s_term_tex)      SDL_DestroyTexture(s_term_tex);
     if (s_composite_tex) SDL_DestroyTexture(s_composite_tex);
+    if (s_basic_tex)     SDL_DestroyTexture(s_basic_tex);
     s_term_tex      = sdl_make_target(w, h);
     s_composite_tex = sdl_make_target(w, h);
+    s_basic_tex     = sdl_make_target(w, h);
+    // Clear term tex to black
     SDL_SetRenderTarget(g_sdl_renderer, s_term_tex);
     SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_sdl_renderer);
+    // Clear basic tex to transparent
+    SDL_SetRenderTarget(g_sdl_renderer, s_basic_tex);
+    SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 0);
+    SDL_RenderClear(g_sdl_renderer);
     SDL_SetRenderTarget(g_sdl_renderer, nullptr);
+    s_basic_has_content = false;
     // Populate stub GLState so mat4/proj references in shared code don't crash
     G.cr = G.cg = G.cb = G.ca = 1.f;
     G.proj = mat4_ortho(0, (float)w, (float)h, 0, -1, 1);
@@ -112,8 +122,14 @@ void sdl_begin_term_frame(int, int, float, float, float) {
 
 void sdl_clear_term_frame(int, int, float bg_r, float bg_g, float bg_b) {
     SDL_SetRenderTarget(g_sdl_renderer, s_term_tex);
-    SDL_SetRenderDrawColor(g_sdl_renderer,
-        (Uint8)(bg_r*255), (Uint8)(bg_g*255), (Uint8)(bg_b*255), 255);
+    if (s_basic_has_content) {
+        // BASIC owns the background — clear term to transparent so glyphs
+        // composite over the BASIC layer without an opaque bg covering it.
+        SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 0);
+    } else {
+        SDL_SetRenderDrawColor(g_sdl_renderer,
+            (Uint8)(bg_r*255), (Uint8)(bg_g*255), (Uint8)(bg_b*255), 255);
+    }
     SDL_RenderClear(g_sdl_renderer);
 }
 
@@ -127,9 +143,17 @@ void sdl_begin_frame(void) {
     SDL_SetRenderTarget(g_sdl_renderer, s_composite_tex);
     SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_sdl_renderer);
-    SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_NONE);
-    SDL_RenderCopy(g_sdl_renderer, s_term_tex, nullptr, nullptr);
-    SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_BLEND);
+    if (s_basic_has_content && s_basic_tex) {
+        // BASIC layer first (background), then term on top with alpha blend
+        SDL_SetTextureBlendMode(s_basic_tex, SDL_BLENDMODE_NONE);
+        SDL_RenderCopy(g_sdl_renderer, s_basic_tex, nullptr, nullptr);
+        SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_BLEND);
+        SDL_RenderCopy(g_sdl_renderer, s_term_tex, nullptr, nullptr);
+    } else {
+        SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_NONE);
+        SDL_RenderCopy(g_sdl_renderer, s_term_tex, nullptr, nullptr);
+        SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_BLEND);
+    }
 }
 
 // ============================================================================

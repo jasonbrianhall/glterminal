@@ -522,7 +522,6 @@ int main(int argc, char **argv) {
 
     uint32_t last_ticks = SDL_GetTicks();
     bool running = true;
-    int  debug_frame = 0;
 
     // Auto-scroll state for selection drag
     int  autoscroll_mouse_x = 0, autoscroll_mouse_y = 0;
@@ -1357,11 +1356,6 @@ int main(int argc, char **argv) {
                 for (int r = 0; r < term.rows && !any_dirty; r++)
                     any_dirty = term.dirty_rows[r] != 0;
             }
-
-            static int dbg_frame = 0;
-            if (s_basic_has_content && (dbg_frame++ % 60 == 0))
-                SDL_Log("[BASIC] frame=%d has_content=%d any_dirty=%d all_dirty=%d dl_dirty=%d\n",
-                        dbg_frame, (int)s_basic_has_content, (int)any_dirty, (int)term.all_dirty, (int)s_dl_dirty);
 
             if (any_dirty) {
                 float bg_r = THEMES[g_theme_idx].bg_r;

@@ -412,7 +412,7 @@ static GLuint s_ping_fbo_rb  = 0;
 static GLuint s_basic_fbo     = 0;
 static GLuint s_basic_fbo_tex = 0;
 static GLuint s_basic_fbo_rb  = 0;
-bool          s_basic_has_content = false;
+// s_basic_has_content defined in sdl_renderer.cpp, declared extern via sdl_renderer.h
 
 // Post-process quad
 static GLuint s_quad_prog  = 0;
@@ -763,7 +763,11 @@ void gl_end_term_frame(void) {
 // ============================================================================
 
 void gl_basic_begin(int win_w, int win_h) {
-    if (g_use_sdl_renderer) return;
+    if (g_use_sdl_renderer) {
+        sdl_flush_verts();
+        if (s_basic_tex) SDL_SetRenderTarget(g_sdl_renderer, s_basic_tex);
+        return;
+    }
     gl_flush_verts();
     glBindFramebuffer(GL_FRAMEBUFFER, s_basic_fbo);
     glViewport(0, 0, win_w, win_h);
@@ -772,14 +776,28 @@ void gl_basic_begin(int win_w, int win_h) {
 }
 
 void gl_basic_end(void) {
-    if (g_use_sdl_renderer) return;
+    if (g_use_sdl_renderer) {
+        sdl_flush_verts();
+        SDL_SetRenderTarget(g_sdl_renderer, nullptr);
+        s_basic_has_content = true;
+        return;
+    }
     gl_flush_verts();
     s_basic_has_content = true;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void gl_basic_clear(int win_w, int win_h) {
-    if (g_use_sdl_renderer) return;
+    if (g_use_sdl_renderer) {
+        if (s_basic_tex) {
+            SDL_SetRenderTarget(g_sdl_renderer, s_basic_tex);
+            SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 0);
+            SDL_RenderClear(g_sdl_renderer);
+            SDL_SetRenderTarget(g_sdl_renderer, nullptr);
+        }
+        s_basic_has_content = false;
+        return;
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, s_basic_fbo);
     glViewport(0, 0, win_w, win_h);
     glClearColor(0,0,0,0);

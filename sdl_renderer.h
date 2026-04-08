@@ -16,6 +16,8 @@ extern bool g_use_sdl_renderer;
 // SDL renderer handle — populated by gl_terminal_main in the SDL path,
 // used by sdl_renderer.cpp internally.
 extern SDL_Renderer *g_sdl_renderer;
+extern SDL_Texture  *s_basic_tex;       // persistent BASIC graphics layer (SDL path)
+extern bool          s_basic_has_content;
 
 // ── SDL-path implementations (defined in sdl_renderer.cpp) ──────────────────
 void sdl_init_renderer   (int w, int h);
