@@ -203,18 +203,25 @@ static void hw_rect(int x1, int y1, int x2, int y2, int color, bool filled) {
 
 static void hw_circle(int cx, int cy, int radius, int color) {
     float r, g, b; resolve_color(color, &r, &g, &b);
-    const int STEPS = SDL_max(32, radius * 2);
+    // Steps based on the screen-space pixel circumference so there are
+    // never gaps between vertices regardless of zoom level.
+    float px_radius = basic_sx(radius, s_win_w);
+    float py_radius = basic_sy(radius, s_win_h);
+    float avg_px_radius = (px_radius + py_radius) * 0.5f;
+    int STEPS = SDL_max(64, (int)(2.f * (float)M_PI * avg_px_radius) + 1);
     std::vector<Vertex> verts;
     verts.reserve((size_t)STEPS + 1);
     for (int i = 0; i <= STEPS; i++) {
         float angle = (float)i / STEPS * 2.f * (float)M_PI;
         verts.push_back({
-            basic_x(cx + (int)(cosf(angle) * radius), s_win_w),
-            basic_y(cy + (int)(sinf(angle) * radius), s_win_h),
+            basic_x(cx, s_win_w) + cosf(angle) * px_radius,
+            basic_y(cy, s_win_h) + sinf(angle) * py_radius,
             r, g, b, 1.f });
     }
     draw_verts(verts.data(), (int)verts.size(), GL_LINE_STRIP);
-    // Software canvas (Bresenham for GET accuracy)
+    // Software canvas — Bresenham for GET/PAINT accuracy
+    // Also fill every scanline inside the circle on the canvas so PAINT
+    // flood fill never leaks through a gap in the outline.
     int x = 0, y = radius, d = 1 - radius;
     while (x <= y) {
         canvas_pset(cx+x,cy+y,color); canvas_pset(cx-x,cy+y,color);
