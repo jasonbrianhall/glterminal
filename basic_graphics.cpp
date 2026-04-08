@@ -406,6 +406,10 @@ static void execute_cmd(const std::vector<std::string> &a) {
     } else if (cmd == "cls") {
         int c=a.size()>1?argi(a,1):0;
         float r,g,b; resolve_color(c,&r,&g,&b);
+        // Clear the persistent basic FBO and fill with background color
+        gl_basic_end();   // close any open basic frame first
+        gl_basic_clear(s_win_w, s_win_h);
+        gl_basic_begin(s_win_w, s_win_h);
         draw_rect(0,0,(float)s_win_w,(float)s_win_h,r,g,b,1.f);
         uint8_t cr=(uint8_t)(r*255),cg=(uint8_t)(g*255),cb=(uint8_t)(b*255);
         for(int i=0;i<s_scr_w*s_scr_h;i++){
@@ -525,8 +529,10 @@ void basic_render(int win_w, int win_h) {
     if (s_display_list.empty()) return;
     s_win_w = win_w;
     s_win_h = win_h;
+    gl_basic_begin(win_w, win_h);
     for (auto &c : s_display_list)
         execute_cmd(c.args);
+    gl_basic_end();
     s_display_list.clear();
     s_dl_dirty = false;
 }

@@ -85,3 +85,13 @@ void  gl_update_ghost(int win_w, int win_h);
 extern bool g_wireframe_cells;
 
 #endif // !SDL_RENDERER
+
+// ============================================================================
+// BASIC GRAPHICS FBO
+// Persistent drawing surface — survives terminal redraws.
+// Call gl_basic_begin() before BASIC draw calls, gl_basic_end() after.
+// gl_basic_clear() wipes it (call on CLS).
+// ============================================================================
+void gl_basic_begin(int win_w, int win_h);
+void gl_basic_end(void);
+void gl_basic_clear(int win_w, int win_h);

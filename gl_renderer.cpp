@@ -408,6 +408,12 @@ static GLuint s_ping_fbo     = 0;
 static GLuint s_ping_fbo_tex = 0;
 static GLuint s_ping_fbo_rb  = 0;
 
+// BASIC graphics persistent FBO — survives terminal redraws
+static GLuint s_basic_fbo     = 0;
+static GLuint s_basic_fbo_tex = 0;
+static GLuint s_basic_fbo_rb  = 0;
+static bool   s_basic_has_content = false;
+
 // Post-process quad
 static GLuint s_quad_prog  = 0;
 static GLuint s_quad_vao   = 0;
@@ -504,6 +510,13 @@ static void create_fbo(int w, int h) {
     make_color_fbo(&s_fbo,       &s_fbo_tex,       &s_fbo_rb,       w, h);
     make_color_fbo(&s_term_fbo,  &s_term_fbo_tex,  &s_term_fbo_rb,  w, h);
     make_color_fbo(&s_ping_fbo,  &s_ping_fbo_tex,  &s_ping_fbo_rb,  w, h);
+    make_color_fbo(&s_basic_fbo, &s_basic_fbo_tex, &s_basic_fbo_rb, w, h);
+    // Clear the basic FBO to transparent on creation/resize
+    glBindFramebuffer(GL_FRAMEBUFFER, s_basic_fbo);
+    glClearColor(0,0,0,0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    s_basic_has_content = false;
     make_color_fbo(&s_ghost_fbo,  &s_ghost_fbo_tex,  &s_ghost_fbo_rb,  w, h);
     make_color_fbo(&s_ghost2_fbo, &s_ghost2_fbo_tex, &s_ghost2_fbo_rb, w, h);
     // Clear term FBO to black — it persists between frames and must not
@@ -740,6 +753,36 @@ void gl_end_term_frame(void) {
 // FRAME — composite term cache + fight figures into post-process FBO
 // ============================================================================
 
+// ============================================================================
+// BASIC GRAPHICS FBO — persistent drawing surface, survives terminal redraws
+// ============================================================================
+
+void gl_basic_begin(int win_w, int win_h) {
+    if (g_use_sdl_renderer) return;
+    gl_flush_verts();
+    glBindFramebuffer(GL_FRAMEBUFFER, s_basic_fbo);
+    glViewport(0, 0, win_w, win_h);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void gl_basic_end(void) {
+    if (g_use_sdl_renderer) return;
+    gl_flush_verts();
+    s_basic_has_content = true;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void gl_basic_clear(int win_w, int win_h) {
+    if (g_use_sdl_renderer) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, s_basic_fbo);
+    glViewport(0, 0, win_w, win_h);
+    glClearColor(0,0,0,0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    s_basic_has_content = false;
+}
+
 void gl_begin_frame(void) {
     if (g_use_sdl_renderer) { sdl_begin_frame(); return; }
     s_accum_n = 0;
@@ -751,6 +794,21 @@ void gl_begin_frame(void) {
     glBlitFramebuffer(0, 0, s_fbo_w, s_fbo_h,
                       0, 0, s_fbo_w, s_fbo_h,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    // Blit BASIC graphics layer on top (alpha blend so terminal text shows through)
+    if (s_basic_has_content && s_basic_fbo_tex) {
+        glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glUseProgram(s_quad_prog);
+        glUniform1i(s_loc_mode, RENDER_MODE_NORMAL);
+        glUniform1f(s_loc_time, 0.f);
+        glUniform2f(s_loc_res, (float)s_fbo_w, (float)s_fbo_h);
+        glActiveTexture(GL_TEXTURE0);
+        glUniform1i(s_loc_tex, 0);
+        glBindTexture(GL_TEXTURE_2D, s_basic_fbo_tex);
+        glBindVertexArray(s_quad_vao);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
 }
 
