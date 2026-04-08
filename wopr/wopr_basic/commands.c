@@ -343,6 +343,8 @@ static int cmd_cls(Interp *ip, const char *args) {
     (void)ip;
     const char *p = sk(args);
     int arg = -1;  /* -1 = no argument */
+    printf("\033[2J\033[H");
+    fflush(stdout);
     if (*p && *p != ':') {
         mpf_t n; mpf_init2(n, g_prec);
         eval_expr(p, n);
