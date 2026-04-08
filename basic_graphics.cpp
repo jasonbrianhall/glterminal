@@ -175,13 +175,21 @@ static void hw_pset(int x, int y, int color) {
     draw_rect(basic_x(x, s_win_w), basic_y(y, s_win_h), 1.f, 1.f, r, g, b, 1.f);
 }
 
+// Emit a 1.5px wide line as a screen-space quad (two triangles).
 static void hw_line(int x1, int y1, int x2, int y2, int color) {
     float r, g, b; resolve_color(color, &r, &g, &b);
-    Vertex v[2] = {
-        { basic_x(x1,s_win_w), basic_y(y1,s_win_h), r, g, b, 1.f },
-        { basic_x(x2,s_win_w), basic_y(y2,s_win_h), r, g, b, 1.f },
+    float ax = basic_x(x1,s_win_w), ay = basic_y(y1,s_win_h);
+    float bx = basic_x(x2,s_win_w), by = basic_y(y2,s_win_h);
+    float dx = bx - ax, dy = by - ay;
+    float len = sqrtf(dx*dx + dy*dy);
+    if (len < 0.001f) { draw_rect(ax,ay,1.f,1.f,r,g,b,1.f); return; }
+    // Perpendicular normal, half-width = 0.75px
+    float nx = -dy/len * 0.75f, ny = dx/len * 0.75f;
+    Vertex v[6] = {
+        {ax+nx, ay+ny, r,g,b,1.f}, {ax-nx, ay-ny, r,g,b,1.f}, {bx+nx, by+ny, r,g,b,1.f},
+        {ax-nx, ay-ny, r,g,b,1.f}, {bx-nx, by-ny, r,g,b,1.f}, {bx+nx, by+ny, r,g,b,1.f},
     };
-    draw_verts(v, 2, GL_LINES);
+    draw_verts(v, 6, GL_TRIANGLES);
 }
 
 static void hw_rect(int x1, int y1, int x2, int y2, int color, bool filled) {
@@ -191,37 +199,47 @@ static void hw_rect(int x1, int y1, int x2, int y2, int color, bool filled) {
     if (filled) {
         draw_rect(px, py, pw, ph, r, g, b, 1.f);
     } else {
-        float px2 = basic_x(x2,s_win_w), py2 = basic_y(y2,s_win_h);
-        Vertex v[5] = {
-            {px,  py,  r,g,b,1.f}, {px2, py,  r,g,b,1.f},
-            {px2, py2, r,g,b,1.f}, {px,  py2, r,g,b,1.f},
-            {px,  py,  r,g,b,1.f},
-        };
-        draw_verts(v, 5, GL_LINE_STRIP);
+        hw_line(x1,y1,x2,y1,color);
+        hw_line(x2,y1,x2,y2,color);
+        hw_line(x2,y2,x1,y2,color);
+        hw_line(x1,y2,x1,y1,color);
     }
 }
 
 static void hw_circle(int cx, int cy, int radius, int color) {
     float r, g, b; resolve_color(color, &r, &g, &b);
-    // Steps based on the screen-space pixel circumference so there are
-    // never gaps between vertices regardless of zoom level.
+    float pcx = basic_x(cx, s_win_w);
+    float pcy = basic_y(cy, s_win_h);
     float px_radius = basic_sx(radius, s_win_w);
     float py_radius = basic_sy(radius, s_win_h);
     float avg_px_radius = (px_radius + py_radius) * 0.5f;
+    // One step per screen pixel of circumference — no gaps
     int STEPS = SDL_max(64, (int)(2.f * (float)M_PI * avg_px_radius) + 1);
-    std::vector<Vertex> verts;
-    verts.reserve((size_t)STEPS + 1);
-    for (int i = 0; i <= STEPS; i++) {
+    const float half_w = 0.75f;  // line half-width in screen pixels
+    // Emit each arc segment as a quad (6 verts / 2 triangles)
+    float prev_x = pcx + cosf(0) * px_radius;
+    float prev_y = pcy + sinf(0) * py_radius;
+    for (int i = 1; i <= STEPS; i++) {
         float angle = (float)i / STEPS * 2.f * (float)M_PI;
-        verts.push_back({
-            basic_x(cx, s_win_w) + cosf(angle) * px_radius,
-            basic_y(cy, s_win_h) + sinf(angle) * py_radius,
-            r, g, b, 1.f });
+        float cur_x = pcx + cosf(angle) * px_radius;
+        float cur_y = pcy + sinf(angle) * py_radius;
+        float dx = cur_x - prev_x, dy = cur_y - prev_y;
+        float len = sqrtf(dx*dx + dy*dy);
+        if (len > 0.001f) {
+            float nx = -dy/len * half_w, ny = dx/len * half_w;
+            Vertex v[6] = {
+                {prev_x+nx, prev_y+ny, r,g,b,1.f},
+                {prev_x-nx, prev_y-ny, r,g,b,1.f},
+                {cur_x +nx, cur_y +ny, r,g,b,1.f},
+                {prev_x-nx, prev_y-ny, r,g,b,1.f},
+                {cur_x -nx, cur_y -ny, r,g,b,1.f},
+                {cur_x +nx, cur_y +ny, r,g,b,1.f},
+            };
+            draw_verts(v, 6, GL_TRIANGLES);
+        }
+        prev_x = cur_x; prev_y = cur_y;
     }
-    draw_verts(verts.data(), (int)verts.size(), GL_LINE_STRIP);
-    // Software canvas — Bresenham for GET/PAINT accuracy
-    // Also fill every scanline inside the circle on the canvas so PAINT
-    // flood fill never leaks through a gap in the outline.
+    // Software canvas — Bresenham for PAINT/GET accuracy
     int x = 0, y = radius, d = 1 - radius;
     while (x <= y) {
         canvas_pset(cx+x,cy+y,color); canvas_pset(cx-x,cy+y,color);
