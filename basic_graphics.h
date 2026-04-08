@@ -27,6 +27,10 @@ extern bool s_dl_dirty;
 void basic_handle_osc(Terminal *t, const char *payload, int len,
                       int win_w, int win_h);
 
+// True when a BASIC screen mode is active (palette owned by BASIC, not terminal theme).
+// When true, term_render skips opaque default cell backgrounds so BASIC graphics show through.
+extern bool s_basic_palette_active;
+
 // Free all sprites and GL/SDL resources. Call before SDL_Quit().
 void basic_graphics_shutdown(void);
 

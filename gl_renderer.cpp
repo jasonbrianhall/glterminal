@@ -412,7 +412,7 @@ static GLuint s_ping_fbo_rb  = 0;
 static GLuint s_basic_fbo     = 0;
 static GLuint s_basic_fbo_tex = 0;
 static GLuint s_basic_fbo_rb  = 0;
-static bool   s_basic_has_content = false;
+bool          s_basic_has_content = false;
 
 // Post-process quad
 static GLuint s_quad_prog  = 0;
@@ -738,7 +738,12 @@ void gl_clear_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_
     if (g_use_sdl_renderer) { sdl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b); return; }
     glBindFramebuffer(GL_FRAMEBUFFER, s_term_fbo);
     glViewport(0, 0, win_w, win_h);
-    glClearColor(bg_r, bg_g, bg_b, 1.0f);
+    // When BASIC graphics are active, clear to fully transparent so the BASIC
+    // layer shows through the term FBO wherever there is no text/explicit bg.
+    if (s_basic_has_content)
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+    else
+        glClearColor(bg_r, bg_g, bg_b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -786,16 +791,18 @@ void gl_basic_clear(int win_w, int win_h) {
 void gl_begin_frame(void) {
     if (g_use_sdl_renderer) { sdl_begin_frame(); return; }
     s_accum_n = 0;
-    // Bind the composite FBO and blit the cached terminal content into it
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
-    // Blit term FBO → composite FBO (no shader, just a pixel copy)
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_term_fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fbo);
-    glBlitFramebuffer(0, 0, s_fbo_w, s_fbo_h,
-                      0, 0, s_fbo_w, s_fbo_h,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    // Blit BASIC graphics layer on top (alpha blend so terminal text shows through)
+
     if (s_basic_has_content && s_basic_fbo_tex) {
+        // BASIC graphics active: composite order is BASIC first, then term on top.
+        // 1. Blit BASIC FBO into composite FBO as the base layer.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_basic_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fbo);
+        glBlitFramebuffer(0, 0, s_fbo_w, s_fbo_h,
+                          0, 0, s_fbo_w, s_fbo_h,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        // 2. Blend term FBO on top — transparent default cell backgrounds let
+        //    the BASIC layer show through; text glyphs and explicit bg colors render normally.
         glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -805,9 +812,16 @@ void gl_begin_frame(void) {
         glUniform2f(s_loc_res, (float)s_fbo_w, (float)s_fbo_h);
         glActiveTexture(GL_TEXTURE0);
         glUniform1i(s_loc_tex, 0);
-        glBindTexture(GL_TEXTURE_2D, s_basic_fbo_tex);
+        glBindTexture(GL_TEXTURE_2D, s_term_fbo_tex);
         glBindVertexArray(s_quad_vao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
+    } else {
+        // Normal (no BASIC): blit term FBO into composite FBO directly.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_term_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fbo);
+        glBlitFramebuffer(0, 0, s_fbo_w, s_fbo_h,
+                          0, 0, s_fbo_w, s_fbo_h,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
 }

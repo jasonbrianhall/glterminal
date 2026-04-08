@@ -45,6 +45,10 @@ struct BgCmd {
 static std::vector<BgCmd> s_display_list;
 bool s_dl_dirty = false;
 
+// Persistent background — set by cls, redrawn every frame so the FBO
+// stays filled even when the display list is empty.
+static float s_bg_r = 0.f, s_bg_g = 0.f, s_bg_b = 0.f, s_bg_a = 0.f;
+
 // ============================================================================
 // SCREEN / COORDINATE MAPPING
 // ============================================================================
@@ -60,15 +64,24 @@ static float basic_sx(int w2, int w) { return (float)w2 * w / s_scr_w; }
 static float basic_sy(int h2, int h) { return (float)h2 * h / s_scr_h; }
 
 // ============================================================================
+// BASIC-LOCAL PALETTE (separate from terminal's g_palette16)
+// Keeps screen/palette commands from stomping the terminal's text colors.
+// ============================================================================
+
+static float s_basic_palette[16][3];
+bool  s_basic_palette_active = false;
+
+// ============================================================================
 // COLOR RESOLUTION
 // ============================================================================
 
 static void resolve_color(int c, float *r, float *g, float *b) {
     if (c < 0) c = 0;
     if (c <= 15) {
-        *r = g_palette16[c][0];
-        *g = g_palette16[c][1];
-        *b = g_palette16[c][2];
+        const float (*pal)[3] = s_basic_palette_active ? s_basic_palette : g_palette16;
+        *r = pal[c][0];
+        *g = pal[c][1];
+        *b = pal[c][2];
     } else {
         *r = ((c >> 16) & 0xFF) / 255.f;
         *g = ((c >>  8) & 0xFF) / 255.f;
@@ -401,32 +414,38 @@ static void setup_screen_palette(int mode) {
         {1.000f, 1.000f, 1.000f},
     };
 
+    // Activate BASIC's own palette so g_palette16 (terminal text colors) is untouched.
+    s_basic_palette_active = true;
+
     auto load_ega = [&]() {
         for (int i = 0; i < 16; i++) {
-            g_palette16[i][0] = PAL_EGA[i][0];
-            g_palette16[i][1] = PAL_EGA[i][1];
-            g_palette16[i][2] = PAL_EGA[i][2];
+            s_basic_palette[i][0] = PAL_EGA[i][0];
+            s_basic_palette[i][1] = PAL_EGA[i][1];
+            s_basic_palette[i][2] = PAL_EGA[i][2];
         }
     };
 
     switch (mode) {
+    case 0:  // text mode — relinquish palette back to terminal
+        s_basic_palette_active = false;
+        break;
     case 1:  // CGA 4-color
         s_max_colors = 4;
         for (int i = 0; i < 4; i++) {
-            g_palette16[i][0] = PAL_CGA4[i][0];
-            g_palette16[i][1] = PAL_CGA4[i][1];
-            g_palette16[i][2] = PAL_CGA4[i][2];
+            s_basic_palette[i][0] = PAL_CGA4[i][0];
+            s_basic_palette[i][1] = PAL_CGA4[i][1];
+            s_basic_palette[i][2] = PAL_CGA4[i][2];
         }
         break;
     case 2:  // CGA 2-color: black + white
         s_max_colors = 2;
-        g_palette16[0][0]=0.f; g_palette16[0][1]=0.f; g_palette16[0][2]=0.f;
-        g_palette16[1][0]=1.f; g_palette16[1][1]=1.f; g_palette16[1][2]=1.f;
+        s_basic_palette[0][0]=0.f; s_basic_palette[0][1]=0.f; s_basic_palette[0][2]=0.f;
+        s_basic_palette[1][0]=1.f; s_basic_palette[1][1]=1.f; s_basic_palette[1][2]=1.f;
         break;
     case 3:  // Hercules 2-color: black + white
         s_max_colors = 2;
-        g_palette16[0][0]=0.f; g_palette16[0][1]=0.f; g_palette16[0][2]=0.f;
-        g_palette16[1][0]=1.f; g_palette16[1][1]=1.f; g_palette16[1][2]=1.f;
+        s_basic_palette[0][0]=0.f; s_basic_palette[0][1]=0.f; s_basic_palette[0][2]=0.f;
+        s_basic_palette[1][0]=1.f; s_basic_palette[1][1]=1.f; s_basic_palette[1][2]=1.f;
         break;
     case 5: case 6:  // CGA low-res, 16-color EGA palette
         s_max_colors = 16;
@@ -442,13 +461,13 @@ static void setup_screen_palette(int mode) {
         break;
     case 10: // EGA monochrome: black + green phosphor
         s_max_colors = 2;
-        g_palette16[0][0]=0.f; g_palette16[0][1]=0.f;  g_palette16[0][2]=0.f;
-        g_palette16[1][0]=0.f; g_palette16[1][1]=0.8f; g_palette16[1][2]=0.f;
+        s_basic_palette[0][0]=0.f; s_basic_palette[0][1]=0.f;  s_basic_palette[0][2]=0.f;
+        s_basic_palette[1][0]=0.f; s_basic_palette[1][1]=0.8f; s_basic_palette[1][2]=0.f;
         break;
     case 11: // VGA 2-color: black + white
         s_max_colors = 2;
-        g_palette16[0][0]=0.f; g_palette16[0][1]=0.f; g_palette16[0][2]=0.f;
-        g_palette16[1][0]=1.f; g_palette16[1][1]=1.f; g_palette16[1][2]=1.f;
+        s_basic_palette[0][0]=0.f; s_basic_palette[0][1]=0.f; s_basic_palette[0][2]=0.f;
+        s_basic_palette[1][0]=1.f; s_basic_palette[1][1]=1.f; s_basic_palette[1][2]=1.f;
         break;
     case 12: // VGA 16-color
         s_max_colors = 16;
@@ -550,6 +569,9 @@ static void execute_cmd(const std::vector<std::string> &a) {
     } else if (cmd == "cls") {
         int c=a.size()>1?clamp_color(argi(a,1)):0;
         float r,g,b; resolve_color(c,&r,&g,&b);
+        float alpha = (c == 0) ? 0.f : 1.f;
+        // Remember this as the persistent background for future frames.
+        s_bg_r = r; s_bg_g = g; s_bg_b = b; s_bg_a = alpha;
         // Always wipe the basic FBO to fully transparent first.
         // This ensures the terminal text/prompt is never permanently hidden.
         gl_basic_end();
@@ -557,7 +579,6 @@ static void execute_cmd(const std::vector<std::string> &a) {
         gl_basic_begin(s_win_w, s_win_h);
         // Only draw a solid background if color is non-zero.
         // cls;0 means "clear graphics, show terminal" — leaves FBO transparent.
-        float alpha = (c == 0) ? 0.f : 1.f;
         if (alpha > 0.f)
             draw_rect(0,0,(float)s_win_w,(float)s_win_h,r,g,b,alpha);
         uint8_t cr=(uint8_t)(r*255),cg=(uint8_t)(g*255),cb=(uint8_t)(b*255);
@@ -609,9 +630,9 @@ static void execute_cmd(const std::vector<std::string> &a) {
     } else if (cmd == "palette") {
         int idx=argi(a,1),r=argi(a,2),g=argi(a,3),b=argi(a,4);
         if(idx>=0&&idx<16){
-            g_palette16[idx][0]=r/255.f;
-            g_palette16[idx][1]=g/255.f;
-            g_palette16[idx][2]=b/255.f;
+            s_basic_palette[idx][0]=r/255.f;
+            s_basic_palette[idx][1]=g/255.f;
+            s_basic_palette[idx][2]=b/255.f;
         }
 
     } else if (cmd == "play") {
@@ -677,9 +698,12 @@ static void queue_cmd(const std::vector<std::string> &a) {
 // ============================================================================
 
 void basic_render(int win_w, int win_h) {
-    if (s_display_list.empty()) return;
     s_win_w = win_w;
     s_win_h = win_h;
+
+    // The basic FBO is persistent — only redraw when there are new commands.
+    if (s_display_list.empty()) return;
+
     gl_basic_begin(win_w, win_h);
     for (auto &c : s_display_list)
         execute_cmd(c.args);

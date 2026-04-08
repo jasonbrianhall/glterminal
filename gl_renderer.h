@@ -83,6 +83,7 @@ void  gl_end_term_frame(void);
 void  gl_update_ghost(int win_w, int win_h);
 
 extern bool g_wireframe_cells;
+extern bool s_basic_has_content;
 
 #endif // !SDL_RENDERER
 

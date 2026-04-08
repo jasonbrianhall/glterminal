@@ -6,6 +6,7 @@
 #include "gl_terminal.h"
 #include "gl_bouncingcircle.h"
 #include "kitty_graphics.h"
+#include "basic_graphics.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -659,7 +660,10 @@ void term_render(Terminal *t, int ox, int oy) {
             if (cell_in_sel(t, vrow, col)) {
                 draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
             } else {
-                draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, 1.f);
+                // When BASIC graphics are active, draw default cell backgrounds
+                // transparent so the BASIC layer shows through underneath.
+                float bg_alpha = (s_basic_palette_active && bg == TCOLOR_PALETTE(0)) ? 0.f : 1.f;
+                draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, bg_alpha);
             }
         }
     }

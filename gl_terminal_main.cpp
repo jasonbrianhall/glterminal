@@ -1344,8 +1344,10 @@ int main(int argc, char **argv) {
         // Sleep is placed AFTER rendering so input→render has no artificial delay.
         // (vsync via SDL_GL_SetSwapInterval(1) already throttles normal frames.)
 
-        // Wake up the render loop if BASIC has queued commands
-        if (s_dl_dirty) needs_render = true;
+        // Wake up the render loop if BASIC has queued commands or has persistent content.
+        // The extra needs_render when s_basic_has_content is true ensures SDL's double
+        // buffer always gets the composited frame presented on both back and front buffers.
+        if (s_dl_dirty || s_basic_has_content) needs_render = true;
 
         if (needs_render) {
             // Only re-render the terminal FBO if at least one row is dirty,
@@ -1356,6 +1358,11 @@ int main(int argc, char **argv) {
                     any_dirty = term.dirty_rows[r] != 0;
             }
 
+            static int dbg_frame = 0;
+            if (s_basic_has_content && (dbg_frame++ % 60 == 0))
+                SDL_Log("[BASIC] frame=%d has_content=%d any_dirty=%d all_dirty=%d dl_dirty=%d\n",
+                        dbg_frame, (int)s_basic_has_content, (int)any_dirty, (int)term.all_dirty, (int)s_dl_dirty);
+
             if (any_dirty) {
                 float bg_r = THEMES[g_theme_idx].bg_r;
                 float bg_g = THEMES[g_theme_idx].bg_g;
@@ -1363,8 +1370,8 @@ int main(int argc, char **argv) {
                 if (term.all_dirty)
                     gl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
                 gl_begin_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
-                term_render(&term, 2, 2);  // clears dirty flags internally
-                basic_render(win_w, win_h); // flush queued BASIC draw commands
+                basic_render(win_w, win_h); // flush BASIC graphics first (background layer)
+                term_render(&term, 2, 2);   // terminal text on top
                 gl_end_term_frame();
             }
 
