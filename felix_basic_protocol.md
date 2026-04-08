@@ -75,12 +75,15 @@ PRINT CHR$(27) + "]666;screen;9" + CHR$(27) + "\"   ' EGA 640x350
 cls ; <color>
 ```
 
-Clears the entire screen to the given palette color. Color 0 is black.
+Clears the graphics layer.
+
+- `cls;0` — clears the graphics layer to **transparent**, revealing the terminal text and shell prompt underneath. Use this at the end of your program to restore the terminal.
+- `cls;N` (N > 0) — fills the graphics layer with palette color N at full opacity, hiding the terminal text.
 
 **Example:**
 ```basic
-PRINT CHR$(27) + "]666;cls;0" + CHR$(27) + "\"    ' clear to black
-PRINT CHR$(27) + "]666;cls;1" + CHR$(27) + "\"    ' clear to blue
+PRINT CHR$(27) + "]666;cls;1" + CHR$(27) + "\"    ' fill with blue background
+PRINT CHR$(27) + "]666;cls;0" + CHR$(27) + "\"    ' clear graphics, show terminal
 ```
 
 ---
@@ -363,3 +366,4 @@ END SUB
 - The OSC buffer in the terminal is 512 bytes. Individual commands are well within this limit. Use `batch` for sending many commands at once to reduce round-trips, but keep the total batch payload under 512 bytes or split across multiple sequences.
 - `GET`/`PUT` sprite IDs are global integers. There is no limit on the number of sprites other than available memory.
 - `PLAY` pre-renders the full MML sequence before handing it to the audio system, so very long strings (over ~30 seconds) are rejected.
+- Always call `cls;0` at the end of your BASIC program to clear the graphics layer and return control to the terminal prompt. Without it, the graphics remain on screen indefinitely.

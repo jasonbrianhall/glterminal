@@ -406,15 +406,21 @@ static void execute_cmd(const std::vector<std::string> &a) {
     } else if (cmd == "cls") {
         int c=a.size()>1?argi(a,1):0;
         float r,g,b; resolve_color(c,&r,&g,&b);
-        // Clear the persistent basic FBO and fill with background color
-        gl_basic_end();   // close any open basic frame first
+        // Always wipe the basic FBO to fully transparent first.
+        // This ensures the terminal text/prompt is never permanently hidden.
+        gl_basic_end();
         gl_basic_clear(s_win_w, s_win_h);
         gl_basic_begin(s_win_w, s_win_h);
-        draw_rect(0,0,(float)s_win_w,(float)s_win_h,r,g,b,1.f);
+        // Only draw a solid background if color is non-zero.
+        // cls;0 means "clear graphics, show terminal" — leaves FBO transparent.
+        float alpha = (c == 0) ? 0.f : 1.f;
+        if (alpha > 0.f)
+            draw_rect(0,0,(float)s_win_w,(float)s_win_h,r,g,b,alpha);
         uint8_t cr=(uint8_t)(r*255),cg=(uint8_t)(g*255),cb=(uint8_t)(b*255);
+        uint8_t ca=(uint8_t)(alpha*255);
         for(int i=0;i<s_scr_w*s_scr_h;i++){
             s_canvas[i*4+0]=cr; s_canvas[i*4+1]=cg;
-            s_canvas[i*4+2]=cb; s_canvas[i*4+3]=0xFF;
+            s_canvas[i*4+2]=cb; s_canvas[i*4+3]=ca;
         }
 
     } else if (cmd == "screen") {
