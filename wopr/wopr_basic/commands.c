@@ -3,6 +3,7 @@
  *              statement splitter, and dispatcher.
  */
 #include "basic.h"
+#include <stdarg.h>
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
@@ -28,14 +29,139 @@ static void print_using(const char *fmt, double val) {
 }
 
 /* ================================================================
- * No-op stubs
+ * Felix graphics protocol helpers
+ * Sends OSC 666 escape sequences:  ESC ] 666 ; <cmd> ESC \
  * ================================================================ */
+
+/* Current screen state — updated by SCREEN, read by graphics cmds */
+int g_screen_mode   = 0;
+int g_screen_width  = 640;
+int g_screen_height = 350;
+int g_back_color    = 1;   /* palette index used by CLS */
+
+/* Immediate commands (screen, palette, play) — take effect on receipt */
+static void felix_send(const char *cmd) {
+    write(STDOUT_FILENO, "\033]666;", 6);
+    write(STDOUT_FILENO, cmd, strlen(cmd));
+    write(STDOUT_FILENO, "\033\\", 2);
+}
+
+static void felix_sendf(const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    felix_send(buf);
+}
+
+/* Draw commands (circle, line, pset, paint, cls, get, put) are queued and
+ * only rendered on the next frame.  The terminal flushes the queue when it
+ * receives a 'batch' sequence, so we wrap every draw call in one. */
+static void felix_draw(const char *cmd) {
+    write(STDOUT_FILENO, "\033]666;batch;", 12);
+    write(STDOUT_FILENO, cmd, strlen(cmd));
+    write(STDOUT_FILENO, "\033\\", 2);
+}
+
+static void felix_drawf(const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    felix_draw(buf);
+}
+/* EGA 64-colour palette: index → (r,g,b) in 0-255 range.
+ * Gorilla uses PALETTE idx, ega_color where ega_color is a 6-bit EGA value
+ * (bits 5-4-3 = RGB high, bits 2-1-0 = rgb low).
+ * For simplicity we map the 16 standard EGA display colours (0-15) and
+ * treat any value ≥ 16 as a 6-bit EGA palette entry. */
+static void ega_to_rgb(int ega6, int *r, int *g, int *b) {
+    /* EGA 6-bit: R1 G1 B1 R0 G0 B0 */
+    int r1 = (ega6 >> 5) & 1;
+    int g1 = (ega6 >> 4) & 1;
+    int b1 = (ega6 >> 3) & 1;
+    int r0 = (ega6 >> 2) & 1;
+    int g0 = (ega6 >> 1) & 1;
+    int b0 = (ega6 >> 0) & 1;
+    *r = (r1 * 2 + r0) * 85;
+    *g = (g1 * 2 + g0) * 85;
+    *b = (b1 * 2 + b0) * 85;
+}
+
+/* Screen mode → (width, height) */
+static void screen_dims(int mode, int *w, int *h) {
+    static const struct { int m, w, h; } modes[] = {
+        {1,320,200},{2,640,200},{3,720,348},{4,640,400},{5,160,100},
+        {6,160,200},{7,320,200},{8,640,200},{9,640,350},{10,640,350},
+        {11,640,480},{12,640,480},{13,320,200},{14,320,200},{15,640,200},
+        {16,640,480},{17,640,480},{18,640,480},{19,640,480},{20,512,480},
+        {21,640,400},{22,640,480},{23,800,600},{24,160,200},{25,320,200},
+        {26,640,200},{27,640,200},{28,720,350},{0,0,0}
+    };
+    for (int i = 0; modes[i].m || modes[i].w; i++) {
+        if (modes[i].m == mode) { *w = modes[i].w; *h = modes[i].h; return; }
+    }
+    *w = 640; *h = 350;
+}
+
+/* Sprite ID registry: maps array variable pointer → sprite ID */
+#define MAX_SPRITES 64
+static struct { Var *var; int id; } g_sprites[MAX_SPRITES];
+static int g_nsprites = 0;
+static int g_next_sprite_id = 1;
+
+static int sprite_id_for(Var *var) {
+    for (int i = 0; i < g_nsprites; i++)
+        if (g_sprites[i].var == var) return g_sprites[i].id;
+    if (g_nsprites >= MAX_SPRITES) return -1;
+    int id = g_next_sprite_id++;
+    g_sprites[g_nsprites].var = var;
+    g_sprites[g_nsprites].id  = id;
+    g_nsprites++;
+    return id;
+}
+
+/* Parse  (x, y)  or  x, y  returning pointer past closing paren (if any) */
+static const char *parse_xy(const char *p, double *x, double *y) {
+    int paren = (*p == '(');
+    if (paren) p = sk(p + 1);
+    mpf_t mx, my; mpf_init2(mx, g_prec); mpf_init2(my, g_prec);
+    p = sk(eval_expr(p, mx)); *x = mpf_get_d(mx); mpf_clear(mx);
+    if (*p == ',') p = sk(p + 1);
+    p = sk(eval_expr(p, my)); *y = mpf_get_d(my); mpf_clear(my);
+    if (paren && *p == ')') p = sk(p + 1);
+    return p;
+}
+
+/* No-op stubs */
 static int cmd_rem(Interp *ip, const char *args)    { (void)ip;(void)args; return 0; }
 static int cmd_defseg(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
 static int cmd_defdbl(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
 static int cmd_key(Interp *ip, const char *args)    { (void)ip;(void)args; return 0; }
 static int cmd_chain(Interp *ip, const char *args)  { (void)ip;(void)args; return 0; }
-static int cmd_screen(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
+
+/* ================================================================
+ * SCREEN mode
+ * ================================================================ */
+static int cmd_screen(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    if (!*p || *p == ':') return 0;
+    mpf_t n; mpf_init2(n, g_prec);
+    eval_expr(p, n);
+    int mode = (int)mpf_get_si(n);
+    mpf_clear(n);
+    if (mode == 0 && g_screen_mode != 0) {
+        /* Return to text mode: clear graphics layer */
+        felix_draw("cls;0");
+    }
+    g_screen_mode = mode;
+    screen_dims(mode, &g_screen_width, &g_screen_height);
+    if (mode != 0) felix_sendf("screen;%d", mode);
+    return 0;
+}
 static int cmd_beep(Interp *ip, const char *args) {
     (void)ip; (void)args;
     sound_beep();
@@ -214,7 +340,34 @@ static int cmd_kill(Interp *ip, const char *args) {
 }
 
 static int cmd_cls(Interp *ip, const char *args) {
-    (void)ip; (void)args; display_cls(); return 0;
+    (void)ip;
+    const char *p = sk(args);
+    int arg = -1;  /* -1 = no argument */
+    if (*p && *p != ':') {
+        mpf_t n; mpf_init2(n, g_prec);
+        eval_expr(p, n);
+        arg = (int)mpf_get_si(n);
+        mpf_clear(n);
+    }
+    if (g_screen_mode > 0) {
+        int c;
+        if (arg >= 0) {
+            /* Explicit argument always wins */
+            c = arg;
+        } else {
+            /* No arg: use BACKCOLOR BASIC variable, else default */
+            c = g_back_color;
+            Var *v = var_find("BACKCOLOR");
+            if (v && v->kind == VAR_NUM) c = (int)mpf_get_si(v->num);
+        }
+        if (c == 0)
+            felix_draw("cls;0");   /* transparent — show terminal through */
+        else
+            felix_drawf("cls;%d", c);
+    } else {
+        display_cls();
+    }
+    return 0;
 }
 
 static int cmd_width(Interp *ip, const char *args) {
@@ -616,24 +769,41 @@ static int cmd_redim(Interp *ip, const char *args) {
  * RESUME NEXT advances past the erroring line (no-op in stub).
  * ================================================================ */
 static int cmd_on_error(Interp *ip, const char *args) {
-    (void)ip;
     const char *p = sk(args);
-    /* ON ERROR GOTO 0 — disable handler */
     if (kw_match(p, "GOTO")) {
         p = sk(p + 4);
-        if (*p == '0' && !isalnum((unsigned char)p[1])) return 0; /* disable */
-        /* Otherwise treat as a regular GOTO to the label/line */
-        return cmd_goto(ip, p);
+        if (*p == '0' && !isalnum((unsigned char)p[1])) {
+            /* ON ERROR GOTO 0 — disable handler */
+            g_error_handler[0] = '\0';
+            return 0;
+        }
+        /* Register handler label/line — do NOT jump now */
+        int i = 0;
+        while (*p && !isspace((unsigned char)*p) && i < MAX_VARNAME - 1)
+            g_error_handler[i++] = *p++;
+        g_error_handler[i] = '\0';
+        return 0;
     }
     return 0;
 }
 
 static int cmd_resume(Interp *ip, const char *args) {
-    (void)ip;
     const char *p = sk(args);
-    /* RESUME NEXT — advance past current line (already done by run loop) */
-    if (kw_match(p, "NEXT")) return 0;
-    /* RESUME — retry current line (just continue for now) */
+    if (kw_match(p, "NEXT")) {
+        /* RESUME NEXT — continue at the line after the error */
+        if (g_error_resume_pc >= 0) {
+            ip->pc = g_error_resume_pc + 1;
+            g_error_resume_pc = -1;
+            return 1;
+        }
+        return 0;
+    }
+    /* RESUME — retry the line that caused the error */
+    if (g_error_resume_pc >= 0) {
+        ip->pc = g_error_resume_pc;
+        g_error_resume_pc = -1;
+        return 1;
+    }
     return 0;
 }
 
@@ -647,10 +817,23 @@ static int cmd_view_print(Interp *ip, const char *args) {
 }
 
 /* ================================================================
- * PALETTE — stub (needed when running without graphics)
+ * PALETTE idx, ega_color — maps EGA palette slot to display colour.
+ * gorilla.bas uses PALETTE 4, 0 style (EGA 6-bit color number).
  * ================================================================ */
 static int cmd_palette(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
+    (void)ip;
+    const char *p = sk(args);
+    mpf_t idx, col; mpf_init2(idx, g_prec); mpf_init2(col, g_prec);
+    p = sk(eval_expr(p, idx));
+    if (*p == ',') p = sk(p + 1);
+    eval_expr(p, col);
+    int i = (int)mpf_get_si(idx);
+    int c = (int)mpf_get_si(col);
+    mpf_clears(idx, col, NULL);
+    int r, g2, b;
+    ega_to_rgb(c, &r, &g2, &b);
+    felix_sendf("palette;%d;%d;%d;%d", i, r, g2, b);
+    return 0;
 }
 
 /* ================================================================
@@ -1204,33 +1387,164 @@ static int cmd_line_input_file(Interp *ip, const char *args) {
 }
 
 /* ================================================================
- * GET/PUT graphics — stubs for CLI mode.
- * In a real graphical backend these would capture/blit screen rects.
+ * GET/PUT graphics — Felix sprite capture/blit.
+ * GET (x1,y1)-(x2,y2), array_var
+ * PUT (x,y), array_var [, PSET|XOR]
  * ================================================================ */
 static int cmd_get_graphics(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
+    (void)ip;
+    const char *p = sk(args);
+    double x1, y1, x2, y2;
+    p = parse_xy(p, &x1, &y1);
+    if (*p == '-') p = sk(p + 1);
+    p = parse_xy(p, &x2, &y2);
+    if (*p == ',') p = sk(p + 1);
+    char vname[MAX_VARNAME];
+    read_varname(sk(p), vname);
+    Var *v = var_get(vname);
+    int id = sprite_id_for(v);
+    felix_drawf("get;%d;%d;%d;%d;%d", id,
+                (int)x1, (int)y1, (int)x2, (int)y2);
+    return 0;
 }
+
 static int cmd_put_graphics(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
+    (void)ip;
+    const char *p = sk(args);
+    double x, y;
+    p = parse_xy(p, &x, &y);
+    if (*p == ',') p = sk(p + 1);
+    char vname[MAX_VARNAME];
+    p = sk(read_varname(sk(p), vname));
+    Var *v = var_get(vname);
+    int id = sprite_id_for(v);
+    /* optional mode: PSET or XOR */
+    const char *mode = "pset";
+    p = sk(p); if (*p == ',') p = sk(p + 1);
+    if (kw_match(p, "XOR"))  mode = "xor";
+    felix_drawf("put;%d;%d;%d;%s", id, (int)x, (int)y, mode);
+    return 0;
 }
+
 static int cmd_draw(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
-}
-static int cmd_circle(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
-}
-static int cmd_line_gfx(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
-}
-static int cmd_paint(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
+    (void)ip; (void)args; return 0;  /* DRAW string mini-language — not needed for gorilla */
 }
 
 /* ================================================================
- * PSET (x, y) [, color] — stub
+ * CIRCLE (x, y), r [, color [, start_angle, end_angle [, aspect]]]
+ * ================================================================ */
+static int cmd_circle(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    double x, y;
+    p = sk(parse_xy(p, &x, &y));
+    if (*p == ',') p = sk(p + 1);
+    mpf_t mr; mpf_init2(mr, g_prec);
+    p = sk(eval_expr(p, mr));
+    double r = mpf_get_d(mr); mpf_clear(mr);
+    int color = 15;
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t mc; mpf_init2(mc, g_prec);
+        p = sk(eval_expr(p, mc));
+        color = (int)mpf_get_si(mc); mpf_clear(mc);
+    }
+    /* consume optional start_angle, end_angle, aspect — not supported by Felix,
+     * just draw the full circle. Handle empty args like CIRCLE x,y,r,c,,,aspect */
+    while (*p == ',') {
+        p = sk(p + 1);
+        if (*p == ',' || *p == '\0' || *p == ':') continue; /* empty arg */
+        mpf_t tmp; mpf_init2(tmp, g_prec);
+        p = sk(eval_expr(p, tmp));
+        mpf_clear(tmp);
+    }
+    felix_drawf("circle;%d;%d;%d;%d",
+                (int)x, (int)y, (int)(r + 0.5), color);
+    return 0;
+}
+
+/* ================================================================
+ * LINE [(x1,y1)]-(x2,y2), color [, B[F]]
+ * ================================================================ */
+static int cmd_line_gfx(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    double x1 = 0, y1 = 0, x2, y2;
+
+    /* optional start point */
+    if (*p == '(') {
+        p = sk(parse_xy(p, &x1, &y1));
+    }
+    if (*p == '-') p = sk(p + 1);
+    p = sk(parse_xy(p, &x2, &y2));
+
+    int color = 15;
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t mc; mpf_init2(mc, g_prec);
+        p = sk(eval_expr(p, mc));
+        color = (int)mpf_get_si(mc); mpf_clear(mc);
+    }
+
+    /* optional B or BF suffix */
+    const char *suffix = "";
+    p = sk(p);
+    if (*p == ',') {
+        p = sk(p + 1);
+        if (kw_match(p, "BF")) suffix = ";BF";
+        else if (*p == 'B' || *p == 'b') suffix = ";B";
+    }
+
+    felix_drawf("line;%d;%d;%d;%d;%d%s",
+                (int)x1, (int)y1, (int)x2, (int)y2, color, suffix);
+    return 0;
+}
+
+/* ================================================================
+ * PAINT (x, y), fill_color [, border_color]
+ * ================================================================ */
+static int cmd_paint(Interp *ip, const char *args) {
+    (void)ip;
+    const char *p = sk(args);
+    double x, y;
+    p = sk(parse_xy(p, &x, &y));
+    int fill = 15, border = -1;
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t mc; mpf_init2(mc, g_prec);
+        p = sk(eval_expr(p, mc));
+        fill = (int)mpf_get_si(mc); mpf_clear(mc);
+    }
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t mc; mpf_init2(mc, g_prec);
+        eval_expr(p, mc);
+        border = (int)mpf_get_si(mc); mpf_clear(mc);
+    }
+    if (border >= 0)
+        felix_drawf("paint;%d;%d;%d;%d", (int)x, (int)y, fill, border);
+    else
+        felix_drawf("paint;%d;%d;%d", (int)x, (int)y, fill);
+    return 0;
+}
+
+/* ================================================================
+ * PSET (x, y) [, color]
  * ================================================================ */
 static int cmd_pset(Interp *ip, const char *args) {
-    (void)ip; (void)args; return 0;
+    (void)ip;
+    const char *p = sk(args);
+    double x, y;
+    p = sk(parse_xy(p, &x, &y));
+    int color = 15;
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t mc; mpf_init2(mc, g_prec);
+        eval_expr(p, mc);
+        color = (int)mpf_get_si(mc); mpf_clear(mc);
+    }
+    felix_drawf("pset;%d;%d;%d", (int)x, (int)y, color);
+    return 0;
 }
 
 /* ================================================================

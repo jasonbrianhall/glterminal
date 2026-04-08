@@ -58,7 +58,14 @@ void run_from(int start_pc) {
     while (ip.running && ip.pc < g_nlines && !g_break) {
         int old_pc = ip.pc;
         int jumped  = dispatch(&ip, g_lines[ip.pc].text);
-        if (!jumped) ip.pc = old_pc + 1;
+        if (jumped < 0 && g_error_handler[0]) {
+            /* Runtime error with a handler registered — invoke it */
+            g_error_resume_pc = old_pc;
+            cmd_goto(&ip, g_error_handler);
+            jumped = 1;
+        } else if (!jumped) {
+            ip.pc = old_pc + 1;
+        }
     }
     if (g_break) {
         g_cont_pc = ip.pc;

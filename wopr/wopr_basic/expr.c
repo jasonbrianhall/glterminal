@@ -16,6 +16,10 @@ int         g_option_base = 0;
 volatile sig_atomic_t g_break  = 0;
 int                   g_cont_pc = -1;
 
+/* ON ERROR GOTO handler state */
+char g_error_handler[MAX_VARNAME] = "";  /* label/line of handler, "" = none */
+int  g_error_resume_pc = -1;             /* pc to RESUME to */
+
 DefFn g_defn[MAX_DEF_FN];
 int   g_defn_count = 0;
 

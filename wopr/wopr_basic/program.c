@@ -316,7 +316,7 @@ void load(const char *filename) {
 
         /* TYPE...END TYPE blocks: record field definitions, don't store as lines */
         if (strncasecmp(p, "END TYPE", 8) == 0) { inside_type = 0; continue; }
-        if (strncasecmp(p, "TYPE ", 5) == 0 && !isalnum((unsigned char)p[5-1+1])) {
+        if (strncasecmp(p, "TYPE ", 5) == 0 && isalpha((unsigned char)p[5])) {
             inside_type = 1;
             /* register the type name */
             if (g_ntypedefs < MAX_TYPE_DEFS) {

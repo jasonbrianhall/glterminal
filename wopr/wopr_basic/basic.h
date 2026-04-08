@@ -48,6 +48,8 @@ extern mp_bitcnt_t      g_prec;
 extern int              g_option_base;
 extern volatile sig_atomic_t g_break;
 extern int              g_cont_pc;
+extern char             g_error_handler[MAX_VARNAME];
+extern int              g_error_resume_pc;
 
 /* ================================================================
  * File handle table
