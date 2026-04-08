@@ -362,6 +362,125 @@ static int argi(const std::vector<std::string> &a, int idx, int def = 0) {
 }
 
 // ============================================================================
+// SCREEN MODE PALETTE SETUP
+// ============================================================================
+
+// Number of usable colors per screen mode (for clamping color indices)
+static int s_max_colors = 16;
+
+static void setup_screen_palette(int mode) {
+    // Authentic QB/EGA/CGA palettes.
+    // ANSI terminal palette (PAL_DEFAULT) is wrong for BASIC — index 1 is red
+    // in ANSI but blue in EGA. Always load the hardware-accurate palette.
+
+    // Standard EGA 16-color palette (used by SCREEN 7, 8, 9, 12 etc.)
+    static const float PAL_EGA[16][3] = {
+        {0.000f, 0.000f, 0.000f},  //  0 black
+        {0.000f, 0.000f, 0.667f},  //  1 blue
+        {0.000f, 0.667f, 0.000f},  //  2 green
+        {0.000f, 0.667f, 0.667f},  //  3 cyan
+        {0.667f, 0.000f, 0.000f},  //  4 red
+        {0.667f, 0.000f, 0.667f},  //  5 magenta
+        {0.667f, 0.333f, 0.000f},  //  6 brown
+        {0.667f, 0.667f, 0.667f},  //  7 light gray
+        {0.333f, 0.333f, 0.333f},  //  8 dark gray
+        {0.333f, 0.333f, 1.000f},  //  9 light blue
+        {0.333f, 1.000f, 0.333f},  // 10 light green
+        {0.333f, 1.000f, 1.000f},  // 11 light cyan
+        {1.000f, 0.333f, 0.333f},  // 12 light red
+        {1.000f, 0.333f, 1.000f},  // 13 light magenta
+        {1.000f, 1.000f, 0.333f},  // 14 yellow
+        {1.000f, 1.000f, 1.000f},  // 15 white
+    };
+
+    // CGA 4-color palette 1 (most common): black, cyan, magenta, white
+    static const float PAL_CGA4[4][3] = {
+        {0.000f, 0.000f, 0.000f},
+        {0.333f, 1.000f, 1.000f},
+        {1.000f, 0.333f, 1.000f},
+        {1.000f, 1.000f, 1.000f},
+    };
+
+    auto load_ega = [&]() {
+        for (int i = 0; i < 16; i++) {
+            g_palette16[i][0] = PAL_EGA[i][0];
+            g_palette16[i][1] = PAL_EGA[i][1];
+            g_palette16[i][2] = PAL_EGA[i][2];
+        }
+    };
+
+    switch (mode) {
+    case 1:  // CGA 4-color
+        s_max_colors = 4;
+        for (int i = 0; i < 4; i++) {
+            g_palette16[i][0] = PAL_CGA4[i][0];
+            g_palette16[i][1] = PAL_CGA4[i][1];
+            g_palette16[i][2] = PAL_CGA4[i][2];
+        }
+        break;
+    case 2:  // CGA 2-color: black + white
+        s_max_colors = 2;
+        g_palette16[0][0]=0.f; g_palette16[0][1]=0.f; g_palette16[0][2]=0.f;
+        g_palette16[1][0]=1.f; g_palette16[1][1]=1.f; g_palette16[1][2]=1.f;
+        break;
+    case 3:  // Hercules 2-color: black + white
+        s_max_colors = 2;
+        g_palette16[0][0]=0.f; g_palette16[0][1]=0.f; g_palette16[0][2]=0.f;
+        g_palette16[1][0]=1.f; g_palette16[1][1]=1.f; g_palette16[1][2]=1.f;
+        break;
+    case 5: case 6:  // CGA low-res, 16-color EGA palette
+        s_max_colors = 16;
+        load_ega();
+        break;
+    case 7: case 8:  // EGA 16-color
+        s_max_colors = 16;
+        load_ega();
+        break;
+    case 9:  // EGA 64-color — 16 active, standard EGA palette
+        s_max_colors = 16;
+        load_ega();
+        break;
+    case 10: // EGA monochrome: black + green phosphor
+        s_max_colors = 2;
+        g_palette16[0][0]=0.f; g_palette16[0][1]=0.f;  g_palette16[0][2]=0.f;
+        g_palette16[1][0]=0.f; g_palette16[1][1]=0.8f; g_palette16[1][2]=0.f;
+        break;
+    case 11: // VGA 2-color: black + white
+        s_max_colors = 2;
+        g_palette16[0][0]=0.f; g_palette16[0][1]=0.f; g_palette16[0][2]=0.f;
+        g_palette16[1][0]=1.f; g_palette16[1][1]=1.f; g_palette16[1][2]=1.f;
+        break;
+    case 12: // VGA 16-color
+        s_max_colors = 16;
+        load_ega();
+        break;
+    case 13: // VGA 256-color — EGA palette for 0-15, rest are RGB ramp
+        s_max_colors = 256;
+        load_ega();
+        break;
+    case 21: case 22: case 23: // SVGA with render effects — EGA palette
+        s_max_colors = 256;
+        load_ega();
+        break;
+    case 24: case 25: // Tandy — EGA palette
+        s_max_colors = 16;
+        load_ega();
+        break;
+    default:
+        s_max_colors = 256;
+        load_ega();
+        break;
+    }
+}
+
+// Clamp a color index to the valid range for the current screen mode
+static int clamp_color(int c) {
+    if (c < 0) return 0;
+    if (c < 16 && c >= s_max_colors) return c % s_max_colors;
+    return c;
+}
+
+// ============================================================================
 // COMMAND EXECUTION — called from basic_render() inside the GL frame
 // ============================================================================
 
@@ -371,10 +490,10 @@ static void execute_cmd(const std::vector<std::string> &a) {
 
     if (cmd == "pset") {
         int x=argi(a,1), y=argi(a,2), c=argi(a,3);
-        hw_pset(x,y,c); canvas_pset(x,y,c);
+        c=clamp_color(c); hw_pset(x,y,c); canvas_pset(x,y,c);
 
     } else if (cmd == "line") {
-        int x1=argi(a,1),y1=argi(a,2),x2=argi(a,3),y2=argi(a,4),c=argi(a,5);
+        int x1=argi(a,1),y1=argi(a,2),x2=argi(a,3),y2=argi(a,4),c=clamp_color(argi(a,5));
         bool box    = a.size()>6 && (a[6]=="B"||a[6]=="BF");
         bool filled = a.size()>6 && a[6]=="BF";
         if (box) {
@@ -393,10 +512,10 @@ static void execute_cmd(const std::vector<std::string> &a) {
         }
 
     } else if (cmd == "circle") {
-        hw_circle(argi(a,1),argi(a,2),argi(a,3),argi(a,4));
+        { int cc=clamp_color(argi(a,4)); hw_circle(argi(a,1),argi(a,2),argi(a,3),cc); }
 
     } else if (cmd == "paint") {
-        int x=argi(a,1),y=argi(a,2),c=argi(a,3),bc=a.size()>4?argi(a,4):-1;
+        int x=argi(a,1),y=argi(a,2),c=clamp_color(argi(a,3)),bc=a.size()>4?clamp_color(argi(a,4)):-1;
         float r,g,b; resolve_color(c,&r,&g,&b);
         // Run flood fill on software canvas first
         canvas_paint(x,y,c,bc);
@@ -429,7 +548,7 @@ static void execute_cmd(const std::vector<std::string> &a) {
         }
 
     } else if (cmd == "cls") {
-        int c=a.size()>1?argi(a,1):0;
+        int c=a.size()>1?clamp_color(argi(a,1)):0;
         float r,g,b; resolve_color(c,&r,&g,&b);
         // Always wipe the basic FBO to fully transparent first.
         // This ensures the terminal text/prompt is never permanently hidden.
@@ -450,6 +569,7 @@ static void execute_cmd(const std::vector<std::string> &a) {
 
     } else if (cmd == "screen") {
         int mode=argi(a,1,9);
+        setup_screen_palette(mode);
         // Resolutions per QB screen mode table.
         // Render effects mapped to visually appropriate modes.
         switch(mode){
