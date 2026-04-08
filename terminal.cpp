@@ -3,6 +3,7 @@
 #include "ft_font.h"    // s_ft_face, g_font_size
 #include "gl_terminal.h" // TERM_COLS_DEFAULT etc.
 #include "kitty_graphics.h"
+#include "basic_graphics.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -14,6 +15,10 @@
 extern int g_font_size;
 // g_sdl_window needed for OSC title; forward-declared here, defined in main
 extern SDL_Window *g_sdl_window;
+// Current window dimensions — needed to pass to basic_handle_osc for coordinate mapping.
+// Defined in gl_terminal_main.cpp (local to main, but we only need a rough snapshot).
+extern int g_basic_win_w;
+extern int g_basic_win_h;
 
 // When false, ESC _ (APC) sequences are silently discarded instead of being
 // passed to kitty_handle_apc(). Set to false for SSH sessions where tmux
@@ -556,9 +561,12 @@ void term_feed(Terminal *t, const char *buf, int len) {
                 const char *semi = strchr(t->osc, ';');
                 if (semi) {
                     int ps = atoi(t->osc);
-                    //SDL_Log("[OSC] ps=%d title='%s'\n", ps, semi + 1);
+                    SDL_Log("[OSC] ps=%d payload='%s'\n", ps, semi + 1);
                     if ((ps == 0 || ps == 2) && g_sdl_window)
                         SDL_SetWindowTitle(g_sdl_window, semi + 1);
+                    else if (ps == 666)
+                        basic_handle_osc(t, semi + 1, (int)(t->osc + t->osc_len - (semi + 1)),
+                                         g_basic_win_w, g_basic_win_h);
                 }
                 t->osc_len = 0;
                 t->state = (ch == 0x1b) ? PS_ESC : PS_NORMAL;

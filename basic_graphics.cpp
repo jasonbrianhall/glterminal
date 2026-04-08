@@ -1,0 +1,580 @@
+// basic_graphics.cpp — BASIC graphics protocol for felix terminal
+//
+// Protocol: ESC ] 6 6 6 ; <cmd> ; <args...> ST
+//
+// Commands:
+//   circle  ; x ; y ; r ; color
+//   line    ; x1 ; y1 ; x2 ; y2 ; color [; B | BF]
+//   pset    ; x ; y ; color
+//   paint   ; x ; y ; color [; border_color]
+//   cls     [; color]
+//   screen  ; mode
+//   palette ; index ; r ; g ; b
+//   play    ; mml_string
+//   get     ; sprite_id ; x1 ; y1 ; x2 ; y2
+//   put     ; sprite_id ; x ; y [; pset|xor]
+//   batch   ; <cmd1>\n<cmd2>\n...
+
+#include "basic_graphics.h"
+#include "mml_player.h"
+#include "gl_renderer.h"
+#include "sdl_renderer.h"
+#include "term_color.h"
+#include "gl_terminal.h"
+
+#include <GL/glew.h>
+#include <SDL2/SDL.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <math.h>
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <algorithm>
+
+// ============================================================================
+// DISPLAY LIST — commands queued by handle_osc, executed by basic_render()
+// ============================================================================
+
+struct BgCmd {
+    std::string              name;
+    std::vector<std::string> args;
+};
+
+static std::vector<BgCmd> s_display_list;
+bool s_dl_dirty = false;
+
+// ============================================================================
+// SCREEN / COORDINATE MAPPING
+// ============================================================================
+
+static int s_scr_w = 640;
+static int s_scr_h = 350;
+static int s_win_w = 800;
+static int s_win_h = 480;
+
+static float basic_x(int x, int w)  { return (float)x * w / s_scr_w; }
+static float basic_y(int y, int h)  { return (float)y * h / s_scr_h; }
+static float basic_sx(int w2, int w) { return (float)w2 * w / s_scr_w; }
+static float basic_sy(int h2, int h) { return (float)h2 * h / s_scr_h; }
+
+// ============================================================================
+// COLOR RESOLUTION
+// ============================================================================
+
+static void resolve_color(int c, float *r, float *g, float *b) {
+    if (c < 0) c = 0;
+    if (c <= 15) {
+        *r = g_palette16[c][0];
+        *g = g_palette16[c][1];
+        *b = g_palette16[c][2];
+    } else {
+        *r = ((c >> 16) & 0xFF) / 255.f;
+        *g = ((c >>  8) & 0xFF) / 255.f;
+        *b = ((c      ) & 0xFF) / 255.f;
+    }
+}
+
+// ============================================================================
+// SPRITE STORE
+// ============================================================================
+
+struct BasicSprite {
+    int w = 0, h = 0;
+    std::vector<uint8_t> rgba;
+    GLuint       tex     = 0;
+    SDL_Texture *sdl_tex = nullptr;
+};
+
+static std::unordered_map<int, BasicSprite> s_sprites;
+
+static void sprite_free(BasicSprite &sp) {
+    if (g_use_sdl_renderer) {
+        if (sp.sdl_tex) { SDL_DestroyTexture(sp.sdl_tex); sp.sdl_tex = nullptr; }
+    } else {
+        if (sp.tex) { glDeleteTextures(1, &sp.tex); sp.tex = 0; }
+    }
+}
+
+static void sprite_upload(BasicSprite &sp) {
+    sprite_free(sp);
+    if (g_use_sdl_renderer) {
+        sp.sdl_tex = SDL_CreateTexture(g_sdl_renderer,
+            SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, sp.w, sp.h);
+        if (sp.sdl_tex) {
+            SDL_UpdateTexture(sp.sdl_tex, nullptr, sp.rgba.data(), sp.w * 4);
+            SDL_SetTextureBlendMode(sp.sdl_tex, SDL_BLENDMODE_BLEND);
+        }
+    } else {
+        glGenTextures(1, &sp.tex);
+        glBindTexture(GL_TEXTURE_2D, sp.tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sp.w, sp.h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, sp.rgba.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+}
+
+// ============================================================================
+// SOFTWARE CANVAS (for GET readback)
+// ============================================================================
+
+static std::vector<uint8_t> s_canvas;
+
+static void canvas_resize() {
+    s_canvas.assign((size_t)s_scr_w * s_scr_h * 4, 0);
+}
+
+static void canvas_pset(int x, int y, int color) {
+    if (x < 0 || y < 0 || x >= s_scr_w || y >= s_scr_h) return;
+    float r, g, b; resolve_color(color, &r, &g, &b);
+    uint8_t *p = s_canvas.data() + (y * s_scr_w + x) * 4;
+    p[0] = (uint8_t)(r * 255); p[1] = (uint8_t)(g * 255);
+    p[2] = (uint8_t)(b * 255); p[3] = 0xFF;
+}
+
+static int canvas_point(int x, int y) {
+    if (x < 0 || y < 0 || x >= s_scr_w || y >= s_scr_h) return -1;
+    const uint8_t *p = s_canvas.data() + (y * s_scr_w + x) * 4;
+    return ((int)p[0] << 16) | ((int)p[1] << 8) | p[2];
+}
+
+static void canvas_paint(int x, int y, int fill_color, int border_color) {
+    int target = canvas_point(x, y);
+    if (target < 0) return;
+    float fr, fg, fb; resolve_color(fill_color, &fr, &fg, &fb);
+    int fill_packed = ((int)(fr*255)<<16)|((int)(fg*255)<<8)|(int)(fb*255);
+    if (target == fill_packed) return;
+    int border_packed = -1;
+    if (border_color >= 0) {
+        float br, bg, bb; resolve_color(border_color, &br, &bg, &bb);
+        border_packed = ((int)(br*255)<<16)|((int)(bg*255)<<8)|(int)(bb*255);
+    }
+    std::vector<std::pair<int,int>> stk;
+    stk.push_back({x, y});
+    while (!stk.empty()) {
+        auto [cx, cy] = stk.back(); stk.pop_back();
+        int cv = canvas_point(cx, cy);
+        if (cv < 0 || cv == fill_packed) continue;
+        if (border_packed >= 0 && cv == border_packed) continue;
+        if (cv != target) continue;
+        canvas_pset(cx, cy, fill_color);
+        stk.push_back({cx-1,cy}); stk.push_back({cx+1,cy});
+        stk.push_back({cx,cy-1}); stk.push_back({cx,cy+1});
+    }
+}
+
+// ============================================================================
+// HARDWARE DRAW HELPERS
+// ============================================================================
+
+static void hw_pset(int x, int y, int color) {
+    float r, g, b; resolve_color(color, &r, &g, &b);
+    draw_rect(basic_x(x, s_win_w), basic_y(y, s_win_h), 1.f, 1.f, r, g, b, 1.f);
+}
+
+static void hw_line(int x1, int y1, int x2, int y2, int color) {
+    float r, g, b; resolve_color(color, &r, &g, &b);
+    Vertex v[2] = {
+        { basic_x(x1,s_win_w), basic_y(y1,s_win_h), r, g, b, 1.f },
+        { basic_x(x2,s_win_w), basic_y(y2,s_win_h), r, g, b, 1.f },
+    };
+    draw_verts(v, 2, GL_LINES);
+}
+
+static void hw_rect(int x1, int y1, int x2, int y2, int color, bool filled) {
+    float r, g, b; resolve_color(color, &r, &g, &b);
+    float px = basic_x(x1,s_win_w), py = basic_y(y1,s_win_h);
+    float pw = basic_sx(x2-x1, s_win_w), ph = basic_sy(y2-y1, s_win_h);
+    if (filled) {
+        draw_rect(px, py, pw, ph, r, g, b, 1.f);
+    } else {
+        float px2 = basic_x(x2,s_win_w), py2 = basic_y(y2,s_win_h);
+        Vertex v[5] = {
+            {px,  py,  r,g,b,1.f}, {px2, py,  r,g,b,1.f},
+            {px2, py2, r,g,b,1.f}, {px,  py2, r,g,b,1.f},
+            {px,  py,  r,g,b,1.f},
+        };
+        draw_verts(v, 5, GL_LINE_STRIP);
+    }
+}
+
+static void hw_circle(int cx, int cy, int radius, int color) {
+    float r, g, b; resolve_color(color, &r, &g, &b);
+    const int STEPS = SDL_max(32, radius * 2);
+    std::vector<Vertex> verts;
+    verts.reserve((size_t)STEPS + 1);
+    for (int i = 0; i <= STEPS; i++) {
+        float angle = (float)i / STEPS * 2.f * (float)M_PI;
+        verts.push_back({
+            basic_x(cx + (int)(cosf(angle) * radius), s_win_w),
+            basic_y(cy + (int)(sinf(angle) * radius), s_win_h),
+            r, g, b, 1.f });
+    }
+    draw_verts(verts.data(), (int)verts.size(), GL_LINE_STRIP);
+    // Software canvas (Bresenham for GET accuracy)
+    int x = 0, y = radius, d = 1 - radius;
+    while (x <= y) {
+        canvas_pset(cx+x,cy+y,color); canvas_pset(cx-x,cy+y,color);
+        canvas_pset(cx+x,cy-y,color); canvas_pset(cx-x,cy-y,color);
+        canvas_pset(cx+y,cy+x,color); canvas_pset(cx-y,cy+x,color);
+        canvas_pset(cx+y,cy-x,color); canvas_pset(cx-y,cy-x,color);
+        if (d < 0) d += 2*x+3; else { d += 2*(x-y)+5; y--; }
+        x++;
+    }
+}
+
+// ============================================================================
+// SPRITE PUT (hardware)
+// ============================================================================
+
+static GLuint s_spr_prog = 0, s_spr_vao = 0, s_spr_vbo = 0;
+static GLint  s_spr_proj = -1, s_spr_tex = -1;
+
+static const char *SPR_VS =
+    "#version 330 core\n"
+    "layout(location=0) in vec2 pos;\n"
+    "layout(location=1) in vec2 tc;\n"
+    "uniform mat4 proj;\n"
+    "out vec2 vTC;\n"
+    "void main(){ gl_Position=proj*vec4(pos,0,1); vTC=tc; }\n";
+
+static const char *SPR_FS =
+    "#version 330 core\n"
+    "in vec2 vTC; out vec4 frag; uniform sampler2D img;\n"
+    "void main(){ frag=texture(img,vTC); }\n";
+
+static void spr_init_gl() {
+    auto compile = [](GLenum t, const char *s) {
+        GLuint sh = glCreateShader(t);
+        glShaderSource(sh, 1, &s, nullptr);
+        glCompileShader(sh);
+        return sh;
+    };
+    GLuint vs = compile(GL_VERTEX_SHADER, SPR_VS);
+    GLuint fs = compile(GL_FRAGMENT_SHADER, SPR_FS);
+    s_spr_prog = glCreateProgram();
+    glAttachShader(s_spr_prog, vs); glAttachShader(s_spr_prog, fs);
+    glLinkProgram(s_spr_prog);
+    glDeleteShader(vs); glDeleteShader(fs);
+    s_spr_proj = glGetUniformLocation(s_spr_prog, "proj");
+    s_spr_tex  = glGetUniformLocation(s_spr_prog, "img");
+    glGenVertexArrays(1, &s_spr_vao);
+    glGenBuffers(1, &s_spr_vbo);
+    glBindVertexArray(s_spr_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_spr_vbo);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
+    glBindVertexArray(0);
+}
+
+static void hw_put_sprite(int id, int x, int y, bool xor_mode) {
+    auto it = s_sprites.find(id);
+    if (it == s_sprites.end()) return;
+    BasicSprite &sp = it->second;
+    float px = basic_x(x,s_win_w), py = basic_y(y,s_win_h);
+    float pw = basic_sx(sp.w,s_win_w), ph = basic_sy(sp.h,s_win_h);
+
+    if (g_use_sdl_renderer) {
+        if (!sp.sdl_tex) return;
+        SDL_Rect dst = { (int)px, (int)py, (int)pw, (int)ph };
+        SDL_SetTextureBlendMode(sp.sdl_tex, xor_mode ? SDL_BLENDMODE_MOD : SDL_BLENDMODE_BLEND);
+        SDL_RenderCopy(g_sdl_renderer, sp.sdl_tex, nullptr, &dst);
+        return;
+    }
+
+    if (!sp.tex) return;
+    gl_flush_verts();
+    if (!s_spr_prog) spr_init_gl();
+
+    float vdata[24] = {
+        px,    py,    0.f,1.f,
+        px+pw, py,    1.f,1.f,
+        px+pw, py+ph, 1.f,0.f,
+        px,    py,    0.f,1.f,
+        px+pw, py+ph, 1.f,0.f,
+        px,    py+ph, 0.f,0.f,
+    };
+    glUseProgram(s_spr_prog);
+    glUniformMatrix4fv(s_spr_proj, 1, GL_FALSE, G.proj.m);
+    glUniform1i(s_spr_tex, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, sp.tex);
+    if (xor_mode) { glEnable(GL_COLOR_LOGIC_OP); glLogicOp(GL_XOR); }
+    glBindVertexArray(s_spr_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_spr_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vdata), vdata, GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    if (xor_mode) glDisable(GL_COLOR_LOGIC_OP);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(G.prog);
+}
+
+// ============================================================================
+// ARGUMENT PARSING
+// ============================================================================
+
+static std::vector<std::string> split_args(const char *s, int len) {
+    std::vector<std::string> out;
+    const char *p = s, *end = s + len;
+    while (p <= end) {
+        const char *q = p;
+        while (q < end && *q != ';') q++;
+        out.emplace_back(p, q);
+        p = q + 1;
+    }
+    return out;
+}
+
+static int argi(const std::vector<std::string> &a, int idx, int def = 0) {
+    if (idx < 0 || idx >= (int)a.size()) return def;
+    return atoi(a[idx].c_str());
+}
+
+// ============================================================================
+// COMMAND EXECUTION — called from basic_render() inside the GL frame
+// ============================================================================
+
+static void execute_cmd(const std::vector<std::string> &a) {
+    if (a.empty()) return;
+    const std::string &cmd = a[0];
+
+    if (cmd == "pset") {
+        int x=argi(a,1), y=argi(a,2), c=argi(a,3);
+        hw_pset(x,y,c); canvas_pset(x,y,c);
+
+    } else if (cmd == "line") {
+        int x1=argi(a,1),y1=argi(a,2),x2=argi(a,3),y2=argi(a,4),c=argi(a,5);
+        bool box    = a.size()>6 && (a[6]=="B"||a[6]=="BF");
+        bool filled = a.size()>6 && a[6]=="BF";
+        if (box) {
+            hw_rect(x1,y1,x2,y2,c,filled);
+        } else {
+            hw_line(x1,y1,x2,y2,c);
+            int dx=abs(x2-x1),dy=abs(y2-y1),sx=x1<x2?1:-1,sy=y1<y2?1:-1,err=dx-dy;
+            int cx=x1,cy=y1;
+            while(true){
+                canvas_pset(cx,cy,c);
+                if(cx==x2&&cy==y2) break;
+                int e2=2*err;
+                if(e2>-dy){err-=dy;cx+=sx;}
+                if(e2< dx){err+=dx;cy+=sy;}
+            }
+        }
+
+    } else if (cmd == "circle") {
+        hw_circle(argi(a,1),argi(a,2),argi(a,3),argi(a,4));
+
+    } else if (cmd == "paint") {
+        int x=argi(a,1),y=argi(a,2),c=argi(a,3),bc=a.size()>4?argi(a,4):-1;
+        float r,g,b; resolve_color(c,&r,&g,&b);
+        // Run flood fill on software canvas first
+        canvas_paint(x,y,c,bc);
+        // Hardware: scan canvas rows and emit filled horizontal spans.
+        // We look for runs of the fill color and draw them as rects.
+        float fr=(uint8_t)(r*255), fg_=(uint8_t)(g*255), fb=(uint8_t)(b*255);
+        (void)fr; (void)fg_; (void)fb;
+        uint8_t tr=(uint8_t)(r*255), tg=(uint8_t)(g*255), tb=(uint8_t)(b*255);
+        for (int row = 0; row < s_scr_h; row++) {
+            int col = 0;
+            while (col < s_scr_w) {
+                const uint8_t *p = s_canvas.data() + (row*s_scr_w+col)*4;
+                if (p[0]==tr && p[1]==tg && p[2]==tb) {
+                    int start = col;
+                    while (col < s_scr_w) {
+                        const uint8_t *q = s_canvas.data()+(row*s_scr_w+col)*4;
+                        if (q[0]!=tr||q[1]!=tg||q[2]!=tb) break;
+                        col++;
+                    }
+                    // Draw span [start, col) on this row
+                    float px = basic_x(start, s_win_w);
+                    float py = basic_y(row,   s_win_h);
+                    float pw = basic_sx(col-start, s_win_w);
+                    float ph = basic_sy(1, s_win_h) + 1.f;
+                    draw_rect(px, py, pw, ph, r, g, b, 1.f);
+                } else {
+                    col++;
+                }
+            }
+        }
+
+    } else if (cmd == "cls") {
+        int c=a.size()>1?argi(a,1):0;
+        float r,g,b; resolve_color(c,&r,&g,&b);
+        draw_rect(0,0,(float)s_win_w,(float)s_win_h,r,g,b,1.f);
+        uint8_t cr=(uint8_t)(r*255),cg=(uint8_t)(g*255),cb=(uint8_t)(b*255);
+        for(int i=0;i<s_scr_w*s_scr_h;i++){
+            s_canvas[i*4+0]=cr; s_canvas[i*4+1]=cg;
+            s_canvas[i*4+2]=cb; s_canvas[i*4+3]=0xFF;
+        }
+
+    } else if (cmd == "screen") {
+        int mode=argi(a,1,9);
+        // Resolutions per QB screen mode table.
+        // Render effects mapped to visually appropriate modes.
+        switch(mode){
+        case 0:                                                              break; // text mode, no change
+        case 1:  s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // CGA 4-color
+        case 2:  s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // CGA 2-color
+        case 3:  s_scr_w=720; s_scr_h=348; g_render_mode=RENDER_MODE_NORMAL; break; // Hercules
+        case 4:  s_scr_w=640; s_scr_h=400; g_render_mode=RENDER_MODE_NORMAL; break; // Olivetti
+        case 5:  s_scr_w=160; s_scr_h=100; g_render_mode=RENDER_MODE_NORMAL; break; // CGA low
+        case 6:  s_scr_w=160; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // CGA low
+        case 7:  s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_BIT_CRT;     break; // EGA 16-color → CRT
+        case 8:  s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_BIT_CRT;     break; // EGA 16-color → CRT
+        case 9:  s_scr_w=640; s_scr_h=350; g_render_mode=RENDER_MODE_NORMAL; break; // EGA 64-color (Gorilla)
+        case 10: s_scr_w=640; s_scr_h=350; g_render_mode=RENDER_MODE_NORMAL; break; // EGA mono
+        case 11: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // VGA 2-color
+        case 12: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // VGA 16-color
+        case 13: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // VGA 256-color
+        case 14: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // PCP 16-color
+        case 15: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // PCP 4-color
+        case 16: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // PGC 256-color
+        case 17: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // IBM 8514/A
+        case 18: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // JEGA
+        case 19: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // JEGA text
+        case 20: s_scr_w=512; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // TIGA
+        case 21: s_scr_w=640; s_scr_h=400; g_render_mode=RENDER_BIT_CRT;     break; // SVGA → CRT effect
+        case 22: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_BIT_VHS;     break; // SVGA → VHS effect
+        case 23: s_scr_w=800; s_scr_h=600; g_render_mode=RENDER_BIT_C64;     break; // SVGA → C64 effect
+        case 24: s_scr_w=160; s_scr_h=200; g_render_mode=RENDER_BIT_COMPOSITE; break; // Tandy → Composite
+        case 25: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_BIT_COMPOSITE; break; // Tandy → Composite
+        case 26: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy
+        case 27: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy ETGA
+        case 28: s_scr_w=720; s_scr_h=350; g_render_mode=RENDER_MODE_NORMAL; break; // OGA
+        default: break;
+        }
+        canvas_resize();
+
+    } else if (cmd == "palette") {
+        int idx=argi(a,1),r=argi(a,2),g=argi(a,3),b=argi(a,4);
+        if(idx>=0&&idx<16){
+            g_palette16[idx][0]=r/255.f;
+            g_palette16[idx][1]=g/255.f;
+            g_palette16[idx][2]=b/255.f;
+        }
+
+    } else if (cmd == "play") {
+        // Dispatched immediately (audio, not a GL command)
+        if (a.size()>1) {
+            SDL_Log("[BASIC] PLAY: %s\n", a[1].c_str());
+            mml_play_via_wopr(a[1].c_str());
+        }
+
+    } else if (cmd == "get") {
+        int id=argi(a,1),x1=argi(a,2),y1=argi(a,3),x2=argi(a,4),y2=argi(a,5);
+        if(x2<x1) std::swap(x1,x2);
+        if(y2<y1) std::swap(y1,y2);
+        x1=SDL_clamp(x1,0,s_scr_w-1); x2=SDL_clamp(x2,0,s_scr_w-1);
+        y1=SDL_clamp(y1,0,s_scr_h-1); y2=SDL_clamp(y2,0,s_scr_h-1);
+        int sw=x2-x1+1, sh=y2-y1+1;
+        BasicSprite &sp = s_sprites[id];
+        sprite_free(sp);
+        sp.w=sw; sp.h=sh;
+        sp.rgba.resize((size_t)sw*sh*4);
+        for(int row=0;row<sh;row++)
+            memcpy(sp.rgba.data()+row*sw*4,
+                   s_canvas.data()+((y1+row)*s_scr_w+x1)*4, sw*4);
+        sprite_upload(sp);
+
+    } else if (cmd == "put") {
+        int id=argi(a,1),x=argi(a,2),y=argi(a,3);
+        bool xormode = a.size()>4 && a[4]=="xor";
+        hw_put_sprite(id,x,y,xormode);
+        auto it=s_sprites.find(id);
+        if(it!=s_sprites.end()){
+            BasicSprite &sp=it->second;
+            for(int row=0;row<sp.h;row++){
+                int dy=y+row; if(dy<0||dy>=s_scr_h) continue;
+                for(int col=0;col<sp.w;col++){
+                    int dx=x+col; if(dx<0||dx>=s_scr_w) continue;
+                    const uint8_t *src=sp.rgba.data()+(row*sp.w+col)*4;
+                    uint8_t *dst=s_canvas.data()+(dy*s_scr_w+dx)*4;
+                    if(xormode){ dst[0]^=src[0]; dst[1]^=src[1]; dst[2]^=src[2]; dst[3]=0xFF; }
+                    else        { memcpy(dst,src,4); }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// COMMAND QUEUE — called from handle_osc (any thread context)
+// ============================================================================
+
+static void queue_cmd(const std::vector<std::string> &a) {
+    if (a.empty()) return;
+    // play is audio-only, execute immediately without queuing for GL frame
+    if (a[0] == "play") { execute_cmd(a); return; }
+    // screen mode change also takes effect immediately (no GL draw)
+    if (a[0] == "screen" || a[0] == "palette") { execute_cmd(a); return; }
+    s_display_list.push_back({ a[0], a });
+    s_dl_dirty = true;
+}
+
+// ============================================================================
+// basic_render — call from gl_terminal_main inside gl_begin_term_frame()
+// ============================================================================
+
+void basic_render(int win_w, int win_h) {
+    if (s_display_list.empty()) return;
+    s_win_w = win_w;
+    s_win_h = win_h;
+    for (auto &c : s_display_list)
+        execute_cmd(c.args);
+    s_display_list.clear();
+    s_dl_dirty = false;
+}
+
+// ============================================================================
+// basic_handle_osc — entry point called from terminal.cpp
+// ============================================================================
+
+void basic_handle_osc(Terminal * /*t*/, const char *payload, int len,
+                      int win_w, int win_h) {
+    s_win_w = win_w;
+    s_win_h = win_h;
+    if (len <= 0) return;
+
+    if (len >= 5 && strncmp(payload, "batch", 5) == 0 && payload[5] == ';') {
+        const char *p = payload + 6;
+        int rem = len - 6;
+        while (rem > 0) {
+            const char *nl = (const char*)memchr(p, '\n', rem);
+            int line_len = nl ? (int)(nl-p) : rem;
+            if (line_len > 0) queue_cmd(split_args(p, line_len));
+            if (!nl) break;
+            rem -= (int)(nl-p)+1;
+            p = nl+1;
+        }
+    } else {
+        queue_cmd(split_args(payload, len));
+    }
+}
+
+// ============================================================================
+// INIT / SHUTDOWN
+// ============================================================================
+
+void basic_graphics_init(int win_w, int win_h) {
+    s_win_w = win_w;
+    s_win_h = win_h;
+    canvas_resize();
+}
+
+void basic_graphics_shutdown(void) {
+    for (auto &kv : s_sprites) sprite_free(kv.second);
+    s_sprites.clear();
+    s_canvas.clear();
+    s_display_list.clear();
+    if (!g_use_sdl_renderer) {
+        if (s_spr_prog) { glDeleteProgram(s_spr_prog);         s_spr_prog = 0; }
+        if (s_spr_vao)  { glDeleteVertexArrays(1, &s_spr_vao); s_spr_vao  = 0; }
+        if (s_spr_vbo)  { glDeleteBuffers(1, &s_spr_vbo);      s_spr_vbo  = 0; }
+    }
+}

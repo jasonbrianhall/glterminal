@@ -2,11 +2,11 @@
 // Build (local shell):
 //   g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
 //       terminal.cpp term_pty.cpp term_ui.cpp gl_bouncingcircle.cpp
-//       font_manager.cpp
+//       font_manager.cpp basic_graphics.cpp
 //       -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
 //
 // Build (with SSH support):
-//   g++ ... ssh_session.cpp ... -lssh2 -lcrypto -lssl -DUSESSH -o gl_terminal
+//   g++ ... ssh_session.cpp basic_graphics.cpp ... -lssh2 -lcrypto -lssl -DUSESSH -o gl_terminal
 
 #include "gl_terminal.h"
 #include "gl_renderer.h"
@@ -20,6 +20,7 @@
 #include "crt_audio.h"
 #include "felix_settings.h"
 #include "kitty_graphics.h"
+#include "basic_graphics.h"
 #include "font_manager.h"
 #include "image_viewer.h"
 #include "wopr/wopr.h"
@@ -51,6 +52,9 @@ float       g_opacity     = 1.0f;
 bool        g_blink_text_on = true;
 SDL_Window *g_sdl_window  = nullptr;
 std::vector<FontEntry> g_font_list;
+// Current window size exposed to terminal.cpp for basic_handle_osc coordinate mapping.
+int         g_basic_win_w = 800;
+int         g_basic_win_h = 480;
 
 // ============================================================================
 // SSH / PTY dispatch helpers — used throughout the main loop.
@@ -332,6 +336,9 @@ int main(int argc, char **argv) {
 
     gl_init_renderer(win_w, win_h);
     kitty_init();
+    g_basic_win_w = win_w;
+    g_basic_win_h = win_h;
+    basic_graphics_init(win_w, win_h);
     if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
 
     term_resize(&term, win_w, win_h);
@@ -1282,6 +1289,9 @@ int main(int argc, char **argv) {
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                     gl_resize_fbo(win_w, win_h);
                     term_resize(&term, win_w, win_h);
+                    g_basic_win_w = win_w;
+                    g_basic_win_h = win_h;
+                    basic_graphics_init(win_w, win_h);  // update canvas mapping
 #ifdef USESSH
                     if (use_ssh) ssh_pty_resize(term.cols, term.rows);
 #endif
@@ -1334,12 +1344,13 @@ int main(int argc, char **argv) {
         // Sleep is placed AFTER rendering so input→render has no artificial delay.
         // (vsync via SDL_GL_SetSwapInterval(1) already throttles normal frames.)
 
+        // Wake up the render loop if BASIC has queued commands
+        if (s_dl_dirty) needs_render = true;
+
         if (needs_render) {
-            // Only re-render the terminal FBO if at least one row is dirty.
-            // term_render itself skips clean rows, so even a full call with
-            // only one dirty row is cheap.  Scrollback, selection, and resize
-            // all call term_dirty_all() so they always get a full redraw.
-            bool any_dirty = term.all_dirty;
+            // Only re-render the terminal FBO if at least one row is dirty,
+            // OR if basic_graphics has commands waiting.
+            bool any_dirty = term.all_dirty || s_dl_dirty;
             if (!any_dirty) {
                 for (int r = 0; r < term.rows && !any_dirty; r++)
                     any_dirty = term.dirty_rows[r] != 0;
@@ -1349,12 +1360,11 @@ int main(int argc, char **argv) {
                 float bg_r = THEMES[g_theme_idx].bg_r;
                 float bg_g = THEMES[g_theme_idx].bg_g;
                 float bg_b = THEMES[g_theme_idx].bg_b;
-                // On a full redraw, clear the FBO first so stale content
-                // from a previous layout (resize, theme change) doesn't show.
                 if (term.all_dirty)
                     gl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
                 gl_begin_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
                 term_render(&term, 2, 2);  // clears dirty flags internally
+                basic_render(win_w, win_h); // flush queued BASIC draw commands
                 gl_end_term_frame();
             }
 
@@ -1415,6 +1425,7 @@ int main(int argc, char **argv) {
     wopr_audio_shutdown();
     crt_audio_shutdown();
     kitty_shutdown();
+    basic_graphics_shutdown();
     menu_font_shutdown();
 #ifdef USESSH
     if (use_ssh) {
