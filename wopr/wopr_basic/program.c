@@ -370,6 +370,29 @@ void load(const char *filename) {
         normalize_kw(p, normbuf, sizeof normbuf);
         p = normbuf;
 
+        /* Register SUB/FUNCTION names as labels so bare calls can find them */
+        if ((strncasecmp(p, "SUB ", 4) == 0 || strncasecmp(p, "FUNCTION ", 9) == 0)) {
+            const char *np = strncasecmp(p, "SUB ", 4) == 0 ? p + 4 : p + 9;
+            while (isspace((unsigned char)*np)) np++;
+            char subname[MAX_VARNAME]; int si = 0;
+            while ((isalnum((unsigned char)*np) || *np == '_') && si < MAX_VARNAME - 1)
+                subname[si++] = (char)toupper((unsigned char)*np++);
+            /* strip type sigil (e.g. CalcDelay!) */
+            if (si > 0 && (subname[si-1] == '!' || subname[si-1] == '#' ||
+                           subname[si-1] == '%' || subname[si-1] == '&'))
+                subname[si-1] = '\0';
+            else
+                subname[si] = '\0';
+            if (subname[0]) {
+                /* point at the next pseudo line (the SUB line itself) */
+                if (pending_count < 8) {
+                    strncpy(pending_buf + pending_count * MAX_VARNAME,
+                            subname, MAX_VARNAME - 1);
+                    pending_count++;
+                }
+            }
+        }
+
         /* Helper: store one statement and assign/register its pseudo-number. */
         #define STORE_FREE(sp) do { \
             if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \

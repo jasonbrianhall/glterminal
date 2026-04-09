@@ -435,6 +435,7 @@ static int cmd_locate(Interp *ip, const char *args) {
 static int cmd_dim(Interp *ip, const char *args);
 static int cmd_return(Interp *ip, const char *args);
 static const char *parse_field_varname(const char *p, char *out);
+static int eval_one_cmp(const char **pp);
 
 /* DO [WHILE|UNTIL cond] — push a loop frame pointing at the DO statement */
 static int cmd_do(Interp *ip, const char *args) {
@@ -447,10 +448,7 @@ static int cmd_do(Interp *ip, const char *args) {
         if (kw_match(p, "WHILE") || kw_match(p, "UNTIL")) {
             int is_until = kw_match(p, "UNTIL");
             p = sk(p + 5);
-            mpf_t v; mpf_init2(v, g_prec);
-            eval_expr(p, v);
-            int cond = (mpf_sgn(v) != 0);
-            mpf_clear(v);
+            int cond = eval_one_cmp(&p);
             if (is_until) cond = !cond;
             if (!cond) {
                 /* skip to after matching LOOP */
@@ -475,10 +473,7 @@ static int cmd_do(Interp *ip, const char *args) {
     if (kw_match(p, "WHILE") || kw_match(p, "UNTIL")) {
         int is_until = kw_match(p, "UNTIL");
         p = sk(p + 5);
-        mpf_t v; mpf_init2(v, g_prec);
-        eval_expr(p, v);
-        int cond = (mpf_sgn(v) != 0);
-        mpf_clear(v);
+        int cond = eval_one_cmp(&p);
         if (is_until) cond = !cond;
         if (!cond) {
             int depth = 1, pc = ip->pc + 1;
@@ -513,16 +508,10 @@ static int cmd_loop(Interp *ip, const char *args) {
 
     if (kw_match(p, "WHILE")) {
         p = sk(p + 5);
-        mpf_t v; mpf_init2(v, g_prec);
-        eval_expr(p, v);
-        keep_looping = (mpf_sgn(v) != 0);
-        mpf_clear(v);
+        keep_looping = eval_one_cmp(&p);
     } else if (kw_match(p, "UNTIL")) {
         p = sk(p + 5);
-        mpf_t v; mpf_init2(v, g_prec);
-        eval_expr(p, v);
-        keep_looping = (mpf_sgn(v) == 0);   /* UNTIL: loop while condition is FALSE */
-        mpf_clear(v);
+        keep_looping = !eval_one_cmp(&p);
     }
 
     if (keep_looping) {
@@ -541,10 +530,15 @@ static int cmd_loop(Interp *ip, const char *args) {
 /* WHILE cond */
 static int cmd_while(Interp *ip, const char *args) {
     const char *p = sk(args);
-    mpf_t v; mpf_init2(v, g_prec);
-    eval_expr(p, v);
-    int cond = (mpf_sgn(v) != 0);
-    mpf_clear(v);
+    int cond = eval_one_cmp(&p);
+    p = sk(p);
+    while (kw_match(p,"AND") || kw_match(p,"OR")) {
+        int is_and = kw_match(p,"AND");
+        p = sk(p + (is_and ? 3 : 2));
+        int next = eval_one_cmp(&p);
+        cond = is_and ? (cond && next) : (cond || next);
+        p = sk(p);
+    }
 
     if (cond) {
         /* Only push a new frame if we're not already tracking this WHILE */
@@ -926,9 +920,10 @@ static int cmd_dim(Interp *ip, const char *args) {
     const char *p = sk(args);
     /* SHARED keyword — skip it, all our vars are already global */
     if (kw_match(p, "SHARED")) p = sk(p + 6);
-    while (*p) {
+    while (*p && *p != '\'') {
         char name[MAX_VARNAME];
         p = sk(read_varname(p, name));
+        if (!name[0]) break;
         /* strip type sigil if present but not already in name */
         if ((*p == '&' || *p == '!' || *p == '#' || *p == '%') &&
             name[strlen(name)-1] != '$') p++;
@@ -1953,6 +1948,9 @@ const Command commands[] = {
     { "END FUNCTION",cmd_end_sub   },
     { "END IF",     cmd_rem        },
     { "END",        cmd_end        },
+    { "ELSE",       cmd_rem        },
+    { "SUB",        cmd_rem        },
+    { "FUNCTION",   cmd_rem        },
     { "EXIT",       cmd_exit       },
     { "STOP",       cmd_stop       },
     { "CONT",       cmd_cont       },
@@ -2068,13 +2066,14 @@ int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
         const char *after = read_varname(p, name);
+        /* skip type sigil (#, !, %, &) after varname */
+        if (*after == '#' || *after == '!' || *after == '%' || *after == '&') after++;
         after = sk(after);
         if (*after == '=' || *after == '(') return cmd_let(ip, p);
         /* struct field: name.field = ... or name(i).field = ... */
         if (*after == '.') return cmd_let(ip, p);
         /* array then dot: name(idx).field */
-        if (*after == '(' ) {
-            /* scan past parens */
+        if (*after == '(') {
             int depth = 1; after++;
             while (*after && depth > 0) {
                 if (*after == '(') depth++;
@@ -2084,6 +2083,8 @@ int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
             after = sk(after);
             if (*after == '.') return cmd_let(ip, p);
         }
+        /* Bare sub call without CALL keyword */
+        return cmd_call(ip, p);
     }
 
     basic_stderr("Warning: unknown: %.60s\n", p);

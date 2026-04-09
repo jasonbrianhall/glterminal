@@ -76,7 +76,8 @@ const char *read_varname(const char *p, char *name) {
     int i = 0;
     while ((isalnum((unsigned char)*p) || *p == '_') && i < MAX_VARNAME - 2)
         name[i++] = (char)toupper((unsigned char)*p++);
-    if (*p == '$') name[i++] = *p++;
+    if (*p == '$' || *p == '#' || *p == '!' || *p == '%' || *p == '&')
+        name[i++] = *p++;
     name[i] = '\0';
     return p;
 }
