@@ -561,7 +561,7 @@ void term_feed(Terminal *t, const char *buf, int len) {
                 const char *semi = strchr(t->osc, ';');
                 if (semi) {
                     int ps = atoi(t->osc);
-                    SDL_Log("[OSC] ps=%d payload='%s'\n", ps, semi + 1);
+                    //SDL_Log("[OSC] ps=%d payload='%s'\n", ps, semi + 1);
                     if ((ps == 0 || ps == 2) && g_sdl_window)
                         SDL_SetWindowTitle(g_sdl_window, semi + 1);
                     else if (ps == 666)
