@@ -601,8 +601,8 @@ static void execute_cmd(const std::vector<std::string> &a) {
         case 4:  s_scr_w=640; s_scr_h=400; g_render_mode=RENDER_MODE_NORMAL; break; // Olivetti
         case 5:  s_scr_w=160; s_scr_h=100; g_render_mode=RENDER_MODE_NORMAL; break; // CGA low
         case 6:  s_scr_w=160; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // CGA low
-        case 7:  s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_BIT_CRT;     break; // EGA 16-color → CRT
-        case 8:  s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_BIT_CRT;     break; // EGA 16-color → CRT
+        case 7:  s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL;     break; // EGA 16-color
+        case 8:  s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL;     break; // EGA 16-color
         case 9:  s_scr_w=640; s_scr_h=350; g_render_mode=RENDER_MODE_NORMAL; break; // EGA 64-color (Gorilla)
         case 10: s_scr_w=640; s_scr_h=350; g_render_mode=RENDER_MODE_NORMAL; break; // EGA mono
         case 11: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // VGA 2-color
@@ -615,12 +615,11 @@ static void execute_cmd(const std::vector<std::string> &a) {
         case 18: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // JEGA
         case 19: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // JEGA text
         case 20: s_scr_w=512; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // TIGA
-        case 21: s_scr_w=640; s_scr_h=400; g_render_mode=RENDER_BIT_CRT;     break; // SVGA → CRT effect
-        case 22: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_BIT_VHS;     break; // SVGA → VHS effect
-        case 23: s_scr_w=800; s_scr_h=600; g_render_mode=RENDER_BIT_C64;     break; // SVGA → C64 effect
-        case 24: s_scr_w=160; s_scr_h=200; g_render_mode=RENDER_BIT_COMPOSITE; break; // Tandy → Composite
-        case 25: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_BIT_COMPOSITE; break; // Tandy → Composite
-        case 26: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy
+        case 21: s_scr_w=640; s_scr_h=400; g_render_mode=RENDER_MODE_NORMAL; break; // SVGA 256-color
+        case 22: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // SVGA 256-color
+        case 23: s_scr_w=800; s_scr_h=600; g_render_mode=RENDER_MODE_NORMAL; break; // SVGA 256-color
+        case 24: s_scr_w=160; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy/PCjr 16-color
+        case 25: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy/PCjr 16-color        case 26: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy
         case 27: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy ETGA
         case 28: s_scr_w=720; s_scr_h=350; g_render_mode=RENDER_MODE_NORMAL; break; // OGA
         default: break;
