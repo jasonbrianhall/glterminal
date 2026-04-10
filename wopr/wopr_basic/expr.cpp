@@ -68,7 +68,7 @@ static ConstEntry *const_find(char *name) {
  * Utility helpers
  * ================================================================ */
 char *str_dup(char *s) {
-    char *d = malloc(strlen(s) + 1);
+    char *d = (char *) malloc(strlen(s) + 1);
     if (!d) { basic_stderr("OOM\n"); exit(1); }
     strcpy(d, s);
     return d;
