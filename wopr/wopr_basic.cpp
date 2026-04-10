@@ -9,6 +9,9 @@
 #include <signal.h>
 #include "sound.h"
 
+using WoprBasic::sound_init;
+using WoprBasic::sound_shutdown;
+
 // ── BASIC C entry points ────────────────────────────────────────────────
     int  basic_main(void);
     extern char    basic_input_buf[];
@@ -16,7 +19,7 @@
     extern int     g_basic_game_over;
     extern int     g_basic_waiting_input;
     extern int     g_basic_suppress_newline;
-    extern volatile sig_atomic_t g_break;
+    extern volatile sig_atomic_t wopr_g_break;
     extern jmp_buf basic_exit_jmp;
     void basic_shim_init(void);
     void basic_shim_set_input(const char *line);
@@ -206,7 +209,7 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
     if (sym == SDLK_c) {
         const Uint8 *ks = SDL_GetKeyboardState(NULL);
         if (ks[SDL_SCANCODE_LCTRL] || ks[SDL_SCANCODE_RCTRL]) {
-            g_break = 1; basic_shim_set_input("\n"); return true;
+            wopr_g_break = 1; basic_shim_set_input("\n"); return true;
         }
     }
 
