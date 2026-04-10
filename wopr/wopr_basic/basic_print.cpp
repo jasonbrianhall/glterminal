@@ -56,7 +56,7 @@ void wopr_basic_push_line(char *line);
 void wopr_basic_signal_done(void);
 #endif
 
-char          basic_input_buf[512];
+char          basic_input_buf[DEFAULT_BUFFER];
 int           basic_input_ready         = 0;
 int           g_basic_game_over         = 0;
 int           g_basic_waiting_input     = 0;

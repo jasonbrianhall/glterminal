@@ -49,7 +49,7 @@ static void felix_send(char *cmd) {
 }
 
 static void felix_sendf(char *fmt, ...) {
-    char buf[512];
+    char buf[DEFAULT_BUFFER];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
@@ -67,7 +67,7 @@ static void felix_draw(char *cmd) {
 }
 
 static void felix_drawf(char *fmt, ...) {
-    char buf[512];
+    char buf[DEFAULT_BUFFER];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
@@ -331,7 +331,7 @@ static int cmd_sleep(Interp *ip, char *args) {
 
 static int cmd_kill(Interp *ip, char *args) {
     (void)ip;
-    char filename[512] = "";
+    char filename[DEFAULT_BUFFER] = "";
     char *p = sk(args);
     if (*p == '"') p++;
     int i = 0;
@@ -1199,7 +1199,7 @@ static int cmd_line_input(Interp *ip, char *args) {
     p = sk(p); if (*p == ';' || *p == ',') p = sk(p + 1);
     char name[MAX_VARNAME];
     read_varname(p, name);
-    char linebuf[512];
+    char linebuf[DEFAULT_BUFFER];
     display_cursor(1);
     display_getline(linebuf, sizeof linebuf);
     display_newline();
@@ -1222,7 +1222,7 @@ static int cmd_input(Interp *ip, char *args) {
     } else {
         display_print("? ");
     }
-    char linebuf[512];
+    char linebuf[DEFAULT_BUFFER];
     display_cursor(1);
     display_getline(linebuf, sizeof linebuf);
     display_newline();
@@ -1231,7 +1231,7 @@ static int cmd_input(Interp *ip, char *args) {
         char name[MAX_VARNAME];
         p = sk(read_varname(sk(p), name));
         char *comma = strchr(tok, ',');
-        char val_str[256];
+        char val_str[DEFAULT_BUFFER];
         if (comma) {
             size_t len = (size_t)(comma - tok);
             if (len >= sizeof val_str) len = sizeof val_str - 1;
@@ -1260,7 +1260,7 @@ static int cmd_input(Interp *ip, char *args) {
 static int cmd_open(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
-    char filename[512]; int fi = 0;
+    char filename[DEFAULT_BUFFER]; int fi = 0;
     if (*p == '"') {
         p++;
         while (*p && *p != '"' && fi < (int)sizeof(filename) - 1) filename[fi++] = *p++;
@@ -1320,7 +1320,7 @@ static int cmd_input_file(Interp *ip, char *args) {
     while (*p) {
         char name[MAX_VARNAME];
         p = sk(read_varname(sk(p), name));
-        char linebuf[512];
+        char linebuf[DEFAULT_BUFFER];
         if (!fgets(linebuf, sizeof linebuf, fh->fp)) linebuf[0] = '\0';
         linebuf[strcspn(linebuf, "\r\n")] = '\0';
         char *val = linebuf;
@@ -1377,7 +1377,7 @@ static int cmd_line_input_file(Interp *ip, char *args) {
     if (!fh->fp || fh->mode != 'I') { basic_stderr("File #%d not open for input\n", n); return 0; }
     char name[MAX_VARNAME];
     read_varname(sk(p), name);
-    char linebuf[512];
+    char linebuf[DEFAULT_BUFFER];
     if (!fgets(linebuf, sizeof linebuf, fh->fp)) linebuf[0] = '\0';
     linebuf[strcspn(linebuf, "\r\n")] = '\0';
     Var *v = var_get(name);
