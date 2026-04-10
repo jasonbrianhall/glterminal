@@ -234,40 +234,15 @@ int basic_printf(char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-
-    /* Scan for %f-like formats */
-    char *p = fmt;
-    va_list ap2;
-    va_copy(ap2, ap);
-
-    while (*p) {
-        if (*p == '%') {
-            p++;
-            while (*p && strchr(" +-0#123456789.", *p)) p++;
-            if (*p == 'f' || *p == 'F' || *p == 'g' || *p == 'G' ||
-                *p == 'e' || *p == 'E') {
-
-                double d = va_arg(ap2, double);
-
-                if (isinf(d)) {
-                    va_end(ap2);
-                    va_end(ap);
-                    return printf(d > 0 ? "1.#INF" : "-1.#INF");
-                }
-                if (isnan(d)) {
-                    va_end(ap2);
-                    va_end(ap);
-                    return printf("1.#IND");
-                }
-            }
-        }
-        p++;
-    }
-    va_end(ap2);
-
-    /* Safe path */
-    int r = vprintf(fmt, ap);
+    char buf[4096];
+    int r = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
+#if defined(WOPR) || defined(FELIX_BASIC)
+    wopr_basic_push_line(buf);
+#else
+    fputs(buf, stdout);
+    fflush(stdout);
+#endif
     return r;
 }
 
