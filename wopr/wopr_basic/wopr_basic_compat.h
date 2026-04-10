@@ -17,14 +17,14 @@
  * Defined as extern "C" wopr_g_break in main.cpp.
  * ---------------------------------------------------------------- */
 #include <signal.h>
-extern "C" volatile sig_atomic_t wopr_g_break;
+volatile sig_atomic_t wopr_g_break;
 static volatile sig_atomic_t &g_break = wopr_g_break;
 
 /* ----------------------------------------------------------------
  * g_autoload_path — path to auto-load on start.
  * Defined as extern "C" wopr_autoload_path[512] in main.cpp.
  * ---------------------------------------------------------------- */
-extern "C" char wopr_autoload_path[512];
+char wopr_autoload_path[512];
 static char (&g_autoload_path)[512] = wopr_autoload_path;
 
 /* ----------------------------------------------------------------

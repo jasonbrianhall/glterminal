@@ -39,10 +39,8 @@ static char *strcasestr(char *haystack, char *needle) {
  * The host binary references these by their plain C names directly.
  */
 #if defined(WOPR) || defined(FELIX_BASIC)
-extern "C" {
     char                    BASIC_AUTOLOAD_SYM[512] = {0};
     volatile sig_atomic_t   BASIC_BREAK_SYM         = 0;
-}
 #endif
 
 BASIC_NS_BEGIN
