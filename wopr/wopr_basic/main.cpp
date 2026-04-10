@@ -3,14 +3,18 @@
  *           and program entry point.
  */
 #include "basic.h"
+
 #ifdef _WIN32
 #include <windows.h>
-/* strcasestr is a GNU extension; provide a fallback for Windows */
-static char *strcasestr(const char *haystack, const char *needle) {
+#include <ctype.h>
+
+
+
+static char *strcasestr(char *haystack, char *needle) {
     if (!*needle) return (char *)haystack;
     for (; *haystack; haystack++) {
         if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle)) {
-            const char *h = haystack, *n = needle;
+            char *h = haystack, *n = needle;
             while (*h && *n && tolower((unsigned char)*h) == tolower((unsigned char)*n)) { h++; n++; }
             if (!*n) return (char *)haystack;
         }
@@ -22,13 +26,32 @@ static char *strcasestr(const char *haystack, const char *needle) {
 #ifdef INLINEBASIC
 #include "inline_basic.h"
 #endif
-#include <SDL2/SDL.h>
+
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
-/* Optional: if set before basic_main(), auto-load and run this .bas file */
-char g_autoload_path[512] = {0};
+/*
+ * C-linkage storage — defined before the namespace opens.
+ * BASIC_AUTOLOAD_SYM / BASIC_BREAK_SYM expand to the unique C symbol name
+ * for this build variant (e.g. g_autoload_path / g_break for WOPR,
+ * fb_autoload_path / fb_g_break for FELIX_BASIC).
+ * The host binary references these by their plain C names directly.
+ */
+#if defined(WOPR) || defined(FELIX_BASIC)
+    char                    BASIC_AUTOLOAD_SYM[512] = {0};
+    volatile sig_atomic_t   BASIC_BREAK_SYM         = 0;
+#endif
+
+BASIC_NS_BEGIN
+
+#if defined(WOPR) || defined(FELIX_BASIC)
+/* g_autoload_path is a reference into the C-linkage buffer so host and
+ * interpreter share the same storage.  g_break is handled by the macro
+ * in basic_ns.h — no namespace-level variable needed. */
+char (&g_autoload_path)[512] = ::BASIC_AUTOLOAD_SYM;
+#endif
+
 
 /* ================================================================
  * SIGINT handler — sets g_break so the run loop can stop cleanly
@@ -61,7 +84,14 @@ void run_from(int start_pc) {
     while (ip.running && ip.pc < g_nlines && !g_break) {
         int old_pc = ip.pc;
         int jumped  = dispatch(&ip, g_lines[ip.pc].text);
-        if (!jumped) ip.pc = old_pc + 1;
+        if (jumped < 0 && g_error_handler[0]) {
+            /* Runtime error with a handler registered — invoke it */
+            g_error_resume_pc = old_pc;
+            cmd_goto(&ip, g_error_handler);
+            jumped = 1;
+        } else if (!jumped) {
+            ip.pc = old_pc + 1;
+        }
     }
     if (g_break) {
         g_cont_pc = ip.pc;
@@ -74,19 +104,86 @@ void run_from(int start_pc) {
 /* ================================================================
  * main — direct-run or interactive REPL
  * ================================================================ */
+#if defined(WOPR) || defined(FELIX_BASIC)
 int basic_main(void) {
-    SDL_Log("[basic] inside basic_main() top");
+#else
+int basic_main(int argc, char **argv) {
+#endif
     g_prec = DEFAULT_PREC;
     mpf_set_default_prec(g_prec);
     srand((unsigned)time(NULL));
     display_init();
-    SDL_Log("[basic] Display Init");
+    install_sigint();
+
+    /* Direct run mode: ./basic program.bas [precision_bits] */
+#ifndef INLINEBASIC
+#if !defined(WOPR) && !defined(FELIX_BASIC)
+    if (argc >= 2) {
+        if (argc >= 3) g_prec = (mp_bitcnt_t)atoi(argv[2]);
+        load(argv[1]);
+        prescan_data();
+        run();
+        display_shutdown();
+        return 0;
+    }
+#endif
+#else
+char tmpfile_path[512];
+
+#ifdef _WIN32
+    // Windows: use GetTempPath + GetTempFileName
+    char tmpdir[MAX_PATH];
+    GetTempPathA(MAX_PATH, tmpdir);
+    GetTempFileNameA(tmpdir, "WOP", 0, tmpfile_path);
+
+    FILE *dbfile = fopen(tmpfile_path, "wb");
+    if (!dbfile) {
+        basic_stderr("Could not open temp file\n");
+        return 1;
+    }
+
+    fwrite(wopr_basic_program, 1, wopr_basic_program_len, dbfile);
+    fclose(dbfile);
+
+#else
+    // POSIX: use mkstemp
+    strcpy(tmpfile_path, "/tmp/woprXXXXXX");
+    int fd = mkstemp(tmpfile_path);
+    if (fd == -1) {
+        perror("mkstemp");
+        return 1;
+    }
+
+    write(fd, wopr_basic_program, wopr_basic_program_len);
+    close(fd);
+#endif
+
+// NOW replace argv[1] with the filename
+argv[1] = tmpfile_path;
+
+load(argv[1]);
+prescan_data();
+run();
+display_shutdown();
+return 0;
+#endif
+
+#if defined(WOPR) || defined(FELIX_BASIC)
+    /* Auto-load a file if one was set before the thread started */
+    if (g_autoload_path[0]) {
+        load_program(g_autoload_path);
+        prescan_data();
+        run();
+        display_shutdown();
+        return 0;
+    }
+#endif
 
     /* ----------------------------------------------------------------
      * REPL helper macros
      * ---------------------------------------------------------------- */
     #define PARSE_FILENAME(dst, src) do { \
-        const char *_q = sk(src); \
+        char *_q = sk(src); \
         if (*_q == '"') _q++; \
         int _i = 0; \
         while (*_q && *_q != '"' && *_q != ',' && !isspace((unsigned char)*_q) && _i < 255) \
@@ -104,21 +201,9 @@ int basic_main(void) {
     /* ----------------------------------------------------------------
      * Interactive REPL
      * ---------------------------------------------------------------- */
-    SDL_Log("[basic] Display CLS");
-
     display_cls();
     display_print("WOPR BASIC\n");
     display_print("Type NEW, LOAD, RUN, LIST, FILES, HELP, or SYSTEM to exit.\n\n");
-
-    /* Auto-load and run a program if one was queued (e.g. Wizard's Castle) */
-    if (g_autoload_path[0]) {
-        load_program(g_autoload_path);
-        g_autoload_path[0] = '\0';
-        if (g_nlines > 0) {
-            g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0;
-            run();
-        }
-    }
 
     char line[512];
     for (;;) {
@@ -141,7 +226,7 @@ int basic_main(void) {
             display_print("Ok\n");
 
         } else if (strncasecmp(p,"FILES",5)==0 || strncasecmp(p,"DIR",3)==0) {
-            const char *pat = sk(p + (strncasecmp(p,"DIR",3)==0 ? 3 : 5));
+            char *pat = sk(p + (strncasecmp(p,"DIR",3)==0 ? 3 : 5));
             char filter[64] = ".bas";
             if (*pat == '"') pat++;
             if (*pat && *pat != '"') { strncpy(filter, pat, 63); char *eq=strchr(filter,'"'); if(eq)*eq='\0'; }
@@ -150,7 +235,7 @@ int basic_main(void) {
             struct dirent *de; int count = 0;
             while ((de = readdir(d))) {
                 if (de->d_name[0] == '.') continue;
-                const char *nm = de->d_name;
+                char *nm = de->d_name;
                 size_t nl = strlen(nm), fl = strlen(filter);
                 if (fl && (nl < fl || strcasecmp(nm + nl - fl, filter) != 0)) continue;
                 char entry[64]; snprintf(entry, sizeof entry, "  %-20s\n", nm);
@@ -267,7 +352,7 @@ int basic_main(void) {
                 for (int j = 0; j < nmap; j++) {
                     if (g_lines[i].linenum == old_nums[j]) { g_lines[i].linenum = new_nums[j]; break; }
                 }
-                const char *kws[] = {"GOTO","GOSUB","THEN","ELSE","RESTORE","RUN", NULL};
+                char *kws[] = {"GOTO","GOSUB","THEN","ELSE","RESTORE","RUN", NULL};
                 for (int k = 0; kws[k]; k++) {
                     char *kw = strcasestr(g_lines[i].text, kws[k]);
                     if (!kw) continue;
@@ -331,3 +416,22 @@ int basic_main(void) {
     display_shutdown();
     return 0;
 }
+
+BASIC_NS_END
+
+/* ================================================================
+ * C-linkage entry points — outside the namespace.
+ *
+ *  WOPR build:         extern "C" int basic_main(void)
+ *  FELIX_BASIC build:  extern "C" int fb_basic_main(void)
+ *  Standalone:         int main(int argc, char **argv)
+ * ================================================================ */
+#if defined(WOPR) || defined(FELIX_BASIC)
+int basic_main(void) {
+    return BASIC_NS::basic_main();
+}
+#else
+int main(int argc, char **argv) {
+    return BASIC_NS::basic_main(argc, argv);
+}
+#endif

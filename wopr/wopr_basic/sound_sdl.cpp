@@ -21,6 +21,8 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+BASIC_NS_BEGIN
+
 /* ================================================================
  * Audio parameters
  * ================================================================ */
@@ -175,22 +177,11 @@ void sound_drain(void) {
     }
 }
 
-void sound_stop(void) {
-    if (!g_dev || !g_mutex) return;
-    SDL_LockMutex(g_mutex);
-    g_q_head = g_q_tail = 0;
-    g_synth.have_note    = 0;
-    g_synth.samples_left = 0;
-    g_synth.gap_left     = 0;
-    SDL_CondSignal(g_cond);
-    SDL_UnlockMutex(g_mutex);
-}
-
 void sound_shutdown(void) {
-    sound_stop();
-    if (g_dev)   { SDL_CloseAudioDevice(g_dev); g_dev = 0; }
-    if (g_cond)  { SDL_DestroyCond(g_cond);     g_cond  = NULL; }
-    if (g_mutex) { SDL_DestroyMutex(g_mutex);   g_mutex = NULL; }
+    sound_drain();  /* wait for queued audio to finish before tearing down */
+    if (g_dev) { SDL_CloseAudioDevice(g_dev); g_dev = 0; }
+    if (g_cond)  { SDL_DestroyCond(g_cond);   g_cond  = NULL; }
+    if (g_mutex) { SDL_DestroyMutex(g_mutex); g_mutex = NULL; }
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
@@ -239,7 +230,7 @@ static int note_index(char c) {
     return -1;
 }
 
-void sound_play(const char *mml) {
+void sound_play(char *mml) {
     if (!g_dev || !mml) return;
 
     /* Playback state */
@@ -250,7 +241,7 @@ void sound_play(const char *mml) {
     /* Articulation: fraction of note duration that is tone vs gap */
     double tone_frac  = 7.0/8.0;  /* MN normal */
 
-    const char *p = mml;
+    char *p = mml;
 
     while (*p) {
         /* Skip whitespace and semicolons */
@@ -349,5 +340,7 @@ void sound_play(const char *mml) {
 
     if (foreground) sound_drain();
 }
+
+BASIC_NS_END
 
 #endif /* HAVE_SDL */

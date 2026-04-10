@@ -7,6 +7,8 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+BASIC_NS_BEGIN
+
 /* ================================================================
  * Global state
  * ================================================================ */
@@ -36,7 +38,7 @@ static int   g_nlabels = 0;
 
 static void label_clear(void) { g_nlabels = 0; }
 
-static void label_add(const char *name, int linenum) {
+static void label_add(char *name, int linenum) {
     if (g_nlabels >= MAX_LABELS) { basic_stderr("Too many labels\n"); return; }
     strncpy(g_labels[g_nlabels].name, name, MAX_VARNAME - 1);
     g_labels[g_nlabels].name[MAX_VARNAME - 1] = '\0';
@@ -45,7 +47,7 @@ static void label_add(const char *name, int linenum) {
 }
 
 /* Resolve a label name → line index, or -1 if not found. */
-int find_line_by_label(const char *name) {
+int find_line_by_label(char *name) {
     for (int i = 0; i < g_nlabels; i++)
         if (strcasecmp(g_labels[i].name, name) == 0)
             return find_line_idx(g_labels[i].linenum);
@@ -70,15 +72,15 @@ int find_line_idx(int num) {
  * word boundary and are immediately followed by an identifier char,
  * e.g. "FORI=1TON" → "FOR I=1 TO N", "NEXTI" → "NEXT I".
  * ================================================================ */
-void normalize_kw(const char *src, char *dst, int dstsz) {
-    static const char *kws[] = {
+void normalize_kw(char *src, char *dst, int dstsz) {
+    static char *kws[] = {
         "PRINT","INPUT","GOTO","GOSUB","RETURN","THEN","ELSE",
         "FOR","NEXT","WHILE","WEND","STEP","TO","LET","DIM","DATA",
         "READ","RESTORE","STOP","REM","ON","DEF",
         NULL
     };
     int di = 0;
-    const char *s = src;
+    char *s = src;
     int in_str = 0, prev_alnum = 0;
     while (*s && di < dstsz - 1) {
         if (*s == '"') {
@@ -132,8 +134,8 @@ void normalize_kw(const char *src, char *dst, int dstsz) {
  * is_label_def — returns 1 if the trimmed line is purely a label
  * definition of the form "Identifier:" (nothing after the colon).
  * ================================================================ */
-static int is_label_def(const char *p, char *name_out) {
-    const char *start = p;
+static int is_label_def(char *p, char *name_out) {
+    char *start = p;
     if (!isalpha((unsigned char)*p) && *p != '_') return 0;
     while (isalnum((unsigned char)*p) || *p == '_') p++;
     if (*p != ':') return 0;
@@ -164,7 +166,7 @@ static int is_label_def(const char *p, char *name_out) {
  *              g_lines themselves.
  *              The array is NOT sorted (file order is execution order).
  * ================================================================ */
-void load(const char *filename) {
+void load(char *filename) {
     FILE *f = fopen(filename, "r");
     if (!f) { perror(filename); return; }
 
@@ -175,7 +177,7 @@ void load(const char *filename) {
     char buf[MAX_LINE_LEN];
     while (fgets(buf, sizeof buf, f)) {
         buf[strcspn(buf, "\r\n")] = '\0';
-        const char *p = buf;
+        char *p = buf;
         while (isspace((unsigned char)*p)) p++;
         if (!*p || *p == '\'' ) continue;   /* blank or comment */
         numbered = isdigit((unsigned char)*p);
@@ -206,7 +208,7 @@ void load(const char *filename) {
             if (strncasecmp(p, "TYPE ", 5) == 0) {
                 inside_type_n = 1;
                 if (g_ntypedefs < MAX_TYPE_DEFS) {
-                    const char *tp = p + 5;
+                    char *tp = p + 5;
                     while (isspace((unsigned char)*tp)) tp++;
                     TypeDef *td = &g_typedefs[g_ntypedefs++];
                     memset(td, 0, sizeof(*td));
@@ -223,7 +225,7 @@ void load(const char *filename) {
                     if (td->nfields < MAX_TYPE_FIELDS) {
                         TypeField *tf = &td->fields[td->nfields];
                         int fi = 0;
-                        const char *fp = p;
+                        char *fp = p;
                         while ((isalnum((unsigned char)*fp) || *fp == '_') && fi < MAX_VARNAME - 1)
                             tf->name[fi++] = (char)toupper((unsigned char)*fp++);
                         tf->name[fi] = '\0';
@@ -237,7 +239,7 @@ void load(const char *filename) {
                 }
                 continue;
             }
-            const char *trimmed = p;
+            char *trimmed = p;
             int starts_with_if = (strncasecmp(trimmed, "IF", 2) == 0 &&
                                   !isalnum((unsigned char)trimmed[2]) &&
                                   trimmed[2] != '_');
@@ -245,7 +247,7 @@ void load(const char *filename) {
             #define STORE_SEG(lnum, sp) do { \
                 if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
                 g_lines[g_nlines].linenum = (lnum); \
-                const char *_sp = (sp); \
+                char *_sp = (sp); \
                 while (isspace((unsigned char)*_sp)) _sp++; \
                 if (*_sp == '?') { \
                     snprintf(g_lines[g_nlines].text, MAX_LINE_LEN, "PRINT %s", _sp + 1); \
@@ -320,7 +322,7 @@ void load(const char *filename) {
             inside_type = 1;
             /* register the type name */
             if (g_ntypedefs < MAX_TYPE_DEFS) {
-                const char *tp = p + 5;
+                char *tp = p + 5;
                 while (isspace((unsigned char)*tp)) tp++;
                 TypeDef *td = &g_typedefs[g_ntypedefs++];
                 memset(td, 0, sizeof(*td));
@@ -372,7 +374,7 @@ void load(const char *filename) {
 
         /* Register SUB/FUNCTION names as labels so bare calls can find them */
         if ((strncasecmp(p, "SUB ", 4) == 0 || strncasecmp(p, "FUNCTION ", 9) == 0)) {
-            const char *np = strncasecmp(p, "SUB ", 4) == 0 ? p + 4 : p + 9;
+            char *np = strncasecmp(p, "SUB ", 4) == 0 ? p + 4 : p + 9;
             while (isspace((unsigned char)*np)) np++;
             char subname[MAX_VARNAME]; int si = 0;
             while ((isalnum((unsigned char)*np) || *np == '_') && si < MAX_VARNAME - 1)
@@ -402,7 +404,7 @@ void load(const char *filename) {
                 label_add(pending_buf + _li * MAX_VARNAME, pseudo); \
             pending_count = 0; \
             g_lines[g_nlines].linenum = pseudo; \
-            const char *_sp = (sp); \
+            char *_sp = (sp); \
             while (isspace((unsigned char)*_sp)) _sp++; \
             if (*_sp == '?') { \
                 snprintf(g_lines[g_nlines].text, MAX_LINE_LEN, "PRINT %s", _sp + 1); \
@@ -464,7 +466,7 @@ void load(const char *filename) {
  * ================================================================ */
 void prescan_data(void) {
     for (int li = 0; li < g_nlines; li++) {
-        const char *p = sk(g_lines[li].text);
+        char *p = sk(g_lines[li].text);
         if (!kw_match(p, "DATA")) continue;
         p = sk(p + 4);
         while (*p) {
@@ -508,7 +510,7 @@ void clear_program(void) {
 /* ================================================================
  * save_program — write g_lines[] back out as a numbered .bas file
  * ================================================================ */
-void save_program(const char *filename) {
+void save_program(char *filename) {
     char path[512];
     if (strchr(filename, '.'))
         snprintf(path, sizeof path, "%s", filename);
@@ -535,7 +537,7 @@ void save_program(const char *filename) {
 /* ================================================================
  * load_program — clear state and load a .bas file
  * ================================================================ */
-void load_program(const char *filename) {
+void load_program(char *filename) {
     char path[512];
     if (strchr(filename, '.'))
         snprintf(path, sizeof path, "%s", filename);
@@ -547,3 +549,5 @@ void load_program(const char *filename) {
     prescan_data();
     printf("Loaded %s (%d lines)\n", path, g_nlines);
 }
+
+BASIC_NS_END

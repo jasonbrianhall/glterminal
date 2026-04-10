@@ -8,6 +8,21 @@
 #include <SDL2/SDL.h>
 #include "basic_print.h"
 
+#ifdef WOPR
+#include "../wopr.h"
+BASIC_NS_BEGIN
+
+void wopr_basic_text(WoprState *w, char *text);
+void wopr_basic_push_line(char *text);
+void wopr_basic_flush_partial(void);
+void wopr_basic_cls(void);
+void wopr_basic_color(int fg);
+bool wopr_basic_is_waiting_input(WoprState *w);
+void wopr_basic_color(int fg);
+void wopr_basic_push_line(char *text);
+BASIC_NS_END
+#endif
+
 #ifdef unix
 #include <sys/types.h>
 #endif
@@ -17,13 +32,29 @@
 #else
 #include <time.h>
 #endif
-#include <SDL2/SDL.h>
+#include "basic_ns.h"
+
+BASIC_NS_BEGIN
+
 /* ============================================================================
  * Shared I/O surfaces
  * ========================================================================== */
+#if defined(WOPR) || defined(FELIX_BASIC)
 
-void wopr_basic_push_line(const char *line);
+#ifdef FELIX_BASIC
+/* Felix terminal host functions */
+void felix_basic_push_line(char *line);
+void felix_basic_flush_partial(void);
+void felix_basic_cls(void);
+void felix_basic_color(int fg);
+/* Map the wopr_ names used in this file to felix_ equivalents */
+static inline void wopr_basic_push_line(char *s) { felix_basic_push_line(s); }
+static inline void wopr_basic_flush_partial(void)       { felix_basic_flush_partial(); }
+#else
+/* WOPR host functions */
+void wopr_basic_push_line(char *line);
 void wopr_basic_signal_done(void);
+#endif
 
 char          basic_input_buf[512];
 int           basic_input_ready         = 0;
@@ -44,7 +75,7 @@ void basic_shim_init(void)
     basic_input_sem = SDL_CreateSemaphore(0);
 }
 
-void basic_shim_set_input(const char *line)
+void basic_shim_set_input(char *line)
 {
     SDL_Log("basic_shim_set_input called with '%s'", line);
     strncpy(basic_input_buf, line, sizeof(basic_input_buf) - 1);
@@ -130,7 +161,7 @@ void basic_more_init(void)
     s_linelen = 0;
 }
 
-void basic_more_output(const char *fmt, ...)
+void basic_more_output(char *fmt, ...)
 {
     char buf[4096];
     int  i;
@@ -197,44 +228,59 @@ int basic_rnd_(int maxval)
 {
     return rand() % maxval;
 }
+#endif /* WOPR || FELIX_BASIC */
 
-int basic_printf(const char *fmt, ...)
+int basic_printf(char *fmt, ...)
 {
-    char buf[4096];
-
-    if (fmt == NULL) {
-        return 0;
-    }
-
-    // Format into buf
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+
+    /* Scan for %f-like formats */
+    char *p = fmt;
+    va_list ap2;
+    va_copy(ap2, ap);
+
+    while (*p) {
+        if (*p == '%') {
+            p++;
+            while (*p && strchr(" +-0#123456789.", *p)) p++;
+            if (*p == 'f' || *p == 'F' || *p == 'g' || *p == 'G' ||
+                *p == 'e' || *p == 'E') {
+
+                double d = va_arg(ap2, double);
+
+                if (isinf(d)) {
+                    va_end(ap2);
+                    va_end(ap);
+                    return printf(d > 0 ? "1.#INF" : "-1.#INF");
+                }
+                if (isnan(d)) {
+                    va_end(ap2);
+                    va_end(ap);
+                    return printf("1.#IND");
+                }
+            }
+        }
+        p++;
+    }
+    va_end(ap2);
+
+    /* Safe path */
+    int r = vprintf(fmt, ap);
     va_end(ap);
-
-    // Push the entire formatted string directly to WOPR
-    wopr_basic_push_line(buf);
-
-    return 0;
+    return r;
 }
 
-int basic_stderr(const char *fmt, ...)
+
+int basic_stderr(char *fmt, ...)
 {
-    char buf[4096];
-
-    if (fmt == NULL) {
-        return 0;
-    }
-
-    // Format into buf
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+
+    int r = vfprintf(stderr, fmt, ap);
+
     va_end(ap);
-
-    // Push the entire formatted string directly to WOPR
-    wopr_basic_push_line(buf);
-
-    return 0;
+    return r;
 }
 
+BASIC_NS_END

@@ -1,9 +1,10 @@
 /*
  * display_ansi.c — ANSI/VT100 terminal implementation of display.h
  *
- * Replace this file with display_sdl.c or display_opengl.c to port the
- * interpreter to a graphical backend.  The interface in display.h stays
- * the same; this file is the only thing that changes.
+ * Three runtime backends selected by compile flags:
+ *   (default)       — raw ANSI/VT100 to stdout
+ *   -DWOPR          — WOPR overlay shim (wopr_basic_push_line etc.)
+ *   -DFELIX_BASIC   — F8 standalone console shim (felix_basic_push_line etc.)
  *
  * CGA colour mapping to ANSI:
  *   0=Black 1=Blue 2=Green 3=Cyan 4=Red 5=Magenta 6=Brown/Yellow 7=LightGrey
@@ -19,7 +20,13 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
-#ifdef _WIN32
+
+#ifdef WOPR
+#include <SDL2/SDL.h>
+#elif defined(FELIX_BASIC)
+#include <SDL2/SDL.h>
+#include "felix_basic.h"
+#elif defined(_WIN32)
 #include <SDL2/SDL.h>
 #endif
 
@@ -32,6 +39,8 @@
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
+
+BASIC_NS_BEGIN
 
 /* ----------------------------------------------------------------
  * Internal state
@@ -84,14 +93,12 @@ static void leave_raw(void) {}
 
 static void cleanup_terminal(void) {
     leave_raw();
-    /* Reset all attributes, show cursor, move to bottom */
     printf("\033[0m\033[?25h\n");
     fflush(stdout);
 }
 
 static void signal_handler(int sig) {
     cleanup_terminal();
-    /* Re-raise with default handler so shell gets correct exit status */
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -106,35 +113,59 @@ void display_init(void)
     signal(SIGTERM, signal_handler);
     signal(SIGSEGV, signal_handler);
     signal(SIGABRT, signal_handler);
-#ifndef _WIN32
+#if !defined(WOPR) && !defined(FELIX_BASIC)
+#  ifndef _WIN32
     printf("\033[0m\033[2J\033[H");
     fflush(stdout);
-#endif
+#  endif
     sound_init();
+#endif
 }
 
 void display_shutdown(void)
 {
+#if !defined(WOPR) && !defined(FELIX_BASIC)
     sound_shutdown();
+#endif
 }
 
 void display_cls(void)
 {
+#ifdef WOPR
+    wopr_basic_cls();
+#elif defined(FELIX_BASIC)
+    felix_basic_cls();
+#else
     printf("\033[2J\033[H");
     fflush(stdout);
+#endif
 }
 
 void display_locate(int row, int col)
 {
+#ifdef WOPR
+    (void)row; (void)col;
+    wopr_basic_flush_partial();
+#elif defined(FELIX_BASIC)
+    (void)row; (void)col;
+    felix_basic_flush_partial();
+#else
     if (row < 1) row = 1;
     if (col < 1) col = 1;
     printf("\033[%d;%dH", row, col);
     fflush(stdout);
+#endif
 }
 
 void display_color(int fg, int bg)
 {
-    /* clamp */
+#ifdef WOPR
+    (void)bg;
+    wopr_basic_color(fg);
+#elif defined(FELIX_BASIC)
+    (void)bg;
+    felix_basic_color(fg);
+#else
     if (fg < 0 || fg > 15) fg = 7;
     if (bg < 0 || bg > 15) bg = 0;
 
@@ -144,80 +175,154 @@ void display_color(int fg, int bg)
 
     printf("\033[%d;%d;%dm", bold, 30 + fg_idx, 40 + bg_idx);
     fflush(stdout);
+#endif
 }
 
 void display_width(int cols)
 {
+#ifdef WOPR
+    (void)cols;
+#elif defined(FELIX_BASIC)
+    (void)cols;
+#else
     g_width = cols;
-    /* Ask terminal to switch column mode if supported */
     if (cols == 40)
-        printf("\033[?3h");   /* DECCOLM 40-col — works on some terminals */
+        printf("\033[?3h");
     else
-        printf("\033[?3l");   /* DECCOLM 80-col */
+        printf("\033[?3l");
     fflush(stdout);
+#endif
 }
 
-void display_print(const char *s)
+void display_print(char *s)
 {
+#ifdef WOPR
+    if (strcmp(s, "Ok\n") == 0) return;
+    if (strncmp(s, "WOPR BASIC", 10) == 0) return;
+    if (strncmp(s, "Type NEW,", 9) == 0) return;
+    g_basic_suppress_newline = 0;
+    wopr_basic_push_line(s);
+#elif defined(FELIX_BASIC)
+    felix_basic_push_line(s);
+#else
     fputs(s, stdout);
     fflush(stdout);
+#endif
 }
 
 void display_putchar(int c)
 {
+#ifdef WOPR
+    g_basic_suppress_newline = 0;
+    char tmp[2] = { (char)c, 0 };
+    wopr_basic_push_line(tmp);
+#elif defined(FELIX_BASIC)
+    char tmp[2] = { (char)c, 0 };
+    felix_basic_push_line(tmp);
+#else
     putchar(c);
     fflush(stdout);
+#endif
 }
 
 void display_newline(void)
 {
+#ifdef WOPR
+    if (g_basic_suppress_newline) {
+        g_basic_suppress_newline = 0;
+        return;
+    }
+    wopr_basic_push_line("\n");
+#elif defined(FELIX_BASIC)
+    felix_basic_push_line("\n");
+#else
     putchar('\n');
     fflush(stdout);
+#endif
 }
 
 void display_cursor(int visible)
 {
+#ifdef WOPR
+    (void)visible;
+#elif defined(FELIX_BASIC)
+    (void)visible;
+#else
     if (visible)
         printf("\033[?25h");
     else
         printf("\033[?25l");
     fflush(stdout);
+#endif
 }
 
 void display_spc(int n)
 {
+#ifdef WOPR
+    for (int i = 0; i < n; i++) wopr_basic_push_line(" ");
+#elif defined(FELIX_BASIC)
+    for (int i = 0; i < n; i++) felix_basic_push_line(" ");
+#else
     for (int i = 0; i < n; i++) putchar(' ');
     fflush(stdout);
+#endif
 }
 
 int display_get_width(void)
 {
-#ifndef _WIN32
+#if defined(WOPR) || defined(FELIX_BASIC)
+    return g_width;
+#elif !defined(_WIN32)
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
         return ws.ws_col;
-#endif
     return g_width;
+#else
+    return g_width;
+#endif
 }
 
 /* INKEY$ — non-blocking */
 int display_inkey(void)
 {
-#ifndef _WIN32
+#ifdef WOPR
+    int c = wopr_basic_get_key();
+    if (c >= 0) return c;
+#  ifdef _WIN32
+    SDL_Delay(1);
+#  else
+    usleep(1000);
+#  endif
+    return 0;
+#elif defined(FELIX_BASIC)
+    int c = felix_basic_get_key();
+    if (c >= 0) return c;
+    SDL_Delay(1);
+    return 0;
+#elif !defined(_WIN32)
     unsigned char c;
     ssize_t n = read(STDIN_FILENO, &c, 1);
     if (n == 1) return (int)c;
     usleep(1000);
+    return 0;
 #else
     SDL_Delay(1);
-#endif
     return 0;
+#endif
 }
 
-/* Blocking line read for LINE INPUT — reads a full line into buf, up to bufsz-1 chars */
+/* Blocking line read */
 int display_getline(char *buf, int bufsz)
 {
-#ifndef _WIN32
+#ifdef WOPR
+    basic_shim_fgets(buf, bufsz);
+    g_basic_suppress_newline = 1;
+    SDL_Log("Returning Buffer %s\n", buf);
+    return (int)strlen(buf);
+#elif defined(FELIX_BASIC)
+    felix_basic_shim_fgets(buf, bufsz);
+    return (int)strlen(buf);
+#elif !defined(_WIN32)
     leave_raw();
 
     struct termios cooked = g_orig_termios;
@@ -245,10 +350,18 @@ int display_getline(char *buf, int bufsz)
 #endif
 }
 
-/* Single blocking getchar — kept for compatibility */
+/* Single blocking getchar */
 int display_getchar(void)
 {
-#ifndef _WIN32
+#ifdef WOPR
+    char buf[2] = {0};
+    basic_shim_fgets(buf, sizeof(buf));
+    return (unsigned char)buf[0];
+#elif defined(FELIX_BASIC)
+    char buf[2] = {0};
+    felix_basic_shim_fgets(buf, sizeof(buf));
+    return (unsigned char)buf[0];
+#elif !defined(_WIN32)
     leave_raw();
 
     struct termios cooked = g_orig_termios;
@@ -266,3 +379,5 @@ int display_getchar(void)
     return (c == EOF) ? 0 : (unsigned char)c;
 #endif
 }
+
+BASIC_NS_END

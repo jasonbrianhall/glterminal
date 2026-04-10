@@ -7,27 +7,38 @@
 #include <cctype>
 #include <setjmp.h>
 #include <signal.h>
-
-extern "C" {
 #include "sound.h"
-}
+#include "wopr_basic_compat.h"
+#include "basic_print.h"
+#include "basic_ns.h"
 
 // ── BASIC C entry points ────────────────────────────────────────────────
-extern "C" {
-    int  basic_main(void);
+// All shim symbols live in namespace WoprBasic (basic_print.cpp).
+
+
+/*namespace WoprBasic {
+    int   basic_main(void);
     extern char    basic_input_buf[];
     extern int     basic_input_ready;
     extern int     g_basic_game_over;
     extern int     g_basic_waiting_input;
     extern int     g_basic_suppress_newline;
-    extern volatile sig_atomic_t g_break;
     extern jmp_buf basic_exit_jmp;
     void basic_shim_init(void);
-    void basic_shim_set_input(const char *line);
-}
+    void basic_shim_set_input(char *line);
+}*/
+using WoprBasic::basic_main;
+using WoprBasic::basic_input_buf;
+using WoprBasic::basic_input_ready;
+using WoprBasic::g_basic_game_over;
+using WoprBasic::g_basic_waiting_input;
+using WoprBasic::g_basic_suppress_newline;
+using WoprBasic::basic_exit_jmp;
+using WoprBasic::basic_shim_init;
+using WoprBasic::basic_shim_set_input;
 
 // ── Line color encoding ───────────────────────────────────────────────────
-static const char COLOR_PREFIX = '\x01';
+static char COLOR_PREFIX = '\x01';
 static std::string make_colored_line(const std::string &text, uint8_t r, uint8_t g, uint8_t b)
 {
     std::string s; s += COLOR_PREFIX; s += (char)r; s += (char)g; s += (char)b; s += text;
@@ -64,7 +75,9 @@ static char       s_key_buf[16];
 static int        s_key_head = 0, s_key_tail = 0;
 static SDL_mutex *s_key_mtx  = nullptr;
 
-extern "C" void wopr_basic_post_key(char c)
+// ── Output helpers (in WoprBasic namespace so basic_print/display_ansi can link) ──
+BASIC_NS_BEGIN
+void wopr_basic_post_key(char c)
 {
     if (!s_key_mtx) return;
     SDL_LockMutex(s_key_mtx);
@@ -80,18 +93,6 @@ extern "C" void wopr_basic_post_key(char c)
     }
     SDL_UnlockMutex(s_key_mtx);
 }
-
-extern "C" int wopr_basic_get_key(void)
-{
-    if (!s_key_mtx) return -1;
-    SDL_LockMutex(s_key_mtx);
-    int c = -1;
-    if (s_key_head != s_key_tail) { c = (unsigned char)s_key_buf[s_key_head]; s_key_head = (s_key_head+1)%16; }
-    SDL_UnlockMutex(s_key_mtx);
-    return c;
-}
-
-// ── Output helpers ────────────────────────────────────────────────────────
 static void commit_line(void)
 {
     if (!s_active || !s_active->wopr) { s_out_buf.clear(); return; }
@@ -103,19 +104,19 @@ static void commit_line(void)
     SDL_UnlockMutex(s_active->line_mtx);
     s_out_buf.clear();
 }
-extern "C" void wopr_basic_push_line(const char *text)
+void wopr_basic_push_line(char *text)
 {
     if (!s_active || !s_active->wopr || !text) return;
-    for (const char *p = text; *p; ++p) { if (*p == '\n') commit_line(); else s_out_buf += *p; }
+    for (char *p = text; *p; ++p) { if (*p == '\n') commit_line(); else s_out_buf += *p; }
 }
-extern "C" void wopr_basic_flush_partial(void)
+void wopr_basic_flush_partial(void)
 {
     if (!s_active || !s_active->wopr || s_out_buf.empty()) return;
     s_prompt_buf = s_out_buf;
     s_prompt_r = s_fg_r; s_prompt_g = s_fg_g; s_prompt_b = s_fg_b;
     s_out_buf.clear();
 }
-extern "C" void wopr_basic_cls(void)
+void wopr_basic_cls(void)
 {
     if (!s_active || !s_active->wopr) return;
     s_out_buf.clear();
@@ -124,11 +125,24 @@ extern "C" void wopr_basic_cls(void)
     s_active->wopr->lines.clear();
     SDL_UnlockMutex(s_active->line_mtx);
 }
-extern "C" void wopr_basic_color(int fg)
+void wopr_basic_color(int fg)
 {
     if (fg < 0 || fg > 15) fg = 7;
     s_fg_r = CGA_RGB[fg][0]; s_fg_g = CGA_RGB[fg][1]; s_fg_b = CGA_RGB[fg][2];
 }
+int wopr_basic_get_key(void)
+{
+    if (!s_key_mtx) return -1;
+    SDL_LockMutex(s_key_mtx);
+    int c = -1;
+    if (s_key_head != s_key_tail) { c = (unsigned char)s_key_buf[s_key_head]; s_key_head = (s_key_head+1)%16; }
+    SDL_UnlockMutex(s_key_mtx);
+    return c;
+}
+BASIC_NS_END
+
+using WoprBasic::wopr_basic_post_key;
+
 bool wopr_basic_is_waiting_input(WoprState *w)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
@@ -211,7 +225,7 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
     if (sym == SDLK_c) {
         const Uint8 *ks = SDL_GetKeyboardState(NULL);
         if (ks[SDL_SCANCODE_LCTRL] || ks[SDL_SCANCODE_RCTRL]) {
-            g_break = 1; basic_shim_set_input("\n"); return true;
+            g_break = 1; basic_shim_set_input(const_cast<char*>("\n")); return true;
         }
     }
 
@@ -222,7 +236,7 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
             std::string full = s_prompt_buf + typed;
             w->lines.push_back(make_colored_line(full, s_prompt_r, s_prompt_g, s_prompt_b));
             s_prompt_buf.clear();
-            typed += '\n'; basic_shim_set_input(typed.c_str());
+            typed += '\n'; basic_shim_set_input(const_cast<char*>(typed.c_str()));
             zs->input_buf.clear(); w->input_buf.clear(); return true;
         }
         case SDLK_BACKSPACE:
@@ -264,11 +278,7 @@ void wopr_basic_text(WoprState *w, const char *text)
 // Include it here so it's only compiled into this TU.
 #include "wizard_bas.h"
 
-extern "C" {
-    void load_program(const char *filename);
-    // Optional path: if set before basic_main(), the REPL auto-loads and runs it
-    extern char g_autoload_path[512];
-}
+    // g_autoload_path provided via wopr_basic_compat.h
 
 // Thread function that auto-runs the loaded program instead of showing REPL
 static int wizard_thread_fn(void *userdata)
@@ -279,7 +289,7 @@ static int wizard_thread_fn(void *userdata)
     // Write embedded bytes to a platform-appropriate temp file
     char tmp[512];
 #ifdef _WIN32
-    const char *tmp_dir = getenv("TEMP");
+    char *tmp_dir = getenv("TEMP");
     if (!tmp_dir) tmp_dir = getenv("TMP");
     if (!tmp_dir) tmp_dir = "C:\\Temp";
     snprintf(tmp, sizeof(tmp), "%s\\wopr_wizard.bas", tmp_dir);
@@ -334,7 +344,7 @@ void wopr_basic_free(WoprState *w)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs) return;
-    if (!zs->dead) { g_basic_game_over = 1; basic_shim_set_input("QUIT\n"); }
+    if (!zs->dead) { g_basic_game_over = 1; basic_shim_set_input(const_cast<char*>("QUIT\n")); }
     sound_shutdown();
     if (zs->thread) { SDL_WaitThread(zs->thread, nullptr); zs->thread = nullptr; }
     if (s_active == zs) s_active = nullptr;

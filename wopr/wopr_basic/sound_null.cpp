@@ -7,9 +7,13 @@
  */
 #include "sound.h"
 
+BASIC_NS_BEGIN
+
 void sound_init(void)                         { }
 void sound_shutdown(void)                     { }
 void sound_drain(void)                        { }
 void sound_beep(void)                         { }
 void sound_tone(double f, double d)           { (void)f; (void)d; }
-void sound_play(const char *mml)              { (void)mml; }
+void sound_play(char *mml)              { (void)mml; }
+
+BASIC_NS_END

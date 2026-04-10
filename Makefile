@@ -14,7 +14,7 @@ CC_LINUX  = gcc
 CC_WIN    = x86_64-w64-mingw32-gcc
 
 # Common flags
-CXXFLAGS_COMMON = -Wall -Wextra -std=c++17
+CXXFLAGS_COMMON = -Wall -Wextra -std=c++17 -DWOPR
 CFLAGS_COMMON   = -Wall -Wextra
 
 # Package config
@@ -168,16 +168,6 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
 	    wopr/zork/sverbs.c \
 	    wopr/zork/verbs.c \
 	    wopr/zork/villns.c \
-	    wopr/wopr_basic/commands.c \
-            wopr/wopr_basic_modified/display_ansi.c \
-            wopr/wopr_basic/expr.c \
-            wopr/wopr_basic/program.c \
-            wopr/wopr_basic/sound_null.c \
-            wopr/wopr_basic_modified/sound_sdl.c \
-            wopr/wopr_basic/vars.c \
-            wopr/wopr_basic_modified/main.c \
-            wopr/wopr_basic_modified/basic_print.c \
-            wopr/wopr_basic/vars.c
 
 
 
@@ -193,7 +183,17 @@ SRCS_WOPR = wopr/wopr.cpp                \
             wopr/beatchess.cpp           \
             wopr/chess_ai_move.cpp       \
             wopr/minesweeper_game.cpp    \
-            wopr/highscores.cpp            
+            wopr/highscores.cpp          \
+            wopr/wopr_basic/basic_print.cpp  \
+            wopr/wopr_basic/commands.cpp     \
+            wopr/wopr_basic/display_ansi.cpp \
+            wopr/wopr_basic/expr.cpp         \
+            wopr/wopr_basic/main.cpp         \
+            wopr/wopr_basic/program.cpp      \
+            wopr/wopr_basic/sound_null.cpp   \
+            wopr/wopr_basic/sound_sdl.cpp    \
+            wopr/wopr_basic/vars.cpp
+                   
 
 
 

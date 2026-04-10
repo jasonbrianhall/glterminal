@@ -1,6 +1,10 @@
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
+#include "basic_ns.h"
+
+BASIC_NS_BEGIN
+
 /*
  * display.h — Terminal display abstraction for the BASIC interpreter
  *
@@ -26,7 +30,7 @@ void display_color(int fg, int bg);
 void display_width(int cols);
 
 /* Print a raw string (no newline) */
-void display_print(const char *s);
+void display_print(char *s);
 
 /* Print a single character */
 void display_putchar(int c);
@@ -51,5 +55,7 @@ void display_spc(int n);
 
 /* Get current terminal width (used by WIDTH query) */
 int display_get_width(void);
+
+BASIC_NS_END
 
 #endif /* DISPLAY_H */
