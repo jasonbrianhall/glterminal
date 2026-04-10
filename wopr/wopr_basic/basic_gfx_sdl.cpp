@@ -250,7 +250,7 @@ bool gfx_sdl_init(const char *title, int w, int h) {
     if (!s_window) { fprintf(stderr, "CreateWindow: %s\n", SDL_GetError()); return false; }
 
     s_renderer = SDL_CreateRenderer(s_window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        SDL_RENDERER_ACCELERATED);
     if (!s_renderer)
         s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_SOFTWARE);
     SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
