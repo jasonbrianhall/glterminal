@@ -359,8 +359,10 @@ static int cmd_cls(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
     int arg = -1;  /* -1 = no argument */
+#ifndef USE_SDL_WINDOW
     printf("\033[2J\033[H");
     fflush(stdout);
+#endif
     if (*p && *p != ':') {
         mpf_t n; mpf_init2(n, g_prec);
         eval_expr(p, n);

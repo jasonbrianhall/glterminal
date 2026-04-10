@@ -7,6 +7,9 @@
 #include <setjmp.h>
 #include <SDL2/SDL.h>
 #include "basic_print.h"
+#ifdef USE_SDL_WINDOW
+#include "display.h"
+#endif
 
 #ifdef WOPR
 #include "../wopr.h"
@@ -239,6 +242,10 @@ int basic_printf(char *fmt, ...)
     va_end(ap);
 #if defined(WOPR) || defined(FELIX_BASIC)
     wopr_basic_push_line(buf);
+#elif defined(USE_SDL_WINDOW)
+    /* Route all output through the SDL text grid via display_print.
+     * display.h is included transitively via basic.h / basic_print.h. */
+    display_print(buf);
 #else
     fputs(buf, stdout);
     fflush(stdout);
