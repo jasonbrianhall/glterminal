@@ -1,1 +1,0 @@
-../wopr_basic/basic.h

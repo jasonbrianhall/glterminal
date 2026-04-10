@@ -1,1 +1,0 @@
-../wopr_basic/display.h
