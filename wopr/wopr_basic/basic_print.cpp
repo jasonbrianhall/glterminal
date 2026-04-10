@@ -12,6 +12,7 @@
 #endif
 
 #ifdef WOPR
+#include "basic.h"
 #include "../wopr.h"
 BASIC_NS_BEGIN
 
