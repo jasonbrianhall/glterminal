@@ -42,7 +42,7 @@ static int        g_nconsts = 0;
 
 void const_clear(void) { g_nconsts = 0; }
 
-void const_set(const char *name, const char *value, int is_str) {
+void const_set(char *name, char *value, int is_str) {
     /* update existing */
     for (int i = 0; i < g_nconsts; i++) {
         if (strcasecmp(g_consts[i].name, name) == 0) {
@@ -58,7 +58,7 @@ void const_set(const char *name, const char *value, int is_str) {
     g_nconsts++;
 }
 
-static ConstEntry *const_find(const char *name) {
+static ConstEntry *const_find(char *name) {
     for (int i = 0; i < g_nconsts; i++)
         if (strcasecmp(g_consts[i].name, name) == 0) return &g_consts[i];
     return NULL;
@@ -67,19 +67,19 @@ static ConstEntry *const_find(const char *name) {
 /* ================================================================
  * Utility helpers
  * ================================================================ */
-char *str_dup(const char *s) {
+char *str_dup(char *s) {
     char *d = malloc(strlen(s) + 1);
     if (!d) { basic_stderr("OOM\n"); exit(1); }
     strcpy(d, s);
     return d;
 }
 
-const char *sk(const char *p) {
+char *sk(char *p) {
     while (isspace((unsigned char)*p)) p++;
     return p;
 }
 
-const char *read_varname(const char *p, char *name) {
+char *read_varname(char *p, char *name) {
     int i = 0;
     while ((isalnum((unsigned char)*p) || *p == '_') && i < MAX_VARNAME - 2)
         name[i++] = (char)toupper((unsigned char)*p++);
@@ -89,7 +89,7 @@ const char *read_varname(const char *p, char *name) {
     return p;
 }
 
-int kw_match(const char *p, const char *kw) {
+int kw_match(char *p, char *kw) {
     size_t len = strlen(kw);
     if (strncasecmp(p, kw, len) != 0) return 0;
     char next = p[len];
@@ -99,9 +99,9 @@ int kw_match(const char *p, const char *kw) {
 /* ================================================================
  * String expression evaluator
  * ================================================================ */
-static const char *eval_str_primary(const char *p, char *buf, int bufsz);
+static char *eval_str_primary(char *p, char *buf, int bufsz);
 
-const char *eval_str_expr(const char *s, char *buf, int bufsz) {
+char *eval_str_expr(char *s, char *buf, int bufsz) {
     buf[0] = '\0';
     s = sk(s);
     char tmp[1024];
@@ -115,7 +115,7 @@ const char *eval_str_expr(const char *s, char *buf, int bufsz) {
     return s;
 }
 
-static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
+static char *eval_str_primary(char *p, char *buf, int bufsz) {
     p = sk(p);
     buf[0] = '\0';
 
@@ -147,7 +147,7 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
         char src[1024];
         p = sk(eval_str_expr(sk(p), src, sizeof src));
         if (*sk(p) == ')') p = sk(p) + 1;
-        const char *s = src;
+        char *s = src;
         while (*s == ' ') s++;
         strncpy(buf, s, bufsz - 1); buf[bufsz - 1] = '\0';
         return p;
@@ -263,7 +263,7 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
         char varname[256];
         p = sk(eval_str_expr(p, varname, sizeof varname));
         if (*p == ')') p++;
-        const char *val = getenv(varname);
+        char *val = getenv(varname);
         strncpy(buf, val ? val : "", bufsz - 1);
         buf[bufsz - 1] = '\0';
         return p;
@@ -315,7 +315,7 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
         if (*p == '(') p++;
         char src_buf[1024];
         p = sk(eval_str_expr(sk(p), src_buf, sizeof src_buf));
-        const char *src = src_buf;
+        char *src = src_buf;
         if (*p == ',') p = sk(p + 1);
         mpf_t st; mpf_init2(st, g_prec);
         p = sk(eval_expr(sk(p), st));
@@ -395,7 +395,7 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
 
     /* Struct field string read: name.field$ or name(idx).field$ */
     if (isalpha((unsigned char)*p)) {
-        const char *save2 = p;
+        char *save2 = p;
         char base2[MAX_VARNAME]; int bi2 = 0;
         while ((isalnum((unsigned char)*p) || *p == '_') && bi2 < MAX_VARNAME - 1)
             base2[bi2++] = (char)toupper((unsigned char)*p++);
@@ -447,7 +447,7 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
     /* String variable (scalar or array element) — check CONST table first */
     if (isalpha((unsigned char)*p)) {
         char vname[MAX_VARNAME];
-        const char *after = read_varname(p, vname);
+        char *after = read_varname(p, vname);
 
         /* CONST string lookup */
         ConstEntry *ce = const_find(vname);
@@ -484,7 +484,7 @@ static const char *eval_str_primary(const char *p, char *buf, int bufsz) {
     return p;
 }
 
-int is_str_token(const char *p) {
+int is_str_token(char *p) {
     p = sk(p);
     if (*p == '"') return 1;
     if (kw_match(p, "INKEY$"))  return 1;
@@ -509,7 +509,7 @@ int is_str_token(const char *p) {
     if (kw_match(p, "OCT$"))    return 1;
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
-        const char *after = read_varname(p, name);
+        char *after = read_varname(p, name);
         if (var_is_str_name(name)) return 1;
         /* check CONST table for string constants */
         ConstEntry *ce = const_find(name);
@@ -551,7 +551,7 @@ int is_str_token(const char *p) {
     return 0;
 }
 
-const char *eval_str_or_inkey(const char *p, char *buf, int bufsz) {
+char *eval_str_or_inkey(char *p, char *buf, int bufsz) {
     p = sk(p);
     if (kw_match(p, "INKEY$")) {
         int ch = display_inkey();
@@ -565,7 +565,7 @@ const char *eval_str_or_inkey(const char *p, char *buf, int bufsz) {
 /* ================================================================
  * Numeric expression evaluator (recursive descent)
  * ================================================================ */
-typedef struct { const char *p; } Parser;
+typedef struct { char *p; } Parser;
 
 static void parse_expr_p(Parser *ps, mpf_t result);
 static void parse_term_p(Parser *ps, mpf_t result);
@@ -770,8 +770,8 @@ static int try_eval_defn(Parser *ps, mpf_t result) {
     if (!(toupper((unsigned char)ps->p[0]) == 'F' &&
           toupper((unsigned char)ps->p[1]) == 'N' &&
           isalnum((unsigned char)ps->p[2]))) return 0;
-    const char *start = ps->p;
-    const char *p = ps->p + 2;
+    char *start = ps->p;
+    char *p = ps->p + 2;
     char fname[MAX_VARNAME]; int i = 0;
     fname[i++] = 'F'; fname[i++] = 'N';
     while (isalnum((unsigned char)*p) && i < MAX_VARNAME - 1) fname[i++] = (char)toupper(*p++);
@@ -993,10 +993,10 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         int start = 1;
         /* if first token is numeric, it's the start offset */
         if (!is_str_token(ps->p)) {
-            const char *save = ps->p;
+            char *save = ps->p;
             mpf_t s; mpf_init2(s, g_prec);
-            const char *after = eval_expr(ps->p, s);
-            const char *q = after; while (isspace((unsigned char)*q)) q++;
+            char *after = eval_expr(ps->p, s);
+            char *q = after; while (isspace((unsigned char)*q)) q++;
             if (*q == ',') { start = (int)mpf_get_si(s); ps->p = (char*)(q + 1); }
             else             ps->p = save;
             mpf_clear(s);
@@ -1008,7 +1008,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         skip_ws_p(ps); if (*ps->p == ')') ps->p++;
         if (start < 1) start = 1;
         if (start > (int)strlen(hay)) { mpf_set_si(result, 0); return; }
-        const char *found = strstr(hay + start - 1, needle);
+        char *found = strstr(hay + start - 1, needle);
         mpf_set_si(result, found ? (long)(found - hay + 1) : 0);
         return;
     }
@@ -1156,7 +1156,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
      * Flat encoding: "BASE.IDX.FIELD" (numeric) or "BASE.IDX.FIELD$" (string)
      * We detect this by peeking ahead for a dot after the name or closing paren */
     if (isalpha((unsigned char)*ps->p)) {
-        const char *save = ps->p;
+        char *save = ps->p;
         char base[MAX_VARNAME]; int bi = 0;
         while ((isalnum((unsigned char)*ps->p) || *ps->p == '_') && bi < MAX_VARNAME - 1)
             base[bi++] = (char)toupper((unsigned char)*ps->p++);
@@ -1216,7 +1216,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     /* Variable or array element — check CONST table first */
     if (isalpha((unsigned char)*ps->p)) {
         char name[MAX_VARNAME];
-        const char *name_start = ps->p;
+        char *name_start = ps->p;
         ps->p = read_varname(ps->p, name);
         skip_ws_p(ps);
 
@@ -1269,7 +1269,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     exit(1);
 }
 
-const char *eval_expr(const char *s, mpf_t result) {
+char *eval_expr(char *s, mpf_t result) {
     Parser ps = { s };
     parse_expr_p(&ps, result);
     return ps.p;

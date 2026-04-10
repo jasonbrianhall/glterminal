@@ -230,7 +230,7 @@ static int note_index(char c) {
     return -1;
 }
 
-void sound_play(const char *mml) {
+void sound_play(char *mml) {
     if (!g_dev || !mml) return;
 
     /* Playback state */
@@ -241,7 +241,7 @@ void sound_play(const char *mml) {
     /* Articulation: fraction of note duration that is tone vs gap */
     double tone_frac  = 7.0/8.0;  /* MN normal */
 
-    const char *p = mml;
+    char *p = mml;
 
     while (*p) {
         /* Skip whitespace and semicolons */

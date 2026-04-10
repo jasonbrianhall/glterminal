@@ -18,7 +18,7 @@ int  g_nvar = 0;
 TypeDef g_typedefs[MAX_TYPE_DEFS];
 int     g_ntypedefs = 0;
 
-TypeDef *typedef_find(const char *name) {
+TypeDef *typedef_find(char *name) {
     for (int i = 0; i < g_ntypedefs; i++)
         if (strcasecmp(g_typedefs[i].name, name) == 0) return &g_typedefs[i];
     return NULL;
@@ -39,17 +39,17 @@ FileHandle *fh_get(int n) {
 /* ================================================================
  * Variable helpers
  * ================================================================ */
-int var_is_str_name(const char *name) {
+int var_is_str_name(char *name) {
     return name[strlen(name) - 1] == '$';
 }
 
-Var *var_find(const char *name) {
+Var *var_find(char *name) {
     for (int i = 0; i < g_nvar; i++)
         if (strcasecmp(g_vars[i].name, name) == 0) return &g_vars[i];
     return NULL;
 }
 
-Var *var_create(const char *name) {
+Var *var_create(char *name) {
     if (g_nvar >= MAX_VARS) { basic_stderr("Too many variables\n"); exit(1); }
     Var *v = &g_vars[g_nvar++];
     memset(v, 0, sizeof(*v));
@@ -65,7 +65,7 @@ Var *var_create(const char *name) {
     return v;
 }
 
-Var *var_get(const char *name) {
+Var *var_get(char *name) {
     Var *v = var_find(name);
     return v ? v : var_create(name);
 }

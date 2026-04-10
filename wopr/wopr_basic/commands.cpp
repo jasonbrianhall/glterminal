@@ -12,9 +12,9 @@ BASIC_NS_BEGIN
 /* ================================================================
  * PRINT USING formatter
  * ================================================================ */
-static void print_using(const char *fmt, double val) {
+static void print_using(char *fmt, double val) {
     int before = 0, after = 0, has_dot = 0, has_dollar = 0, has_plus = 0;
-    for (const char *f = fmt; *f; f++) {
+    for (char *f = fmt; *f; f++) {
         if      (*f == '$') has_dollar = 1;
         else if (*f == '+') has_plus   = 1;
         else if (*f == '.') has_dot    = 1;
@@ -42,13 +42,13 @@ int g_screen_height = 350;
 int g_back_color    = 1;   /* palette index used by CLS */
 
 /* Immediate commands (screen, palette, play) — take effect on receipt */
-static void felix_send(const char *cmd) {
+static void felix_send(char *cmd) {
     write(STDOUT_FILENO, "\033]666;", 6);
     write(STDOUT_FILENO, cmd, strlen(cmd));
     write(STDOUT_FILENO, "\033\\", 2);
 }
 
-static void felix_sendf(const char *fmt, ...) {
+static void felix_sendf(char *fmt, ...) {
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
@@ -60,13 +60,13 @@ static void felix_sendf(const char *fmt, ...) {
 /* Draw commands (circle, line, pset, paint, cls, get, put) are queued and
  * only rendered on the next frame.  The terminal flushes the queue when it
  * receives a 'batch' sequence, so we wrap every draw call in one. */
-static void felix_draw(const char *cmd) {
+static void felix_draw(char *cmd) {
     write(STDOUT_FILENO, "\033]666;batch;", 12);
     write(STDOUT_FILENO, cmd, strlen(cmd));
     write(STDOUT_FILENO, "\033\\", 2);
 }
 
-static void felix_drawf(const char *fmt, ...) {
+static void felix_drawf(char *fmt, ...) {
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
@@ -126,7 +126,7 @@ static int sprite_id_for(Var *var) {
 }
 
 /* Parse  (x, y)  or  x, y  returning pointer past closing paren (if any) */
-static const char *parse_xy(const char *p, double *x, double *y) {
+static char *parse_xy(char *p, double *x, double *y) {
     int paren = (*p == '(');
     if (paren) p = sk(p + 1);
     mpf_t mx, my; mpf_init2(mx, g_prec); mpf_init2(my, g_prec);
@@ -138,18 +138,18 @@ static const char *parse_xy(const char *p, double *x, double *y) {
 }
 
 /* No-op stubs */
-static int cmd_rem(Interp *ip, const char *args)    { (void)ip;(void)args; return 0; }
-static int cmd_defseg(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
-static int cmd_defdbl(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
-static int cmd_key(Interp *ip, const char *args)    { (void)ip;(void)args; return 0; }
-static int cmd_chain(Interp *ip, const char *args)  { (void)ip;(void)args; return 0; }
+static int cmd_rem(Interp *ip, char *args)    { (void)ip;(void)args; return 0; }
+static int cmd_defseg(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
+static int cmd_defdbl(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
+static int cmd_key(Interp *ip, char *args)    { (void)ip;(void)args; return 0; }
+static int cmd_chain(Interp *ip, char *args)  { (void)ip;(void)args; return 0; }
 
 /* ================================================================
  * SCREEN mode
  * ================================================================ */
-static int cmd_screen(Interp *ip, const char *args) {
+static int cmd_screen(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (!*p || *p == ':') return 0;
     mpf_t n; mpf_init2(n, g_prec);
     eval_expr(p, n);
@@ -164,16 +164,16 @@ static int cmd_screen(Interp *ip, const char *args) {
     if (mode != 0) felix_sendf("screen;%d", mode);
     return 0;
 }
-static int cmd_beep(Interp *ip, const char *args) {
+static int cmd_beep(Interp *ip, char *args) {
     (void)ip; (void)args;
     sound_beep();
     return 0;
 }
 
 /* SOUND freq, duration  — freq in Hz, duration in 18.2-tick clock units */
-static int cmd_sound(Interp *ip, const char *args) {
+static int cmd_sound(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     mpf_t freq, dur; mpf_init2(freq, g_prec); mpf_init2(dur, g_prec);
     p = sk(eval_expr(p, freq));
     if (*p == ',') p = sk(p + 1);
@@ -184,7 +184,7 @@ static int cmd_sound(Interp *ip, const char *args) {
 }
 
 /* PLAY "mml-string" — GW-BASIC Music Macro Language */
-static int cmd_play(Interp *ip, const char *args) {
+static int cmd_play(Interp *ip, char *args) {
     (void)ip;
     char mml[1024];
     eval_str_expr(sk(args), mml, sizeof mml);
@@ -195,7 +195,7 @@ static int cmd_play(Interp *ip, const char *args) {
 /* ================================================================
  * Interpreter control
  * ================================================================ */
-static int cmd_stop(Interp *ip, const char *args) {
+static int cmd_stop(Interp *ip, char *args) {
     (void)args;
     g_cont_pc = ip->pc + 1;
     ip->running = 0;
@@ -203,7 +203,7 @@ static int cmd_stop(Interp *ip, const char *args) {
     return 1;
 }
 
-static int cmd_cont(Interp *ip, const char *args) {
+static int cmd_cont(Interp *ip, char *args) {
     (void)args;
     if (g_cont_pc < 0) { display_print("Can't continue\n"); return 0; }
     ip->pc = g_cont_pc;
@@ -211,7 +211,7 @@ static int cmd_cont(Interp *ip, const char *args) {
     return 1;
 }
 
-static int cmd_end(Interp *ip, const char *args) {
+static int cmd_end(Interp *ip, char *args) {
     (void)args; ip->running = 0;
     for (int i = 1; i <= MAX_FILE_HANDLES; i++)
         if (g_files[i].fp) { fclose(g_files[i].fp); g_files[i].fp = NULL; g_files[i].mode = 0; }
@@ -221,9 +221,9 @@ static int cmd_end(Interp *ip, const char *args) {
 /* ================================================================
  * Utility commands
  * ================================================================ */
-static int cmd_randomize(Interp *ip, const char *args) {
+static int cmd_randomize(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (*p && *p != ':') {
         mpf_t n; mpf_init2(n, g_prec);
         eval_expr(p, n);
@@ -235,9 +235,9 @@ static int cmd_randomize(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_swap(Interp *ip, const char *args) {
+static int cmd_swap(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     char name1[MAX_VARNAME], name2[MAX_VARNAME];
     p = sk(read_varname(p, name1));
     if (*p == ',') p = sk(p + 1);
@@ -253,9 +253,9 @@ static int cmd_swap(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_erase(Interp *ip, const char *args) {
+static int cmd_erase(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     while (*p) {
         char name[MAX_VARNAME];
         p = sk(read_varname(p, name));
@@ -278,9 +278,9 @@ static int cmd_erase(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_option(Interp *ip, const char *args) {
+static int cmd_option(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (kw_match(p, "BASE")) {
         p = sk(p + 4);
         mpf_t n; mpf_init2(n, g_prec);
@@ -295,7 +295,7 @@ static int cmd_option(Interp *ip, const char *args) {
 /* ================================================================
  * Display commands
  * ================================================================ */
-static int cmd_system(Interp *ip, const char *args) {
+static int cmd_system(Interp *ip, char *args) {
     (void)args;
     ip->running = 0;
     /* longjmp out if available (WOPR context), otherwise just stop */
@@ -306,9 +306,9 @@ static int cmd_system(Interp *ip, const char *args) {
     return 1;
 }
 
-static int cmd_sleep(Interp *ip, const char *args) {
+static int cmd_sleep(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     double secs = 1.0;
     if (*p && *p != ':') {
         mpf_t n; mpf_init2(n, g_prec);
@@ -329,10 +329,10 @@ static int cmd_sleep(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_kill(Interp *ip, const char *args) {
+static int cmd_kill(Interp *ip, char *args) {
     (void)ip;
     char filename[512] = "";
-    const char *p = sk(args);
+    char *p = sk(args);
     if (*p == '"') p++;
     int i = 0;
     while (*p && *p != '"' && i < (int)sizeof(filename) - 1) filename[i++] = *p++;
@@ -341,9 +341,9 @@ static int cmd_kill(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_cls(Interp *ip, const char *args) {
+static int cmd_cls(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     int arg = -1;  /* -1 = no argument */
     printf("\033[2J\033[H");
     fflush(stdout);
@@ -374,9 +374,9 @@ static int cmd_cls(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_width(Interp *ip, const char *args) {
+static int cmd_width(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     mpf_t n; mpf_init2(n, g_prec);
     p = sk(eval_expr(p, n));
     int cols = (int)mpf_get_si(n);
@@ -392,9 +392,9 @@ static int cmd_width(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_color(Interp *ip, const char *args) {
+static int cmd_color(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     mpf_t fg, bg; mpf_init2(fg, g_prec); mpf_init2(bg, g_prec);
     mpf_set_ui(bg, 0);
     p = eval_expr(p, fg); p = sk(p);
@@ -404,9 +404,9 @@ static int cmd_color(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_locate(Interp *ip, const char *args) {
+static int cmd_locate(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     mpf_t row, col, cur;
     mpf_init2(row, g_prec); mpf_init2(col, g_prec); mpf_init2(cur, g_prec);
     mpf_set_ui(row, 0); mpf_set_ui(col, 0); mpf_set_ui(cur, 1);
@@ -434,19 +434,19 @@ static int cmd_locate(Interp *ip, const char *args) {
  * ================================================================ */
 
 /* Forward declarations for commands used before their definition */
-static int cmd_dim(Interp *ip, const char *args);
-static int cmd_return(Interp *ip, const char *args);
-static const char *parse_field_varname(const char *p, char *out);
-static int eval_one_cmp(const char **pp);
+static int cmd_dim(Interp *ip, char *args);
+static int cmd_return(Interp *ip, char *args);
+static char *parse_field_varname(char *p, char *out);
+static int eval_one_cmp(char **pp);
 
 /* DO [WHILE|UNTIL cond] — push a loop frame pointing at the DO statement */
-static int cmd_do(Interp *ip, const char *args) {
+static int cmd_do(Interp *ip, char *args) {
     /* When LOOP sends us back here, the frame already exists — don't push again.
      * But we must still re-check any DO WHILE / DO UNTIL condition. */
     if (g_ctrl_top > 0 &&
         strcmp(g_ctrl[g_ctrl_top - 1].varname, "\x02" "DO") == 0 &&
         g_ctrl[g_ctrl_top - 1].line_idx == ip->pc) {
-        const char *p = sk(args);
+        char *p = sk(args);
         if (kw_match(p, "WHILE") || kw_match(p, "UNTIL")) {
             int is_until = kw_match(p, "UNTIL");
             p = sk(p + 5);
@@ -456,7 +456,7 @@ static int cmd_do(Interp *ip, const char *args) {
                 /* skip to after matching LOOP */
                 int depth = 1, pc = ip->pc + 1;
                 while (pc < g_nlines && depth > 0) {
-                    const char *t = sk(g_lines[pc].text);
+                    char *t = sk(g_lines[pc].text);
                     if (kw_match(t, "DO")) depth++;
                     else if (kw_match(t, "LOOP")) depth--;
                     pc++;
@@ -471,7 +471,7 @@ static int cmd_do(Interp *ip, const char *args) {
     }
 
     /* First entry: optionally check DO WHILE/UNTIL before pushing */
-    const char *p = sk(args);
+    char *p = sk(args);
     if (kw_match(p, "WHILE") || kw_match(p, "UNTIL")) {
         int is_until = kw_match(p, "UNTIL");
         p = sk(p + 5);
@@ -480,7 +480,7 @@ static int cmd_do(Interp *ip, const char *args) {
         if (!cond) {
             int depth = 1, pc = ip->pc + 1;
             while (pc < g_nlines && depth > 0) {
-                const char *t = sk(g_lines[pc].text);
+                char *t = sk(g_lines[pc].text);
                 if (kw_match(t, "DO")) depth++;
                 else if (kw_match(t, "LOOP")) depth--;
                 pc++;
@@ -499,13 +499,13 @@ static int cmd_do(Interp *ip, const char *args) {
 }
 
 /* LOOP [WHILE|UNTIL cond] */
-static int cmd_loop(Interp *ip, const char *args) {
+static int cmd_loop(Interp *ip, char *args) {
     /* find the matching DO frame */
     int fi = g_ctrl_top - 1;
     while (fi >= 0 && strcmp(g_ctrl[fi].varname, "\x02" "DO") != 0) fi--;
     if (fi < 0) { basic_stderr("LOOP without DO\n"); return -1; }
 
-    const char *p = sk(args);
+    char *p = sk(args);
     int keep_looping = 1;   /* default: infinite loop, need explicit WHILE/UNTIL to stop */
 
     if (kw_match(p, "WHILE")) {
@@ -530,8 +530,8 @@ static int cmd_loop(Interp *ip, const char *args) {
 }
 
 /* WHILE cond */
-static int cmd_while(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_while(Interp *ip, char *args) {
+    char *p = sk(args);
     int cond = eval_one_cmp(&p);
     p = sk(p);
     while (kw_match(p,"AND") || kw_match(p,"OR")) {
@@ -568,7 +568,7 @@ static int cmd_while(Interp *ip, const char *args) {
         int depth = 1;
         int pc = ip->pc + 1;
         while (pc < g_nlines && depth > 0) {
-            const char *t = sk(g_lines[pc].text);
+            char *t = sk(g_lines[pc].text);
             if (kw_match(t, "WHILE")) depth++;
             else if (kw_match(t, "WEND")) depth--;
             if (depth > 0) pc++;
@@ -579,7 +579,7 @@ static int cmd_while(Interp *ip, const char *args) {
 }
 
 /* WEND — jump back to the matching WHILE; WHILE will pop if condition fails */
-static int cmd_wend(Interp *ip, const char *args) {
+static int cmd_wend(Interp *ip, char *args) {
     (void)args;
     int fi = g_ctrl_top - 1;
     while (fi >= 0 && strcmp(g_ctrl[fi].varname, "\x03" "WHILE") != 0) fi--;
@@ -601,7 +601,7 @@ static int cmd_wend(Interp *ip, const char *args) {
 static int find_next_case(int start_pc) {
     int depth = 0;
     for (int pc = start_pc; pc < g_nlines; pc++) {
-        const char *t = sk(g_lines[pc].text);
+        char *t = sk(g_lines[pc].text);
         if (kw_match(t, "SELECT")) depth++;
         else if (kw_match(t, "END") && kw_match(sk(t + 3), "SELECT")) {
             if (depth == 0) return pc;
@@ -611,8 +611,8 @@ static int find_next_case(int start_pc) {
     return g_nlines;
 }
 
-static int cmd_select(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_select(Interp *ip, char *args) {
+    char *p = sk(args);
     /* skip optional CASE keyword after SELECT */
     if (kw_match(p, "CASE")) p = sk(p + 4);
 
@@ -631,7 +631,7 @@ static int cmd_select(Interp *ip, const char *args) {
     /* Scan forward through CASE clauses */
     int pc = ip->pc + 1;
     while (pc < g_nlines) {
-        const char *t = sk(g_lines[pc].text);
+        char *t = sk(g_lines[pc].text);
 
         if (kw_match(t, "END") && kw_match(sk(t + 3), "SELECT")) {
             ip->pc = pc + 1; return 1;    /* no match — skip to END SELECT */
@@ -694,15 +694,15 @@ static int cmd_select(Interp *ip, const char *args) {
     ip->pc = pc + 1; return 1;
 }
 
-static int cmd_end_select(Interp *ip, const char *args) {
+static int cmd_end_select(Interp *ip, char *args) {
     (void)ip; (void)args; return 0;   /* normal fall-through after a matched CASE */
 }
 
 /* ================================================================
  * EXIT SUB / EXIT FUNCTION / EXIT FOR / EXIT DO
  * ================================================================ */
-static int cmd_exit(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_exit(Interp *ip, char *args) {
+    char *p = sk(args);
     if (kw_match(p, "FOR")) {
         /* pop to the innermost FOR frame */
         for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
@@ -712,7 +712,7 @@ static int cmd_exit(Interp *ip, const char *args) {
                 /* scan forward to NEXT */
                 int depth = 1, pc = ip->pc + 1;
                 while (pc < g_nlines && depth > 0) {
-                    const char *t = sk(g_lines[pc].text);
+                    char *t = sk(g_lines[pc].text);
                     if (kw_match(t, "FOR")) depth++;
                     else if (kw_match(t, "NEXT")) depth--;
                     pc++;
@@ -728,7 +728,7 @@ static int cmd_exit(Interp *ip, const char *args) {
             if (strcmp(g_ctrl[fi].varname, "\x02" "DO") == 0) {
                 int depth = 1, pc = ip->pc + 1;
                 while (pc < g_nlines && depth > 0) {
-                    const char *t = sk(g_lines[pc].text);
+                    char *t = sk(g_lines[pc].text);
                     if (kw_match(t, "DO")) depth++;
                     else if (kw_match(t, "LOOP")) depth--;
                     pc++;
@@ -756,7 +756,7 @@ static int cmd_exit(Interp *ip, const char *args) {
 /* ================================================================
  * REDIM — same as DIM for our purposes (we don't track initialisation)
  * ================================================================ */
-static int cmd_redim(Interp *ip, const char *args) {
+static int cmd_redim(Interp *ip, char *args) {
     return cmd_dim(ip, args);
 }
 
@@ -766,8 +766,8 @@ static int cmd_redim(Interp *ip, const char *args) {
  * ON ERROR GOTO 0 disables any pending handler (no-op for us).
  * RESUME NEXT advances past the erroring line (no-op in stub).
  * ================================================================ */
-static int cmd_on_error(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_on_error(Interp *ip, char *args) {
+    char *p = sk(args);
     if (kw_match(p, "GOTO")) {
         p = sk(p + 4);
         if (*p == '0' && !isalnum((unsigned char)p[1])) {
@@ -785,8 +785,8 @@ static int cmd_on_error(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_resume(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_resume(Interp *ip, char *args) {
+    char *p = sk(args);
     if (kw_match(p, "NEXT")) {
         /* RESUME NEXT — continue at the line after the error */
         if (g_error_resume_pc >= 0) {
@@ -808,7 +808,7 @@ static int cmd_resume(Interp *ip, const char *args) {
 /* ================================================================
  * VIEW PRINT [top TO bottom] — set text viewport (stub: just clear)
  * ================================================================ */
-static int cmd_view_print(Interp *ip, const char *args) {
+static int cmd_view_print(Interp *ip, char *args) {
     (void)ip; (void)args;
     /* TODO: real viewport when we have a graphical backend */
     return 0;
@@ -818,9 +818,9 @@ static int cmd_view_print(Interp *ip, const char *args) {
  * PALETTE idx, ega_color — maps EGA palette slot to display colour.
  * gorilla.bas uses PALETTE 4, 0 style (EGA 6-bit color number).
  * ================================================================ */
-static int cmd_palette(Interp *ip, const char *args) {
+static int cmd_palette(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     mpf_t idx, col; mpf_init2(idx, g_prec); mpf_init2(col, g_prec);
     p = sk(eval_expr(p, idx));
     if (*p == ',') p = sk(p + 1);
@@ -837,7 +837,7 @@ static int cmd_palette(Interp *ip, const char *args) {
 /* ================================================================
  * POKE addr, val — stub
  * ================================================================ */
-static int cmd_poke(Interp *ip, const char *args) {
+static int cmd_poke(Interp *ip, char *args) {
     (void)ip; (void)args; return 0;
 }
 
@@ -846,7 +846,7 @@ static int cmd_poke(Interp *ip, const char *args) {
  * but we need them registered so they don't print "unknown".
  * END IF is similar.
  * ================================================================ */
-static int cmd_end_sub(Interp *ip, const char *args) {
+static int cmd_end_sub(Interp *ip, char *args) {
     /* Treat as RETURN — end of an inline sub body */
     return cmd_return(ip, args);
 }
@@ -854,8 +854,8 @@ static int cmd_end_sub(Interp *ip, const char *args) {
 /* ================================================================
  * CALL subname [args] — for now, treat as GOSUB to label
  * ================================================================ */
-static int cmd_call(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_call(Interp *ip, char *args) {
+    char *p = sk(args);
     char name[MAX_VARNAME]; int i = 0;
     while ((isalnum((unsigned char)*p) || *p == '_') && i < MAX_VARNAME - 1)
         name[i++] = *p++;
@@ -867,14 +867,14 @@ static int cmd_call(Interp *ip, const char *args) {
 /* ================================================================
  * STATIC — variable declaration inside a SUB, treat like DIM
  * ================================================================ */
-static int cmd_static(Interp *ip, const char *args) {
+static int cmd_static(Interp *ip, char *args) {
     return cmd_dim(ip, args);
 }
 
 
-static int cmd_const(Interp *ip, const char *args) {
+static int cmd_const(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     while (*p) {
         char name[MAX_VARNAME];
         p = sk(read_varname(sk(p), name));
@@ -890,7 +890,7 @@ static int cmd_const(Interp *ip, const char *args) {
             const_set(name, val, 1);
         } else {
             /* numeric — store the raw expression text for lazy eval */
-            const char *start = p;
+            char *start = p;
             /* consume until comma or end (skipping parens) */
             int depth = 0;
             while (*p) {
@@ -917,9 +917,9 @@ static int cmd_const(Interp *ip, const char *args) {
 /* ================================================================
  * DIM — strip optional AS typename suffix before processing
  * ================================================================ */
-static int cmd_dim(Interp *ip, const char *args) {
+static int cmd_dim(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     /* SHARED keyword — skip it, all our vars are already global */
     if (kw_match(p, "SHARED")) p = sk(p + 6);
     while (*p && *p != '\'') {
@@ -1030,15 +1030,15 @@ static int cmd_dim(Interp *ip, const char *args) {
 /* ================================================================
  * LET / implicit assignment
  * ================================================================ */
-static int cmd_let(Interp *ip, const char *args) {
+static int cmd_let(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
 
     /* Check for struct field access: identifier optionally followed by (idx).field */
     {
-        const char *save = p;
+        char *save = p;
         char flatname[MAX_VARNAME];
-        const char *after = parse_field_varname(p, flatname);
+        char *after = parse_field_varname(p, flatname);
         if (after) {
             after = sk(after);
             if (*after == '=') {
@@ -1102,11 +1102,11 @@ static int cmd_let(Interp *ip, const char *args) {
 /* ================================================================
  * PRINT
  * ================================================================ */
-static int cmd_print_file(Interp *ip, const char *args);  /* forward */
+static int cmd_print_file(Interp *ip, char *args);  /* forward */
 
-static int cmd_print(Interp *ip, const char *args) {
+static int cmd_print(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (*p == '#') return cmd_print_file(ip, args);
 
     if (kw_match(p, "USING")) {
@@ -1184,12 +1184,12 @@ static int cmd_print(Interp *ip, const char *args) {
 /* ================================================================
  * LINE INPUT / INPUT
  * ================================================================ */
-static int cmd_line_input_file(Interp *ip, const char *args);  /* forward */
-static int cmd_input_file(Interp *ip, const char *args);       /* forward */
+static int cmd_line_input_file(Interp *ip, char *args);  /* forward */
+static int cmd_input_file(Interp *ip, char *args);       /* forward */
 
-static int cmd_line_input(Interp *ip, const char *args) {
+static int cmd_line_input(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (*p == '#') return cmd_line_input_file(ip, args);
     if (*p == '"') {
         p++;
@@ -1208,9 +1208,9 @@ static int cmd_line_input(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_input(Interp *ip, const char *args) {
+static int cmd_input(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (*p == '#') return cmd_input_file(ip, args);
     if (*p == '"') {
         p++;
@@ -1257,9 +1257,9 @@ static int cmd_input(Interp *ip, const char *args) {
 /* ================================================================
  * File I/O commands
  * ================================================================ */
-static int cmd_open(Interp *ip, const char *args) {
+static int cmd_open(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     char filename[512]; int fi = 0;
     if (*p == '"') {
         p++;
@@ -1288,9 +1288,9 @@ static int cmd_open(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_close(Interp *ip, const char *args) {
+static int cmd_close(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (!*p) {
         for (int i = 1; i <= MAX_FILE_HANDLES; i++)
             if (g_files[i].fp) { fclose(g_files[i].fp); g_files[i].fp = NULL; g_files[i].mode = 0; }
@@ -1308,9 +1308,9 @@ static int cmd_close(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_input_file(Interp *ip, const char *args) {
+static int cmd_input_file(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (*p == '#') p = sk(p + 1);
     mpf_t num; mpf_init2(num, g_prec);
     p = sk(eval_expr(p, num)); int n = (int)mpf_get_si(num); mpf_clear(num);
@@ -1334,9 +1334,9 @@ static int cmd_input_file(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_print_file(Interp *ip, const char *args) {
+static int cmd_print_file(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (*p == '#') p = sk(p + 1);
     mpf_t num; mpf_init2(num, g_prec);
     p = sk(eval_expr(p, num)); int n = (int)mpf_get_si(num); mpf_clear(num);
@@ -1366,9 +1366,9 @@ static int cmd_print_file(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_line_input_file(Interp *ip, const char *args) {
+static int cmd_line_input_file(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (*p == '#') p = sk(p + 1);
     mpf_t num; mpf_init2(num, g_prec);
     p = sk(eval_expr(p, num)); int n = (int)mpf_get_si(num); mpf_clear(num);
@@ -1390,9 +1390,9 @@ static int cmd_line_input_file(Interp *ip, const char *args) {
  * GET (x1,y1)-(x2,y2), array_var
  * PUT (x,y), array_var [, PSET|XOR]
  * ================================================================ */
-static int cmd_get_graphics(Interp *ip, const char *args) {
+static int cmd_get_graphics(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     double x1, y1, x2, y2;
     p = parse_xy(p, &x1, &y1);
     if (*p == '-') p = sk(p + 1);
@@ -1407,9 +1407,9 @@ static int cmd_get_graphics(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_put_graphics(Interp *ip, const char *args) {
+static int cmd_put_graphics(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     double x, y;
     p = parse_xy(p, &x, &y);
     if (*p == ',') p = sk(p + 1);
@@ -1418,23 +1418,23 @@ static int cmd_put_graphics(Interp *ip, const char *args) {
     Var *v = var_get(vname);
     int id = sprite_id_for(v);
     /* optional mode: PSET or XOR */
-    const char *mode = "pset";
+    char *mode = "pset";
     p = sk(p); if (*p == ',') p = sk(p + 1);
     if (kw_match(p, "XOR"))  mode = "xor";
     felix_drawf("put;%d;%d;%d;%s", id, (int)x, (int)y, mode);
     return 0;
 }
 
-static int cmd_draw(Interp *ip, const char *args) {
+static int cmd_draw(Interp *ip, char *args) {
     (void)ip; (void)args; return 0;  /* DRAW string mini-language — not needed for gorilla */
 }
 
 /* ================================================================
  * CIRCLE (x, y), r [, color [, start_angle, end_angle [, aspect]]]
  * ================================================================ */
-static int cmd_circle(Interp *ip, const char *args) {
+static int cmd_circle(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     double x, y;
     p = sk(parse_xy(p, &x, &y));
     if (*p == ',') p = sk(p + 1);
@@ -1465,9 +1465,9 @@ static int cmd_circle(Interp *ip, const char *args) {
 /* ================================================================
  * LINE [(x1,y1)]-(x2,y2), color [, B[F]]
  * ================================================================ */
-static int cmd_line_gfx(Interp *ip, const char *args) {
+static int cmd_line_gfx(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     double x1 = 0, y1 = 0, x2, y2;
 
     /* optional start point */
@@ -1486,7 +1486,7 @@ static int cmd_line_gfx(Interp *ip, const char *args) {
     }
 
     /* optional B or BF suffix */
-    const char *suffix = "";
+    char *suffix = "";
     p = sk(p);
     if (*p == ',') {
         p = sk(p + 1);
@@ -1502,9 +1502,9 @@ static int cmd_line_gfx(Interp *ip, const char *args) {
 /* ================================================================
  * PAINT (x, y), fill_color [, border_color]
  * ================================================================ */
-static int cmd_paint(Interp *ip, const char *args) {
+static int cmd_paint(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     double x, y;
     p = sk(parse_xy(p, &x, &y));
     int fill = 15, border = -1;
@@ -1530,9 +1530,9 @@ static int cmd_paint(Interp *ip, const char *args) {
 /* ================================================================
  * PSET (x, y) [, color]
  * ================================================================ */
-static int cmd_pset(Interp *ip, const char *args) {
+static int cmd_pset(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     double x, y;
     p = sk(parse_xy(p, &x, &y));
     int color = 15;
@@ -1553,7 +1553,7 @@ static int cmd_pset(Interp *ip, const char *args) {
  * Result written into out (must be MAX_VARNAME bytes).
  * Returns pointer past the parsed text, or NULL on failure.
  * ================================================================ */
-static const char *parse_field_varname(const char *p, char *out) {
+static char *parse_field_varname(char *p, char *out) {
     /* read base name */
     char base[MAX_VARNAME]; int bi = 0;
     while ((isalnum((unsigned char)*p) || *p == '_') && bi < MAX_VARNAME - 1)
@@ -1600,8 +1600,8 @@ static const char *parse_field_varname(const char *p, char *out) {
 
     return p;
 }
-static int cmd_for(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_for(Interp *ip, char *args) {
+    char *p = sk(args);
     char vname[MAX_VARNAME];
     p = sk(read_varname(p, vname));
     if (*p == '=') p = sk(p + 1);
@@ -1623,8 +1623,8 @@ static int cmd_for(Interp *ip, const char *args) {
     return 0;
 }
 
-static int cmd_next(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_next(Interp *ip, char *args) {
+    char *p = sk(args);
     char vname[MAX_VARNAME] = "";
     if (isalpha((unsigned char)*p)) read_varname(p, vname);
     int fi = g_ctrl_top - 1;
@@ -1643,8 +1643,8 @@ static int cmd_next(Interp *ip, const char *args) {
     ip->pc = f->line_idx + 1; return 1;
 }
 
-int cmd_goto(Interp *ip, const char *args) {
-    const char *p = sk(args);
+int cmd_goto(Interp *ip, char *args) {
+    char *p = sk(args);
     int idx;
     if (isdigit((unsigned char)*p)) {
         idx = find_line_idx(atoi(p));
@@ -1660,7 +1660,7 @@ int cmd_goto(Interp *ip, const char *args) {
     ip->pc = idx; return 1;
 }
 
-int cmd_gosub(Interp *ip, const char *args) {
+int cmd_gosub(Interp *ip, char *args) {
     if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return-1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strcpy(f->varname, "\x01" "GOSUB");
@@ -1670,7 +1670,7 @@ int cmd_gosub(Interp *ip, const char *args) {
     return cmd_goto(ip, args);
 }
 
-static int cmd_return(Interp *ip, const char *args) {
+static int cmd_return(Interp *ip, char *args) {
     (void)args;
     for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
         if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0) {
@@ -1685,8 +1685,8 @@ static int cmd_return(Interp *ip, const char *args) {
 /* ================================================================
  * IF / THEN / ELSE
  * ================================================================ */
-static int eval_one_cmp(const char **pp) {
-    const char *p = sk(*pp);
+static int eval_one_cmp(char **pp) {
+    char *p = sk(*pp);
     int cmp = 0;
 
     if (*p == '(') {
@@ -1787,7 +1787,7 @@ static int eval_one_cmp(const char **pp) {
     return cmp;
 }
 
-static const char *find_else(const char *p) {
+static char *find_else(char *p) {
     int in_str = 0;
     while (*p) {
         if (*p == '"') { in_str = !in_str; p++; continue; }
@@ -1797,8 +1797,8 @@ static const char *find_else(const char *p) {
     return NULL;
 }
 
-static int cmd_if(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_if(Interp *ip, char *args) {
+    char *p = sk(args);
     int result = eval_one_cmp(&p);
     p = sk(p);
     while (kw_match(p,"AND") || kw_match(p,"OR")) {
@@ -1809,7 +1809,7 @@ static int cmd_if(Interp *ip, const char *args) {
         p = sk(p);
     }
     if (kw_match(p,"THEN")) p = sk(p + 4);
-    const char *else_p = find_else(p);
+    char *else_p = find_else(p);
     if (result) {
         char then_clause[MAX_LINE_LEN];
         if (else_p) {
@@ -1837,12 +1837,12 @@ static int cmd_if(Interp *ip, const char *args) {
 /* ================================================================
  * DATA / READ / RESTORE
  * ================================================================ */
-static int cmd_data(Interp *ip, const char *args)    { (void)ip;(void)args; return 0; }
-static int cmd_restore(Interp *ip, const char *args) { (void)ip;(void)args; g_data_pos=0; return 0; }
+static int cmd_data(Interp *ip, char *args)    { (void)ip;(void)args; return 0; }
+static int cmd_restore(Interp *ip, char *args) { (void)ip;(void)args; g_data_pos=0; return 0; }
 
-static int cmd_read(Interp *ip, const char *args) {
+static int cmd_read(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     while (*p) {
         char name[MAX_VARNAME];
         p = sk(read_varname(sk(p), name));
@@ -1855,7 +1855,7 @@ static int cmd_read(Interp *ip, const char *args) {
             if (*p==')') p = sk(p + 1);
         }
         if (g_data_pos >= g_data_count) { basic_stderr("READ: out of data\n"); return -1; }
-        const char *item = g_data[g_data_pos++];
+        char *item = g_data[g_data_pos++];
         Var *v = var_get(name);
         if (var_is_str_name(name)) {
             if (is_arr && v->kind == VAR_ARRAY_STR) {
@@ -1874,9 +1874,9 @@ static int cmd_read(Interp *ip, const char *args) {
 /* ================================================================
  * DEF FN
  * ================================================================ */
-static int cmd_def(Interp *ip, const char *args) {
+static int cmd_def(Interp *ip, char *args) {
     (void)ip;
-    const char *p = sk(args);
+    char *p = sk(args);
     if (!(toupper((unsigned char)p[0])=='F' && toupper((unsigned char)p[1])=='N'
           && isalnum((unsigned char)p[2]))) return 0;
     p += 2;
@@ -1902,8 +1902,8 @@ static int cmd_def(Interp *ip, const char *args) {
 /* ================================================================
  * ON x GOTO / ON x GOSUB
  * ================================================================ */
-static int cmd_on(Interp *ip, const char *args) {
-    const char *p = sk(args);
+static int cmd_on(Interp *ip, char *args) {
+    char *p = sk(args);
     mpf_t val; mpf_init2(val, g_prec);
     p = sk(eval_expr(p, val));
     int idx = (int)mpf_get_d(val);
@@ -1928,7 +1928,7 @@ static int cmd_on(Interp *ip, const char *args) {
 /* ================================================================
  * DEFINT / DEFSNG / DEFDBL / DEFSTR stubs
  * ================================================================ */
-static int cmd_defint(Interp *ip, const char *args) { (void)ip;(void)args; return 0; }
+static int cmd_defint(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
 
 /* ================================================================
  * Command registration table
@@ -2016,12 +2016,12 @@ const Command commands[] = {
 /* ================================================================
  * Statement splitter — splits a line on unquoted colons
  * ================================================================ */
-static int split_statements(const char *line, char *segs[], char **buf_out) {
+static int split_statements(char *line, char *segs[], char **buf_out) {
     char *buf = str_dup(line);
     *buf_out = buf;
     int n = 0, in_str = 0;
     segs[n++] = buf;
-    const char *trimmed = buf;
+    char *trimmed = buf;
     while (isspace((unsigned char)*trimmed)) trimmed++;
     if (strncasecmp(trimmed,"REM",3)==0 && !isalnum((unsigned char)trimmed[3]) && trimmed[3]!='_') return n;
     if (*trimmed == '\'') return n;
@@ -2044,18 +2044,18 @@ static int split_statements(const char *line, char *segs[], char **buf_out) {
 /* ================================================================
  * Dispatcher
  * ================================================================ */
-int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
-    const char *p = sk(stmt);
+int dispatch_one(Interp *ip, char *stmt, char *full_line) {
+    char *p = sk(stmt);
     if (!*p) return 0;
 
     for (int i = 0; commands[i].keyword; i++) {
-        const char *kw = commands[i].keyword;
+        char *kw = commands[i].keyword;
         size_t len = strlen(kw);
         if (strncasecmp(p, kw, len) == 0) {
             char next = p[len];
             if (!isalnum((unsigned char)next) && next != '_' && next != '$') {
                 if (strcasecmp(kw,"IF") == 0 && full_line) {
-                    const char *fl = sk(full_line);
+                    char *fl = sk(full_line);
                     if (strncasecmp(fl,"IF",2) == 0) fl = sk(fl + 2);
                     return commands[i].fn(ip, fl);
                 }
@@ -2067,7 +2067,7 @@ int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
     /* Bare assignment: var = expr, arr(i) = expr, or var.field = expr */
     if (isalpha((unsigned char)*p)) {
         char name[MAX_VARNAME];
-        const char *after = read_varname(p, name);
+        char *after = read_varname(p, name);
         /* skip type sigil (#, !, %, &) after varname */
         if (*after == '#' || *after == '!' || *after == '%' || *after == '&') after++;
         after = sk(after);
@@ -2093,11 +2093,11 @@ int dispatch_one(Interp *ip, const char *stmt, const char *full_line) {
     return 0;
 }
 
-int dispatch(Interp *ip, const char *line) {
+int dispatch(Interp *ip, char *line) {
     return dispatch_one(ip, line, line);
 }
 
-int dispatch_multi(Interp *ip, const char *clause) {
+int dispatch_multi(Interp *ip, char *clause) {
     char *segs[MAX_STMTS];
     char *buf;
     int n = split_statements(clause, segs, &buf);

@@ -194,7 +194,7 @@ void display_width(int cols)
 #endif
 }
 
-void display_print(const char *s)
+void display_print(char *s)
 {
 #ifdef WOPR
     if (strcmp(s, "Ok\n") == 0) return;

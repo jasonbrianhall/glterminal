@@ -28,16 +28,16 @@ BASIC_NS_BEGIN
 
 #ifdef FELIX_BASIC
 /* Felix terminal host functions */
-void felix_basic_push_line(const char *line);
+void felix_basic_push_line(char *line);
 void felix_basic_flush_partial(void);
 void felix_basic_cls(void);
 void felix_basic_color(int fg);
 /* Map the wopr_ names used in this file to felix_ equivalents */
-static inline void wopr_basic_push_line(const char *s) { felix_basic_push_line(s); }
+static inline void wopr_basic_push_line(char *s) { felix_basic_push_line(s); }
 static inline void wopr_basic_flush_partial(void)       { felix_basic_flush_partial(); }
 #else
 /* WOPR host functions */
-void wopr_basic_push_line(const char *line);
+void wopr_basic_push_line(char *line);
 void wopr_basic_signal_done(void);
 #endif
 
@@ -60,7 +60,7 @@ void basic_shim_init(void)
     basic_input_sem = SDL_CreateSemaphore(0);
 }
 
-void basic_shim_set_input(const char *line)
+void basic_shim_set_input(char *line)
 {
     SDL_Log("basic_shim_set_input called with '%s'", line);
     strncpy(basic_input_buf, line, sizeof(basic_input_buf) - 1);
@@ -146,7 +146,7 @@ void basic_more_init(void)
     s_linelen = 0;
 }
 
-void basic_more_output(const char *fmt, ...)
+void basic_more_output(char *fmt, ...)
 {
     char buf[4096];
     int  i;
@@ -215,13 +215,13 @@ int basic_rnd_(int maxval)
 }
 #endif /* WOPR || FELIX_BASIC */
 
-int basic_printf(const char *fmt, ...)
+int basic_printf(char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
 
     /* Scan for %f-like formats */
-    const char *p = fmt;
+    char *p = fmt;
     va_list ap2;
     va_copy(ap2, ap);
 
@@ -257,7 +257,7 @@ int basic_printf(const char *fmt, ...)
 }
 
 
-int basic_stderr(const char *fmt, ...)
+int basic_stderr(char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);

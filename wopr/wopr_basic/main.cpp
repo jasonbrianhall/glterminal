@@ -10,11 +10,11 @@
 
 
 
-static char *strcasestr(const char *haystack, const char *needle) {
+static char *strcasestr(char *haystack, char *needle) {
     if (!*needle) return (char *)haystack;
     for (; *haystack; haystack++) {
         if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle)) {
-            const char *h = haystack, *n = needle;
+            char *h = haystack, *n = needle;
             while (*h && *n && tolower((unsigned char)*h) == tolower((unsigned char)*n)) { h++; n++; }
             if (!*n) return (char *)haystack;
         }
@@ -185,7 +185,7 @@ return 0;
      * REPL helper macros
      * ---------------------------------------------------------------- */
     #define PARSE_FILENAME(dst, src) do { \
-        const char *_q = sk(src); \
+        char *_q = sk(src); \
         if (*_q == '"') _q++; \
         int _i = 0; \
         while (*_q && *_q != '"' && *_q != ',' && !isspace((unsigned char)*_q) && _i < 255) \
@@ -228,7 +228,7 @@ return 0;
             display_print("Ok\n");
 
         } else if (strncasecmp(p,"FILES",5)==0 || strncasecmp(p,"DIR",3)==0) {
-            const char *pat = sk(p + (strncasecmp(p,"DIR",3)==0 ? 3 : 5));
+            char *pat = sk(p + (strncasecmp(p,"DIR",3)==0 ? 3 : 5));
             char filter[64] = ".bas";
             if (*pat == '"') pat++;
             if (*pat && *pat != '"') { strncpy(filter, pat, 63); char *eq=strchr(filter,'"'); if(eq)*eq='\0'; }
@@ -237,7 +237,7 @@ return 0;
             struct dirent *de; int count = 0;
             while ((de = readdir(d))) {
                 if (de->d_name[0] == '.') continue;
-                const char *nm = de->d_name;
+                char *nm = de->d_name;
                 size_t nl = strlen(nm), fl = strlen(filter);
                 if (fl && (nl < fl || strcasecmp(nm + nl - fl, filter) != 0)) continue;
                 char entry[64]; snprintf(entry, sizeof entry, "  %-20s\n", nm);
@@ -354,7 +354,7 @@ return 0;
                 for (int j = 0; j < nmap; j++) {
                     if (g_lines[i].linenum == old_nums[j]) { g_lines[i].linenum = new_nums[j]; break; }
                 }
-                const char *kws[] = {"GOTO","GOSUB","THEN","ELSE","RESTORE","RUN", NULL};
+                char *kws[] = {"GOTO","GOSUB","THEN","ELSE","RESTORE","RUN", NULL};
                 for (int k = 0; kws[k]; k++) {
                     char *kw = strcasestr(g_lines[i].text, kws[k]);
                     if (!kw) continue;

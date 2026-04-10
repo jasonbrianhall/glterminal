@@ -29,7 +29,7 @@ extern bool g_basic_graphics_active;
 // Handle a complete OSC 666 payload. payload points to everything after
 // the "666;" prefix (i.e. the command string). win_w/win_h are the current
 // terminal window dimensions in pixels.
-void basic_handle_osc(Terminal *t, const char *payload, int len,
+void basic_handle_osc(Terminal *t, char *payload, int len,
                       int win_w, int win_h);
 
 // Free all sprites and GL/SDL resources. Call before SDL_Quit().
@@ -66,7 +66,7 @@ void basic_graphics_shutdown(void);
 // static inline void bg_palette(int idx,int r,int g,int b)
 //   { printf(BG_ESC "palette;%d;%d;%d;%d" BG_ST, idx,r,g,b); fflush(stdout); }
 //
-// static inline void bg_play(const char *mml)
+// static inline void bg_play(char *mml)
 //   { printf(BG_ESC "play;%s" BG_ST, mml); fflush(stdout); }
 //
 // static inline void bg_get(int id,int x1,int y1,int x2,int y2)

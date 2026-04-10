@@ -14,7 +14,7 @@ BASIC_NS_BEGIN
 
 
 /* Provided by the Felix/WOPR overlay */
-void wopr_basic_push_line(const char *line);
+void wopr_basic_push_line(char *line);
 void wopr_basic_signal_done(void);
 void wopr_basic_flush_partial(void);
 void wopr_basic_cls(void);
@@ -39,7 +39,7 @@ extern jmp_buf  basic_exit_jmp;
 void basic_shim_init(void);
 
 /* Push a line of input into the BASIC interpreter */
-void basic_shim_set_input(const char *line);
+void basic_shim_set_input(char *line);
 
 /* Blocking fgets replacement used by BASIC */
 char *basic_shim_fgets(char *buf, int n);
@@ -49,7 +49,7 @@ char *basic_shim_fgets(char *buf, int n);
  * ========================================================================== */
 
 void basic_more_init(void);
-void basic_more_output(const char *fmt, ...);
+void basic_more_output(char *fmt, ...);
 void basic_more_input(void);
 
 /* ============================================================================
@@ -66,9 +66,9 @@ void basic_itime_(int *hrptr, int *minptr, int *secptr);
 int basic_rnd_(int maxval);
 
 /* BASIC printf override (line-buffered) */
-int basic_printf(const char *fmt, ...);
+int basic_printf(char *fmt, ...);
 
-int basic_stderr(const char *fmt, ...);
+int basic_stderr(char *fmt, ...);
 
 
 /* BASIC fgets override (calls basic_shim_fgets) */

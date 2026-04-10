@@ -92,10 +92,10 @@ typedef struct {
 extern Var  g_vars[MAX_VARS];
 extern int  g_nvar;
 
-int     var_is_str_name(const char *name);
-Var    *var_find(const char *name);
-Var    *var_create(const char *name);
-Var    *var_get(const char *name);
+int     var_is_str_name(char *name);
+Var    *var_find(char *name);
+Var    *var_create(char *name);
+Var    *var_get(char *name);
 mpf_t  *arr_num_elem(Var *v, int i, int j);
 char  **arr_str_elem(Var *v, int i, int j);
 
@@ -112,11 +112,11 @@ extern int  g_nlines;
 
 int  line_cmp(const void *a, const void *b);
 int  find_line_idx(int num);
-int  find_line_by_label(const char *name);
-void normalize_kw(const char *src, char *dst, int dstsz);
-void load(const char *filename);
-void save_program(const char *filename);
-void load_program(const char *filename);
+int  find_line_by_label(char *name);
+void normalize_kw(char *src, char *dst, int dstsz);
+void load(char *filename);
+void save_program(char *filename);
+void load_program(char *filename);
 void clear_program(void);
 
 /* ================================================================
@@ -170,7 +170,7 @@ typedef struct {
 extern TypeDef g_typedefs[MAX_TYPE_DEFS];
 extern int     g_ntypedefs;
 
-TypeDef *typedef_find(const char *name);
+TypeDef *typedef_find(char *name);
 
 /* ================================================================
  * DEF FN store
@@ -195,36 +195,36 @@ typedef struct {
 /* ================================================================
  * Utility helpers (defined in expr.c, used everywhere)
  * ================================================================ */
-char        *str_dup(const char *s);
-const char  *sk(const char *p);
-const char  *read_varname(const char *p, char *name);
-int          kw_match(const char *p, const char *kw);
-int          is_str_token(const char *p);
+char        *str_dup(char *s);
+char  *sk(char *p);
+char  *read_varname(char *p, char *name);
+int          kw_match(char *p, char *kw);
+int          is_str_token(char *p);
 
 /* ================================================================
  * CONST table (expr.c)
  * ================================================================ */
 void const_clear(void);
-void const_set(const char *name, const char *value, int is_str);
-const char *eval_expr(const char *s, mpf_t result);
-const char *eval_str_expr(const char *s, char *buf, int bufsz);
-const char *eval_str_or_inkey(const char *p, char *buf, int bufsz);
+void const_set(char *name, char *value, int is_str);
+char *eval_expr(char *s, mpf_t result);
+char *eval_str_expr(char *s, char *buf, int bufsz);
+char *eval_str_or_inkey(char *p, char *buf, int bufsz);
 
 /* ================================================================
  * Command dispatch (commands.c)
  * ================================================================ */
-typedef int (*CmdFn)(Interp *ip, const char *args);
-typedef struct { const char *keyword; CmdFn fn; } Command;
+typedef int (*CmdFn)(Interp *ip, char *args);
+typedef struct { char *keyword; CmdFn fn; } Command;
 
 extern const Command commands[];
 
-int dispatch_one(Interp *ip, const char *stmt, const char *full_line);
-int dispatch(Interp *ip, const char *line);
-int dispatch_multi(Interp *ip, const char *clause);
+int dispatch_one(Interp *ip, char *stmt, char *full_line);
+int dispatch(Interp *ip, char *line);
+int dispatch_multi(Interp *ip, char *clause);
 
 /* Individual command handlers needed by other modules */
-int cmd_goto(Interp *ip, const char *args);
-int cmd_gosub(Interp *ip, const char *args);
+int cmd_goto(Interp *ip, char *args);
+int cmd_gosub(Interp *ip, char *args);
 
 /* ================================================================
  * Main interpreter loop (main.c)
