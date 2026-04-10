@@ -107,7 +107,7 @@ void run_from(int start_pc) {
 #if defined(WOPR) || defined(FELIX_BASIC)
 int basic_main(void) {
 #else
-int basic_main(int argc, char **argv) {
+int main(int argc, char **argv) {
 #endif
     g_prec = DEFAULT_PREC;
     mpf_set_default_prec(g_prec);
@@ -427,11 +427,11 @@ BASIC_NS_END
  *  Standalone:         int main(int argc, char **argv)
  * ================================================================ */
 #if defined(WOPR) || defined(FELIX_BASIC)
-extern "C" int BASIC_MAIN_CSYM(void) {
+int BASIC_MAIN_CSYM(void) {
     return BASIC_NS::basic_main();
 }
 #else
 int main(int argc, char **argv) {
-    return BASIC_NS::basic_main(argc, argv);
+    return BASIC_NS::main(argc, argv);
 }
 #endif
