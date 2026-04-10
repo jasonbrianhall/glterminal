@@ -10,6 +10,7 @@
 #include "sound.h"
 #include "wopr_basic_compat.h"
 #include "basic_print.h"
+#include "basic_ns.h"
 
 // ── BASIC C entry points ────────────────────────────────────────────────
 // All shim symbols live in namespace WoprBasic (basic_print.cpp).
@@ -74,6 +75,8 @@ static char       s_key_buf[16];
 static int        s_key_head = 0, s_key_tail = 0;
 static SDL_mutex *s_key_mtx  = nullptr;
 
+// ── Output helpers (in WoprBasic namespace so basic_print/display_ansi can link) ──
+BASIC_NS_BEGIN
 void wopr_basic_post_key(char c)
 {
     if (!s_key_mtx) return;
@@ -90,18 +93,6 @@ void wopr_basic_post_key(char c)
     }
     SDL_UnlockMutex(s_key_mtx);
 }
-
-int wopr_basic_get_key(void)
-{
-    if (!s_key_mtx) return -1;
-    SDL_LockMutex(s_key_mtx);
-    int c = -1;
-    if (s_key_head != s_key_tail) { c = (unsigned char)s_key_buf[s_key_head]; s_key_head = (s_key_head+1)%16; }
-    SDL_UnlockMutex(s_key_mtx);
-    return c;
-}
-
-// ── Output helpers ────────────────────────────────────────────────────────
 static void commit_line(void)
 {
     if (!s_active || !s_active->wopr) { s_out_buf.clear(); return; }
@@ -139,6 +130,19 @@ void wopr_basic_color(int fg)
     if (fg < 0 || fg > 15) fg = 7;
     s_fg_r = CGA_RGB[fg][0]; s_fg_g = CGA_RGB[fg][1]; s_fg_b = CGA_RGB[fg][2];
 }
+int wopr_basic_get_key(void)
+{
+    if (!s_key_mtx) return -1;
+    SDL_LockMutex(s_key_mtx);
+    int c = -1;
+    if (s_key_head != s_key_tail) { c = (unsigned char)s_key_buf[s_key_head]; s_key_head = (s_key_head+1)%16; }
+    SDL_UnlockMutex(s_key_mtx);
+    return c;
+}
+BASIC_NS_END
+
+using WoprBasic::wopr_basic_post_key;
+
 bool wopr_basic_is_waiting_input(WoprState *w)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
@@ -249,13 +253,13 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
 }
 
 // ── Text input ────────────────────────────────────────────────────────────
-void wopr_basic_text(WoprState *w, char *text)
+void wopr_basic_text(WoprState *w, const char *text)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs || zs->dead || !text) return;
 
     if (g_basic_waiting_input) {
-        for (char *p = text; *p; ++p) {
+        for (const char *p = text; *p; ++p) {
             char c = *p;
             if (zs->requires_upper)
                 c = (char)std::toupper((unsigned char)c);
@@ -263,7 +267,7 @@ void wopr_basic_text(WoprState *w, char *text)
         }
         w->input_buf = zs->input_buf;
     } else {
-        for (char *p = text; *p; ++p)
+        for (const char *p = text; *p; ++p)
             wopr_basic_post_key(*p);
     }
 }
