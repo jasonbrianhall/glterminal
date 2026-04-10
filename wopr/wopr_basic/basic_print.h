@@ -52,6 +52,10 @@ void basic_more_init(void);
 void basic_more_output(char *fmt, ...);
 void basic_more_input(void);
 
+#if defined(WOPR) || defined(FELIX_BASIC)
+int basic_main(void);
+#endif
+
 /* ============================================================================
  * Lifecycle
  * ========================================================================== */
