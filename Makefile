@@ -168,7 +168,6 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
 	    wopr/zork/sverbs.c \
 	    wopr/zork/verbs.c \
 	    wopr/zork/villns.c \
-	    wopr/wopr_basic/commands.c \
 
 
 
