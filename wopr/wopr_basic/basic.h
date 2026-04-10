@@ -9,6 +9,8 @@
  *           -lgmp -lm
  */
 
+#include "basic_ns.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +25,8 @@
 
 #include "display.h"
 #include "sound.h"
+
+BASIC_NS_BEGIN
 
 /* ================================================================
  * Configuration constants
@@ -46,7 +50,11 @@
  * ================================================================ */
 extern mp_bitcnt_t      g_prec;
 extern int              g_option_base;
+/* g_break: in hosted builds it is a macro (defined in basic_ns.h) that
+ * expands to ::BASIC_BREAK_SYM.  In standalone builds it is a normal extern. */
+#if !defined(WOPR) && !defined(FELIX_BASIC)
 extern volatile sig_atomic_t g_break;
+#endif
 extern int              g_cont_pc;
 extern char             g_error_handler[MAX_VARNAME];
 extern int              g_error_resume_pc;
@@ -223,3 +231,11 @@ int cmd_gosub(Interp *ip, const char *args);
  * ================================================================ */
 void run(void);
 void run_from(int start_pc);
+
+#if defined(WOPR) || defined(FELIX_BASIC)
+int basic_main(void);
+#else
+int basic_main(int argc, char **argv);
+#endif
+
+BASIC_NS_END

@@ -4,13 +4,14 @@
 #include <setjmp.h>
 #include <SDL2/SDL.h>
 
+#include "basic_ns.h"
+
+BASIC_NS_BEGIN
+
 /* ============================================================================
  * Shared I/O surfaces (Felix BASIC shim)
  * ========================================================================== */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* Provided by the Felix/WOPR overlay */
 void wopr_basic_push_line(const char *line);
@@ -73,9 +74,8 @@ int basic_stderr(const char *fmt, ...);
 /* BASIC fgets override (calls basic_shim_fgets) */
 char *basic_fgets(char *buf, int size, FILE *fp);
 
-#ifdef __cplusplus
-}
-#endif
+
+BASIC_NS_END
 
 #endif /* BASIC_SUPP_H */
 

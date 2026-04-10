@@ -8,14 +8,14 @@ ifeq ($(TARGET),windows)
     PKG_CONFIG = mingw64-pkg-config
     BUILDDIR   = build/windows
     EXE        = $(BUILDDIR)/basic.exe
-    CFLAGS     = -O2 -Wall -std=c11 -DWIN32 -D_WIN32
+    CFLAGS     = -O2 -Wall -std=c++11 -DWIN32 -D_WIN32
     LDFLAGS    = -lgmp -lm -mconsole
 else
-    CC         = gcc
+    CC         = g++
     PKG_CONFIG = pkg-config
     BUILDDIR   = build/linux
     EXE        = $(BUILDDIR)/basic
-    CFLAGS     = -O2 -Wall -std=c11
+    CFLAGS     = -O2 -Wall -std=c++11
     LDFLAGS    = -lgmp -lm
 endif
 
@@ -26,12 +26,12 @@ SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
 SDL_LIBS   := $(shell $(PKG_CONFIG) --libs   sdl2 2>/dev/null)
 
 ifneq ($(SDL_LIBS),)
-    CFLAGS    += $(SDL_CFLAGS) -DHAVE_SDL
+    CFLAGS    += $(SDL_CFLAGS) -DHAVE_SDL -fpermissive
     LDFLAGS   += $(SDL_LIBS)
-    SOUND_SRC  = sound_sdl.c
+    SOUND_SRC  = sound_sdl.cpp
     $(info SDL2 found — building with audio support)
 else
-    SOUND_SRC  = sound_null.c
+    SOUND_SRC  = sound_null.cpp
     $(info SDL2 not found — building without audio support)
 endif
 
@@ -51,8 +51,8 @@ endif
 # --------------------------------------------------------------------
 # SOURCES → per-target object paths
 # --------------------------------------------------------------------
-SRCS = main.c vars.c expr.c program.c commands.c display_ansi.c basic_print.c $(SOUND_SRC)
-OBJS = $(patsubst %.c,$(BUILDDIR)/%.o,$(SRCS))
+SRCS = main.cpp vars.cpp expr.cpp program.cpp commands.cpp display_ansi.cpp basic_print.cpp $(SOUND_SRC)
+OBJS = $(patsubst %.cpp,$(BUILDDIR)/%.o,$(SRCS))
 
 # --------------------------------------------------------------------
 # BUILD TARGETS
@@ -77,7 +77,7 @@ embed:
 # --------------------------------------------------------------------
 # OBJECT RULES
 # --------------------------------------------------------------------
-$(BUILDDIR)/%.o: %.c basic.h display.h sound.h $(GENERATED_HEADERS)
+$(BUILDDIR)/%.o: %.cpp basic.h display.h sound.h $(GENERATED_HEADERS)
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 

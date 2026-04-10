@@ -6,6 +6,8 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+BASIC_NS_BEGIN
+
 
 /* ================================================================
  * Global state
@@ -94,3 +96,5 @@ char **arr_str_elem(Var *v, int i, int j) {
     }
     return &v->arr_str[idx];
 }
+
+BASIC_NS_END

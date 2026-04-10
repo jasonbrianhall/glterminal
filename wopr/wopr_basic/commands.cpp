@@ -7,6 +7,8 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+BASIC_NS_BEGIN
+
 /* ================================================================
  * PRINT USING formatter
  * ================================================================ */
@@ -960,11 +962,11 @@ static int cmd_dim(Interp *ip, const char *args) {
             if (total > MAX_ARRAY_SIZE) { basic_stderr("Array too large: %d\n", total); total = MAX_ARRAY_SIZE; }
             if (var_is_str_name(name)) {
                 v->kind = VAR_ARRAY_STR; v->dim[0] = dim1; v->dim[1] = dim2; v->ndim = ndim;
-                v->arr_str = calloc(total, sizeof(char *));
+                v->arr_str = (char **)calloc(total, sizeof(char *));
                 for (int i = 0; i < total; i++) v->arr_str[i] = str_dup("");
             } else {
                 v->kind = VAR_ARRAY_NUM; v->dim[0] = dim1; v->dim[1] = dim2; v->ndim = ndim;
-                v->arr_num = calloc(total, sizeof(mpf_t));
+                v->arr_num = (mpf_t *)calloc(total, sizeof(mpf_t));
                 for (int i = 0; i < total; i++) { mpf_init2(v->arr_num[i], g_prec); mpf_set_ui(v->arr_num[i], 0); }
             }
         }
@@ -973,16 +975,16 @@ static int cmd_dim(Interp *ip, const char *args) {
         if (kw_match(p, "AS")) {
             p = sk(p + 2);
             /* read the type name */
-            char typename[MAX_VARNAME]; int tni = 0;
+            char type_name[MAX_VARNAME]; int tni = 0;
             while ((isalnum((unsigned char)*p) || *p == '_') && tni < MAX_VARNAME - 1)
-                typename[tni++] = (char)toupper((unsigned char)*p++);
-            typename[tni] = '\0';
+                type_name[tni++] = (char)toupper((unsigned char)*p++);
+            type_name[tni] = '\0';
             p = sk(p);
             if (*p == '*') { p = sk(p + 1); while (isdigit((unsigned char)*p)) p++; }
             p = sk(p);
 
             /* If it's a user-defined TYPE, create flat field variables */
-            TypeDef *td = typedef_find(typename);
+            TypeDef *td = typedef_find(type_name);
             if (td) {
                 /* Determine the array size (if any) for this var */
                 int arr_count = 1, arr_base = g_option_base;
@@ -2105,3 +2107,5 @@ int dispatch_multi(Interp *ip, const char *clause) {
     free(buf);
     return jumped;
 }
+
+BASIC_NS_END

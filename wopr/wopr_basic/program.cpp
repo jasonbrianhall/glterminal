@@ -7,6 +7,8 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+BASIC_NS_BEGIN
+
 /* ================================================================
  * Global state
  * ================================================================ */
@@ -547,3 +549,5 @@ void load_program(const char *filename) {
     prescan_data();
     printf("Loaded %s (%d lines)\n", path, g_nlines);
 }
+
+BASIC_NS_END

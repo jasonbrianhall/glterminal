@@ -7,13 +7,20 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+BASIC_NS_BEGIN
+
 /* ================================================================
  * Global state
  * ================================================================ */
 mp_bitcnt_t g_prec       = DEFAULT_PREC;
 int         g_option_base = 0;
 
+#if !defined(WOPR) && !defined(FELIX_BASIC)
+/* Standalone: g_break lives in the namespace */
 volatile sig_atomic_t g_break  = 0;
+#endif
+/* Hosted builds: g_break is a macro (basic_ns.h) expanding to ::BASIC_BREAK_SYM,
+ * the C-linkage global defined in main.cpp — no definition needed here. */
 int                   g_cont_pc = -1;
 
 /* ON ERROR GOTO handler state */
@@ -1267,3 +1274,5 @@ const char *eval_expr(const char *s, mpf_t result) {
     parse_expr_p(&ps, result);
     return ps.p;
 }
+
+BASIC_NS_END

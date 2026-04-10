@@ -1,4 +1,8 @@
 #pragma once
+
+#include "basic_ns.h"
+
+BASIC_NS_BEGIN
 /*
  * sound.h — Audio backend interface for the BASIC interpreter.
  *
@@ -47,3 +51,5 @@ void sound_stop(void);
  *   Xvar$;    execute string variable (passed in as pre-expanded string)
  */
 void sound_play(const char *mml);
+
+BASIC_NS_END

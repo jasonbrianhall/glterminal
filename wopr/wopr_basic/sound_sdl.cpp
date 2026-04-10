@@ -21,6 +21,8 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+BASIC_NS_BEGIN
+
 /* ================================================================
  * Audio parameters
  * ================================================================ */
@@ -338,5 +340,7 @@ void sound_play(const char *mml) {
 
     if (foreground) sound_drain();
 }
+
+BASIC_NS_END
 
 #endif /* HAVE_SDL */

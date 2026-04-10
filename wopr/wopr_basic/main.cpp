@@ -3,9 +3,13 @@
  *           and program entry point.
  */
 #include "basic.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #include <ctype.h>
+
+
+
 static char *strcasestr(const char *haystack, const char *needle) {
     if (!*needle) return (char *)haystack;
     for (; *haystack; haystack++) {
@@ -26,6 +30,30 @@ static char *strcasestr(const char *haystack, const char *needle) {
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
+
+/*
+ * C-linkage storage — defined before the namespace opens.
+ * BASIC_AUTOLOAD_SYM / BASIC_BREAK_SYM expand to the unique C symbol name
+ * for this build variant (e.g. g_autoload_path / g_break for WOPR,
+ * fb_autoload_path / fb_g_break for FELIX_BASIC).
+ * The host binary references these by their plain C names directly.
+ */
+#if defined(WOPR) || defined(FELIX_BASIC)
+extern "C" {
+    char                    BASIC_AUTOLOAD_SYM[512] = {0};
+    volatile sig_atomic_t   BASIC_BREAK_SYM         = 0;
+}
+#endif
+
+BASIC_NS_BEGIN
+
+#if defined(WOPR) || defined(FELIX_BASIC)
+/* g_autoload_path is a reference into the C-linkage buffer so host and
+ * interpreter share the same storage.  g_break is handled by the macro
+ * in basic_ns.h — no namespace-level variable needed. */
+char (&g_autoload_path)[512] = ::BASIC_AUTOLOAD_SYM;
+#endif
+
 
 /* ================================================================
  * SIGINT handler — sets g_break so the run loop can stop cleanly
@@ -78,7 +106,11 @@ void run_from(int start_pc) {
 /* ================================================================
  * main — direct-run or interactive REPL
  * ================================================================ */
-int main(int argc, char **argv) {
+#if defined(WOPR) || defined(FELIX_BASIC)
+int basic_main(void) {
+#else
+int basic_main(int argc, char **argv) {
+#endif
     g_prec = DEFAULT_PREC;
     mpf_set_default_prec(g_prec);
     srand((unsigned)time(NULL));
@@ -87,6 +119,7 @@ int main(int argc, char **argv) {
 
     /* Direct run mode: ./basic program.bas [precision_bits] */
 #ifndef INLINEBASIC
+#if !defined(WOPR) && !defined(FELIX_BASIC)
     if (argc >= 2) {
         if (argc >= 3) g_prec = (mp_bitcnt_t)atoi(argv[2]);
         load(argv[1]);
@@ -95,6 +128,7 @@ int main(int argc, char **argv) {
         display_shutdown();
         return 0;
     }
+#endif
 #else
 char tmpfile_path[512];
 
@@ -134,6 +168,17 @@ prescan_data();
 run();
 display_shutdown();
 return 0;
+#endif
+
+#if defined(WOPR) || defined(FELIX_BASIC)
+    /* Auto-load a file if one was set before the thread started */
+    if (g_autoload_path[0]) {
+        load_program(g_autoload_path);
+        prescan_data();
+        run();
+        display_shutdown();
+        return 0;
+    }
 #endif
 
     /* ----------------------------------------------------------------
@@ -373,3 +418,22 @@ return 0;
     display_shutdown();
     return 0;
 }
+
+BASIC_NS_END
+
+/* ================================================================
+ * C-linkage entry points — outside the namespace.
+ *
+ *  WOPR build:         extern "C" int basic_main(void)
+ *  FELIX_BASIC build:  extern "C" int fb_basic_main(void)
+ *  Standalone:         int main(int argc, char **argv)
+ * ================================================================ */
+#if defined(WOPR) || defined(FELIX_BASIC)
+extern "C" int BASIC_MAIN_CSYM(void) {
+    return BASIC_NS::basic_main();
+}
+#else
+int main(int argc, char **argv) {
+    return BASIC_NS::basic_main(argc, argv);
+}
+#endif
