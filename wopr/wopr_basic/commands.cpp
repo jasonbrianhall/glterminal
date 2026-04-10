@@ -31,8 +31,10 @@ static void print_using(char *fmt, double val) {
 }
 
 /* ================================================================
- * Felix graphics protocol helpers
- * Sends OSC 666 escape sequences:  ESC ] 666 ; <cmd> ESC \
+ * Graphics backend — two compile paths:
+ *
+ *   USE_SDL_WINDOW  → call basic_gfx.h functions directly (SDL pixel buffer)
+ *   (default)       → emit OSC 666 escape sequences to stdout (Felix terminal)
  * ================================================================ */
 
 /* Current screen state — updated by SCREEN, read by graphics cmds */
@@ -41,7 +43,20 @@ int g_screen_width  = 640;
 int g_screen_height = 350;
 int g_back_color    = 1;   /* palette index used by CLS */
 
-/* Immediate commands (screen, palette, play) — take effect on receipt */
+#ifdef USE_SDL_WINDOW
+/* ── SDL direct path ────────────────────────────────────────────────────── */
+#include "basic_gfx.h"
+
+/* No-op shims so the rest of the file compiles unchanged */
+static void felix_send(char *)  {}
+static void felix_sendf(char *, ...) {}
+static void felix_draw(char *)  {}
+static void felix_drawf(char *, ...) {}
+
+#else
+/* ── OSC 666 escape-code path (original Felix terminal protocol) ─────────── */
+#include <unistd.h>
+
 static void felix_send(char *cmd) {
     write(STDOUT_FILENO, "\033]666;", 6);
     write(STDOUT_FILENO, cmd, strlen(cmd));
@@ -50,16 +65,14 @@ static void felix_send(char *cmd) {
 
 static void felix_sendf(char *fmt, ...) {
     char buf[DEFAULT_BUFFER];
-    va_list ap;
-    va_start(ap, fmt);
+    va_list ap; va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     felix_send(buf);
 }
 
-/* Draw commands (circle, line, pset, paint, cls, get, put) are queued and
- * only rendered on the next frame.  The terminal flushes the queue when it
- * receives a 'batch' sequence, so we wrap every draw call in one. */
+/* Draw commands are wrapped in "batch;" so the terminal flushes them
+ * together on the next frame. */
 static void felix_draw(char *cmd) {
     write(STDOUT_FILENO, "\033]666;batch;", 12);
     write(STDOUT_FILENO, cmd, strlen(cmd));
@@ -68,12 +81,12 @@ static void felix_draw(char *cmd) {
 
 static void felix_drawf(char *fmt, ...) {
     char buf[DEFAULT_BUFFER];
-    va_list ap;
-    va_start(ap, fmt);
+    va_list ap; va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     felix_draw(buf);
 }
+#endif /* USE_SDL_WINDOW */
 /* EGA 64-colour palette: index → (r,g,b) in 0-255 range.
  * Gorilla uses PALETTE idx, ega_color where ega_color is a 6-bit EGA value
  * (bits 5-4-3 = RGB high, bits 2-1-0 = rgb low).
@@ -155,13 +168,14 @@ static int cmd_screen(Interp *ip, char *args) {
     eval_expr(p, n);
     int mode = (int)mpf_get_si(n);
     mpf_clear(n);
-    if (mode == 0 && g_screen_mode != 0) {
-        /* Return to text mode: clear graphics layer */
-        felix_draw("cls;0");
-    }
     g_screen_mode = mode;
     screen_dims(mode, &g_screen_width, &g_screen_height);
-    if (mode != 0) felix_sendf("screen;%d", mode);
+#ifdef USE_SDL_WINDOW
+    gfx_screen(mode);   /* allocates / frees the pixel buffer directly */
+#else
+    if (mode == 0) felix_draw("cls;0");
+    else           felix_sendf("screen;%d", mode);
+#endif
     return 0;
 }
 static int cmd_beep(Interp *ip, char *args) {
@@ -356,18 +370,18 @@ static int cmd_cls(Interp *ip, char *args) {
     if (g_screen_mode > 0) {
         int c;
         if (arg >= 0) {
-            /* Explicit argument always wins */
             c = arg;
         } else {
-            /* No arg: use BACKCOLOR BASIC variable, else default */
             c = g_back_color;
             Var *v = var_find("BACKCOLOR");
             if (v && v->kind == VAR_NUM) c = (int)mpf_get_si(v->num);
         }
-        if (c == 0)
-            felix_draw("cls;0");   /* transparent — show terminal through */
-        else
-            felix_drawf("cls;%d", c);
+#ifdef USE_SDL_WINDOW
+        gfx_cls(c);
+#else
+        if (c == 0) felix_draw("cls;0");
+        else        felix_drawf("cls;%d", c);
+#endif
     } else {
         display_cls();
     }
@@ -830,7 +844,11 @@ static int cmd_palette(Interp *ip, char *args) {
     mpf_clears(idx, col, NULL);
     int r, g2, b;
     ega_to_rgb(c, &r, &g2, &b);
+#ifdef USE_SDL_WINDOW
+    gfx_palette(i, r, g2, b);
+#else
     felix_sendf("palette;%d;%d;%d;%d", i, r, g2, b);
+#endif
     return 0;
 }
 
@@ -1402,8 +1420,12 @@ static int cmd_get_graphics(Interp *ip, char *args) {
     read_varname(sk(p), vname);
     Var *v = var_get(vname);
     int id = sprite_id_for(v);
+#ifdef USE_SDL_WINDOW
+    gfx_get(id, (int)x1, (int)y1, (int)x2, (int)y2);
+#else
     felix_drawf("get;%d;%d;%d;%d;%d", id,
                 (int)x1, (int)y1, (int)x2, (int)y2);
+#endif
     return 0;
 }
 
@@ -1421,7 +1443,11 @@ static int cmd_put_graphics(Interp *ip, char *args) {
     char *mode = "pset";
     p = sk(p); if (*p == ',') p = sk(p + 1);
     if (kw_match(p, "XOR"))  mode = "xor";
+#ifdef USE_SDL_WINDOW
+    gfx_put(id, (int)x, (int)y, (strcmp(mode, "xor") == 0) ? 1 : 0);
+#else
     felix_drawf("put;%d;%d;%d;%s", id, (int)x, (int)y, mode);
+#endif
     return 0;
 }
 
@@ -1457,8 +1483,12 @@ static int cmd_circle(Interp *ip, char *args) {
         p = sk(eval_expr(p, tmp));
         mpf_clear(tmp);
     }
+#ifdef USE_SDL_WINDOW
+    gfx_circle((int)x, (int)y, (int)(r + 0.5), color);
+#else
     felix_drawf("circle;%d;%d;%d;%d",
                 (int)x, (int)y, (int)(r + 0.5), color);
+#endif
     return 0;
 }
 
@@ -1485,7 +1515,6 @@ static int cmd_line_gfx(Interp *ip, char *args) {
         color = (int)mpf_get_si(mc); mpf_clear(mc);
     }
 
-    /* optional B or BF suffix */
     char *suffix = "";
     p = sk(p);
     if (*p == ',') {
@@ -1494,8 +1523,14 @@ static int cmd_line_gfx(Interp *ip, char *args) {
         else if (*p == 'B' || *p == 'b') suffix = ";B";
     }
 
+#ifdef USE_SDL_WINDOW
+    if      (strcmp(suffix, ";BF") == 0) gfx_boxfill((int)x1,(int)y1,(int)x2,(int)y2, color);
+    else if (strcmp(suffix, ";B")  == 0) gfx_box    ((int)x1,(int)y1,(int)x2,(int)y2, color);
+    else                                 gfx_line   ((int)x1,(int)y1,(int)x2,(int)y2, color);
+#else
     felix_drawf("line;%d;%d;%d;%d;%d%s",
                 (int)x1, (int)y1, (int)x2, (int)y2, color, suffix);
+#endif
     return 0;
 }
 
@@ -1520,10 +1555,15 @@ static int cmd_paint(Interp *ip, char *args) {
         eval_expr(p, mc);
         border = (int)mpf_get_si(mc); mpf_clear(mc);
     }
+    int bc = (border >= 0) ? border : fill;
+#ifdef USE_SDL_WINDOW
+    gfx_paint((int)x, (int)y, fill, bc);
+#else
     if (border >= 0)
         felix_drawf("paint;%d;%d;%d;%d", (int)x, (int)y, fill, border);
     else
         felix_drawf("paint;%d;%d;%d", (int)x, (int)y, fill);
+#endif
     return 0;
 }
 
@@ -1542,7 +1582,11 @@ static int cmd_pset(Interp *ip, char *args) {
         eval_expr(p, mc);
         color = (int)mpf_get_si(mc); mpf_clear(mc);
     }
+#ifdef USE_SDL_WINDOW
+    gfx_pset((int)x, (int)y, color);
+#else
     felix_drawf("pset;%d;%d;%d", (int)x, (int)y, color);
+#endif
     return 0;
 }
 
