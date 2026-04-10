@@ -484,8 +484,6 @@ static void screen_mode_dims(int mode, int *w, int *h) {
         if (MODES[i].m == mode) { *w = MODES[i].w; *h = MODES[i].h; return; }
 }
 
-extern "C" {
-
 void gfx_screen(int mode) {
     if (mode == 0) {
         s_gfx_active = false;
@@ -663,8 +661,6 @@ void gfx_put(int id, int x, int y, int xor_mode) {
 int gfx_active(void) { return s_gfx_active ? 1 : 0; }
 int gfx_width(void)  { return s_gfx_w; }
 int gfx_height(void) { return s_gfx_h; }
-
-} // extern "C"
 
 // ============================================================================
 // display.h implementation  (replaces display_ansi.cpp)
