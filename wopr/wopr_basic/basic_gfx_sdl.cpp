@@ -67,6 +67,7 @@ static Uint32 s_pal[16] = {
 static inline Uint8 pal_r(int i) { i&=15; return (s_pal[i]>>16)&0xFF; }
 static inline Uint8 pal_g(int i) { i&=15; return (s_pal[i]>> 8)&0xFF; }
 static inline Uint8 pal_b(int i) { i&=15; return (s_pal[i]    )&0xFF; }
+static int s_font_gen;
 
 // ============================================================================
 // SDL globals
@@ -339,19 +340,69 @@ bool gfx_sdl_pump() {
 // ============================================================================
 static void render_text_cell(int row, int col) {
     const Cell &cell = s_grid[row][col];
+    unsigned char ch = (unsigned char)cell.ch;
+
+    if (ch < 0x20)
+        return;
+
     int cx = col * s_cell_w;
     int cy = row * s_cell_h;
 
-    // DO NOT draw background — transparency over graphics
-    // (remove SDL_RenderFillRect entirely)
-
-    if ((unsigned char)cell.ch < 0x20)
-        return;
-
-    const Glyph &g = glyph_get((unsigned char)cell.ch);
+    const Glyph &g = glyph_get(ch);
     if (g.bm.empty())
         return;
 
+    // Cache keyed by (codepoint, font generation)
+    struct Key {
+        int cp;
+        int gen;
+        bool operator==(const Key &o) const {
+            return cp == o.cp && gen == o.gen;
+        }
+    };
+
+    struct KeyHash {
+        size_t operator()(const Key &k) const {
+            return (size_t)k.cp ^ ((size_t)k.gen << 16);
+        }
+    };
+
+    static std::unordered_map<Key, SDL_Texture*, KeyHash> tex_cache;
+
+    Key key{ ch, s_font_gen };
+    SDL_Texture *tex = nullptr;
+
+    auto it = tex_cache.find(key);
+    if (it != tex_cache.end()) {
+        tex = it->second;
+    } else {
+        // Build ARGB texture exactly like pixel renderer
+        tex = SDL_CreateTexture(
+            s_renderer,
+            SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STATIC,
+            g.bm_w,
+            g.bm_h
+        );
+        if (!tex) return;
+
+        std::vector<Uint32> argb((size_t)(g.bm_w * g.bm_h));
+
+        Uint32 fgcol = s_pal[cell.fg & 15]; // ARGB from palette
+
+        for (int i = 0; i < g.bm_w * g.bm_h; i++) {
+            Uint8 a = g.bm[i];
+            // ARGB: palette RGB, glyph alpha
+            argb[i] = (fgcol & 0x00FFFFFFu) | ((Uint32)a << 24);
+        }
+
+        SDL_UpdateTexture(tex, nullptr, argb.data(), g.bm_w * 4);
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+
+        tex_cache[key] = tex;
+    }
+
+    // Baseline alignment
     int ascender = s_ft_face
         ? (int)(s_ft_face->size->metrics.ascender >> 6)
         : s_cell_h - 2;
@@ -359,20 +410,10 @@ static void render_text_cell(int row, int col) {
     int gx = cx + g.bearing_x;
     int gy = cy + ascender - g.bearing_y;
 
-    Uint8 fr = pal_r(cell.fg);
-    Uint8 fg2 = pal_g(cell.fg);
-    Uint8 fb = pal_b(cell.fg);
-
-    for (int py = 0; py < g.bm_h; py++) {
-        for (int px = 0; px < g.bm_w; px++) {
-            Uint8 a = g.bm[(size_t)(py * g.bm_w + px)];
-            if (!a) continue;
-
-            SDL_SetRenderDrawColor(s_renderer, fr, fg2, fb, a);
-            SDL_RenderDrawPoint(s_renderer, gx + px, gy + py);
-        }
-    }
+    SDL_Rect dst = { gx, gy, g.bm_w, g.bm_h };
+    SDL_RenderCopy(s_renderer, tex, nullptr, &dst);
 }
+
 
 
 void gfx_sdl_render() {
