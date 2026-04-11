@@ -545,15 +545,28 @@ void gfx_palette(int idx, int r, int g, int b) {
 }
 
 void gfx_cls(int color) {
+    // 1. Clear graphics buffer if active
     if (s_gfx_active) {
-        std::fill(s_pixels.begin(), s_pixels.end(), s_pal[color & 15] | 0xFF000000u);
-    } else {
-        for (auto &row : s_grid)
-            for (auto &c : row) c = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
-        s_cur_row = s_cur_col = 0;
+        std::fill(s_pixels.begin(), s_pixels.end(),
+                  s_pal[color & 15] | 0xFF000000u);
     }
+
+    // 2. Clear text grid to the same background colour
+    for (int r = 0; r < TEXT_ROWS; r++) {
+        for (int c = 0; c < s_text_cols; c++) {
+            s_grid[r][c] = { ' ', (Uint8)s_cur_fg, (Uint8)(color & 15) };
+        }
+    }
+
+    // 3. Reset cursor and visibility
+    s_cur_row    = 0;
+    s_cur_col    = 0;
+    s_cursor_vis = true;
+
+    // 4. Mark dirty so it actually redraws
     s_needs_render = true;
 }
+
 
 void gfx_pset(int x, int y, int color) {
     px_set(x, y, color);
