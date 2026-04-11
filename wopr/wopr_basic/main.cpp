@@ -39,7 +39,7 @@ static char *strcasestr(char *haystack, char *needle) {
  * The host binary references these by their plain C names directly.
  */
 #if defined(WOPR) || defined(FELIX_BASIC)
-    char                    BASIC_AUTOLOAD_SYM[512] = {0};
+    char                    BASIC_AUTOLOAD_SYM[DEFAULT_BUFFER] = {0};
     volatile sig_atomic_t   BASIC_BREAK_SYM         = 0;
 #endif
 
@@ -49,7 +49,7 @@ BASIC_NS_BEGIN
 /* g_autoload_path is a reference into the C-linkage buffer so host and
  * interpreter share the same storage.  g_break is handled by the macro
  * in basic_ns.h — no namespace-level variable needed. */
-char (&g_autoload_path)[512] = ::BASIC_AUTOLOAD_SYM;
+char (&g_autoload_path)[DEFAULT_BUFFER] = ::BASIC_AUTOLOAD_SYM;
 #endif
 
 
@@ -128,7 +128,7 @@ int basic_main(int argc, char **argv) {
     }
 #endif
 #else
-char tmpfile_path[512];
+char tmpfile_path[DEFAULT_BUFFER];
 
 #ifdef _WIN32
     // Windows: use GetTempPath + GetTempFileName
@@ -205,7 +205,7 @@ return 0;
     display_print("WOPR BASIC\n");
     display_print("Type NEW, LOAD, RUN, LIST, FILES, HELP, or SYSTEM to exit.\n\n");
 
-    char line[512];
+    char line[DEFAULT_BUFFER];
     for (;;) {
         display_print("Ok\n");
         display_cursor(1);
@@ -246,27 +246,27 @@ return 0;
 
         } else if (strncasecmp(p,"KILL",4)==0 && !isalnum((unsigned char)p[4])) {
             p += 4;
-            char name[256]; PARSE_FILENAME(name, p);
-            char path[512]; BAS_EXT(path, name);
+            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            char path[DEFAULT_BUFFER]; BAS_EXT(path, name);
             if (remove(path) == 0) printf("Deleted %s\n", path); else perror(path);
 
         } else if (strncasecmp(p,"RENAME",6)==0 && !isalnum((unsigned char)p[6])) {
             p += 6;
-            char old[256], neo[256];
+            char old[DEFAULT_BUFFER], neo[DEFAULT_BUFFER];
             PARSE_FILENAME(old, p); p = sk(p); if (*p==',') p++;
             PARSE_FILENAME(neo, p);
-            char op[512], np[512]; BAS_EXT(op,old); BAS_EXT(np,neo);
+            char op[DEFAULT_BUFFER], np[DEFAULT_BUFFER]; BAS_EXT(op,old); BAS_EXT(np,neo);
             if (rename(op, np) == 0) printf("Renamed %s -> %s\n", op, np); else perror(op);
 
         } else if (strncasecmp(p,"CHDIR",5)==0 || strncasecmp(p,"CD",2)==0) {
             p += strncasecmp(p,"CHDIR",5)==0 ? 5 : 2;
-            char name[256]; PARSE_FILENAME(name, p);
-            if (!*name) { char cwd[512]; if(getcwd(cwd,sizeof cwd)) printf("%s\n",cwd); }
+            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            if (!*name) { char cwd[DEFAULT_BUFFER]; if(getcwd(cwd,sizeof cwd)) printf("%s\n",cwd); }
             else if (chdir(name)!=0) perror(name);
-            else { char cwd[512]; if(getcwd(cwd,sizeof cwd)) printf("%s\n",cwd); }
+            else { char cwd[DEFAULT_BUFFER]; if(getcwd(cwd,sizeof cwd)) printf("%s\n",cwd); }
 
         } else if (strncasecmp(p,"MKDIR",5)==0 && !isalnum((unsigned char)p[5])) {
-            p += 5; char name[256]; PARSE_FILENAME(name, p);
+            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
             if (
 #ifdef _WIN32
                 mkdir(name)
@@ -276,16 +276,16 @@ return 0;
                 != 0) perror(name); else printf("Created %s\n", name);
 
         } else if (strncasecmp(p,"RMDIR",5)==0 && !isalnum((unsigned char)p[5])) {
-            p += 5; char name[256]; PARSE_FILENAME(name, p);
+            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
             if (rmdir(name)!=0) perror(name); else printf("Removed %s\n", name);
 
         } else if (strncasecmp(p,"LOAD",4)==0 && !isalnum((unsigned char)p[4])) {
-            p += 4; char name[256]; PARSE_FILENAME(name, p);
+            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
             if (!*name) { display_print("Usage: LOAD \"filename\"\n"); continue; }
             load_program(name);
 
         } else if (strncasecmp(p,"SAVE",4)==0 && !isalnum((unsigned char)p[4])) {
-            p += 4; char name[256]; PARSE_FILENAME(name, p);
+            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
             if (!*name) { display_print("Usage: SAVE \"filename\"\n"); continue; }
             save_program(name);
 

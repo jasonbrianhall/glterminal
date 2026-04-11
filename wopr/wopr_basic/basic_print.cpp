@@ -7,8 +7,12 @@
 #include <setjmp.h>
 #include <SDL2/SDL.h>
 #include "basic_print.h"
+#ifdef USE_SDL_WINDOW
+#include "display.h"
+#endif
 
 #ifdef WOPR
+#include "basic.h"
 #include "../wopr.h"
 BASIC_NS_BEGIN
 
@@ -56,7 +60,7 @@ void wopr_basic_push_line(char *line);
 void wopr_basic_signal_done(void);
 #endif
 
-char          basic_input_buf[512];
+char          basic_input_buf[DEFAULT_BUFFER];
 int           basic_input_ready         = 0;
 int           g_basic_game_over         = 0;
 int           g_basic_waiting_input     = 0;
@@ -239,6 +243,10 @@ int basic_printf(char *fmt, ...)
     va_end(ap);
 #if defined(WOPR) || defined(FELIX_BASIC)
     wopr_basic_push_line(buf);
+#elif defined(USE_SDL_WINDOW)
+    /* Route all output through the SDL text grid via display_print.
+     * display.h is included transitively via basic.h / basic_print.h. */
+    display_print(buf);
 #else
     fputs(buf, stdout);
     fflush(stdout);

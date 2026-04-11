@@ -471,7 +471,7 @@ void prescan_data(void) {
         p = sk(p + 4);
         while (*p) {
             p = sk(p);
-            char item[512]; int i = 0;
+            char item[DEFAULT_BUFFER]; int i = 0;
             if (*p == '"') {
                 p++;
                 while (*p && *p != '"' && i < (int)sizeof(item) - 1) item[i++] = *p++;
@@ -511,7 +511,7 @@ void clear_program(void) {
  * save_program — write g_lines[] back out as a numbered .bas file
  * ================================================================ */
 void save_program(char *filename) {
-    char path[512];
+    char path[DEFAULT_BUFFER];
     if (strchr(filename, '.'))
         snprintf(path, sizeof path, "%s", filename);
     else
@@ -538,7 +538,7 @@ void save_program(char *filename) {
  * load_program — clear state and load a .bas file
  * ================================================================ */
 void load_program(char *filename) {
-    char path[512];
+    char path[DEFAULT_BUFFER];
     if (strchr(filename, '.'))
         snprintf(path, sizeof path, "%s", filename);
     else

@@ -5,7 +5,7 @@
 #include <SDL2/SDL.h>
 
 #include "basic_ns.h"
-
+#include "basic.h"
 BASIC_NS_BEGIN
 
 /* ============================================================================
@@ -25,7 +25,7 @@ void wopr_basic_post_key(char c);
 int  wopr_basic_get_key(void);   /* returns -1 if empty, else char */
 
 /* Input state */
-extern char     basic_input_buf[512];
+extern char     basic_input_buf[DEFAULT_BUFFER];
 extern int      basic_input_ready;
 extern int      g_basic_game_over;
 extern int      g_basic_waiting_input;

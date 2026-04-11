@@ -260,7 +260,7 @@ static char *eval_str_primary(char *p, char *buf, int bufsz) {
     if (kw_match(p, "ENV$")) {
         p = sk(p + 4);
         if (*p == '(') p = sk(p + 1);
-        char varname[256];
+        char varname[DEFAULT_BUFFER];
         p = sk(eval_str_expr(p, varname, sizeof varname));
         if (*p == ')') p++;
         char *val = getenv(varname);
@@ -931,7 +931,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     /* VAL(str$) */
     if (kw_match(ps->p, "VAL")) {
         ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
-        char sbuf[256];
+        char sbuf[DEFAULT_BUFFER];
         ps->p = eval_str_expr(ps->p, sbuf, sizeof sbuf);
         mpf_set_d(result, atof(sbuf));
         skip_ws_p(ps); if (*ps->p == ')') ps->p++;
@@ -941,7 +941,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     /* ASC(str$) */
     if (kw_match(ps->p, "ASC")) {
         ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
-        char sbuf[256];
+        char sbuf[DEFAULT_BUFFER];
         ps->p = eval_str_expr(ps->p, sbuf, sizeof sbuf);
         mpf_set_si(result, (unsigned char)sbuf[0]);
         skip_ws_p(ps); if (*ps->p == ')') ps->p++;
@@ -951,7 +951,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     /* LEN(str$) */
     if (kw_match(ps->p, "LEN")) {
         ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
-        char sbuf[256];
+        char sbuf[DEFAULT_BUFFER];
         ps->p = eval_str_expr(ps->p, sbuf, sizeof sbuf);
         mpf_set_si(result, (long)strlen(sbuf));
         skip_ws_p(ps); if (*ps->p == ')') ps->p++;
@@ -1001,7 +1001,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
             else             ps->p = save;
             mpf_clear(s);
         }
-        char hay[1024], needle[256];
+        char hay[1024], needle[DEFAULT_BUFFER];
         ps->p = (char*)sk(eval_str_expr(ps->p, hay, sizeof hay));
         if (*ps->p == ',') ps->p++;
         ps->p = (char*)sk(eval_str_expr(sk(ps->p), needle, sizeof needle));

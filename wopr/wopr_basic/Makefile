@@ -36,6 +36,12 @@ else
 endif
 
 # --------------------------------------------------------------------
+# FreeType autodetection (required for the SDL window build only)
+# --------------------------------------------------------------------
+FT_CFLAGS := $(shell $(PKG_CONFIG) --cflags freetype2 2>/dev/null)
+FT_LIBS   := $(shell $(PKG_CONFIG) --libs   freetype2 2>/dev/null)
+
+# --------------------------------------------------------------------
 # INLINE BASIC EMBEDDING
 # --------------------------------------------------------------------
 ifdef INLINEBASIC
@@ -54,10 +60,14 @@ endif
 SRCS = main.cpp vars.cpp expr.cpp program.cpp commands.cpp display_ansi.cpp basic_print.cpp $(SOUND_SRC)
 OBJS = $(patsubst %.cpp,$(BUILDDIR)/%.o,$(SRCS))
 
+# SDL window build uses basic_gfx_sdl.cpp instead of display_ansi.cpp
+SDL_WIN_SRCS = main.cpp vars.cpp expr.cpp program.cpp commands.cpp basic_gfx_sdl.cpp basic_print.cpp $(SOUND_SRC)
+SDL_WIN_OBJS = $(patsubst %.cpp,$(BUILDDIR)/sdlwin/%.o,$(SDL_WIN_SRCS))
+
 # --------------------------------------------------------------------
 # BUILD TARGETS
 # --------------------------------------------------------------------
-.PHONY: all linux windows clean embed
+.PHONY: all linux windows sdlwindow clean embed
 
 all: linux
 
@@ -66,6 +76,21 @@ linux:
 
 windows:
 	$(MAKE) build/windows/basic.exe TARGET=windows
+
+# SDL window build — direct SDL2 rendering, no OSC escape codes
+# Requires SDL2 + FreeType.  Output: build/linux/basic_sdlwin
+sdlwindow:
+ifeq ($(FT_LIBS),)
+	$(error FreeType not found — install libfreetype6-dev)
+endif
+ifeq ($(SDL_LIBS),)
+	$(error SDL2 not found — install libsdl2-dev)
+endif
+	$(MAKE) build/linux/basic_sdlwin TARGET=sdlwindow
+
+build/linux/basic_sdlwin: $(SDL_WIN_OBJS)
+	@mkdir -p build/linux
+	$(CC) $(CFLAGS) -DUSE_SDL_WINDOW $(FT_CFLAGS) -o $@ $(SDL_WIN_OBJS) $(LDFLAGS) $(FT_LIBS)
 
 $(EXE): $(GENERATED_HEADERS) $(OBJS)
 	@mkdir -p $(BUILDDIR)
@@ -80,6 +105,11 @@ embed:
 $(BUILDDIR)/%.o: %.cpp basic.h display.h sound.h $(GENERATED_HEADERS)
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+# SDL window objects — compiled with USE_SDL_WINDOW + FreeType flags
+$(BUILDDIR)/sdlwin/%.o: %.cpp basic.h display.h sound.h basic_gfx.h basic_gfx_sdl.h $(GENERATED_HEADERS)
+	@mkdir -p $(BUILDDIR)/sdlwin
+	$(CC) $(CFLAGS) -DUSE_SDL_WINDOW $(FT_CFLAGS) -c -o $@ $<
 
 # --------------------------------------------------------------------
 # CLEAN

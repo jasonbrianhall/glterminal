@@ -31,7 +31,8 @@ BASIC_NS_BEGIN
 /* ================================================================
  * Configuration constants
  * ================================================================ */
-#define DEFAULT_PREC     512
+#define DEFAULT_PREC     128
+#define DEFAULT_BUFFER  4096
 #define PRINT_DIGITS      60
 #define MAX_VARS         512
 #define MAX_VARNAME       64
