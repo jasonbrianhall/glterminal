@@ -17,7 +17,6 @@
 #include <windows.h>
 #include <ctype.h>
 
-
 static char *strcasestr(char *haystack, char *needle) {
     if (!*needle) return (char *)haystack;
     for (; *haystack; haystack++) {
@@ -101,7 +100,7 @@ void run_from(int start_pc) {
         // Pump SDL events every iteration
         if (!gfx_sdl_pump())
             break;
-
+        gfx_maybe_mark_dirty();
         // Render at ~60 FPS
         Uint32 now = SDL_GetTicks();
         if (now - last_frame >= 16) {

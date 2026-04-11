@@ -75,6 +75,7 @@ static SDL_Window   *s_window   = nullptr;
 static SDL_Renderer *s_renderer = nullptr;
 static bool          s_needs_render = true;
 static int           s_win_w = 800, s_win_h = 600;
+static Uint32        s_last_dirty = 0;
 
 // ============================================================================
 // Graphics surface
@@ -155,6 +156,14 @@ static std::vector<Uint8> b64_decode(const char *src, size_t len) {
 
 // Kept alive for FT_New_Memory_Face
 static std::vector<Uint8> s_font_data;
+
+void gfx_maybe_mark_dirty() {
+    Uint32 now = SDL_GetTicks();
+    if (now - s_last_dirty >= 16) {   // ~60 FPS
+        s_needs_render = true;
+        s_last_dirty = now;
+    }
+}
 
 static void ft_set_size_for_window() {
     if (!s_ft_face) return;
@@ -448,8 +457,8 @@ void gfx_sdl_mark_dirty() { s_needs_render = true; }
 static inline void px_set(int x, int y, int color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
     s_pixels[(size_t)(y * s_gfx_w + x)] = s_pal[color & 15] | 0xFF000000u;
-    s_needs_render = true;
 }
+
 static inline Uint32 px_get(int x, int y) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return 0;
     return s_pixels[(size_t)(y * s_gfx_w + x)];
