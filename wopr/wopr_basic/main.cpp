@@ -88,6 +88,8 @@ void run(void) { run_from(0); }
 void run_from(int start_pc) {
     g_break = 0;
     Interp ip = { .pc = start_pc, .running = 1 };
+    sound_init();
+
 
 #ifdef USE_SDL_WINDOW
     // ------------------------------------------------------------
