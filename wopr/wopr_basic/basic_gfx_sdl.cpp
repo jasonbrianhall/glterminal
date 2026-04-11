@@ -333,80 +333,112 @@ static void render_text_cell(int row, int col) {
     int cx = col * s_cell_w;
     int cy = row * s_cell_h;
 
-    // Background quad
-    SDL_Rect bg = { cx, cy, s_cell_w, s_cell_h };
-    SDL_SetRenderDrawColor(s_renderer, pal_r(cell.bg), pal_g(cell.bg), pal_b(cell.bg), 255);
-    SDL_RenderFillRect(s_renderer, &bg);
+    // DO NOT draw background — transparency over graphics
+    // (remove SDL_RenderFillRect entirely)
 
-    if ((unsigned char)cell.ch < 0x20) return;
+    if ((unsigned char)cell.ch < 0x20)
+        return;
 
     const Glyph &g = glyph_get((unsigned char)cell.ch);
-    if (g.bm.empty()) return;
+    if (g.bm.empty())
+        return;
 
-    // Use FreeType ascender for a stable baseline across all glyphs
-    int ascender = s_ft_face ? (int)(s_ft_face->size->metrics.ascender >> 6) : s_cell_h - 2;
+    int ascender = s_ft_face
+        ? (int)(s_ft_face->size->metrics.ascender >> 6)
+        : s_cell_h - 2;
+
     int gx = cx + g.bearing_x;
     int gy = cy + ascender - g.bearing_y;
 
-    Uint8 fr = pal_r(cell.fg), fg2 = pal_g(cell.fg), fb = pal_b(cell.fg);
+    Uint8 fr = pal_r(cell.fg);
+    Uint8 fg2 = pal_g(cell.fg);
+    Uint8 fb = pal_b(cell.fg);
+
     for (int py = 0; py < g.bm_h; py++) {
         for (int px = 0; px < g.bm_w; px++) {
             Uint8 a = g.bm[(size_t)(py * g.bm_w + px)];
             if (!a) continue;
+
             SDL_SetRenderDrawColor(s_renderer, fr, fg2, fb, a);
             SDL_RenderDrawPoint(s_renderer, gx + px, gy + py);
         }
     }
 }
 
+
 void gfx_sdl_render() {
     if (!s_needs_render) return;
     s_needs_render = false;
 
+    // Clear full window
     SDL_SetRenderDrawColor(s_renderer, 0, 0, 0, 255);
     SDL_RenderClear(s_renderer);
 
+    //
+    // 1. Draw graphics framebuffer (if active)
+    //
     if (s_gfx_active && s_gfx_tex) {
+        // Always reset viewport before drawing graphics
+        SDL_RenderSetViewport(s_renderer, nullptr);
+
         SDL_UpdateTexture(s_gfx_tex, nullptr, s_pixels.data(), s_gfx_w * 4);
-        // Letterbox into window
+
+        // Scale graphics to fit window (letterbox only graphics)
         float sx = (float)s_win_w / s_gfx_w;
         float sy = (float)s_win_h / s_gfx_h;
         float scale = std::min(sx, sy);
         int dw = (int)(s_gfx_w * scale);
         int dh = (int)(s_gfx_h * scale);
-        SDL_Rect dst = { (s_win_w - dw) / 2, (s_win_h - dh) / 2, dw, dh };
+
+        SDL_Rect dst = {
+            (s_win_w - dw) / 2,
+            (s_win_h - dh) / 2,
+            dw,
+            dh
+        };
+
         SDL_RenderCopy(s_renderer, s_gfx_tex, nullptr, &dst);
-    } else {
-        // Text mode — padded and centred in window
-        int tw = s_text_cols * s_cell_w;
-        int th = TEXT_ROWS   * s_cell_h;
-        int ox = (s_win_w - tw) / 2;
-        int oy = (s_win_h - th) / 2;
-        if (ox < TEXT_PAD) ox = TEXT_PAD;
-        if (oy < TEXT_PAD) oy = TEXT_PAD;
-
-        SDL_Rect vp = { ox, oy, tw, th };
-        SDL_RenderSetViewport(s_renderer, &vp);
-        SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
-
-        for (int r = 0; r < TEXT_ROWS; r++)
-            for (int c = 0; c < s_text_cols; c++)
-                render_text_cell(r, c);
-
-        // Cursor — solid block at current position
-        if (s_cursor_vis && s_cur_row < TEXT_ROWS && s_cur_col < s_text_cols) {
-            int cx = s_cur_col * s_cell_w;
-            int cy = s_cur_row * s_cell_h + s_cell_h - 3;
-            SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_NONE);
-            SDL_SetRenderDrawColor(s_renderer, 200, 200, 200, 255);
-            SDL_RenderDrawLine(s_renderer, cx, cy, cx + s_cell_w - 1, cy);
-            SDL_RenderDrawLine(s_renderer, cx, cy+1, cx + s_cell_w - 1, cy+1);
-        }
-        SDL_RenderSetViewport(s_renderer, nullptr);
     }
 
+    //
+    // 2. Draw text grid overlay (ALWAYS, even in graphics modes)
+    //
+    // QBASIC draws text at the top-left, never centered.
+    //
+    SDL_Rect vp = { 0, 0, s_text_cols * s_cell_w, TEXT_ROWS * s_cell_h };
+    SDL_RenderSetViewport(s_renderer, &vp);
+    SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
+
+    for (int r = 0; r < TEXT_ROWS; r++)
+        for (int c = 0; c < s_text_cols; c++)
+            render_text_cell(r, c);
+
+    //
+    // 3. Draw cursor (in ALL modes)
+    //
+    if (s_cursor_vis &&
+        s_cur_row < TEXT_ROWS &&
+        s_cur_col < s_text_cols)
+    {
+        int cx = s_cur_col * s_cell_w;
+        int cy = s_cur_row * s_cell_h + s_cell_h - 3;
+
+        SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(s_renderer, 200, 200, 200, 255);
+
+        SDL_RenderDrawLine(s_renderer, cx, cy, cx + s_cell_w - 1, cy);
+        SDL_RenderDrawLine(s_renderer, cx, cy + 1, cx + s_cell_w - 1, cy + 1);
+    }
+
+    // Reset viewport back to full window
+    SDL_RenderSetViewport(s_renderer, nullptr);
+
+    //
+    // 4. Present final composed frame
+    //
     SDL_RenderPresent(s_renderer);
 }
+
 
 void gfx_sdl_mark_dirty() { s_needs_render = true; }
 
