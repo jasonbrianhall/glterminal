@@ -190,6 +190,7 @@ static void ft_set_size_for_window() {
     if (adv > 0) s_cell_w = adv;
     if (ht  > 0) s_cell_h = ht;
     s_glyph_cache.clear();
+    s_font_gen++;
 }
 
 static void ft_init() {
