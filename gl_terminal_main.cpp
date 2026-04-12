@@ -1391,9 +1391,12 @@ int main(int argc, char **argv) {
         // buffer always gets the composited frame presented on both back and front buffers.
         if (s_dl_dirty || s_basic_has_content) needs_render = true;
 
+        // SDL mode draws directly to the screen (no persistent FBO), so every
+        // frame must redraw — otherwise the double-buffer swap shows a blank buffer.
+        if (g_use_sdl_renderer) needs_render = true;
+
         // Any visible overlay must be redrawn every frame so both buffers of the
-        // SDL/GL double-buffer swap chain contain it.  Without this, closing one
-        // overlay and opening another leaves the old one visible on the stale buffer.
+        // SDL/GL double-buffer swap chain contain it.
         if (g_menu.visible || g_help_visible || g_iv.visible || g_wopr.visible
 #ifdef USESSH
             || g_sftp.visible || g_sftp_console_visible || g_pf_overlay.visible
@@ -1403,7 +1406,9 @@ int main(int argc, char **argv) {
         if (needs_render) {
             // Only re-render the terminal FBO if at least one row is dirty,
             // OR if basic_graphics has commands waiting.
-            bool any_dirty = term.all_dirty || s_dl_dirty;
+            // In SDL mode, glyphs aren't cached in s_term_tex so we must always
+            // re-queue them — treat every frame as dirty when using SDL renderer.
+            bool any_dirty = term.all_dirty || s_dl_dirty || g_use_sdl_renderer;
             if (!any_dirty) {
                 for (int r = 0; r < term.rows && !any_dirty; r++)
                     any_dirty = term.dirty_rows[r] != 0;
@@ -1413,7 +1418,11 @@ int main(int argc, char **argv) {
                 float bg_r = THEMES[g_theme_idx].bg_r;
                 float bg_g = THEMES[g_theme_idx].bg_g;
                 float bg_b = THEMES[g_theme_idx].bg_b;
-                if (fbo_needs_clear) {
+                // In SDL mode glyphs aren't cached so we must redraw all rows
+                // every frame. Mark all dirty so term_render redraws everything,
+                // then clear the texture so stale backgrounds don't accumulate.
+                if (g_use_sdl_renderer) term_dirty_all(&term);
+                if (fbo_needs_clear || g_use_sdl_renderer) {
                     gl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
                     fbo_needs_clear = false;
                 }

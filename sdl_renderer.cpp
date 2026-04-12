@@ -179,18 +179,21 @@ void sdl_clear_term_frame(int, int, float bg_r, float bg_g, float bg_b) {
 }
 
 void sdl_end_term_frame(void) {
-    sdl_flush_glyphs();
+    // Flush only solid-colour geometry (backgrounds, cursor) into s_term_tex.
+    // Glyphs are deferred — see sdl_end_frame where they're drawn to the screen
+    // after the composite blit, avoiding the streaming-texture-as-source-while-
+    // texture-is-render-target conflict in SDL's opengl backend.
     sdl_flush_verts();
     SDL_SetRenderTarget(g_sdl_renderer, nullptr);
 }
 
 void sdl_begin_frame(void) {
     s_accum_n = 0;
-    SDL_SetRenderTarget(g_sdl_renderer, s_composite_tex);
+    // Blit s_term_tex (backgrounds only) to screen first
+    SDL_SetRenderTarget(g_sdl_renderer, nullptr);
     SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_sdl_renderer);
     if (s_basic_has_content && s_basic_tex) {
-        // BASIC layer first (background), then term on top with alpha blend
         SDL_SetTextureBlendMode(s_basic_tex, SDL_BLENDMODE_NONE);
         SDL_RenderCopy(g_sdl_renderer, s_basic_tex, nullptr, nullptr);
         SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_BLEND);
@@ -198,8 +201,11 @@ void sdl_begin_frame(void) {
     } else {
         SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_NONE);
         SDL_RenderCopy(g_sdl_renderer, s_term_tex, nullptr, nullptr);
-        SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_BLEND);
     }
+    // Flush deferred terminal glyphs directly to screen (target=nullptr).
+    // This avoids SDL opengl backend's conflict between a STREAMING source
+    // texture and a TARGET render target.
+    sdl_flush_glyphs();
 }
 
 // ============================================================================
@@ -388,19 +394,17 @@ void sdl_end_frame(float time, int win_w, int win_h) {
     SDL_SetRenderTarget(g_sdl_renderer, nullptr);
 
     if (!g_render_mode) {
-        SDL_Rect dst = { 0, 0, win_w, win_h };
-        SDL_SetTextureBlendMode(s_composite_tex, SDL_BLENDMODE_NONE);
-        SDL_RenderCopy(g_sdl_renderer, s_composite_tex, nullptr, &dst);
-        SDL_SetTextureBlendMode(s_composite_tex, SDL_BLENDMODE_BLEND);
+        // Screen already has backgrounds + glyphs from sdl_begin_frame.
+        // Nothing more to do for the normal (no post-process) path.
         return;
     }
 
+    // Post-process: read back the screen, apply effects, write back.
+    // We need to read what sdl_begin_frame drew to the screen.
     int tw = s_tex_w, th = s_tex_h;
     std::vector<uint8_t> buf_a(tw * th * 4), buf_b(tw * th * 4);
 
-    SDL_SetRenderTarget(g_sdl_renderer, s_composite_tex);
     SDL_RenderReadPixels(g_sdl_renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, buf_a.data(), tw * 4);
-    SDL_SetRenderTarget(g_sdl_renderer, nullptr);
 
     uint8_t *src = buf_a.data(), *dst2 = buf_b.data();
 
