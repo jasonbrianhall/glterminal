@@ -292,10 +292,17 @@ return 0;
             while ((de = readdir(d))) {
                 if (de->d_name[0] == '.') continue;
                 char *nm = de->d_name;
-                size_t nl = strlen(nm), fl = strlen(filter);
-                if (fl && (nl < fl || strcasecmp(nm + nl - fl, filter) != 0)) continue;
-                char entry[64]; snprintf(entry, sizeof entry, "  %-20s\n", nm);
-                display_print(entry); count++;
+                struct stat st; bool is_dir = false;
+                if (stat(nm, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = true;
+                if (is_dir) {
+                    char entry[68]; snprintf(entry, sizeof entry, "  %-19s/\n", nm);
+                    display_print(entry); count++;
+                } else {
+                    size_t nl = strlen(nm), fl = strlen(filter);
+                    if (fl && (nl < fl || strcasecmp(nm + nl - fl, filter) != 0)) continue;
+                    char entry[68]; snprintf(entry, sizeof entry, "  %-20s\n", nm);
+                    display_print(entry); count++;
+                }
             }
             closedir(d);
             if (!count) display_print("  (no matching files)\n");
