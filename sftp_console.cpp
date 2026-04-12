@@ -131,6 +131,42 @@ static std::atomic<bool>          s_busy{false};
 static std::atomic<float>         s_progress{0.f};
 static std::string                s_progress_label;
 
+// Thread-safe output queue: worker pushes here, main thread drains into s_lines each frame.
+static std::vector<ConsoleLine>   s_pending;
+static SDL_mutex                 *s_pending_mtx = nullptr;
+
+static void ensure_pending_mtx() {
+    if (!s_pending_mtx) s_pending_mtx = SDL_CreateMutex();
+}
+
+static void pending_push(const char *text, float r, float g, float b) {
+    ensure_pending_mtx();
+    // Split on newlines
+    const char *p = text;
+    const char *nl;
+    SDL_LockMutex(s_pending_mtx);
+    while ((nl = strchr(p, '\n')) != nullptr) {
+        s_pending.push_back({ std::string(p, nl), r, g, b });
+        p = nl + 1;
+    }
+    if (*p) s_pending.push_back({ std::string(p), r, g, b });
+    SDL_UnlockMutex(s_pending_mtx);
+}
+
+// Called from main thread (render / open) to flush pending into s_lines.
+static void drain_pending() {
+    ensure_pending_mtx();
+    SDL_LockMutex(s_pending_mtx);
+    for (auto &ln : s_pending) {
+        s_lines.push_back(std::move(ln));
+        if ((int)s_lines.size() > MAX_SCROLLBACK)
+            s_lines.erase(s_lines.begin());
+    }
+    if (!s_pending.empty()) s_scroll_offset = 0;
+    s_pending.clear();
+    SDL_UnlockMutex(s_pending_mtx);
+}
+
 // ============================================================================
 // ROW HEIGHT  (shared with sftp_overlay style)
 // ============================================================================
@@ -145,10 +181,8 @@ static float con_text(const char *t, float x, float y, float r, float g, float b
 // OUTPUT HELPERS
 // ============================================================================
 
-static void push_line(const char *text, float r = 0.82f, float g = 0.88f, float b = 0.96f) {
-    // Split on newlines so multi-line output renders as separate rows.
-    const char *p = text;
-    const char *nl;
+static void push_line_direct(const char *text, float r, float g, float b) {
+    const char *p = text, *nl;
     while ((nl = strchr(p, '\n')) != nullptr) {
         s_lines.push_back({ std::string(p, nl), r, g, b });
         p = nl + 1;
@@ -156,7 +190,18 @@ static void push_line(const char *text, float r = 0.82f, float g = 0.88f, float 
     if (*p) s_lines.push_back({ std::string(p), r, g, b });
     if ((int)s_lines.size() > MAX_SCROLLBACK)
         s_lines.erase(s_lines.begin(), s_lines.begin() + (s_lines.size() - MAX_SCROLLBACK));
-    s_scroll_offset = 0; // auto-scroll to bottom
+    s_scroll_offset = 0;
+}
+
+static void push_line(const char *text, float r = 0.82f, float g = 0.88f, float b = 0.96f) {
+    // Worker thread → pending queue (drained by main thread in render).
+    // Main thread → direct (cmd_instant, push_cmd, etc.).
+    // We detect which thread we're on by whether s_busy is set; worker always
+    // sets s_busy=true before running, main thread never sets it while calling push_line.
+    if (s_busy.load())
+        pending_push(text, r, g, b);
+    else
+        push_line_direct(text, r, g, b);
 }
 
 static void push_ok  (const char *t) { push_line(t, 0.30f, 1.00f, 0.45f); }
@@ -544,33 +589,10 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
         push_info(buf);
         return true;
     }
-    return false;
-}
 
-// Dispatched on a worker thread — may block on network I/O
-static void cmd_worker(std::vector<std::string> toks) {
-    if (toks.empty()) { s_busy.store(false); return; }
-    const std::string &cmd = toks[0];
+    // ---- SFTP metadata commands — fast, run synchronously on main thread ----
+    if (!console_sftp_init()) { push_err("SFTP subsystem not available"); return true; }
 
-    // ------------------------------------------------------------------ cd
-    if (cmd == "cd") {
-        if (toks.size() < 2) { push_err("usage: cd <path>"); s_busy.store(false); return; }
-        SessionLock lk;
-        LIBSSH2_SESSION *sess = ssh_get_session();
-        libssh2_session_set_blocking(sess, 0);
-        std::string target = remote_abs(toks[1]);
-        // Resolve real path so we always store canonical form
-        std::string real = remote_realpath(target.c_str());
-        if (!remote_is_dir(real.c_str())) {
-            push_err(("cd: not a directory: " + real).c_str());
-        } else {
-            strncpy(s_remote_cwd, real.c_str(), sizeof(s_remote_cwd)-1);
-            push_ok(s_remote_cwd);
-        }
-        s_busy.store(false); return;
-    }
-
-    // ------------------------------------------------------------------ ls
     if (cmd == "ls") {
         bool long_fmt = false;
         std::string path = s_remote_cwd;
@@ -582,6 +604,10 @@ static void cmd_worker(std::vector<std::string> toks) {
         LIBSSH2_SESSION *sess = ssh_get_session();
         libssh2_session_set_blocking(sess, 0);
         auto entries = list_remote_dir(path.c_str());
+        // On first use after open, the SFTP subsystem may need one round-trip
+        // to settle — retry once if we got nothing back from a valid directory.
+        if (entries.empty() && remote_is_dir(path.c_str()))
+            entries = list_remote_dir(path.c_str());
         if (entries.empty() && !remote_is_dir(path.c_str())) {
             push_err(("ls: cannot access " + path).c_str());
         } else {
@@ -598,10 +624,10 @@ static void cmd_worker(std::vector<std::string> toks) {
                         struct tm *tm = gmtime(&e.mtime);
                         strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d %H:%M", tm);
                     } else strcpy(tmbuf, "                ");
-                    char line[1024];
-                    snprintf(line, sizeof(line), "%s  %8s  %s  %s%s",
+                    char line2[1024];
+                    snprintf(line2, sizeof(line2), "%s  %8s  %s  %s%s",
                              perm, sz, tmbuf, e.name.c_str(), e.is_dir ? "/" : "");
-                    push_line(line, e.is_dir ? 0.90f : 0.82f, e.is_dir ? 0.90f : 0.82f,
+                    push_line(line2, e.is_dir ? 0.90f : 0.82f, e.is_dir ? 0.90f : 0.82f,
                                      e.is_dir ? 0.50f : 0.96f);
                 } else {
                     std::string disp = e.is_dir ? ("[" + e.name + "]") : e.name;
@@ -611,8 +637,113 @@ static void cmd_worker(std::vector<std::string> toks) {
                 }
             }
         }
-        s_busy.store(false); return;
+        return true;
     }
+
+    if (cmd == "cd") {
+        if (toks.size() < 2) { push_err("usage: cd <path>"); return true; }
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        libssh2_session_set_blocking(sess, 0);
+        std::string target = remote_abs(toks[1]);
+        std::string real   = remote_realpath(target.c_str());
+        if (!remote_is_dir(real.c_str()))
+            push_err(("cd: not a directory: " + real).c_str());
+        else {
+            strncpy(s_remote_cwd, real.c_str(), sizeof(s_remote_cwd)-1);
+            push_ok(s_remote_cwd);
+        }
+        return true;
+    }
+
+    if (cmd == "mkdir") {
+        if (toks.size() < 2) { push_err("usage: mkdir <path>"); return true; }
+        std::string path = remote_abs(toks[1]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        int rc;
+        while ((rc = libssh2_sftp_mkdir(s_sftp, path.c_str(),
+                LIBSSH2_SFTP_S_IRWXU|LIBSSH2_SFTP_S_IRGRP|LIBSSH2_SFTP_S_IXGRP|
+                LIBSSH2_SFTP_S_IROTH|LIBSSH2_SFTP_S_IXOTH))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("mkdir failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok(("Created " + path).c_str());
+        return true;
+    }
+
+    if (cmd == "rmdir") {
+        if (toks.size() < 2) { push_err("usage: rmdir <path>"); return true; }
+        std::string path = remote_abs(toks[1]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        int rc;
+        while ((rc = libssh2_sftp_rmdir(s_sftp, path.c_str()))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("rmdir failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok(("Removed " + path).c_str());
+        return true;
+    }
+
+    if (cmd == "rm") {
+        if (toks.size() < 2) { push_err("usage: rm <file>"); return true; }
+        std::string path = remote_abs(toks[1]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        int rc;
+        while ((rc = libssh2_sftp_unlink(s_sftp, path.c_str()))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("rm failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok(("Removed " + path).c_str());
+        return true;
+    }
+
+    if (cmd == "rename") {
+        if (toks.size() < 3) { push_err("usage: rename <old> <new>"); return true; }
+        std::string src = remote_abs(toks[1]), dst = remote_abs(toks[2]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        int rc;
+        while ((rc = libssh2_sftp_rename(s_sftp, src.c_str(), dst.c_str()))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("rename failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok((src + " → " + dst).c_str());
+        return true;
+    }
+
+    if (cmd == "chmod") {
+        if (toks.size() < 3) { push_err("usage: chmod <mode> <file>"); return true; }
+        unsigned long mode = strtoul(toks[1].c_str(), nullptr, 8);
+        std::string path = remote_abs(toks[2]);
+        SessionLock lk;
+        LIBSSH2_SESSION *sess = ssh_get_session();
+        int sock = ssh_get_socket();
+        libssh2_session_set_blocking(sess, 0);
+        LIBSSH2_SFTP_ATTRIBUTES attrs{};
+        attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
+        attrs.permissions = (uint32_t)mode;
+        int rc;
+        while ((rc = libssh2_sftp_setstat(s_sftp, path.c_str(), &attrs))
+               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        if (rc) push_err(("chmod failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
+        else    push_ok(("chmod " + toks[1] + " " + path).c_str());
+        return true;
+    }
+
+    return false;
+}
+
+// Dispatched on a worker thread — only for bulk transfers (get/put/mget/mput)
+static void cmd_worker(std::vector<std::string> toks) {
+    if (toks.empty()) { s_busy.store(false); return; }
+    const std::string &cmd = toks[0];
 
     // ------------------------------------------------------------------ get
     if (cmd == "get") {
@@ -728,92 +859,6 @@ static void cmd_worker(std::vector<std::string> toks) {
         s_busy.store(false); return;
     }
 
-    // ------------------------------------------------------------------ mkdir
-    if (cmd == "mkdir") {
-        if (toks.size() < 2) { push_err("usage: mkdir <path>"); s_busy.store(false); return; }
-        std::string path = remote_abs(toks[1]);
-        SessionLock lk;
-        LIBSSH2_SESSION *sess = ssh_get_session();
-        int sock = ssh_get_socket();
-        libssh2_session_set_blocking(sess, 0);
-        int rc;
-        while ((rc = libssh2_sftp_mkdir(s_sftp, path.c_str(),
-                LIBSSH2_SFTP_S_IRWXU|LIBSSH2_SFTP_S_IRGRP|LIBSSH2_SFTP_S_IXGRP|
-                LIBSSH2_SFTP_S_IROTH|LIBSSH2_SFTP_S_IXOTH))
-               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
-        if (rc) push_err(("mkdir failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
-        else    push_ok(("Created " + path).c_str());
-        s_busy.store(false); return;
-    }
-
-    // ------------------------------------------------------------------ rmdir
-    if (cmd == "rmdir") {
-        if (toks.size() < 2) { push_err("usage: rmdir <path>"); s_busy.store(false); return; }
-        std::string path = remote_abs(toks[1]);
-        SessionLock lk;
-        LIBSSH2_SESSION *sess = ssh_get_session();
-        int sock = ssh_get_socket();
-        libssh2_session_set_blocking(sess, 0);
-        int rc;
-        while ((rc = libssh2_sftp_rmdir(s_sftp, path.c_str()))
-               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
-        if (rc) push_err(("rmdir failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
-        else    push_ok(("Removed " + path).c_str());
-        s_busy.store(false); return;
-    }
-
-    // ------------------------------------------------------------------ rm
-    if (cmd == "rm") {
-        if (toks.size() < 2) { push_err("usage: rm <file>"); s_busy.store(false); return; }
-        std::string path = remote_abs(toks[1]);
-        SessionLock lk;
-        LIBSSH2_SESSION *sess = ssh_get_session();
-        int sock = ssh_get_socket();
-        libssh2_session_set_blocking(sess, 0);
-        int rc;
-        while ((rc = libssh2_sftp_unlink(s_sftp, path.c_str()))
-               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
-        if (rc) push_err(("rm failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
-        else    push_ok(("Removed " + path).c_str());
-        s_busy.store(false); return;
-    }
-
-    // ------------------------------------------------------------------ rename
-    if (cmd == "rename") {
-        if (toks.size() < 3) { push_err("usage: rename <old> <new>"); s_busy.store(false); return; }
-        std::string src = remote_abs(toks[1]), dst = remote_abs(toks[2]);
-        SessionLock lk;
-        LIBSSH2_SESSION *sess = ssh_get_session();
-        int sock = ssh_get_socket();
-        libssh2_session_set_blocking(sess, 0);
-        int rc;
-        while ((rc = libssh2_sftp_rename(s_sftp, src.c_str(), dst.c_str()))
-               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
-        if (rc) push_err(("rename failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
-        else    push_ok((src + " → " + dst).c_str());
-        s_busy.store(false); return;
-    }
-
-    // ------------------------------------------------------------------ chmod
-    if (cmd == "chmod") {
-        if (toks.size() < 3) { push_err("usage: chmod <mode> <file>"); s_busy.store(false); return; }
-        unsigned long mode = strtoul(toks[1].c_str(), nullptr, 8);
-        std::string path = remote_abs(toks[2]);
-        SessionLock lk;
-        LIBSSH2_SESSION *sess = ssh_get_session();
-        int sock = ssh_get_socket();
-        libssh2_session_set_blocking(sess, 0);
-        LIBSSH2_SFTP_ATTRIBUTES attrs{};
-        attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
-        attrs.permissions = (uint32_t)mode;
-        int rc;
-        while ((rc = libssh2_sftp_setstat(s_sftp, path.c_str(), &attrs))
-               == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
-        if (rc) push_err(("chmod failed (sftp " + std::to_string(libssh2_sftp_last_error(s_sftp)) + ")").c_str());
-        else    push_ok(("chmod " + toks[1] + " " + path).c_str());
-        s_busy.store(false); return;
-    }
-
     push_err(("Unknown command: " + cmd + "  (type 'help')").c_str());
     s_busy.store(false);
 }
@@ -825,6 +870,7 @@ static void cmd_worker(std::vector<std::string> toks) {
 static void execute(const char *line) {
     if (!*line) return;
     push_cmd(line);
+    drain_pending();  // flush echo immediately so it appears this frame
 
     // history
     if (s_history.empty() || s_history.back() != line) {
@@ -840,10 +886,13 @@ static void execute(const char *line) {
     if (cmd_instant(toks)) return;
 
     // Needs network — dispatch to worker
-    if (s_busy.load()) { push_err("Busy — wait for current transfer to finish"); return; }
-    if (!console_sftp_init()) { push_err("SFTP subsystem not available"); return; }
+    if (s_busy.load()) { push_err("Busy — wait for current transfer to finish"); drain_pending(); return; }
+    if (!console_sftp_init()) { push_err("SFTP subsystem not available"); drain_pending(); return; }
     s_busy.store(true);
-    if (s_worker.joinable()) s_worker.join();
+    if (s_worker.joinable()) {
+        s_worker.join();   // blocks until previous command's output is all pushed
+        drain_pending();   // flush that output into s_lines immediately
+    }
     s_worker = std::thread(cmd_worker, std::move(toks));
 }
 
@@ -852,6 +901,7 @@ static void execute(const char *line) {
 // ============================================================================
 
 void sftp_console_open(int /*win_w*/, int /*win_h*/) {
+    ensure_pending_mtx();
     g_sftp_console_visible = true;
     refresh_local_cwd();
 
@@ -1166,6 +1216,13 @@ bool sftp_console_mouseup(int x, int y) {
     return true;
 }
 
+void sftp_console_scroll(int delta_y) {
+    // delta_y > 0 = wheel up = scroll toward older lines (increase offset)
+    int step = (delta_y > 0) ? 3 : -3;
+    s_scroll_offset = std::max(0, s_scroll_offset + step);
+    // Upper clamp is applied in render against total_lines - visible
+}
+
 // Last win_h seen by render — used by mouse handlers.
 int g_console_last_win_h = 480;
 
@@ -1175,6 +1232,8 @@ int g_console_last_win_h = 480;
 
 void sftp_console_render(int win_w, int win_h) {
     if (!g_sftp_console_visible) return;
+
+    drain_pending();   // flush worker output into s_lines before drawing
 
     g_console_last_win_h = win_h;
     int row = rh();

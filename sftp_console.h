@@ -28,6 +28,9 @@ bool sftp_console_mousedown(int x, int y, int button);
 bool sftp_console_mousemotion(int x, int y, bool lbutton);
 bool sftp_console_mouseup(int x, int y);
 
+// Mouse wheel scroll — delta_y > 0 = wheel up.
+void sftp_console_scroll(int delta_y);
+
 // Must be called before sftp_shutdown() if a background transfer may be running.
 void sftp_console_join();
 

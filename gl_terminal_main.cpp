@@ -1369,6 +1369,13 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+#ifdef USESSH
+                if (g_sftp_console_visible) {
+                    sftp_console_scroll(ev.wheel.y);
+                    needs_render = true;
+                    break;
+                }
+#endif
                 if (g_sftp.visible) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     sftp_overlay_mousewheel(ev.wheel.mouseX, ev.wheel.mouseY,
