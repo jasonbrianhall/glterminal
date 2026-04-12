@@ -20,9 +20,9 @@ void wopr_basic_text(WoprState *w, char *text);
 void wopr_basic_push_line(char *text);
 void wopr_basic_flush_partial(void);
 void wopr_basic_cls(void);
-void wopr_basic_color(int fg);
+void wopr_basic_color(int fg, int bg);
 bool wopr_basic_is_waiting_input(WoprState *w);
-void wopr_basic_color(int fg);
+void wopr_basic_color(int fg, int bg);
 void wopr_basic_push_line(char *text);
 BASIC_NS_END
 #endif

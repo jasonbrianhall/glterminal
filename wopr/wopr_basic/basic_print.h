@@ -19,7 +19,7 @@ void wopr_basic_signal_done(void);
 void wopr_basic_flush_partial(void);
 void wopr_basic_cls(void);
 void wopr_basic_locate(int row, int col);
-void wopr_basic_color(int fg);
+void wopr_basic_color(int fg, int bg = 0);
 
 /* Single-key (INKEY$) buffer — fed by wopr_basic_post_key, read by display_inkey */
 void wopr_basic_post_key(char c);

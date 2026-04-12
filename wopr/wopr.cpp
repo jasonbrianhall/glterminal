@@ -64,18 +64,20 @@ static std::string to_upper(const std::string &s) {
 }
 
 static void push_line(WoprState *w, const std::string &line) {
-    // Stamp current terminal color as a \x01 R G B prefix so the renderer
-    // uses whatever color was active when this line was written.
-    // Empty lines and lines that already carry a color prefix pass through.
+    // Stamp current terminal color as a \x01 fgR fgG fgB bgR bgG bgB prefix.
+    // bg is always 0,0,0 for WOPR UI lines.
     extern uint8_t g_term_r, g_term_g, g_term_b;
     if (!line.empty() && (unsigned char)line[0] != 0x01) {
         std::string colored;
-        colored.resize(4 + line.size());
+        colored.resize(7 + line.size());
         colored[0] = '\x01';
         colored[1] = (char)g_term_r;
         colored[2] = (char)g_term_g;
         colored[3] = (char)g_term_b;
-        colored.replace(4, line.size(), line);
+        colored[4] = 0;  /* bg R */
+        colored[5] = 0;  /* bg G */
+        colored[6] = 0;  /* bg B */
+        colored.replace(7, line.size(), line);
         w->lines.push_back(colored);
     } else {
         w->lines.push_back(line);
@@ -705,12 +707,19 @@ void wopr_render(int win_w, int win_h) {
     for (int li = start_line; li < total; li++) {
         const char *line = w->lines[li].c_str();
         float lr = 0.f, lg = 1.f, lb = 0.27f;
-        if (line[0] == '\x01') {
+        float br = 0.f, bg = 0.f, bb = 0.f;
+        if ((unsigned char)line[0] == 0x01) {
             lr = (uint8_t)line[1] / 255.f;
             lg = (uint8_t)line[2] / 255.f;
             lb = (uint8_t)line[3] / 255.f;
-            line += 4;
+            br = (uint8_t)line[4] / 255.f;
+            bg = (uint8_t)line[5] / 255.f;
+            bb = (uint8_t)line[6] / 255.f;
+            line += 7;
         }
+        // Draw background rect if bg color is non-black
+        if (br > 0.f || bg > 0.f || bb > 0.f)
+            gl_draw_rect(x0, y, area_w, ch, br, bg, bb, 1.f);
         gl_draw_text(line, x0, y, lr, lg, lb, 1.f, SCALE);
         y += ch;
     }

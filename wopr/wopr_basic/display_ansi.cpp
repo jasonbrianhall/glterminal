@@ -158,8 +158,7 @@ void display_locate(int row, int col)
 void display_color(int fg, int bg)
 {
 #ifdef WOPR
-    (void)bg;
-    wopr_basic_color(fg);
+    wopr_basic_color(fg, bg);
 #elif defined(FELIX_BASIC)
     (void)bg;
     felix_basic_color(fg);
@@ -284,6 +283,9 @@ int display_get_width(void)
 int display_inkey(void)
 {
 #ifdef WOPR
+    // Flush any pending partial line so it shows as the prompt while
+    // the program spins on INKEY$ waiting for a keypress.
+    wopr_basic_flush_partial();
     int c = wopr_basic_get_key();
     if (c >= 0) return c;
 #  ifdef _WIN32
