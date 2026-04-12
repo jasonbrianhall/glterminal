@@ -516,6 +516,23 @@ static void do_command(WoprState *w, const std::string &raw) {
 
 void wopr_open() {
     WoprState *w = &g_wopr;
+
+    // Tear down any sub-game that's still running before wiping state.
+    // Without this, re-opening the overlay (e.g. F7 while a game is active)
+    // would orphan the game thread and leak its ZorkState/basicState.
+    if (w->visible) {
+        switch (w->phase) {
+            case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
+            case WoprPhase::PLAYING_CHESS: wopr_chess_free(w); break;
+            case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
+            case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
+            case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
+            case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
+            case WoprPhase::PLAYING_BASIC: wopr_basic_free(w); break;
+            default: break;
+        }
+    }
+
     *w = WoprState{};
     w->visible = true;
     w->lines.reserve(128);

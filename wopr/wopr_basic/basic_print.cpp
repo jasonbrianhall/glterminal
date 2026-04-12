@@ -101,8 +101,7 @@ char *basic_shim_fgets(char *buf, int n)
 
     if (g_basic_game_over) {
         SDL_Log("Game over (early)");
-        if (n > 0) buf[0] = '\0';
-        return buf;
+        return NULL;  // EOF — stops the interpreter loop
     }
 
     if (basic_input_sem) {
@@ -128,8 +127,7 @@ char *basic_shim_fgets(char *buf, int n)
     if (!basic_input_ready || g_basic_game_over) {
         SDL_Log("No input ready after wait: ready=%d game_over=%d",
                 basic_input_ready, g_basic_game_over);
-        if (n > 0) buf[0] = '\0';
-        return buf;
+        return NULL;  // EOF — stops the interpreter loop
     }
 
     strncpy(buf, basic_input_buf, n - 1);
