@@ -46,7 +46,7 @@ static const char *GLYPH_VS =
     "  v_color_glyph = a_color_glyph;\n"
     "}\n";
 
-// Grayscale glyphs: atlas .r is the coverage mask, multiplied by tint.
+// Grayscale glyphs: atlas .a is the coverage mask, multiplied by tint.
 // Colour/emoji glyphs: full RGBA from atlas, tint alpha applied.
 static const char *GLYPH_FS =
     "#version 330 core\n"
@@ -60,7 +60,7 @@ static const char *GLYPH_FS =
     "  if (v_color_glyph > 0.5) {\n"
     "    frag = vec4(s.rgb, s.a * v_tint.a);\n"
     "  } else {\n"
-    "    frag = vec4(v_tint.rgb, v_tint.a * s.r);\n"
+    "    frag = vec4(v_tint.rgb, v_tint.a * s.a);\n"
     "  }\n"
     "}\n";
 

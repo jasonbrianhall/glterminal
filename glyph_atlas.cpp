@@ -13,8 +13,9 @@ GlyphAtlas g_atlas;
 // ============================================================================
 
 void GlyphAtlas::init() {
-    if (tex && !g_use_sdl_renderer) return;
-    if (sdl_tex) return;
+    // Already initialized for the correct path
+    if (!g_use_sdl_renderer && tex)    return;
+    if ( g_use_sdl_renderer && sdl_tex) return;
 
     // CPU pixel mirror — always allocated, used by both GL and SDL paths
     pixels.assign((size_t)ATLAS_W * ATLAS_H * 4, 0);
@@ -31,9 +32,14 @@ void GlyphAtlas::init() {
         glBindTexture(GL_TEXTURE_2D, 0);
     } else {
         sdl_tex = SDL_CreateTexture(g_sdl_renderer,
-            SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, ATLAS_W, ATLAS_H);
-        if (sdl_tex)
+            SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, ATLAS_W, ATLAS_H);
+        if (sdl_tex) {
             SDL_SetTextureBlendMode(sdl_tex, SDL_BLENDMODE_BLEND);
+            SDL_Log("[Atlas] SDL texture created: %p fmt=ABGR8888 STATIC %dx%d\n",
+                    (void*)sdl_tex, ATLAS_W, ATLAS_H);
+        } else {
+            SDL_Log("[Atlas] SDL texture creation FAILED: %s\n", SDL_GetError());
+        }
     }
 
     cursor_x = ATLAS_PADDING;
@@ -170,10 +176,14 @@ const GlyphEntry *GlyphAtlas::get(FT_Face face, uint32_t cp, int font_px, int em
                 for (int col = 0; col < (int)bm->width; col++) {
                     uint8_t pv = bm->buffer[row * bm->pitch + col];
                     uint8_t *dst = pixels.data() + ((ay + row) * ATLAS_W + (ax + col)) * 4;
-                    dst[0] = pv;
-                    dst[1] = 0;
-                    dst[2] = 0;
-                    dst[3] = (uint8_t)(sqrtf(pv / 255.f) * 255.f);
+                    uint8_t alpha = (uint8_t)(sqrtf(pv / 255.f) * 255.f);
+                    // GL shader reads .r as coverage mask (tints via uniform color).
+                    // SDL multiplies vertex_color * tex_color per channel, so store
+                    // white (255,255,255) with alpha=coverage so tint color passes through.
+                    dst[0] = 255;   // R — white so GL .r path and SDL multiply both work
+                    dst[1] = 255;   // G
+                    dst[2] = 255;   // B
+                    dst[3] = alpha; // A — coverage
                 }
             }
         }
@@ -203,10 +213,11 @@ const GlyphEntry *GlyphAtlas::get(FT_Face face, uint32_t cp, int font_px, int em
                     if (src_col >= (int)bm->width) src_col = (int)bm->width - 1;
                     uint8_t pv = bm->buffer[src_row * bm->pitch + src_col];
                     uint8_t *dst = pixels.data() + ((ay + row) * ATLAS_W + (ax + col)) * 4;
-                    dst[0] = pv;
-                    dst[1] = 0;
-                    dst[2] = 0;
-                    dst[3] = (uint8_t)(sqrtf(pv / 255.f) * 255.f);
+                    uint8_t alpha = (uint8_t)(sqrtf(pv / 255.f) * 255.f);
+                    dst[0] = 255;
+                    dst[1] = 255;
+                    dst[2] = 255;
+                    dst[3] = alpha;
                 }
             }
         }

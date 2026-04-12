@@ -341,6 +341,22 @@ int main(int argc, char **argv) {
     basic_graphics_init(win_w, win_h);
     if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
 
+    // Re-apply the font size now that the renderer exists. settings_load() and
+    // font_apply() ran before gl_init_renderer so cell_w/cell_h and the atlas
+    // were computed independently.  Calling term_set_font_size here forces a
+    // single consistent recalculation of everything (cell dims, window size,
+    // atlas invalidation) from the already-correct g_font_size value.
+    SDL_GetWindowSize(window, &win_w, &win_h);
+    term_set_font_size(&term, g_font_size, win_w, win_h);
+    ft_invalidate_glyph_cache();
+    // fbo_needs_clear starts true at loop init — no need to set it here
+    win_w = (int)(term.cell_w * term.cols) + 4;
+    win_h = (int)(term.cell_h * term.rows) + 4;
+    SDL_SetWindowSize(window, win_w, win_h);
+    SDL_GetWindowSize(window, &win_w, &win_h);
+    gl_resize_fbo(win_w, win_h);
+    G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+
     term_resize(&term, win_w, win_h);
 
     // ---- SSH: async connection state ----------------------------------------
@@ -1359,6 +1375,15 @@ int main(int argc, char **argv) {
         // buffer always gets the composited frame presented on both back and front buffers.
         if (s_dl_dirty || s_basic_has_content) needs_render = true;
 
+        // Any visible overlay must be redrawn every frame so both buffers of the
+        // SDL/GL double-buffer swap chain contain it.  Without this, closing one
+        // overlay and opening another leaves the old one visible on the stale buffer.
+        if (g_menu.visible || g_help_visible || g_iv.visible || g_wopr.visible
+#ifdef USESSH
+            || g_sftp.visible || g_sftp_console_visible || g_pf_overlay.visible
+#endif
+        ) needs_render = true;
+
         if (needs_render) {
             // Only re-render the terminal FBO if at least one row is dirty,
             // OR if basic_graphics has commands waiting.
@@ -1396,20 +1421,23 @@ int main(int argc, char **argv) {
             float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
             gl_end_frame(t_sec, win_w, win_h);
 
-            // Menu renders after post-process so it's never distorted
-            if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
-            menu_render(&g_menu);
+            // Overlay rendering — each layer only renders if no higher-priority
+            // overlay is active, so they never visually stack on top of each other.
+            // Priority (lowest to highest): menu < SFTP < image viewer < help < WOPR
+            if (g_wopr.visible) {
+                wopr_render(win_w, win_h);
+            } else if (g_help_visible) {
+                help_render(win_w, win_h);
+            } else if (g_iv.visible) {
+                iv_render(win_w, win_h);
+            } else {
 #ifdef USESSH
-            sftp_overlay_render(win_w, win_h);
-            sftp_console_render(win_w, win_h);
-            pf_overlay_render(win_w, win_h);
+                sftp_overlay_render(win_w, win_h);
+                sftp_console_render(win_w, win_h);
+                pf_overlay_render(win_w, win_h);
 #endif
-            // Image viewer (F5) — full-screen overlay
-            iv_render(win_w, win_h);
-            // Help overlay renders last (topmost layer)
-            help_render(win_w, win_h);
-            // WOPR overlay — above everything including help
-            if (g_wopr.visible) wopr_render(win_w, win_h);
+                menu_render(&g_menu);
+            }
 
             // Flush any geometry queued by overlay renderers (menus, help, etc.)
             gl_flush_glyphs();
