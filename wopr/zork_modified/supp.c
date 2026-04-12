@@ -58,10 +58,9 @@ void zork_shim_set_input(const char *line)
 
 char *zork_shim_fgets(char *buf, int n)
 {
-    if (g_zork_game_over) {
-        if (n > 0) buf[0] = '\0';
-        return buf;
-    }
+    if (g_zork_game_over)
+        return NULL;  /* EOF — caller must call exit_() */
+
     if (zork_input_sem) {
         SDL_SemWait(zork_input_sem);
     } else {
@@ -69,10 +68,9 @@ char *zork_shim_fgets(char *buf, int n)
         while (!zork_input_ready && !g_zork_game_over)
             SDL_Delay(10);
     }
-    if (!zork_input_ready || g_zork_game_over) {
-        if (n > 0) buf[0] = '\0';
-        return buf;
-    }
+    if (!zork_input_ready || g_zork_game_over)
+        return NULL;  /* EOF — caller must call exit_() */
+
     strncpy(buf, zork_input_buf, n - 1);
     buf[n - 1] = '\0';
     zork_input_ready = 0;
