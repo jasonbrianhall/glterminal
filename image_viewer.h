@@ -51,6 +51,9 @@ struct ImageViewer {
     char   img_label[512] = {};
     char   error[256]     = {};
 
+    // Audio visualizer
+    int    vis_mode   = 0;      // 0=symmetry cascade, 1=radial, 2=oscilloscope, 3=starfield
+
     // Zoom / pan / rotation (image view)
     float  zoom       = 1.0f;   // 1.0 = fit-to-area
     float  pan_x      = 0.0f;  // offset in pixels from centre

@@ -1176,15 +1176,23 @@ static void iv_draw_image_rotated(float cx, float cy, float w, float h, int angl
         py[i] = cy + lx[i] * sinA + ly[i] * cosA;
     }
 
-    // UV coords — rotate them opposite to the vertex rotation so the image
-    // appears to rotate. For 90° CW each step shifts UV assignment by 1.
-    int shift = ((angle_deg / 90) % 4 + 4) % 4;
-    float uvs[4][2] = { {0,0}, {1,0}, {1,1}, {0,1} };
-    // Assign UVs to corners with shift
+    // UV coords for each corner (TL, TR, BR, BL) after clockwise rotation.
+    // At 0°:   TL=(0,0) TR=(1,0) BR=(1,1) BL=(0,1)
+    // At 90°CW: the top of the image goes to the right, so:
+    //   TL=(0,1) TR=(0,0) BR=(1,0) BL=(1,1)
+    // At 180°: TL=(1,1) TR=(0,1) BR=(0,0) BL=(1,0)
+    // At 270°CW: TL=(1,0) TR=(1,1) BR=(0,1) BL=(0,0)
+    static const float uv_table[4][4][2] = {
+        { {0,0},{1,0},{1,1},{0,1} },   //   0°
+        { {0,1},{0,0},{1,0},{1,1} },   //  90° CW
+        { {1,1},{0,1},{0,0},{1,0} },   // 180°
+        { {1,0},{1,1},{0,1},{0,0} },   // 270° CW
+    };
+    int rot_idx = ((angle_deg / 90) % 4 + 4) % 4;
     float u[4], v[4];
     for (int i = 0; i < 4; i++) {
-        u[i] = uvs[(i + shift) % 4][0];
-        v[i] = uvs[(i + shift) % 4][1];
+        u[i] = uv_table[rot_idx][i][0];
+        v[i] = uv_table[rot_idx][i][1];
     }
 
     if (g_use_sdl_renderer) {
@@ -1501,129 +1509,287 @@ void iv_render(int win_w, int win_h) {
             }
 
         } else if (g_iv.audio_playing || g_iv.audio_paused) {
-            // ── Audio-only display: symmetry cascade visualizer ───────────
-            // Needs Mix_GetMusicPosition (SDL_mixer 2.6+) or we fake it with
-            // a simple pseudo-spectrum derived from audio_position phase.
-            // We use a cheap sine-bank driven by audio_position as a fallback
-            // since we don't have a real FFT buffer here.
+            // ── Audio-only display: multi-mode visualizer ─────────────────
             const int NUM_BANDS = 48;
             double bands[NUM_BANDS];
+            double t = g_iv.audio_position;
+            float  alpha_mul = g_iv.audio_paused ? 0.35f : 1.0f;
+
+            // Sine-bank pseudo-spectrum (no FFT available here)
             for (int i = 0; i < NUM_BANDS; i++) {
-                double freq = 0.5 + i * 0.15;
-                double phase = g_iv.audio_position * freq * 6.2832;
-                double v = 0.5 + 0.5 * sin(phase + i * 0.4);
-                // Add some harmonics for texture
-                v += 0.25 * sin(phase * 2.0 + i * 0.7);
-                v += 0.1  * sin(phase * 3.0 + i * 1.1);
-                v = v / 1.85;  // normalize to ~0..1
-                if (g_iv.audio_paused) v *= 0.3;
-                bands[i] = v;
+                double freq  = 0.4 + i * 0.18;
+                double phase = t * freq * 6.2832;
+                double v = 0.5 + 0.5  * sin(phase + i * 0.4)
+                               + 0.25 * sin(phase * 2.1 + i * 0.7)
+                               + 0.10 * sin(phase * 3.3 + i * 1.1);
+                bands[i] = v / 1.85;
             }
 
-            // Draw symmetry cascade: mirrored bars from centre
-            float band_w   = iw / (float)NUM_BANDS;
-            float max_half = ih * 0.42f;
-            float centre_y = iy + ih * 0.5f;
-
-            for (int i = 0; i < NUM_BANDS; i++) {
-                float amplitude = (float)bands[i];
-                float height    = amplitude * max_half;
-
-                float bx = ix + i * band_w;
-
-                // HSV-style rainbow colour
-                float hue = (float)i / NUM_BANDS;
-                float sat = fminf(1.0f, amplitude * 2.0f);
-                float r, g2, b;
-                int h_i = (int)(hue * 6.f);
-                float f  = hue * 6.f - h_i;
-                float p  = 1.f - sat;
-                float q  = 1.f - f * sat;
-                float t  = 1.f - (1.f - f) * sat;
-                switch (h_i % 6) {
-                    case 0: r=1.f; g2=t;   b=p;   break;
-                    case 1: r=q;   g2=1.f; b=p;   break;
-                    case 2: r=p;   g2=1.f; b=t;   break;
-                    case 3: r=p;   g2=q;   b=1.f; break;
-                    case 4: r=t;   g2=p;   b=1.f; break;
-                    default:r=1.f; g2=p;   b=q;   break;
+            // ── Helper: HSV→RGB ───────────────────────────────────────────
+            auto hsv_rgb = [](float hue, float sat, float val,
+                               float &r, float &g2, float &b) {
+                int   hi = (int)(hue * 6.f) % 6;
+                float f  = hue * 6.f - (int)(hue * 6.f);
+                float p  = val * (1.f - sat);
+                float q  = val * (1.f - f * sat);
+                float tv = val * (1.f - (1.f - f) * sat);
+                switch (hi) {
+                    case 0: r=val; g2=tv;  b=p;   break;
+                    case 1: r=q;   g2=val; b=p;   break;
+                    case 2: r=p;   g2=val; b=tv;  break;
+                    case 3: r=p;   g2=q;   b=val; break;
+                    case 4: r=tv;  g2=p;   b=val; break;
+                    default:r=val; g2=p;   b=q;   break;
                 }
+            };
 
-                float alpha = 0.85f;
-                if (g_iv.audio_paused) alpha = 0.4f;
+            // ── Visualizer button (top-right of display area) ─────────────
+            static const char *vis_names[] = {
+                "Symmetry", "Radial", "Scope", "Starfield"
+            };
+            const int NUM_VIS = 4;
+            float btn_w = 90.f, btn_h = (float)rh;
+            float btn_x = ix + iw - btn_w - IV_PAD;
+            float btn_y = iy + IV_PAD;
+            draw_rect(btn_x, btn_y, btn_w, btn_h, 0.18f, 0.22f, 0.35f, 0.90f);
+            draw_rect(btn_x, btn_y, btn_w, 1,     0.35f, 0.55f, 0.95f, 1.f);
+            draw_rect(btn_x, btn_y+btn_h-1, btn_w, 1, 0.35f, 0.55f, 0.95f, 1.f);
+            draw_rect(btn_x, btn_y, 1, btn_h,     0.35f, 0.55f, 0.95f, 1.f);
+            draw_rect(btn_x+btn_w-1, btn_y, 1, btn_h, 0.35f, 0.55f, 0.95f, 1.f);
+            char btn_label[64];
+            snprintf(btn_label, sizeof(btn_label), "V: %s",
+                     vis_names[g_iv.vis_mode % NUM_VIS]);
+            iv_draw_text(btn_label,
+                         btn_x + 6.f,
+                         btn_y + btn_h * 0.72f,
+                         0.75f, 0.88f, 1.00f, 1.f);
 
-                // Top half (upward)
-                draw_rect(bx + 1.f, centre_y - height, band_w - 2.f, height, r, g2, b, alpha);
-                // Bottom half (mirrored downward)
-                draw_rect(bx + 1.f, centre_y,           band_w - 2.f, height, r, g2, b, alpha * 0.6f);
-            }
+            // ── Shared progress / track UI at bottom ──────────────────────
+            double total   = g_iv.music ? Mix_MusicDuration(g_iv.music) : 0.0;
+            float  prog    = (total > 0) ? (float)(t / total) : 0.f;
+            if (prog > 1.f) prog = 1.f;
+            float bar_y  = iy + ih - (float)rh * 2.5f;
+            float bar_x  = ix + iw * 0.05f;
+            float bar_w  = iw * 0.90f;
 
-            // Track name (centred, above midpoint)
-            float lbl_y = iy + ih * 0.12f;
+            // Track label
+            float lbl_y = iy + ih * 0.07f;
             iv_draw_text(g_iv.audio_label,
                          ix + iw*0.5f - strlen(g_iv.audio_label)*g_font_size*0.3f,
-                         lbl_y,
-                         0.90f, 0.95f, 1.00f, 1.f);
-
+                         lbl_y, 0.90f, 0.95f, 1.00f, 1.f);
             if (g_iv.audio_paused) {
-                const char *paused = "\xe2\x80\x96 PAUSED";  // ‖ PAUSED
-                iv_draw_text(paused,
-                             ix + iw*0.5f - strlen(paused)*g_font_size*0.3f,
-                             lbl_y + rh,
-                             1.00f, 0.75f, 0.30f, 1.f);
+                const char *ps = "\xe2\x80\x96 PAUSED";
+                iv_draw_text(ps,
+                             ix + iw*0.5f - strlen(ps)*g_font_size*0.3f,
+                             lbl_y + rh, 1.00f, 0.75f, 0.30f, 1.f);
             }
 
-            // Progress bar near bottom of visualizer area
-            double total = g_iv.music ? Mix_MusicDuration(g_iv.music) : 0.0;
-            float prog = (total > 0) ? (float)(g_iv.audio_position / total) : 0.f;
-            if (prog > 1.f) prog = 1.f;
-            float bar_x = ix + iw * 0.05f;
-            float bar_w = iw * 0.90f;
-            float bar_y = iy + ih - (float)rh * 2.5f;
+            // Progress bar
             draw_rect(bar_x, bar_y, bar_w, 6.f, 0.15f, 0.15f, 0.20f, 1.f);
             if (prog > 0.f)
                 draw_rect(bar_x, bar_y, bar_w * prog, 6.f, 0.30f, 0.80f, 0.40f, 1.f);
 
             // Time
-            int cur_s = (int)g_iv.audio_position;
-            int tot_s = (int)total;
+            int cur_s = (int)t, tot_s = (int)total;
             char timebuf[32];
             snprintf(timebuf, sizeof(timebuf), "%d:%02d / %d:%02d",
                      cur_s/60, cur_s%60, tot_s/60, tot_s%60);
             iv_draw_text(timebuf,
                          bar_x + bar_w*0.5f - strlen(timebuf)*g_font_size*0.3f,
-                         bar_y + 14.f,
-                         0.55f, 0.65f, 0.75f, 1.f);
+                         bar_y + 14.f, 0.55f, 0.65f, 0.75f, 1.f);
 
-            // Controls hint
-            const char *ctrl = "Space: pause/resume   S: stop   ←→: prev/next track";
+            const char *ctrl = "Space: pause/resume   S: stop   ←→: prev/next   V: next viz";
             iv_draw_text(ctrl,
                          ix + iw*0.5f - strlen(ctrl)*g_font_size*0.3f,
                          bar_y + (float)rh + 4.f,
                          0.40f, 0.45f, 0.55f, 1.f);
 
+            // ── Visualizer drawing area (between label and progress bar) ──
+            float viz_top = lbl_y + rh * 1.8f;
+            float viz_bot = bar_y - (float)rh * 0.5f;
+            float viz_h   = viz_bot - viz_top;
+            float viz_mid = viz_top + viz_h * 0.5f;
+            float viz_w   = iw * 0.96f;
+            float viz_x   = ix + (iw - viz_w) * 0.5f;
+
+            int mode = g_iv.vis_mode % NUM_VIS;
+
+            if (mode == 0) {
+                // ── 0: Symmetry Cascade ──────────────────────────────────
+                float band_pw = viz_w / NUM_BANDS;
+                float max_half = viz_h * 0.48f;
+                for (int i = 0; i < NUM_BANDS; i++) {
+                    float amp = (float)bands[i];
+                    float h   = amp * max_half;
+                    float bx  = viz_x + i * band_pw;
+                    float hue = (float)i / NUM_BANDS;
+                    float r, g2, b;
+                    hsv_rgb(hue, fminf(1.f, amp*2.f), 1.f, r, g2, b);
+                    draw_rect(bx+1.f, viz_mid - h, band_pw-2.f, h,
+                              r, g2, b, alpha_mul * 0.90f);
+                    draw_rect(bx+1.f, viz_mid,     band_pw-2.f, h,
+                              r, g2, b, alpha_mul * 0.50f);
+                }
+
+            } else if (mode == 1) {
+                // ── 1: Radial Burst ──────────────────────────────────────
+                float cx2  = viz_x + viz_w * 0.5f;
+                float cy2  = viz_top + viz_h * 0.5f;
+                float maxR = fminf(viz_w, viz_h) * 0.46f;
+                float innerR = maxR * 0.18f;
+                // Rotating spoke angle driven by time
+                float rot = (float)(fmod(t * 0.4, 6.2832));
+                for (int i = 0; i < NUM_BANDS; i++) {
+                    float angle = rot + (float)i / NUM_BANDS * 6.2832f;
+                    float amp   = (float)bands[i];
+                    float outerR = innerR + amp * (maxR - innerR);
+                    float x1 = cx2 + cosf(angle) * innerR;
+                    float y1 = cy2 + sinf(angle) * innerR;
+                    float x2 = cx2 + cosf(angle) * outerR;
+                    float y2 = cy2 + sinf(angle) * outerR;
+                    float hue = fmodf((float)i / NUM_BANDS + (float)t * 0.05f, 1.f);
+                    float r, g2, b;
+                    hsv_rgb(hue, 1.f, 1.f, r, g2, b);
+                    // Draw as a thin rect along the spoke direction
+                    float dx2 = x2 - x1, dy2 = y2 - y1;
+                    float len = sqrtf(dx2*dx2 + dy2*dy2);
+                    if (len < 1.f) continue;
+                    float nx2 = -dy2/len * 2.f, ny2 = dx2/len * 2.f;
+                    // 4-corner quad — draw as two axis-rects (approximation)
+                    // Use screen-aligned rect at spoke position
+                    float spoke_w = fmaxf(2.f, viz_w / NUM_BANDS * 0.7f);
+                    float sx = x1 + (x2-x1)*0.5f - spoke_w*0.5f;
+                    float sy = fminf(y1, y2);
+                    float sw = spoke_w;
+                    float sh = fmaxf(2.f, fabsf(y2-y1));
+                    draw_rect(sx, sy, sw, sh, r, g2, b, alpha_mul * 0.85f);
+                    (void)nx2; (void)ny2;
+                }
+                // Centre pulse circle (simulated with a filled rect square)
+                float pulse = 0.4f + 0.6f * (float)bands[0];
+                float pr = innerR * pulse;
+                draw_rect(cx2 - pr, cy2 - pr*0.5f, pr*2.f, pr,
+                          1.f, 0.8f, 0.3f, alpha_mul * 0.6f);
+
+            } else if (mode == 2) {
+                // ── 2: Oscilloscope ──────────────────────────────────────
+                // Draw grid
+                draw_rect(viz_x, viz_mid - 0.5f, viz_w, 1.f,
+                          0.25f, 0.25f, 0.35f, 0.5f);
+                for (int gi = 1; gi < 4; gi++) {
+                    float gy = viz_top + viz_h * gi / 4.f;
+                    draw_rect(viz_x, gy, viz_w, 1.f, 0.20f, 0.20f, 0.28f, 0.4f);
+                }
+                // Draw waveform as a series of thin vertical rects connecting samples
+                const int SCOPE_PTS = 128;
+                float prev_y = viz_mid;
+                for (int i = 0; i < SCOPE_PTS; i++) {
+                    float fi   = (float)i / (SCOPE_PTS - 1);
+                    // Build a sample from overlapping sine bands
+                    double phase = t * 6.2832 * (1.0 + fi * 4.0) + fi * 12.0;
+                    float sample = 0.f;
+                    for (int b = 0; b < 6; b++)
+                        sample += (float)(bands[b * 8] * sin(phase * (b+1) * 0.7 + b));
+                    sample /= 6.f;
+                    float sy2 = viz_mid - sample * viz_h * 0.44f;
+                    sy2 = fmaxf(viz_top, fminf(viz_bot, sy2));
+                    float sx2 = viz_x + fi * viz_w;
+                    float hue = fmodf(fi + (float)t * 0.08f, 1.f);
+                    float r, g2, b;
+                    hsv_rgb(hue, 0.7f, 1.f, r, g2, b);
+                    float seg_h = fabsf(sy2 - prev_y) + 2.f;
+                    float seg_y = fminf(sy2, prev_y);
+                    draw_rect(sx2, seg_y, fmaxf(2.f, viz_w / SCOPE_PTS + 1.f),
+                              seg_h, r, g2, b, alpha_mul * 0.90f);
+                    prev_y = sy2;
+                }
+
+            } else {
+                // ── 3: Starfield ─────────────────────────────────────────
+                // Persistent star state
+                static struct Star {
+                    float x, y, speed, size, hue;
+                    bool  alive;
+                } stars[200] = {};
+                static bool stars_init = false;
+                if (!stars_init) {
+                    for (auto &s : stars) {
+                        s.x     = (float)rand() / RAND_MAX;
+                        s.y     = (float)rand() / RAND_MAX;
+                        s.speed = 0.01f + (float)rand()/RAND_MAX * 0.04f;
+                        s.size  = 1.f + (float)rand()/RAND_MAX * 3.f;
+                        s.hue   = (float)rand()/RAND_MAX;
+                        s.alive = true;
+                    }
+                    stars_init = true;
+                }
+                // Update: move stars outward from centre, reset when off-screen
+                float beat = (float)(0.5 + 0.5 * sin(t * 4.0));  // pulse
+                for (auto &s : stars) {
+                    float dx2 = s.x - 0.5f, dy2 = s.y - 0.5f;
+                    float dist = sqrtf(dx2*dx2 + dy2*dy2) + 0.001f;
+                    float speed = s.speed * (1.f + beat * (float)bands[(int)(s.hue*47)]);
+                    s.x += dx2 / dist * speed;
+                    s.y += dy2 / dist * speed;
+                    s.hue = fmodf(s.hue + 0.002f, 1.f);
+                    if (s.x < 0 || s.x > 1 || s.y < 0 || s.y > 1) {
+                        // Reset near centre
+                        s.x     = 0.5f + ((float)rand()/RAND_MAX - 0.5f) * 0.08f;
+                        s.y     = 0.5f + ((float)rand()/RAND_MAX - 0.5f) * 0.08f;
+                        s.speed = 0.005f + (float)rand()/RAND_MAX * 0.035f;
+                        s.size  = 1.f + (float)rand()/RAND_MAX * 4.f;
+                        s.hue   = (float)rand()/RAND_MAX;
+                    }
+                }
+                // Draw stars
+                for (auto &s : stars) {
+                    float sx2 = viz_x + s.x * viz_w;
+                    float sy2 = viz_top + s.y * viz_h;
+                    float dx2 = s.x - 0.5f, dy2 = s.y - 0.5f;
+                    float dist = sqrtf(dx2*dx2 + dy2*dy2);
+                    float brightness = fminf(1.f, dist * 3.f);
+                    float r, g2, b;
+                    hsv_rgb(s.hue, 0.6f, brightness, r, g2, b);
+                    float sz = s.size * (0.5f + dist * 2.f);
+                    draw_rect(sx2 - sz*0.5f, sy2 - sz*0.5f, sz, sz,
+                              r, g2, b, alpha_mul * brightness * 0.90f);
+                }
+                // Vignette hint text
+                const char *sft = "Starfield";
+                iv_draw_text(sft,
+                             viz_x + viz_w - strlen(sft)*g_font_size*0.6f - IV_PAD,
+                             viz_top + IV_PAD,
+                             0.30f, 0.35f, 0.50f, 0.5f);
+            }
+
         } else if (g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex) {
             // ── Image display with zoom / pan / rotation ──────────────────
-            // Base fit-to-area scale
+            // tw/th = texture dimensions in the rotated orientation (for fit calc)
             float tw = (float)(g_iv.img_rot % 180 == 0 ? g_iv.tex_w : g_iv.tex_h);
             float th = (float)(g_iv.img_rot % 180 == 0 ? g_iv.tex_h : g_iv.tex_w);
             float base_scale = std::min(iw / tw, ih / th);
             float effective  = base_scale * g_iv.zoom;
 
+            // dw/dh = display size of the rotated image footprint
             float dw = tw * effective;
             float dh = th * effective;
+
             // Centre + pan offset
             float cx  = ix + iw * 0.5f;
             float cy2 = iy + ih * 0.5f;
             float dx  = cx - dw * 0.5f + g_iv.pan_x;
             float dy  = cy2 - dh * 0.5f + g_iv.pan_y;
-
-            // Checkerboard bg for transparency
-            draw_rect(dx, dy, dw, dh, 0.25f, 0.25f, 0.25f, 1.f);
-
             float img_cx = dx + dw * 0.5f;
             float img_cy = dy + dh * 0.5f;
-            iv_draw_image_rotated(img_cx, img_cy, dw, dh, g_iv.img_rot);
+
+            // Background rect fits the rotated footprint
+            draw_rect(dx, dy, dw, dh, 0.25f, 0.25f, 0.25f, 1.f);
+
+            // Draw with original (unswapped) tex dimensions — the rotation
+            // function rotates the quad, so we pass raw tex size * scale.
+            float raw_w = (float)g_iv.tex_w * effective;
+            float raw_h = (float)g_iv.tex_h * effective;
+            iv_draw_image_rotated(img_cx, img_cy, raw_w, raw_h, g_iv.img_rot);
 
             // Zoom level hint (fade out quickly — only show when != 1.0)
             if (g_iv.zoom != 1.0f) {
@@ -1772,6 +1938,14 @@ bool iv_keydown(SDL_Keycode sym) {
             return true;
         }
         return true;
+
+    case SDLK_v:
+        // Cycle visualizer mode (only when audio is playing/paused, else letter-jump)
+        if (g_iv.audio_playing || g_iv.audio_paused) {
+            g_iv.vis_mode = (g_iv.vis_mode + 1) % 4;
+            return true;
+        }
+        goto first_letter_jump;
 
     case SDLK_LEFT:
     case SDLK_RIGHT: {
@@ -1925,12 +2099,22 @@ bool iv_mousewheel(int x, int y, int delta_y, int win_w, int win_h) {
     int panel_w = iv_panel_width(win_w);
 
     if (x < panel_w) {
-        // Scroll the file list
-        int visible_rows = ((win_h - (iv_row_h() + IV_PAD) - (iv_row_h() + IV_PAD)) / iv_row_h());
+        // Scroll the file list — move both scroll_top and selected together
+        // so the render clamp (which keeps selected visible) doesn't fight us.
+        int rh2 = iv_row_h();
+        int title_h2  = rh2 + IV_PAD;
+        int status_h2 = rh2 + IV_PAD;
+        int content_h2 = win_h - title_h2 - status_h2;
+        int visible_rows = (content_h2 - rh2) / rh2;
         int n = (int)g_iv.entries.size();
-        g_iv.scroll_top -= delta_y;  // wheel up = scroll up = lower index
-        if (g_iv.scroll_top < 0) g_iv.scroll_top = 0;
-        if (g_iv.scroll_top > n - visible_rows) g_iv.scroll_top = std::max(0, n - visible_rows);
+        int step = (delta_y > 0) ? -3 : 3;  // wheel up = step toward top (lower index)
+        g_iv.scroll_top = std::max(0, std::min(g_iv.scroll_top + step, std::max(0, n - visible_rows)));
+        // Keep selected within the visible window
+        if (g_iv.selected < g_iv.scroll_top)
+            g_iv.selected = g_iv.scroll_top;
+        if (g_iv.selected >= g_iv.scroll_top + visible_rows)
+            g_iv.selected = g_iv.scroll_top + visible_rows - 1;
+        g_iv.selected = std::max(0, std::min(g_iv.selected, n - 1));
         return true;
     }
 
@@ -1986,6 +2170,20 @@ bool iv_mousedown(int x, int y, int button, int win_w, int win_h) {
                 s_last_click_idx  = idx;
             }
             return true;
+        }
+
+        // Check visualizer button (top-right of image area) when audio is playing
+        if (x >= panel_w && (g_iv.audio_playing || g_iv.audio_paused)) {
+            float ix2, iy2, iw2, ih2;
+            iv_image_rect(win_w, win_h, ix2, iy2, iw2, ih2);
+            float btn_w = 90.f, btn_h = (float)rh;
+            float btn_x = ix2 + iw2 - btn_w - IV_PAD;
+            float btn_y = iy2 + IV_PAD;
+            if ((float)x >= btn_x && (float)x <= btn_x + btn_w &&
+                (float)y >= btn_y && (float)y <= btn_y + btn_h) {
+                g_iv.vis_mode = (g_iv.vis_mode + 1) % 4;
+                return true;
+            }
         }
 
         // Start pan drag in image area
