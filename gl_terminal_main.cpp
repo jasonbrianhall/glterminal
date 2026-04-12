@@ -349,28 +349,8 @@ int main(int argc, char **argv) {
     basic_graphics_init(win_w, win_h);
     if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
 
-    // Re-apply the font size now that the renderer exists. settings_load() and
-    // font_apply() ran before gl_init_renderer so cell_w/cell_h and the atlas
-    // were computed independently.  Calling term_set_font_size here forces a
-    // single consistent recalculation of everything (cell dims, window size,
-    // atlas invalidation) from the already-correct g_font_size value.
-    SDL_GetWindowSize(window, &win_w, &win_h);
-    term_set_font_size(&term, g_font_size, win_w, win_h);
-    ft_invalidate_glyph_cache();
-    // fbo_needs_clear starts true at loop init — no need to set it here
-    win_w = (int)(term.cell_w * term.cols) + 4;
-    win_h = (int)(term.cell_h * term.rows) + 4;
-    SDL_SetWindowSize(window, win_w, win_h);
-    SDL_GetWindowSize(window, &win_w, &win_h);
-    gl_resize_fbo(win_w, win_h);
-    G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
-    // Discard any geometry that may have accumulated during startup re-apply
-    gl_flush_glyphs();
-    gl_flush_verts();
-
     // Helper: correct term.cell_w to match the regular face (s_ft_face_reg) rather
     // than the bold face (s_ft_face) that term_set_font_size uses internally.
-    // Bold is slightly wider, causing glyphs to appear spread when rendered in regular.
     auto fix_cell_w = [&]() {
         FT_Face reg = s_ft_face_reg ? s_ft_face_reg : s_ft_face;
         FT_Set_Pixel_Sizes(reg, 0, (FT_UInt)g_font_size);
@@ -378,9 +358,15 @@ int main(int argc, char **argv) {
         if (gi && FT_Load_Glyph(reg, gi, FT_LOAD_DEFAULT) == 0)
             term.cell_w = (float)(reg->glyph->advance.x >> 6);
     };
-    fix_cell_w();
 
-    term_resize(&term, win_w, win_h);
+    // Invalidate glyph cache now that the renderer is up.
+    // Don't call term_set_font_size or SDL_SetWindowSize here — those send
+    // SIGWINCH which confuses the shell and causes double-spacing at startup.
+    ft_invalidate_glyph_cache();
+    fix_cell_w();
+    SDL_GetWindowSize(window, &win_w, &win_h);
+    gl_resize_fbo(win_w, win_h);
+    G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
 
     // ---- SSH: async connection state ----------------------------------------
     // ssh_connect() blocks on network I/O (DNS, TCP, SSH handshake, auth).
