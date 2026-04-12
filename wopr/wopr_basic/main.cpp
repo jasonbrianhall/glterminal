@@ -165,6 +165,7 @@ int basic_main(int argc, char **argv) {
 #endif
     g_prec = DEFAULT_PREC;
     mpf_set_default_prec(g_prec);
+    clear_program();   /* flush g_nlines/g_nvar/etc. left over from a prior session */
     srand((unsigned)time(NULL));
     display_init();
     install_sigint();
@@ -284,6 +285,7 @@ return 0;
             char filter[64] = ".bas";
             if (*pat == '"') pat++;
             if (*pat && *pat != '"') { strncpy(filter, pat, 63); char *eq=strchr(filter,'"'); if(eq)*eq='\0'; }
+            { char cwd[DEFAULT_BUFFER]; if (getcwd(cwd, sizeof cwd)) { char hdr[DEFAULT_BUFFER+16]; snprintf(hdr, sizeof hdr, "  Directory: %s\n\n", cwd); display_print(hdr); } }
             DIR *d = opendir(".");
             if (!d) { perror("opendir"); continue; }
             struct dirent *de; int count = 0;

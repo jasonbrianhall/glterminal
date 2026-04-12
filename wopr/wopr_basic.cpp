@@ -107,7 +107,19 @@ static void commit_line(void)
 void wopr_basic_push_line(char *text)
 {
     if (!s_active || !s_active->wopr || !text) return;
-    for (char *p = text; *p; ++p) { if (*p == '\n') commit_line(); else s_out_buf += *p; }
+    for (char *p = text; *p; ++p) {
+        if (*p == '\n') {
+            commit_line();
+        } else if (*p == '\t') {
+            // GW-BASIC comma separator uses 14-column tab stops
+            int col = (int)s_out_buf.size();
+            int spaces = 14 - (col % 14);
+            if (spaces == 0) spaces = 14;
+            for (int i = 0; i < spaces; i++) s_out_buf += ' ';
+        } else {
+            s_out_buf += *p;
+        }
+    }
 }
 void wopr_basic_flush_partial(void)
 {
@@ -129,6 +141,10 @@ void wopr_basic_color(int fg)
 {
     if (fg < 0 || fg > 15) fg = 7;
     s_fg_r = CGA_RGB[fg][0]; s_fg_g = CGA_RGB[fg][1]; s_fg_b = CGA_RGB[fg][2];
+    // Keep the WOPR global terminal color in sync so the prompt line,
+    // crawl text, and any lines without an explicit \x01 prefix also
+    // use the color selected by BASIC's COLOR statement.
+    g_term_r = s_fg_r; g_term_g = s_fg_g; g_term_b = s_fg_b;
 }
 int wopr_basic_get_key(void)
 {
@@ -151,7 +167,9 @@ bool wopr_basic_is_waiting_input(WoprState *w)
 }
 const char *wopr_basic_get_prompt(uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    *r = s_prompt_r; *g = s_prompt_g; *b = s_prompt_b;
+    // Always use the live fg color so COLOR N immediately affects the
+    // input cursor even before any text is printed after it.
+    *r = s_fg_r; *g = s_fg_g; *b = s_fg_b;
     return s_prompt_buf.c_str();
 }
 
@@ -205,11 +223,15 @@ void wopr_basic_update(WoprState *w, double)
         zs->dead = true;
         w->lines.push_back(""); w->lines.push_back("  -- BASIC SESSION ENDED --");
         w->lines.push_back("  TYPE  LIST GAMES  TO PLAY AGAIN."); w->lines.push_back("");
+        // Thread already posted done_sem and is about to return — safe to join.
         if (zs->thread) { SDL_WaitThread(zs->thread, nullptr); zs->thread = nullptr; }
         if (s_active == zs) s_active = nullptr;
-        SDL_DestroyMutex(zs->line_mtx); SDL_DestroySemaphore(zs->done_sem);
-        delete zs; w->sub_state = nullptr;
+        // Transition phase BEFORE freeing zs so wopr_close won't call
+        // wopr_basic_free on an already-freed pointer.
         w->phase = WoprPhase::GAME_MENU; w->input_buf.clear();
+        w->sub_state = nullptr;
+        SDL_DestroyMutex(zs->line_mtx); SDL_DestroySemaphore(zs->done_sem);
+        delete zs;
     }
 }
 
@@ -234,7 +256,9 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
         case SDLK_RETURN: case SDLK_KP_ENTER: {
             std::string typed = zs->input_buf;
             std::string full = s_prompt_buf + typed;
-            w->lines.push_back(make_colored_line(full, s_prompt_r, s_prompt_g, s_prompt_b));
+            // Use the live fg color so COLOR N is immediately visible on
+            // the echoed line, not the stale snapshot from flush_partial.
+            w->lines.push_back(make_colored_line(full, s_fg_r, s_fg_g, s_fg_b));
             s_prompt_buf.clear();
             typed += '\n'; basic_shim_set_input(const_cast<char*>(typed.c_str()));
             zs->input_buf.clear(); w->input_buf.clear(); return true;
@@ -344,10 +368,47 @@ void wopr_basic_free(WoprState *w)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs) return;
-    if (!zs->dead) { g_basic_game_over = 1; basic_shim_set_input(const_cast<char*>("QUIT\n")); }
+
+    if (!zs->dead) {
+        // Signal the thread to exit: set game-over flag, then post the
+        // semaphore enough times to unblock it regardless of where it is
+        // (waiting for input, or having already consumed one post).
+        g_basic_game_over = 1;
+        if (basic_input_sem) {
+            SDL_SemPost(basic_input_sem);
+            SDL_SemPost(basic_input_sem);
+        }
+    }
+
     sound_shutdown();
-    if (zs->thread) { SDL_WaitThread(zs->thread, nullptr); zs->thread = nullptr; }
+
+    if (zs->thread) {
+        // Give the thread up to 500 ms to exit cleanly.
+        // If it doesn't, detach it — leaking the SDL_Thread handle is
+        // far better than freezing the main/render thread.
+        const int TIMEOUT_MS = 500;
+        const int STEP_MS    = 10;
+        int waited = 0;
+        bool joined = false;
+        while (waited < TIMEOUT_MS) {
+            if (SDL_SemTryWait(zs->done_sem) == 0) {
+                SDL_WaitThread(zs->thread, nullptr);
+                joined = true;
+                break;
+            }
+            SDL_Delay(STEP_MS);
+            waited += STEP_MS;
+        }
+        if (!joined) {
+            SDL_Log("[basic] free: thread did not exit in %d ms, detaching", TIMEOUT_MS);
+            SDL_DetachThread(zs->thread);
+        }
+        zs->thread = nullptr;
+    }
+
     if (s_active == zs) s_active = nullptr;
-    SDL_DestroyMutex(zs->line_mtx); SDL_DestroySemaphore(zs->done_sem);
-    delete zs; w->sub_state = nullptr;
+    SDL_DestroyMutex(zs->line_mtx);
+    SDL_DestroySemaphore(zs->done_sem);
+    delete zs;
+    w->sub_state = nullptr;
 }
