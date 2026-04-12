@@ -1061,7 +1061,12 @@ int main(int argc, char **argv) {
                     break;
                 }
                 // Image viewer captures all clicks
-                if (g_iv.visible) { needs_render = true; break; }
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    iv_mousedown(ev.button.x, ev.button.y, ev.button.button, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1189,6 +1194,12 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    if (iv_mousemotion(ev.motion.x, ev.motion.y, win_w, win_h))
+                        needs_render = true;
+                    break;
+                }
                 if (g_help_visible) {
                     if (help_mousemotion(ev.motion.x, ev.motion.y))
                         needs_render = true;
@@ -1254,6 +1265,11 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_iv.visible) {
+                    iv_mouseup(ev.button.x, ev.button.y, ev.button.button);
+                    needs_render = true;
+                    break;
+                }
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1283,6 +1299,13 @@ int main(int argc, char **argv) {
             }
 
             case SDL_MOUSEWHEEL: {
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    iv_mousewheel(ev.wheel.mouseX, ev.wheel.mouseY,
+                                  ev.wheel.y, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
                     int delta = (ev.wheel.y > 0) ? 1 : -1;
@@ -1338,6 +1361,10 @@ int main(int argc, char **argv) {
 
         // Animated render modes (CRT flicker, VHS noise) need continuous redraw
         if (g_render_mode & (RENDER_BIT_CRT | RENDER_BIT_VHS | RENDER_BIT_C64 | RENDER_BIT_COMPOSITE | RENDER_BIT_GHOSTING))
+            needs_render = true;
+
+        // Audio visualizer in image viewer needs continuous redraw while playing
+        if (g_iv.visible && g_iv.audio_playing)
             needs_render = true;
 
         // Notify audio of mode state

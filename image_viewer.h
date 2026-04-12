@@ -51,6 +51,17 @@ struct ImageViewer {
     char   img_label[512] = {};
     char   error[256]     = {};
 
+    // Zoom / pan / rotation (image view)
+    float  zoom       = 1.0f;   // 1.0 = fit-to-area
+    float  pan_x      = 0.0f;  // offset in pixels from centre
+    float  pan_y      = 0.0f;
+    int    img_rot    = 0;      // 0 / 90 / 180 / 270 degrees
+    bool   drag_active = false;
+    int    drag_start_x = 0;
+    int    drag_start_y = 0;
+    float  drag_pan_x0  = 0.0f;
+    float  drag_pan_y0  = 0.0f;
+
     // Audio playback
     bool       audio_playing      = false;
     bool       audio_paused       = false;
@@ -72,3 +83,7 @@ void iv_close();
 void iv_tick(double dt);
 void iv_render(int win_w, int win_h);
 bool iv_keydown(SDL_Keycode sym);
+bool iv_mousewheel(int x, int y, int delta_y, int win_w, int win_h);
+bool iv_mousedown(int x, int y, int button, int win_w, int win_h);
+bool iv_mousemotion(int x, int y, int win_w, int win_h);
+bool iv_mouseup(int x, int y, int button);
