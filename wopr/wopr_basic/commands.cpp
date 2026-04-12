@@ -7,6 +7,10 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 BASIC_NS_BEGIN
 
 /* ================================================================
