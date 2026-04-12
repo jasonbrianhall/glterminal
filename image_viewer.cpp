@@ -1535,9 +1535,13 @@ bool iv_keydown(SDL_Keycode sym) {
         return true;
 
     case SDLK_s:
-        iv_stop_audio();
-        iv_cdg_free();
-        return true;
+        if (g_iv.audio_playing || g_iv.audio_paused) {
+            iv_stop_audio();
+            iv_cdg_free();
+            return true;
+        }
+        // No audio active — fall through to first-letter jump
+        goto first_letter_jump;
 
     case SDLK_LEFT:
     case SDLK_RIGHT: {
@@ -1620,7 +1624,34 @@ bool iv_keydown(SDL_Keycode sym) {
         }
         return true;
 
-    default:
+    default: {
+        first_letter_jump:
+        // First-letter jump: press a letter/digit to jump to the first entry
+        // whose name starts with that character (case-insensitive). Pressing
+        // the same key again cycles through all matches, wrapping around.
+        if (sym < 32 || sym > 126) return true;
+        char ch = (char)tolower((unsigned char)sym);
+        if (!isalpha((unsigned char)ch) && !isdigit((unsigned char)ch)) return true;
+
+        std::vector<int> matches;
+        for (int i = 0; i < n; i++) {
+            const char *nm = g_iv.entries[i].name;
+            if (strcmp(nm, "..") == 0) continue;
+            if (tolower((unsigned char)nm[0]) == (unsigned char)ch)
+                matches.push_back(i);
+        }
+        if (matches.empty()) return true;
+
+        // If already on a match advance to next, otherwise jump to first.
+        int next = matches[0];
+        for (int i = 0; i < (int)matches.size(); i++) {
+            if (matches[i] == g_iv.selected) {
+                next = matches[(i + 1) % (int)matches.size()];
+                break;
+            }
+        }
+        g_iv.selected = next;
         return true;
     }
+    } // switch
 }
