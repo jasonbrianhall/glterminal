@@ -36,6 +36,7 @@ using WoprBasic::g_basic_suppress_newline;
 using WoprBasic::basic_exit_jmp;
 using WoprBasic::basic_shim_init;
 using WoprBasic::basic_shim_set_input;
+using WoprBasic::basic_input_sem;
 
 // ── Line color encoding ───────────────────────────────────────────────────
 static char COLOR_PREFIX = '\x01';
