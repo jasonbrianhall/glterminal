@@ -101,16 +101,7 @@ static std::vector<GlyphVertex> s_glyph_pending;
 
 void sdl_flush_glyphs() {
     if (s_glyph_pending.empty()) return;
-    if (!g_atlas.sdl_tex) {
-        SDL_Log("[Glyph] sdl_flush_glyphs: atlas tex is null, dropping %d verts\n",
-                (int)s_glyph_pending.size());
-        s_glyph_pending.clear();
-        return;
-    }
-    SDL_Log("[Glyph] flushing %d verts to target=%p atlas=%p\n",
-            (int)s_glyph_pending.size(),
-            SDL_GetRenderTarget(g_sdl_renderer),
-            (void*)g_atlas.sdl_tex);
+    if (!g_atlas.sdl_tex) { s_glyph_pending.clear(); return; }
 
     s_glyph_sv.clear();
     s_glyph_sv.reserve(s_glyph_pending.size());

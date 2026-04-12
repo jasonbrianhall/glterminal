@@ -356,6 +356,21 @@ int main(int argc, char **argv) {
     SDL_GetWindowSize(window, &win_w, &win_h);
     gl_resize_fbo(win_w, win_h);
     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+    // Discard any geometry that may have accumulated during startup re-apply
+    gl_flush_glyphs();
+    gl_flush_verts();
+
+    // Helper: correct term.cell_w to match the regular face (s_ft_face_reg) rather
+    // than the bold face (s_ft_face) that term_set_font_size uses internally.
+    // Bold is slightly wider, causing glyphs to appear spread when rendered in regular.
+    auto fix_cell_w = [&]() {
+        FT_Face reg = s_ft_face_reg ? s_ft_face_reg : s_ft_face;
+        FT_Set_Pixel_Sizes(reg, 0, (FT_UInt)g_font_size);
+        FT_UInt gi = FT_Get_Char_Index(reg, 'M');
+        if (gi && FT_Load_Glyph(reg, gi, FT_LOAD_DEFAULT) == 0)
+            term.cell_w = (float)(reg->glyph->advance.x >> 6);
+    };
+    fix_cell_w();
 
     term_resize(&term, win_w, win_h);
 
@@ -1280,6 +1295,7 @@ int main(int argc, char **argv) {
                     if (mod & KMOD_SHIFT) delta *= 4;
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     term_set_font_size(&term, g_font_size + delta, win_w, win_h);
+                    fix_cell_w();
                     ft_invalidate_glyph_cache();
                     fbo_needs_clear = true;
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);

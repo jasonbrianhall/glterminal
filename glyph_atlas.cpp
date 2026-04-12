@@ -31,12 +31,19 @@ void GlyphAtlas::init() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glBindTexture(GL_TEXTURE_2D, 0);
     } else {
+        // Use STREAMING access — SDL's opengl backend handles this most reliably
+        // for textures used as geometry sources while rendering to another target.
         sdl_tex = SDL_CreateTexture(g_sdl_renderer,
-            SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, ATLAS_W, ATLAS_H);
+            SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, ATLAS_W, ATLAS_H);
         if (sdl_tex) {
             SDL_SetTextureBlendMode(sdl_tex, SDL_BLENDMODE_BLEND);
-            SDL_Log("[Atlas] SDL texture created: %p fmt=ABGR8888 STATIC %dx%d\n",
-                    (void*)sdl_tex, ATLAS_W, ATLAS_H);
+            // Initialize to transparent
+            void *px; int pitch;
+            if (SDL_LockTexture(sdl_tex, nullptr, &px, &pitch) == 0) {
+                memset(px, 0, pitch * ATLAS_H);
+                SDL_UnlockTexture(sdl_tex);
+            }
+            SDL_Log("[Atlas] SDL texture created %dx%d\n", ATLAS_W, ATLAS_H);
         } else {
             SDL_Log("[Atlas] SDL texture creation FAILED: %s\n", SDL_GetError());
         }
@@ -60,7 +67,13 @@ void GlyphAtlas::clear() {
                         GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
         glBindTexture(GL_TEXTURE_2D, 0);
     } else if (sdl_tex) {
-        SDL_UpdateTexture(sdl_tex, nullptr, pixels.data(), ATLAS_W * 4);
+        void *px; int pitch;
+        if (SDL_LockTexture(sdl_tex, nullptr, &px, &pitch) == 0) {
+            // pitch may differ from ATLAS_W*4 — copy row by row
+            for (int row = 0; row < ATLAS_H; row++)
+                memset((uint8_t*)px + row * pitch, 0, ATLAS_W * 4);
+            SDL_UnlockTexture(sdl_tex);
+        }
     }
 
     cursor_x = ATLAS_PADDING;
@@ -238,14 +251,16 @@ const GlyphEntry *GlyphAtlas::get(FT_Face face, uint32_t cp, int font_px, int em
                         GL_RGBA, GL_UNSIGNED_BYTE, rect.data());
         glBindTexture(GL_TEXTURE_2D, 0);
     } else if (sdl_tex) {
-        // SDL: update just the dirty rect
+        // Lock just the dirty rect and copy from CPU mirror
         SDL_Rect r = { ax, ay, dst_w, dst_h };
-        std::vector<uint8_t> rect(dst_w * dst_h * 4);
-        for (int row = 0; row < dst_h; row++)
-            memcpy(rect.data() + row * dst_w * 4,
-                   pixels.data() + ((ay + row) * ATLAS_W + ax) * 4,
-                   dst_w * 4);
-        SDL_UpdateTexture(sdl_tex, &r, rect.data(), dst_w * 4);
+        void *px; int pitch;
+        if (SDL_LockTexture(sdl_tex, &r, &px, &pitch) == 0) {
+            for (int row = 0; row < dst_h; row++)
+                memcpy((uint8_t*)px + row * pitch,
+                       pixels.data() + ((ay + row) * ATLAS_W + ax) * 4,
+                       dst_w * 4);
+            SDL_UnlockTexture(sdl_tex);
+        }
     }
 
     generation++;
