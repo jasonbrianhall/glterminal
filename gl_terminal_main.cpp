@@ -95,8 +95,8 @@ int main(int argc, char **argv) {
     std::vector<int> pf_socks_pending;
 #endif
     bool use_ssh = false;
-    bool force_sdl = true;   // SDL renderer is the default
-    bool force_gl  = false;
+    bool force_sdl = false;
+    bool force_gl  = true;   // GL renderer is the default
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -194,8 +194,8 @@ int main(int argc, char **argv) {
             printf("       flt [options]\n\n");
             printf("Options:\n");
             printf("  [shell]                     Command to run instead of default shell\n");
-            printf("  --gl                        Force OpenGL renderer (default is SDL)\n");
-            printf("  --sdl                       Force SDL renderer (same as default)\n");
+            printf("  --gl                        Force OpenGL renderer (default)\n");
+            printf("  --sdl                       Force SDL renderer\n");
 #ifdef USESSH
             printf("\nSSH options:\n");
             printf("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
@@ -276,7 +276,7 @@ int main(int argc, char **argv) {
         if (!ctx)
             SDL_Log("INFO: GL 3.3 unavailable (%s), falling back to SDL renderer\n", SDL_GetError());
     } else {
-        SDL_Log("INFO: Using SDL renderer (default; use --gl for OpenGL)\n");
+        SDL_Log("INFO: Using SDL renderer (use --gl for OpenGL)\n");
     }
 
     if (!force_gl || !ctx) {
