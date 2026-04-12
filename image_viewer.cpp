@@ -684,11 +684,10 @@ void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
         iv_list_local(g_iv.path, g_iv.entries);
     } else {
 #ifdef USESSH
-        // Try to get the remote home dir via a quick pwd-like approach
+        // Start at remote filesystem root — getenv("HOME") is the *local*
+        // home directory and is wrong when connecting from Windows.
+        // The user can navigate to their home via the listing.
         strncpy(g_iv.path, "/", sizeof(g_iv.path)-1);
-        // If sftp is available, resolve ~ by reading a well-known path
-        const char *rh = getenv("HOME");  // fallback — server may differ
-        if (rh) strncpy(g_iv.path, rh, sizeof(g_iv.path)-1);
         iv_list_remote(g_iv.path, g_iv.entries);
 #else
         g_iv.remote = false;
@@ -846,10 +845,13 @@ static void iv_enter_selected() {
             }
             strncpy(g_iv.path, tmp, sizeof(g_iv.path)-1);
         } else {
-            snprintf(newpath, sizeof(newpath), "%s%s%s",
-                     g_iv.path,
-                     (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\",
-                     e.name);
+            // Avoid double-slash when path is already "/"
+            size_t plen = strlen(g_iv.path);
+            bool ends_sep = plen > 0 &&
+                (g_iv.path[plen-1] == '/' || g_iv.path[plen-1] == '\\');
+            const char *sep = ends_sep ? "" :
+                              (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\";
+            snprintf(newpath, sizeof(newpath), "%s%s%s", g_iv.path, sep, e.name);
             strncpy(g_iv.path, newpath, sizeof(g_iv.path)-1);
         }
         iv_refresh();
@@ -1150,6 +1152,36 @@ static void iv_draw_image(float x, float y, float w, float h) {
     iv_draw_image_tex(g_iv.sdl_tex, g_iv.tex, x, y, w, h);
 }
 
+// Truncate a filename so it fits within max_chars, preserving the extension.
+// Result is written into out (must be at least max_chars+1 bytes).
+// Uses a UTF-8-safe approach by working in bytes (filenames are usually ASCII).
+static void iv_truncate_name(const char *name, int max_chars, char *out, int out_sz) {
+    int len = (int)strlen(name);
+    if (len <= max_chars) {
+        strncpy(out, name, out_sz - 1);
+        out[out_sz - 1] = '\0';
+        return;
+    }
+    // Find extension (last dot)
+    const char *dot = strrchr(name, '.');
+    int ext_len = dot ? (int)strlen(dot) : 0;  // includes the dot
+    // We need: stem... + ellipsis(1 char '…' = 3 bytes) + ext
+    // Keep at least "A…ext" = 1 stem char + ellipsis + ext
+    int keep_stem = max_chars - 1 - ext_len;  // chars for stem before ellipsis
+    if (keep_stem < 1) keep_stem = 1;
+    // Build truncated string
+    int pos = 0;
+    for (int i = 0; i < keep_stem && i < len && pos < out_sz - 1; i++)
+        out[pos++] = name[i];
+    // UTF-8 ellipsis: 0xE2 0x80 0xA6
+    if (pos + 3 < out_sz) { out[pos++]='\xe2'; out[pos++]='\x80'; out[pos++]='\xa6'; }
+    if (dot && ext_len > 0 && pos + ext_len < out_sz) {
+        strncpy(out + pos, dot, out_sz - pos - 1);
+        pos += ext_len;
+    }
+    out[pos] = '\0';
+}
+
 void iv_render(int win_w, int win_h) {
     if (!g_iv.visible) return;
 
@@ -1204,7 +1236,22 @@ void iv_render(int win_w, int win_h) {
             if (!zname) zname = strrchr(g_iv.zip_file, '\\');
             snprintf(path_disp, sizeof(path_disp), " [ZIP] %s", zname ? zname+1 : g_iv.zip_file);
         } else {
-            snprintf(path_disp, sizeof(path_disp), " %s", g_iv.path);
+            // Truncate path from the left if it's too long for the panel
+            int char_w  = g_font_size > 0 ? g_font_size : 16;
+            int avail   = (int)(pw - 2 * IV_PAD);
+            int max_ch  = avail / char_w;
+            if (max_ch < 6) max_ch = 6;
+            int plen    = (int)strlen(g_iv.path);
+            if (plen + 1 <= max_ch) {
+                snprintf(path_disp, sizeof(path_disp), " %s", g_iv.path);
+            } else {
+                // Show ellipsis + tail: "…/rest/of/path"
+                const char *tail = g_iv.path + plen - (max_ch - 2);
+                // Align to next '/' boundary
+                const char *sl = strchr(tail, '/');
+                if (!sl) sl = tail;
+                snprintf(path_disp, sizeof(path_disp), " \xe2\x80\xa6%s", sl);
+            }
         }
         iv_draw_text(path_disp, px + IV_PAD, py + rh * 0.72f, 0.45f, 0.80f, 0.45f, 1.f);
 
@@ -1260,7 +1307,19 @@ void iv_render(int win_w, int win_h) {
                                  e.is_audio ? (e.has_cdg_pair ? "[CDG] " : "[AUD] ") :
                                  e.is_cdg  ? "[.CDG]" :
                                              "      ";
-            snprintf(name_buf, sizeof(name_buf), "%s%s", prefix, e.name);
+            // Calculate how many characters fit in the panel (approx, monospace)
+            // Reserve ~7 chars on right for the size column + padding
+            int prefix_len = (int)strlen(prefix);
+            int avail_px   = (int)(pw - 2 * IV_PAD - 64);  // 64px reserved for size
+            int char_w     = g_font_size > 0 ? g_font_size : 16;
+            int max_name_chars = avail_px / char_w;
+            if (max_name_chars < 8) max_name_chars = 8;
+            int max_for_name = max_name_chars - prefix_len;
+            if (max_for_name < 4) max_for_name = 4;
+
+            char trunc_name[520];
+            iv_truncate_name(e.name, max_for_name, trunc_name, sizeof(trunc_name));
+            snprintf(name_buf, sizeof(name_buf), "%s%s", prefix, trunc_name);
             iv_draw_text(name_buf, px + IV_PAD, ry + rh * 0.72f, nr, ng, nb, 1.f);
 
             if (!e.is_dir && e.size > 0) {
