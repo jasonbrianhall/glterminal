@@ -191,7 +191,6 @@ SRCS_WOPR = wopr/wopr.cpp                \
             wopr/wopr_basic/expr.cpp         \
             wopr/wopr_basic/main.cpp         \
             wopr/wopr_basic/program.cpp      \
-            wopr/wopr_basic/sound_null.cpp   \
             wopr/wopr_basic/sound_sdl.cpp    \
             wopr/wopr_basic/vars.cpp
                    
@@ -261,6 +260,29 @@ $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX): $(OBJECTS_LINUX)
 $(BUILD_DIR_LINUX)/%.o: %.cpp
 	@echo "Compiling (Linux): $<"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX) -MMD -MP -c $< -o $@
+
+# sound_sdl.cpp needs -DHAVE_SDL to enable the SDL audio backend.
+# Without it the #ifdef HAVE_SDL guard makes the file compile to nothing
+# and the silent sound_null stubs are used instead.
+$(BUILD_DIR_LINUX)/wopr/wopr_basic/sound_sdl.o: wopr/wopr_basic/sound_sdl.cpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Linux): $< [+HAVE_SDL]"
+	$(CXX_LINUX) $(CXXFLAGS_LINUX) -DHAVE_SDL -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_LINUX_DEBUG)/wopr/wopr_basic/sound_sdl.debug.o: wopr/wopr_basic/sound_sdl.cpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Linux Debug): $< [+HAVE_SDL]"
+	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) -DHAVE_SDL -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN)/wopr/wopr_basic/sound_sdl.win.o: wopr/wopr_basic/sound_sdl.cpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Windows): $< [+HAVE_SDL]"
+	$(CXX_WIN) $(CXXFLAGS_WIN) -DHAVE_SDL -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN_DEBUG)/wopr/wopr_basic/sound_sdl.win.debug.o: wopr/wopr_basic/sound_sdl.cpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Windows Debug): $< [+HAVE_SDL]"
+	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) -DHAVE_SDL -MMD -MP -c $< -o $@
 
 $(BUILD_DIR_LINUX)/wopr/%.o: wopr/%.cpp
 	@mkdir -p $(dir $@)
