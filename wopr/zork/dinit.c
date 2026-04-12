@@ -10,6 +10,8 @@
 #include <amos.h>
 #endif
 
+#include <stdlib.h>
+
 #include "funcs.h"
 #include "vars.h"
 #include "dtextc.h"
