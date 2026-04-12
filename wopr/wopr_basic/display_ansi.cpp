@@ -315,7 +315,10 @@ int display_inkey(void)
 int display_getline(char *buf, int bufsz)
 {
 #ifdef WOPR
-    basic_shim_fgets(buf, bufsz);
+    if (!basic_shim_fgets(buf, bufsz)) {
+        buf[0] = '\0';
+        return 0;
+    }
     g_basic_suppress_newline = 1;
     SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);
@@ -355,7 +358,7 @@ int display_getchar(void)
 {
 #ifdef WOPR
     char buf[2] = {0};
-    basic_shim_fgets(buf, sizeof(buf));
+    if (!basic_shim_fgets(buf, sizeof(buf))) return 0;
     return (unsigned char)buf[0];
 #elif defined(FELIX_BASIC)
     char buf[2] = {0};

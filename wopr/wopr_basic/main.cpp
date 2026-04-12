@@ -264,7 +264,7 @@ return 0;
     for (;;) {
         display_print("Ok\n");
         display_cursor(1);
-        display_getline(line, sizeof line);
+        if (!display_getline(line, sizeof line)) break;  /* EOF / game over */
         display_newline();
 
         char *p = line;
