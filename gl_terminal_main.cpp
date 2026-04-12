@@ -95,7 +95,8 @@ int main(int argc, char **argv) {
     std::vector<int> pf_socks_pending;
 #endif
     bool use_ssh = false;
-    bool force_sdl = false;
+    bool force_sdl = true;   // SDL renderer is the default
+    bool force_gl  = false;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -173,6 +174,12 @@ int main(int argc, char **argv) {
         // Positional: shell command (local mode only)
         if (strcmp(arg, "--sdl") == 0 || strcmp(arg, "-sdl") == 0) {
             force_sdl = true;
+            force_gl  = false;
+            continue;
+        }
+        if (strcmp(arg, "--gl") == 0 || strcmp(arg, "-gl") == 0) {
+            force_gl  = true;
+            force_sdl = false;
             continue;
         }
 
@@ -187,7 +194,8 @@ int main(int argc, char **argv) {
             printf("       flt [options]\n\n");
             printf("Options:\n");
             printf("  [shell]                     Command to run instead of default shell\n");
-            printf("  --sdl                       Force SDL renderer (for testing fallback path)\n");
+            printf("  --gl                        Force OpenGL renderer (default is SDL)\n");
+            printf("  --sdl                       Force SDL renderer (same as default)\n");
 #ifdef USESSH
             printf("\nSSH options:\n");
             printf("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
@@ -257,7 +265,7 @@ int main(int argc, char **argv) {
     }
 
     SDL_GLContext ctx = nullptr;
-    if (!force_sdl) {
+    if (force_gl) {
         ctx = SDL_GL_CreateContext(window);
         if (!ctx) {
             SDL_Log("INFO: GL 3.3 not available (%s), retrying with Compatibility profile\n",
@@ -268,10 +276,10 @@ int main(int argc, char **argv) {
         if (!ctx)
             SDL_Log("INFO: GL 3.3 unavailable (%s), falling back to SDL renderer\n", SDL_GetError());
     } else {
-        SDL_Log("INFO: --sdl flag set, forcing SDL renderer\n");
+        SDL_Log("INFO: Using SDL renderer (default; use --gl for OpenGL)\n");
     }
 
-    if (force_sdl || !ctx) {
+    if (!force_gl || !ctx) {
         g_use_sdl_renderer = true;
         // Recreate the window without the OpenGL flag so the SDL renderer can own it
         SDL_DestroyWindow(window);
