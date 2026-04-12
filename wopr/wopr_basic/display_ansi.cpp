@@ -143,8 +143,7 @@ void display_cls(void)
 void display_locate(int row, int col)
 {
 #ifdef WOPR
-    (void)row; (void)col;
-    wopr_basic_flush_partial();
+    wopr_basic_locate(row, col);
 #elif defined(FELIX_BASIC)
     (void)row; (void)col;
     felix_basic_flush_partial();

@@ -71,7 +71,6 @@ static std::string s_prompt_buf;
 static int         s_cur_row = 1;  /* 1-based virtual cursor row */
 static int         s_cur_col = 1;  /* 1-based virtual cursor col */
 static int         s_screen_top = 0; /* lines[] index of row 1 after last CLS */
-static int         s_prompt_row = 0; /* row where input prompt lives (0=bottom) */
 static uint8_t     s_prompt_r = 0, s_prompt_g = 170, s_prompt_b = 0;
 static const int   MAX_WOPR_LINES = 500;
 
@@ -215,7 +214,6 @@ void wopr_basic_flush_partial(void)
     if (!s_active || !s_active->wopr || s_out_buf.empty()) return;
     s_prompt_buf = s_out_buf;
     s_prompt_r = s_fg_r; s_prompt_g = s_fg_g; s_prompt_b = s_fg_b;
-    s_prompt_row = s_cur_row;  /* remember which row the prompt lives on */
     s_out_buf.clear();
 }
 void wopr_basic_cls(void)
@@ -224,7 +222,6 @@ void wopr_basic_cls(void)
     s_out_buf.clear();
     s_prompt_buf.clear();
     s_cur_row = 1; s_cur_col = 1;
-    s_prompt_row = 0;
     SDL_LockMutex(s_active->line_mtx);
     s_active->wopr->lines.clear();
     s_screen_top = 0;
@@ -314,21 +311,10 @@ bool wopr_basic_is_waiting_input(WoprState *w)
 }
 const char *wopr_basic_get_prompt(uint8_t *r, uint8_t *g, uint8_t *b)
 {
+    // Always use the live fg color so COLOR N immediately affects the
+    // input cursor even before any text is printed after it.
     *r = s_fg_r; *g = s_fg_g; *b = s_fg_b;
     return s_prompt_buf.c_str();
-}
-
-/* Returns the 1-based screen row where the input prompt should be drawn,
- * or 0 if it should go at the bottom (default scroll behaviour). */
-int wopr_basic_get_prompt_row(void)
-{
-    return s_prompt_row;
-}
-
-/* Returns the lines[] base index for screen row 1. */
-int wopr_basic_get_screen_top(void)
-{
-    return s_screen_top;
 }
 
 // ── Game thread ───────────────────────────────────────────────────────────

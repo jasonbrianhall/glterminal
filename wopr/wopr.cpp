@@ -748,7 +748,20 @@ void wopr_render(int win_w, int win_h) {
         std::string prompt = std::string(pfx) + w->input_buf;
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
-        gl_draw_text(prompt.c_str(), x0, y, pr/255.f, pg/255.f, pb/255.f, 1.f, SCALE);
+        // If LOCATE placed the prompt at a specific row, draw it there
+        // rather than always appending after the last line.
+        int prompt_row = wopr_basic_get_prompt_row();
+        int screen_top = wopr_basic_get_screen_top();
+        float py = y;  // default: bottom
+        if (prompt_row > 0) {
+            // Row 1 of the current screen is at lines[screen_top],
+            // which renders at y0 + (screen_top - start_line)*ch.
+            // So prompt row r renders at y0 + (screen_top + r - 1 - start_line)*ch.
+            int prompt_line_idx = screen_top + prompt_row - 1;
+            py = y0 + (prompt_line_idx - start_line) * ch;
+            if (py < y0) py = y;  // fell off top — fall back to bottom
+        }
+        gl_draw_text(prompt.c_str(), x0, py, pr/255.f, pg/255.f, pb/255.f, 1.f, SCALE);
     }
 
     gl_flush_verts();
