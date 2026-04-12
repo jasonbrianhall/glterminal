@@ -1035,7 +1035,7 @@ static const HelpRow HELP_ROWS[] = {
     { nullptr, "Ctrl+click URL",  "Open hyperlink in browser",                           nullptr },
 
     { "── SSH ──",                nullptr, nullptr, nullptr },
-    { nullptr, "--ssh [user@host]","Connect to a remote host via SSH",                   nullptr },
+    { nullptr, "--ssh [user@host]","Connect to a remote host via SSH (see CLI options)", nullptr },
 #ifdef USESSH
     { nullptr, "F2",              "SFTP upload overlay",                                 nullptr },
     { nullptr, "F3",              "SFTP download overlay",                               nullptr },
@@ -1045,7 +1045,7 @@ static const HelpRow HELP_ROWS[] = {
 
     { "── Appearance ──",         nullptr, nullptr, nullptr },
     { nullptr, "Render Mode",     "Post-process visual effects (right-click menu)",      nullptr },
-    { nullptr, "Color Theme",     "Built-in colour schemes (right-click menu)",          nullptr },
+    { nullptr, "Color Theme",     "Built-in color schemes (right-click menu)",          nullptr },
     { nullptr, "Transparency",    "Adjust window opacity (right-click menu)",            nullptr },
     { nullptr, "Font",            "Switch monospace font (right-click menu)",            nullptr },
 
