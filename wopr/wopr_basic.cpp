@@ -272,7 +272,7 @@ void wopr_basic_locate(int row, int col)
     if (target < (int)lines.size()) {
         const std::string &existing = lines[target];
         const char *txt = existing.c_str();
-        if (!existing.empty() && (unsigned char)txt[0] == 0x01) txt += 4;
+        if (!existing.empty() && (unsigned char)txt[0] == 0x01) txt += 7;
         seed = txt;
     }
     SDL_UnlockMutex(s_active->line_mtx);

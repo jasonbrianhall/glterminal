@@ -702,6 +702,11 @@ void wopr_render(int win_w, int win_h) {
     int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell || in_zork || basic_wants_input) ? 1 : 0;
     int used        = total + crawl_extra + input_extra;
     int start_line  = std::max(0, used - vis_rows);
+    // In BASIC mode, always render from s_screen_top (row 1 of current
+    // screen) so structured full-screen layouts are never cut off at top.
+    if (in_basic) {
+        start_line = wopr_basic_get_screen_top();
+    }
 
     float y = y0;
     for (int li = start_line; li < total; li++) {
