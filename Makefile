@@ -132,7 +132,8 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               font_manager.cpp      sftp_overlay.cpp      \
               sftp_console.cpp      image_viewer.cpp      \
               cdg.cpp               $(SSH_SRCS)           \
-              basic_graphics.cpp    mml_player.cpp
+              basic_graphics.cpp    mml_player.cpp        \
+              glyph_atlas.cpp
 
 SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
             wopr/zork/actors.c \

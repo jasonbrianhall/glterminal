@@ -24,6 +24,8 @@ void sdl_init_renderer   (int w, int h);
 void sdl_resize_fbo      (int w, int h);
 void sdl_flush_verts     (void);
 void sdl_draw_verts      (Vertex *v, int n);
+void sdl_flush_glyphs    (void);
+void sdl_draw_glyph_verts(GlyphVertex *v, int n);
 void sdl_begin_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b);
 void sdl_clear_term_frame(int win_w, int win_h, float bg_r, float bg_g, float bg_b);
 void sdl_end_term_frame  (void);

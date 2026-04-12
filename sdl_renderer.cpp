@@ -13,6 +13,7 @@
 
 #include "gl_renderer.h"   // Vertex, Mat4, GLState, MAX_VERTS, mat4_ortho
 #include "sdl_renderer.h"
+#include "glyph_atlas.h"   // g_atlas, GlyphVertex
 #include "gl_terminal.h"   // MAX_VERTS cross-check
 #include <SDL2/SDL.h>
 #include <string.h>
@@ -92,6 +93,48 @@ void sdl_resize_fbo(int w, int h) {
     sdl_init_renderer(w, h);  // recreate textures at new size
 }
 
+// Glyph accumulator for SDL path
+static std::vector<SDL_Vertex> s_glyph_sv;
+static std::vector<GlyphVertex> s_glyph_pending;
+
+void sdl_flush_glyphs() {
+    if (s_glyph_pending.empty()) return;
+    if (!g_atlas.sdl_tex) { s_glyph_pending.clear(); return; }
+
+    s_glyph_sv.clear();
+    s_glyph_sv.reserve(s_glyph_pending.size());
+
+    for (auto &gv : s_glyph_pending) {
+        SDL_Vertex sv;
+        sv.position.x  = gv.x;
+        sv.position.y  = gv.y;
+        sv.tex_coord.x = gv.u;
+        sv.tex_coord.y = gv.v;
+        if (gv.color_glyph > 0.5f) {
+            sv.color.r = 255;
+            sv.color.g = 255;
+            sv.color.b = 255;
+            sv.color.a = (Uint8)(gv.tint_a * 255.f);
+        } else {
+            // Grayscale: tint color * atlas alpha (coverage baked into .a)
+            sv.color.r = (Uint8)(gv.tint_r * 255.f);
+            sv.color.g = (Uint8)(gv.tint_g * 255.f);
+            sv.color.b = (Uint8)(gv.tint_b * 255.f);
+            sv.color.a = (Uint8)(gv.tint_a * 255.f);
+        }
+        s_glyph_sv.push_back(sv);
+    }
+
+    SDL_RenderGeometry(g_sdl_renderer, g_atlas.sdl_tex,
+                       s_glyph_sv.data(), (int)s_glyph_sv.size(), nullptr, 0);
+    s_glyph_pending.clear();
+}
+
+void sdl_draw_glyph_verts(GlyphVertex *v, int n) {
+    for (int i = 0; i < n; i++)
+        s_glyph_pending.push_back(v[i]);
+}
+
 void sdl_flush_verts(void) {
     if (s_accum_n == 0) return;
     SDL_RenderGeometry(g_sdl_renderer, nullptr, s_accum, s_accum_n, nullptr, 0);
@@ -134,6 +177,7 @@ void sdl_clear_term_frame(int, int, float bg_r, float bg_g, float bg_b) {
 }
 
 void sdl_end_term_frame(void) {
+    sdl_flush_glyphs();
     sdl_flush_verts();
     SDL_SetRenderTarget(g_sdl_renderer, nullptr);
 }

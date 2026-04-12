@@ -522,6 +522,11 @@ int main(int argc, char **argv) {
 
     uint32_t last_ticks = SDL_GetTicks();
     bool running = true;
+    // Tracks whether the term FBO needs a full clear before the next draw.
+    // Only set on layout changes (resize, theme, font) — NOT on PTY scroll.
+    // PTY-driven all_dirty was clearing the FBO every frame, causing the blink
+    // when holding Enter.
+    bool fbo_needs_clear = true;
 
     // Auto-scroll state for selection drag
     int  autoscroll_mouse_x = 0, autoscroll_mouse_y = 0;
@@ -1070,6 +1075,7 @@ int main(int argc, char **argv) {
                             if (g_menu.sub_open == MENU_ID_THEMES) {
                                 apply_theme(sub_hit);
                                 settings_save();
+                                fbo_needs_clear = true;
                                 term_dirty_all(&term);
                             } else if (g_menu.sub_open == MENU_ID_OPACITY) {
                                 g_opacity = ((float[]){1.0f,0.85f,0.7f,0.5f,0.3f,0.1f})[sub_hit];
@@ -1095,6 +1101,8 @@ int main(int argc, char **argv) {
                                 SDL_GetWindowSize(window, &win_w, &win_h);
                                 font_apply(g_font_list[sub_hit], g_font_list, &term, win_w, win_h);
                                 font_save_config(g_font_list[sub_hit].display_name);
+                                ft_invalidate_glyph_cache();
+                                fbo_needs_clear = true;
                                 G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                                 settings_save();
                                 term_dirty_all(&term);
@@ -1256,6 +1264,8 @@ int main(int argc, char **argv) {
                     if (mod & KMOD_SHIFT) delta *= 4;
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     term_set_font_size(&term, g_font_size + delta, win_w, win_h);
+                    ft_invalidate_glyph_cache();
+                    fbo_needs_clear = true;
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                     settings_save();
                 } else if (term.mouse_report) {
@@ -1291,6 +1301,7 @@ int main(int argc, char **argv) {
                     g_basic_win_w = win_w;
                     g_basic_win_h = win_h;
                     basic_graphics_init(win_w, win_h);  // update canvas mapping
+                    fbo_needs_clear = true;
 #ifdef USESSH
                     if (use_ssh) ssh_pty_resize(term.cols, term.rows);
 #endif
@@ -1361,8 +1372,10 @@ int main(int argc, char **argv) {
                 float bg_r = THEMES[g_theme_idx].bg_r;
                 float bg_g = THEMES[g_theme_idx].bg_g;
                 float bg_b = THEMES[g_theme_idx].bg_b;
-                if (term.all_dirty)
+                if (fbo_needs_clear) {
                     gl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
+                    fbo_needs_clear = false;
+                }
                 gl_begin_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
                 basic_render(win_w, win_h); // flush BASIC graphics first (background layer)
                 term_render(&term, 2, 2);   // terminal text on top
@@ -1397,6 +1410,10 @@ int main(int argc, char **argv) {
             help_render(win_w, win_h);
             // WOPR overlay — above everything including help
             if (g_wopr.visible) wopr_render(win_w, win_h);
+
+            // Flush any geometry queued by overlay renderers (menus, help, etc.)
+            gl_flush_glyphs();
+            gl_flush_verts();
 
             if (g_use_sdl_renderer)
                 SDL_RenderPresent(g_sdl_renderer);

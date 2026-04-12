@@ -19,7 +19,20 @@
 // VERTEX / GL STATE
 // ============================================================================
 
+// Solid-colour vertex (used by draw_rect, draw_verts, background fills, etc.)
 typedef struct { float x, y, r, g, b, a; } Vertex;
+
+// Textured vertex for glyph quads — UV coords address the glyph atlas.
+// tint_r/g/b multiply the sampled colour; tint_a is the overall opacity.
+// For grayscale glyphs the shader does:  out = vec4(tint.rgb, tint.a * tex.r)
+// For colour/emoji glyphs the shader does: out = tex * vec4(1,1,1,tint.a)
+// The `color` flag selects which path (packed as a float: 0.0 or 1.0).
+typedef struct {
+    float x, y;
+    float u, v;
+    float tint_r, tint_g, tint_b, tint_a;
+    float color_glyph;  // 0.0 = grayscale, 1.0 = RGBA emoji
+} GlyphVertex;
 
 typedef struct { float m[16]; } Mat4;
 
@@ -31,6 +44,18 @@ struct GLState {
 };
 
 extern GLState G;
+
+#define MAX_GLYPH_VERTS 65536   // 65536 / 6 ≈ 10 922 glyphs per flush
+
+// Glyph shader state — populated by gl_init_renderer, used by ft_font.cpp
+struct GlyphGLState {
+    GLuint prog = 0;
+    GLuint vao  = 0;
+    GLuint vbo  = 0;
+    GLint  proj_loc     = -1;
+    GLint  atlas_loc    = -1;   // sampler2D uniform
+};
+extern GlyphGLState GG;
 
 // ============================================================================
 // RENDER MODES  (bitmask — multiple modes can be active simultaneously)
@@ -71,8 +96,15 @@ void  gl_resize_fbo(int w, int h);
 void  gl_begin_frame(void);
 void  gl_end_frame(float time, int win_w, int win_h);
 
+// Solid-colour geometry (backgrounds, cursors, underlines, decorations)
 void  draw_verts(Vertex *v, int n, GLenum mode);
 void  draw_rect(float x, float y, float w, float h, float r, float g, float b, float a);
+
+// Textured glyph quads — submitted to a separate accumulator flushed by
+// gl_flush_glyphs().  Automatically interleaved with solid draws in the
+// same frame; gl_end_term_frame flushes both.
+void  draw_glyph_verts(GlyphVertex *v, int n);
+void  gl_flush_glyphs(void);
 
 void  gl_flush_verts(void);
 
