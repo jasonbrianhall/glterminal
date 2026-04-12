@@ -1216,6 +1216,13 @@ bool sftp_console_mouseup(int x, int y) {
     return true;
 }
 
+void sftp_console_scroll(int delta_y) {
+    // delta_y > 0 = wheel up = scroll toward older lines (increase offset)
+    int step = (delta_y > 0) ? 3 : -3;
+    s_scroll_offset = std::max(0, s_scroll_offset + step);
+    // Upper clamp is applied in render against total_lines - visible
+}
+
 // Last win_h seen by render — used by mouse handlers.
 int g_console_last_win_h = 480;
 
