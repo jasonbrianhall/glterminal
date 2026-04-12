@@ -64,18 +64,20 @@ static std::string to_upper(const std::string &s) {
 }
 
 static void push_line(WoprState *w, const std::string &line) {
-    // Stamp current terminal color as a \x01 R G B prefix so the renderer
-    // uses whatever color was active when this line was written.
-    // Empty lines and lines that already carry a color prefix pass through.
+    // Stamp current terminal color as a \x01 fgR fgG fgB bgR bgG bgB prefix.
+    // bg is always 0,0,0 for WOPR UI lines.
     extern uint8_t g_term_r, g_term_g, g_term_b;
     if (!line.empty() && (unsigned char)line[0] != 0x01) {
         std::string colored;
-        colored.resize(4 + line.size());
+        colored.resize(7 + line.size());
         colored[0] = '\x01';
         colored[1] = (char)g_term_r;
         colored[2] = (char)g_term_g;
         colored[3] = (char)g_term_b;
-        colored.replace(4, line.size(), line);
+        colored[4] = 0;  /* bg R */
+        colored[5] = 0;  /* bg G */
+        colored[6] = 0;  /* bg B */
+        colored.replace(7, line.size(), line);
         w->lines.push_back(colored);
     } else {
         w->lines.push_back(line);
@@ -514,6 +516,23 @@ static void do_command(WoprState *w, const std::string &raw) {
 
 void wopr_open() {
     WoprState *w = &g_wopr;
+
+    // Tear down any sub-game that's still running before wiping state.
+    // Without this, re-opening the overlay (e.g. F7 while a game is active)
+    // would orphan the game thread and leak its ZorkState/basicState.
+    if (w->visible) {
+        switch (w->phase) {
+            case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
+            case WoprPhase::PLAYING_CHESS: wopr_chess_free(w); break;
+            case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
+            case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
+            case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
+            case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
+            case WoprPhase::PLAYING_BASIC: wopr_basic_free(w); break;
+            default: break;
+        }
+    }
+
     *w = WoprState{};
     w->visible = true;
     w->lines.reserve(128);
@@ -700,17 +719,29 @@ void wopr_render(int win_w, int win_h) {
     int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell || in_zork || basic_wants_input) ? 1 : 0;
     int used        = total + crawl_extra + input_extra;
     int start_line  = std::max(0, used - vis_rows);
+    // In BASIC mode, always render from s_screen_top (row 1 of current
+    // screen) so structured full-screen layouts are never cut off at top.
+    if (in_basic) {
+        start_line = wopr_basic_get_screen_top();
+    }
 
     float y = y0;
     for (int li = start_line; li < total; li++) {
         const char *line = w->lines[li].c_str();
         float lr = 0.f, lg = 1.f, lb = 0.27f;
-        if (line[0] == '\x01') {
+        float br = 0.f, bg = 0.f, bb = 0.f;
+        if ((unsigned char)line[0] == 0x01) {
             lr = (uint8_t)line[1] / 255.f;
             lg = (uint8_t)line[2] / 255.f;
             lb = (uint8_t)line[3] / 255.f;
-            line += 4;
+            br = (uint8_t)line[4] / 255.f;
+            bg = (uint8_t)line[5] / 255.f;
+            bb = (uint8_t)line[6] / 255.f;
+            line += 7;
         }
+        // Draw background rect if bg color is non-black
+        if (br > 0.f || bg > 0.f || bb > 0.f)
+            gl_draw_rect(x0, y, area_w, ch, br, bg, bb, 1.f);
         gl_draw_text(line, x0, y, lr, lg, lb, 1.f, SCALE);
         y += ch;
     }
@@ -748,7 +779,20 @@ void wopr_render(int win_w, int win_h) {
         std::string prompt = std::string(pfx) + w->input_buf;
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
-        gl_draw_text(prompt.c_str(), x0, y, pr/255.f, pg/255.f, pb/255.f, 1.f, SCALE);
+        // If LOCATE placed the prompt at a specific row, draw it there
+        // rather than always appending after the last line.
+        int prompt_row = wopr_basic_get_prompt_row();
+        int screen_top = wopr_basic_get_screen_top();
+        float py = y;  // default: bottom
+        if (prompt_row > 0) {
+            // Row 1 of the current screen is at lines[screen_top],
+            // which renders at y0 + (screen_top - start_line)*ch.
+            // So prompt row r renders at y0 + (screen_top + r - 1 - start_line)*ch.
+            int prompt_line_idx = screen_top + prompt_row - 1;
+            py = y0 + (prompt_line_idx - start_line) * ch;
+            if (py < y0) py = y;  // fell off top — fall back to bottom
+        }
+        gl_draw_text(prompt.c_str(), x0, py, pr/255.f, pg/255.f, pb/255.f, 1.f, SCALE);
     }
 
     gl_flush_verts();

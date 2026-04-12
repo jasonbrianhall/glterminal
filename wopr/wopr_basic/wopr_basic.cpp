@@ -40,13 +40,9 @@ using WoprBasic::basic_input_sem;
 
 // ── Line color encoding ───────────────────────────────────────────────────
 static char COLOR_PREFIX = '\x01';
-static std::string make_colored_line(const std::string &text, uint8_t r, uint8_t g, uint8_t b,
-                                      uint8_t br = 0, uint8_t bg = 0, uint8_t bb = 0)
+static std::string make_colored_line(const std::string &text, uint8_t r, uint8_t g, uint8_t b)
 {
-    std::string s;
-    s += COLOR_PREFIX; s += (char)r; s += (char)g; s += (char)b;
-    s += (char)br;     s += (char)bg; s += (char)bb;
-    s += text;
+    std::string s; s += COLOR_PREFIX; s += (char)r; s += (char)g; s += (char)b; s += text;
     return s;
 }
 static const uint8_t CGA_RGB[16][3] = {
@@ -70,13 +66,11 @@ struct basicState {
 
 static basicState *s_active = nullptr;
 static uint8_t     s_fg_r = 0, s_fg_g = 170, s_fg_b = 0;
-static uint8_t     s_bg_r = 0, s_bg_g = 0,   s_bg_b = 0;
 static std::string s_out_buf;
 static std::string s_prompt_buf;
 static int         s_cur_row = 1;  /* 1-based virtual cursor row */
 static int         s_cur_col = 1;  /* 1-based virtual cursor col */
 static int         s_screen_top = 0; /* lines[] index of row 1 after last CLS */
-static int         s_prompt_row = 0; /* row where input prompt lives (0=bottom) */
 static uint8_t     s_prompt_r = 0, s_prompt_g = 170, s_prompt_b = 0;
 static const int   MAX_WOPR_LINES = 500;
 
@@ -109,7 +103,7 @@ static void commit_line(void)
     SDL_LockMutex(s_active->line_mtx);
     auto &lines = s_active->wopr->lines;
     int target = s_screen_top + s_cur_row - 1;  /* 0-based index for this row */
-    std::string colored = make_colored_line(s_out_buf, s_fg_r, s_fg_g, s_fg_b, s_bg_r, s_bg_g, s_bg_b);
+    std::string colored = make_colored_line(s_out_buf, s_fg_r, s_fg_g, s_fg_b);
     if (target < (int)lines.size()) {
         lines[target] = colored;  /* overwrite existing row (LOCATE went backwards) */
     } else {
@@ -220,7 +214,6 @@ void wopr_basic_flush_partial(void)
     if (!s_active || !s_active->wopr || s_out_buf.empty()) return;
     s_prompt_buf = s_out_buf;
     s_prompt_r = s_fg_r; s_prompt_g = s_fg_g; s_prompt_b = s_fg_b;
-    s_prompt_row = s_cur_row;  /* remember which row the prompt lives on */
     s_out_buf.clear();
 }
 void wopr_basic_cls(void)
@@ -229,7 +222,6 @@ void wopr_basic_cls(void)
     s_out_buf.clear();
     s_prompt_buf.clear();
     s_cur_row = 1; s_cur_col = 1;
-    s_prompt_row = 0;
     SDL_LockMutex(s_active->line_mtx);
     s_active->wopr->lines.clear();
     s_screen_top = 0;
@@ -240,70 +232,62 @@ void wopr_basic_locate(int row, int col)
     if (row < 1) row = 1;
     if (col < 1) col = 1;
 
-    if (row != s_cur_row) {
-        // Moving to a different row — commit s_out_buf first.
-        if (!s_out_buf.empty())
+    // Flush any partial output at the current position first.
+    // If we are moving to a different row, commit current line.
+    if (row != s_cur_row && !s_out_buf.empty()) {
+        commit_line();
+    } else {
+        wopr_basic_flush_partial();
+    }
+
+    if (row > s_cur_row) {
+        // Moving forward: emit blank lines to fill the gap.
+        while (s_cur_row < row)
             commit_line();
-        if (row > s_cur_row) {
-            while (s_cur_row < row)
-                commit_line();   // emits blank lines for the gap
-        } else {
-            s_cur_row = row;
-            s_cur_col = 1;
+    } else if (row < s_cur_row) {
+        // Moving backwards: just reposition. commit_line will overwrite
+        // the existing lines[] entry via the s_screen_top + row - 1 index.
+        s_cur_row = row;
+        s_cur_col = 1;
+    }
+    // else row == s_cur_row: stay on this row.
+
+    // Now pad to the target column, starting from where we are.
+    // If moving backwards on same row we need to seed s_out_buf from
+    // the existing line content up to col so we don't lose what's there.
+    if (col > s_cur_col) {
+        // Seed from existing line if we repositioned backwards
+        if (s_out_buf.empty()) {
+            SDL_LockMutex(s_active->line_mtx);
+            auto &lines = s_active->wopr->lines;
+            int target = s_screen_top + s_cur_row - 1;
+            if (target < (int)lines.size()) {
+                const std::string &existing = lines[target];
+                // Strip the  RGB prefix if present
+                const char *txt = existing.c_str();
+                if (!existing.empty() && (unsigned char)txt[0] == 0x01)
+                    txt += 4;
+                s_out_buf = txt;
+                s_cur_col = (int)s_out_buf.size() + 1;
+            }
+            SDL_UnlockMutex(s_active->line_mtx);
         }
+        while (s_cur_col < col) {
+            s_out_buf += ' ';
+            s_cur_col++;
+        }
+    } else {
+        s_cur_col = col;
     }
-    // s_cur_row == row now.
-
-    if (col == s_cur_col) return;
-
-    if (col > s_cur_col && !s_out_buf.empty()) {
-        // Moving right while already building this line — just pad.
-        while (s_cur_col < col) { s_out_buf += ' '; s_cur_col++; }
-        return;
-    }
-
-    // Either moving left, or moving right from an empty buf (need to seed).
-    // Seed s_out_buf from the already-committed version of this row, then
-    // truncate/extend to exactly (col-1) display columns.
-    SDL_LockMutex(s_active->line_mtx);
-    auto &lines = s_active->wopr->lines;
-    int target = s_screen_top + s_cur_row - 1;
-    std::string seed;
-    if (target < (int)lines.size()) {
-        const std::string &existing = lines[target];
-        const char *txt = existing.c_str();
-        if (!existing.empty() && (unsigned char)txt[0] == 0x01) txt += 7;
-        seed = txt;
-    }
-    SDL_UnlockMutex(s_active->line_mtx);
-
-    // Walk the seed, keeping exactly (col-1) display columns.
-    std::string prefix;
-    int dcol = 0;
-    for (size_t i = 0; i < seed.size() && dcol < col - 1; ) {
-        unsigned char c = (unsigned char)seed[i];
-        int seqlen = 1;
-        if      ((c & 0x80) == 0x00) seqlen = 1;
-        else if ((c & 0xE0) == 0xC0) seqlen = 2;
-        else if ((c & 0xF0) == 0xE0) seqlen = 3;
-        else if ((c & 0xF8) == 0xF0) seqlen = 4;
-        if (i + seqlen > seed.size()) break;
-        prefix += seed.substr(i, seqlen);
-        i += seqlen;
-        dcol++;
-    }
-    // Pad to exactly (col-1) cols with spaces if the seed was shorter.
-    while (dcol < col - 1) { prefix += ' '; dcol++; }
-
-    s_out_buf = prefix;
-    s_cur_col = col;
 }
-void wopr_basic_color(int fg, int bg)
+
+void wopr_basic_color(int fg)
 {
     if (fg < 0 || fg > 15) fg = 7;
-    if (bg < 0 || bg > 15) bg = 0;
     s_fg_r = CGA_RGB[fg][0]; s_fg_g = CGA_RGB[fg][1]; s_fg_b = CGA_RGB[fg][2];
-    s_bg_r = CGA_RGB[bg][0]; s_bg_g = CGA_RGB[bg][1]; s_bg_b = CGA_RGB[bg][2];
+    // Keep the WOPR global terminal color in sync so the prompt line,
+    // crawl text, and any lines without an explicit \x01 prefix also
+    // use the color selected by BASIC's COLOR statement.
     g_term_r = s_fg_r; g_term_g = s_fg_g; g_term_b = s_fg_b;
 }
 int wopr_basic_get_key(void)
@@ -327,21 +311,10 @@ bool wopr_basic_is_waiting_input(WoprState *w)
 }
 const char *wopr_basic_get_prompt(uint8_t *r, uint8_t *g, uint8_t *b)
 {
+    // Always use the live fg color so COLOR N immediately affects the
+    // input cursor even before any text is printed after it.
     *r = s_fg_r; *g = s_fg_g; *b = s_fg_b;
     return s_prompt_buf.c_str();
-}
-
-/* Returns the 1-based screen row where the input prompt should be drawn,
- * or 0 if it should go at the bottom (default scroll behaviour). */
-int wopr_basic_get_prompt_row(void)
-{
-    return s_prompt_row;
-}
-
-/* Returns the lines[] base index for screen row 1. */
-int wopr_basic_get_screen_top(void)
-{
-    return s_screen_top;
 }
 
 // ── Game thread ───────────────────────────────────────────────────────────
@@ -377,7 +350,6 @@ void wopr_basic_enter(WoprState *w)
     s_prompt_buf.clear();
     s_cur_row = 1; s_cur_col = 1; s_screen_top = 0;
     s_fg_r = 0; s_fg_g = 170; s_fg_b = 0;
-    s_bg_r = 0; s_bg_g = 0;   s_bg_b = 0;
     basic_shim_init();
     sound_init();   /* audio init on main thread */
 
@@ -528,7 +500,6 @@ void wopr_wizard_enter(WoprState *w)
     s_prompt_buf.clear();
     s_cur_row = 1; s_cur_col = 1; s_screen_top = 0;
     s_fg_r = 0; s_fg_g = 170; s_fg_b = 0;
-    s_bg_r = 0; s_bg_g = 0;   s_bg_b = 0;
     basic_shim_init();
     sound_init();
 

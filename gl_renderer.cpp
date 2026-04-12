@@ -550,7 +550,7 @@ void gl_resize_fbo(int w, int h) {
 }
 
 // ============================================================================
-// SOLID-COLOUR VERTEX ACCUMULATOR
+// SOLID-COLOR VERTEX ACCUMULATOR
 // ============================================================================
 
 static Vertex s_accum[MAX_VERTS];

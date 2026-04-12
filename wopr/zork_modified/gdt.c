@@ -15,7 +15,11 @@
 #include "../zork/vars.h"
 #include "../zork/parse.h"
 
-extern char *zork_shim_fgets(char *buf, int n);
+extern char *ZORK_FGETS(char *buf, int n);
+
+/* Call zork_shim_fgets and exit_ immediately on NULL (game_over / EOF). */
+#define ZORK_FGETS(buf, n) \
+    do { if (ZORK_FGETS((buf), (n)) == NULL) { exit_(); return; } } while (0)
 
 #ifdef ALLOW_GDT
 
@@ -50,7 +54,7 @@ void gdt_()
 
 L2000:
     more_output("GDT>");
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     cmd[0] = ' ';
     cmd[1] = ' ';
@@ -83,7 +87,7 @@ L2300:
 
 L2700:
     more_output("Idx,Ary:  ");
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     for (z = buf; *z != '\0'; z++)
 	if (*z == ',')
@@ -95,7 +99,7 @@ L2700:
 
 L2600:
     more_output("Limits:   ");
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     for (z = buf; *z != '\0'; z++)
 	if (*z == ',')
@@ -110,7 +114,7 @@ L2600:
 
 L2500:
     more_output("Entry:    ");
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     j = 0;
     sscanf(buf, "%d", &j);
@@ -332,7 +336,7 @@ L20000:
 	goto L2200;
     }
     more_output("Old= %6d      New= ", j);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &j);
     goto L2000;
@@ -449,7 +453,7 @@ L32000:
 	goto L2200;
     }
     more_output("Old = %6d      New = ", eqr[j + k * 200 - 201]);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &eqr[j + k * 200 - 201]);
     goto L2000;
@@ -461,7 +465,7 @@ L33000:
 	goto L2200;
     }
     more_output("Old = %6d      New = ", eqo[j + k * 200 - 201]);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &eqo[j + k * 220 - 221]);
     goto L2000;
@@ -473,7 +477,7 @@ L34000:
 	goto L2200;
     }
     more_output("Old = %6d      New = ", eqa[j + (k << 2) - 5]);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &eqa[j + (k << 2) - 5]);
     goto L2000;
@@ -488,13 +492,13 @@ L35000:
 	goto L35500;
     }
     more_output("Old = %6d      New = ", eqc[j + k * 25 - 26]);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &eqc[j + k * 25 - 26]);
     goto L2000;
 
 L35500:
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     for (z = buf; *z != '\0'; z++) {
 	if (! isspace(*z)) {
@@ -514,7 +518,7 @@ L36000:
 	goto L2200;
     }
     more_output("Old= %6d     New= ", exits_1.travel[j - 1]);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &exits_1.travel[j - 1]);
     goto L2000;
@@ -526,7 +530,7 @@ L37000:
 	goto L2200;
     }
     more_output("Old = %6d      New= ", eqv[j + (k << 2) - 5]);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &eqv[j + (k << 2) - 5]);
     goto L2000;
@@ -566,7 +570,7 @@ L40000:
 	goto L2200;
     }
     more_output("Old= %6d      New= ", switch_[j - 1]);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &switch_[j - 1]);
     goto L2000;
@@ -601,7 +605,7 @@ L42000:
 
 L43000:
     more_output("Old= %6d      New= ", play_1.here);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &play_1.here);
     eqa[0] = play_1.here;
@@ -628,7 +632,7 @@ L44000:
 
 L45000:
     more_output("Old= %6d      New= ", debug_1.prsflg);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &debug_1.prsflg);
     goto L2000;
@@ -652,7 +656,7 @@ L47000:
 	goto L2200;
     }
     more_output("Old= %6d      New= ", puzzle_1.cpvec[j - 1]);
-    zork_shim_fgets(buf, sizeof buf);
+    ZORK_FGETS(buf, sizeof buf);
     more_input();
     sscanf(buf, "%d", &puzzle_1.cpvec[j - 1]);
     goto L2000;

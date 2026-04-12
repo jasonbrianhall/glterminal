@@ -122,7 +122,8 @@ int yesno_(int q, int y, int n)
 
 L100:
     rspeak_(q);
-    zork_shim_fgets(ans, sizeof ans);
+    if (zork_shim_fgets(ans, sizeof ans) == NULL)
+        exit_();
     more_input();
     if (*ans == 'Y' || *ans == 'y') {
 	goto L200;

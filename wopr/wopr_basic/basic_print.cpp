@@ -20,9 +20,9 @@ void wopr_basic_text(WoprState *w, char *text);
 void wopr_basic_push_line(char *text);
 void wopr_basic_flush_partial(void);
 void wopr_basic_cls(void);
-void wopr_basic_color(int fg);
+void wopr_basic_color(int fg, int bg);
 bool wopr_basic_is_waiting_input(WoprState *w);
-void wopr_basic_color(int fg);
+void wopr_basic_color(int fg, int bg);
 void wopr_basic_push_line(char *text);
 BASIC_NS_END
 #endif
@@ -101,8 +101,7 @@ char *basic_shim_fgets(char *buf, int n)
 
     if (g_basic_game_over) {
         SDL_Log("Game over (early)");
-        if (n > 0) buf[0] = '\0';
-        return buf;
+        return NULL;  // EOF — stops the interpreter loop
     }
 
     if (basic_input_sem) {
@@ -128,8 +127,7 @@ char *basic_shim_fgets(char *buf, int n)
     if (!basic_input_ready || g_basic_game_over) {
         SDL_Log("No input ready after wait: ready=%d game_over=%d",
                 basic_input_ready, g_basic_game_over);
-        if (n > 0) buf[0] = '\0';
-        return buf;
+        return NULL;  // EOF — stops the interpreter loop
     }
 
     strncpy(buf, basic_input_buf, n - 1);

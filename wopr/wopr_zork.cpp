@@ -167,9 +167,7 @@ void wopr_zork_text(WoprState *w, const char *text)
 void wopr_zork_free(WoprState *w)
 {
     ZorkState *zs = static_cast<ZorkState *>(w->sub_state);
-    if (!zs) {
-        return;
-    }
+    if (!zs) return;
 
     if (!zs->dead) {
         g_zork_game_over = 1;
@@ -178,7 +176,25 @@ void wopr_zork_free(WoprState *w)
     }
 
     if (zs->thread) {
-        SDL_WaitThread(zs->thread, nullptr);
+        // Give the thread up to 500 ms to exit cleanly before detaching.
+        // A bare SDL_WaitThread could block forever if the shim is stuck.
+        const int TIMEOUT_MS = 500;
+        const int STEP_MS    = 10;
+        int  waited = 0;
+        bool joined = false;
+        while (waited < TIMEOUT_MS) {
+            if (SDL_SemTryWait(zs->done_sem) == 0) {
+                SDL_WaitThread(zs->thread, nullptr);
+                joined = true;
+                break;
+            }
+            SDL_Delay(STEP_MS);
+            waited += STEP_MS;
+        }
+        if (!joined) {
+            SDL_Log("[zork] free: thread did not exit in %d ms, detaching", TIMEOUT_MS);
+            SDL_DetachThread(zs->thread);
+        }
         zs->thread = nullptr;
     }
 

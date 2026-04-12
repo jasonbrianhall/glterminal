@@ -144,6 +144,20 @@ static void audio_callback(void *userdata, Uint8 *stream, int len) {
 static SDL_AudioDeviceID g_dev = 0;
 
 void sound_init(void) {
+    /* If already initialised (e.g. re-entering BASIC without a clean shutdown),
+     * tear down first so we don't open a second device on top of the first. */
+    if (g_dev) {
+        sound_shutdown();
+    }
+
+    /* Reset queue and synth state from any previous session.
+     * In a standalone build these are always zero-initialised, but in WOPR
+     * the statics survive across enter/free cycles.  A stale g_synth.have_note
+     * or mismatched queue indices will cause the callback to skip new notes. */
+    g_q_head = 0;
+    g_q_tail = 0;
+    memset(&g_synth, 0, sizeof(g_synth));
+
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
         basic_stderr("sound: SDL_InitSubSystem: %s\n", SDL_GetError());
         return;

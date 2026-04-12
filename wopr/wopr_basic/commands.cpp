@@ -410,9 +410,11 @@ static int cmd_color(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
     mpf_t fg, bg; mpf_init2(fg, g_prec); mpf_init2(bg, g_prec);
-    mpf_set_ui(bg, 0);
-    p = eval_expr(p, fg); p = sk(p);
-    if (*p == ',') { p = sk(p + 1); p = eval_expr(p, bg); }
+    mpf_set_ui(fg, 7); mpf_set_ui(bg, 0);
+    if (!*p) { mpf_clears(fg, bg, NULL); return 0; } /* bare COLOR — no-op */
+    if (*p != ',') p = eval_expr(p, fg);
+    p = sk(p);
+    if (*p == ',') { p = sk(p + 1); if (*p) p = eval_expr(p, bg); }
     display_color((int)mpf_get_si(fg), (int)mpf_get_si(bg));
     mpf_clears(fg, bg, NULL);
     return 0;
