@@ -60,6 +60,13 @@ void sftp_overlay_render(int win_w, int win_h);
 // Handle SDL_KEYDOWN. Returns true if consumed.
 bool sftp_overlay_keydown(SDL_Keycode sym);
 
+// Mouse wheel — call from SDL_MOUSEWHEEL when overlay is visible.
+// x/y = cursor position, delta = ev.wheel.y. Returns true if consumed.
+bool sftp_overlay_mousewheel(int x, int y, int delta, int win_w);
+
+// Mouse button down — click to select entry, double-click to enter directory.
+bool sftp_overlay_mousedown(int x, int y, int button, int win_w, int win_h);
+
 std::string sftp_local_download_dir();
 std::string sftp_local_home_dir();
 

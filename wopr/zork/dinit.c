@@ -10,6 +10,8 @@
 #include <amos.h>
 #endif
 
+#include <stdlib.h>
+
 #include "funcs.h"
 #include "vars.h"
 #include "dtextc.h"
@@ -326,7 +328,17 @@ L10000:
 /* NOW RESTORE FROM EXISTING INDEX FILE. */
 
 #if defined(WIN32) || defined(__DJGPP__)
-    dbfile = tmpfile();
+    /* tmpfile() on modern Windows requires admin rights (writes to C:\).
+     * Use _tempnam() instead, which respects TEMP/TMP env vars. */
+    {
+        char *tmpname = _tempnam(NULL, "zork");
+        if (tmpname != NULL) {
+            dbfile = fopen(tmpname, "w+b");
+            free(tmpname);
+        } else {
+            dbfile = NULL;
+        }
+    }
     if (dbfile != NULL) {
         fwrite(dtextc_dat, 1, dtextc_dat_len, dbfile);
         rewind(dbfile);

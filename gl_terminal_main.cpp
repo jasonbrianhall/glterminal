@@ -388,6 +388,7 @@ int main(int argc, char **argv) {
         bool        pending  = false;
         bool        answered = false;
         bool        secret   = false;  // true = echo *, false = echo chars
+        int         attempt  = 0;      // how many password attempts so far
         SDL_mutex  *mtx      = nullptr;
     } prompt_req;
 
@@ -430,6 +431,7 @@ int main(int argc, char **argv) {
 
             ssh_cfg.prompt_password = [&](const char *prompt_str) -> std::string {
                 SDL_LockMutex(prompt_req.mtx);
+                prompt_req.attempt++;
                 prompt_req.prompt   = prompt_str;
                 prompt_req.response.clear();
                 prompt_req.answered = false;
@@ -448,7 +450,37 @@ int main(int argc, char **argv) {
             };
 
             ssh_thread = std::thread([&]() {
-                ssh_conn_ok = ssh_connect(ssh_cfg, &term);
+                // Retry password auth up to 3 times before giving up.
+                // Each failed attempt re-calls prompt_password via ssh_connect.
+                const int MAX_ATTEMPTS = 3;
+                for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                    ssh_conn_ok = ssh_connect(ssh_cfg, &term);
+                    if (ssh_conn_ok) break;
+                    if (ssh_abort.load()) break;
+
+                    // If we never got a password prompt this attempt, it's a
+                    // network/key/host error rather than a bad password — don't retry.
+                    SDL_LockMutex(prompt_req.mtx);
+                    int got_prompts = prompt_req.attempt;
+                    SDL_UnlockMutex(prompt_req.mtx);
+                    if (got_prompts == 0) break;
+
+                    if (attempt < MAX_ATTEMPTS) {
+                        // Reset attempt counter so the next ssh_connect gets a fresh prompt
+                        SDL_LockMutex(prompt_req.mtx);
+                        prompt_req.attempt = 0;
+                        SDL_UnlockMutex(prompt_req.mtx);
+                        char msg[64];
+                        snprintf(msg, sizeof(msg),
+                                 "\r\nAuthentication failed (attempt %d/%d)\r\n",
+                                 attempt, MAX_ATTEMPTS);
+                        term_feed(&term, msg, (int)strlen(msg));
+                    } else {
+                        term_feed(&term,
+                                  "\r\nAuthentication failed — maximum attempts reached.\r\n",
+                                  52);
+                    }
+                }
                 ssh_thread_done.store(true);
             });
         }
@@ -805,6 +837,7 @@ int main(int argc, char **argv) {
 
                                 ssh_cfg.prompt_password = [&](const char *prompt_str) -> std::string {
                                     SDL_LockMutex(prompt_req.mtx);
+                                    prompt_req.attempt++;
                                     prompt_req.prompt   = prompt_str;
                                     prompt_req.response.clear();
                                     prompt_req.answered = false;
@@ -822,7 +855,30 @@ int main(int argc, char **argv) {
                                     }
                                 };
                                 ssh_thread = std::thread([&]() {
-                                    ssh_conn_ok = ssh_connect(ssh_cfg, &term);
+                                    const int MAX_ATTEMPTS = 3;
+                                    for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                                        ssh_conn_ok = ssh_connect(ssh_cfg, &term);
+                                        if (ssh_conn_ok) break;
+                                        if (ssh_abort.load()) break;
+                                        SDL_LockMutex(prompt_req.mtx);
+                                        int got_prompts = prompt_req.attempt;
+                                        SDL_UnlockMutex(prompt_req.mtx);
+                                        if (got_prompts == 0) break;
+                                        if (attempt < MAX_ATTEMPTS) {
+                                            SDL_LockMutex(prompt_req.mtx);
+                                            prompt_req.attempt = 0;
+                                            SDL_UnlockMutex(prompt_req.mtx);
+                                            char msg[64];
+                                            snprintf(msg, sizeof(msg),
+                                                     "\r\nAuthentication failed (attempt %d/%d)\r\n",
+                                                     attempt, MAX_ATTEMPTS);
+                                            term_feed(&term, msg, (int)strlen(msg));
+                                        } else {
+                                            term_feed(&term,
+                                                      "\r\nAuthentication failed — maximum attempts reached.\r\n",
+                                                      52);
+                                        }
+                                    }
                                     ssh_thread_done.store(true);
                                 });
                             }
@@ -1060,8 +1116,20 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+                // SFTP overlay captures clicks
+                if (g_sftp.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    sftp_overlay_mousedown(ev.button.x, ev.button.y, ev.button.button, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
                 // Image viewer captures all clicks
-                if (g_iv.visible) { needs_render = true; break; }
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    iv_mousedown(ev.button.x, ev.button.y, ev.button.button, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1189,6 +1257,12 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    if (iv_mousemotion(ev.motion.x, ev.motion.y, win_w, win_h))
+                        needs_render = true;
+                    break;
+                }
                 if (g_help_visible) {
                     if (help_mousemotion(ev.motion.x, ev.motion.y))
                         needs_render = true;
@@ -1254,6 +1328,11 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_iv.visible) {
+                    iv_mouseup(ev.button.x, ev.button.y, ev.button.button);
+                    needs_render = true;
+                    break;
+                }
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1283,6 +1362,20 @@ int main(int argc, char **argv) {
             }
 
             case SDL_MOUSEWHEEL: {
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    iv_mousewheel(ev.wheel.mouseX, ev.wheel.mouseY,
+                                  ev.wheel.y, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
+                if (g_sftp.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    sftp_overlay_mousewheel(ev.wheel.mouseX, ev.wheel.mouseY,
+                                            ev.wheel.y, win_w);
+                    needs_render = true;
+                    break;
+                }
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
                     int delta = (ev.wheel.y > 0) ? 1 : -1;
@@ -1338,6 +1431,10 @@ int main(int argc, char **argv) {
 
         // Animated render modes (CRT flicker, VHS noise) need continuous redraw
         if (g_render_mode & (RENDER_BIT_CRT | RENDER_BIT_VHS | RENDER_BIT_C64 | RENDER_BIT_COMPOSITE | RENDER_BIT_GHOSTING))
+            needs_render = true;
+
+        // Audio visualizer in image viewer needs continuous redraw while playing
+        if (g_iv.visible && g_iv.audio_playing)
             needs_render = true;
 
         // Notify audio of mode state

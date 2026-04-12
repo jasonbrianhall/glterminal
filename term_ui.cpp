@@ -1022,7 +1022,7 @@ struct HelpRow {
 static const HelpRow HELP_ROWS[] = {
     { "── General ──",            nullptr, nullptr, nullptr },
     { nullptr, "F1",              "Toggle this help screen",                             nullptr },
-    { nullptr, "F5",              "Eye of Felix image viewer (local or remote via SSH)", nullptr },
+    { nullptr, "F5",              "Felix Chirp image/audio player (SSH or local)      ", nullptr },
     { nullptr, "F7",              "WOPR terminal",                                       nullptr },
     { nullptr, "F11",             "Toggle fullscreen",                                   nullptr },
     { nullptr, "Right-click",     "Open context menu",                                   nullptr },

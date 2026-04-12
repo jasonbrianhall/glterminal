@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <ctype.h>
 #include <thread>
 #include <atomic>
 
@@ -580,13 +581,60 @@ bool sftp_overlay_keydown(SDL_Keycode sym) {
         }
         return true;
 
-    default: return false;
+    default: {
+        // First-letter jump: press a letter/digit to jump to the first entry
+        // starting with that character. Press again to cycle through matches.
+        if (sym < 32 || sym > 126) return false;
+        char ch = (char)tolower((unsigned char)sym);
+        if (!isalpha((unsigned char)ch) && !isdigit((unsigned char)ch)) return false;
+
+        std::vector<int> matches;
+        for (int i = 0; i < n; i++) {
+            const char *nm = fp.entries[i].name;
+            if (strcmp(nm, "..") == 0) continue;
+            if (tolower((unsigned char)nm[0]) == (unsigned char)ch)
+                matches.push_back(i);
+        }
+        if (matches.empty()) return false;
+
+        int next = matches[0];
+        for (int i = 0; i < (int)matches.size(); i++) {
+            if (matches[i] == fp.selected) {
+                next = matches[(i + 1) % (int)matches.size()];
+                break;
+            }
+        }
+        fp.selected = next;
+        // Keep selection visible
+        if (fp.selected < fp.scroll_top)
+            fp.scroll_top = fp.selected;
+        if (fp.selected >= fp.scroll_top + g_sftp.visible_rows)
+            fp.scroll_top = fp.selected - g_sftp.visible_rows + 1;
+        return true;
+    }
     }
 }
 
 // ============================================================================
 // RENDER
 // ============================================================================
+
+// Truncate a filename to fit max_chars, preserving the extension with … before it.
+static void sftp_truncate_name(const char *name, int max_chars, char *out, int out_sz) {
+    int len = (int)strlen(name);
+    if (len <= max_chars) { strncpy(out, name, out_sz-1); out[out_sz-1] = '\0'; return; }
+    const char *dot    = strrchr(name, '.');
+    int         ext_len = dot ? (int)strlen(dot) : 0;
+    int         keep   = max_chars - 1 - ext_len;  // chars of stem before ellipsis
+    if (keep < 1) keep = 1;
+    int pos = 0;
+    for (int i = 0; i < keep && pos < out_sz-1; i++) out[pos++] = name[i];
+    if (pos+3 < out_sz) { out[pos++]='\xe2'; out[pos++]='\x80'; out[pos++]='\xa6'; }
+    if (dot && ext_len > 0 && pos+ext_len < out_sz) {
+        strncpy(out+pos, dot, out_sz-pos-1); pos += ext_len;
+    }
+    out[pos] = '\0';
+}
 
 static void draw_panel(const SftpPanel &p, float px, float py, float pw, float ph,
                        bool focused, const char *label, int visible_rows) {
@@ -636,7 +684,18 @@ static void draw_panel(const SftpPanel &p, float px, float py, float pw, float p
         float nb = sel ? 1.0f : (e.is_dir ? 0.50f : 0.92f);
 
         char name_buf[520];
-        snprintf(name_buf, sizeof(name_buf), "%s%s", e.is_dir ? "[DIR] " : "      ", e.name);
+        const char *prefix = e.is_dir ? "[DIR] " : "      ";
+        int prefix_len = 6;
+        int char_w     = g_font_size > 0 ? g_font_size : 16;
+        // Reserve right side for size column (72px + PAD) and scrollbar (5px)
+        int avail_px   = (int)(pw - PAD - 72 - PAD - 5);
+        int max_chars  = avail_px / char_w;
+        if (max_chars < 6) max_chars = 6;
+        int max_name   = max_chars - prefix_len;
+        if (max_name < 3) max_name = 3;
+        char trunc[520];
+        sftp_truncate_name(e.name, max_name, trunc, sizeof(trunc));
+        snprintf(name_buf, sizeof(name_buf), "%s%s", prefix, trunc);
         sftp_draw_text(name_buf, px + PAD, ry + rh * 0.72f, nr, ng, nb, 1.f);
 
         if (!e.is_dir && e.size > 0) {
@@ -774,6 +833,87 @@ void sftp_overlay_render(int win_w, int win_h) {
     }
 
     gl_flush_verts();
+}
+
+// ============================================================================
+// MOUSE
+// ============================================================================
+
+// Returns which panel (0=left, 1=right) the pixel x falls in, and computes
+// the layout constants needed by both mouse handlers.
+static int sftp_hit_panel(int x, int win_w, float &panels_y, int &rh_out, int &list_top_row) {
+    rh_out     = row_h();
+    panels_y   = (float)(rh_out + PAD);   // title_h
+    list_top_row = 2;                       // header row + path row above the list
+    float half = win_w * 0.5f;
+    return (x < (int)half) ? 0 : 1;
+}
+
+bool sftp_overlay_mousewheel(int x, int /*y*/, int delta, int win_w) {
+    if (!g_sftp.visible || g_sftp.transferring) return false;
+
+    float panels_y; int rh, list_top_row;
+    int side = sftp_hit_panel(x, win_w, panels_y, rh, list_top_row);
+
+    SftpPanel &p = (side == 0) ? g_sftp.left : g_sftp.right;
+    // Focus the panel the mouse is over
+    g_sftp.focused_panel = side;
+
+    int n    = (int)p.entries.size();
+    int step = (delta > 0) ? -3 : 3;   // wheel up → scroll toward top
+    p.scroll_top = std::max(0, std::min(p.scroll_top + step,
+                                        std::max(0, n - g_sftp.visible_rows)));
+    // Keep selected within the visible window
+    if (p.selected < p.scroll_top)
+        p.selected = p.scroll_top;
+    if (p.selected >= p.scroll_top + g_sftp.visible_rows)
+        p.selected = p.scroll_top + g_sftp.visible_rows - 1;
+    p.selected = std::max(0, std::min(p.selected, n - 1));
+    return true;
+}
+
+bool sftp_overlay_mousedown(int x, int y, int button, int win_w, int win_h) {
+    if (!g_sftp.visible || g_sftp.transferring) return false;
+    if (button != SDL_BUTTON_LEFT) return false;
+
+    float panels_y; int rh, list_top_row;
+    int side = sftp_hit_panel(x, win_w, panels_y, rh, list_top_row);
+
+    // Switch focus to whichever panel was clicked
+    g_sftp.focused_panel = side;
+    SftpPanel &p = (side == 0) ? g_sftp.left : g_sftp.right;
+
+    // Compute click row inside the file list
+    // Layout: panels_y + rh (header) + rh (path) = start of file list
+    float list_y = panels_y + rh * list_top_row;
+    int   row    = (int)((y - list_y) / rh);
+    int   idx    = p.scroll_top + row;
+    int   n      = (int)p.entries.size();
+
+    if (row < 0 || idx >= n) return true;  // clicked header/path row — just switch focus
+
+    static uint32_t s_last_time[2] = {};
+    static int      s_last_idx[2]  = { -1, -1 };
+    uint32_t now = SDL_GetTicks();
+    bool dbl = (idx == s_last_idx[side] && (now - s_last_time[side]) < 400);
+    s_last_time[side] = now;
+    s_last_idx[side]  = idx;
+
+    p.selected = idx;
+    // Keep selection visible (shouldn't need adjustment but be safe)
+    if (p.selected < p.scroll_top) p.scroll_top = p.selected;
+    if (p.selected >= p.scroll_top + g_sftp.visible_rows)
+        p.scroll_top = p.selected - g_sftp.visible_rows + 1;
+
+    if (dbl) {
+        if (p.entries[idx].is_dir)
+            sftp_panel_enter(p);
+        else
+            sftp_overlay_transfer();
+    }
+
+    (void)win_h;
+    return true;
 }
 
 #endif // USESSH
