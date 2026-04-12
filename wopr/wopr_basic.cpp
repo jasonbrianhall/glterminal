@@ -38,6 +38,8 @@ using WoprBasic::basic_shim_init;
 using WoprBasic::basic_shim_set_input;
 using WoprBasic::basic_input_sem;
 
+static const int SCREEN_ROWS = 25;
+
 // ── Line color encoding ───────────────────────────────────────────────────
 static char COLOR_PREFIX = '\x01';
 static std::string make_colored_line(const std::string &text, uint8_t r, uint8_t g, uint8_t b,
@@ -103,17 +105,17 @@ void wopr_basic_post_key(char c)
     }
     SDL_UnlockMutex(s_key_mtx);
 }
-static void commit_line(void)
+
+/*static void commit_line(void)
 {
     if (!s_active || !s_active->wopr) { s_out_buf.clear(); return; }
     SDL_LockMutex(s_active->line_mtx);
     auto &lines = s_active->wopr->lines;
-    int target = s_screen_top + s_cur_row - 1;  /* 0-based index for this row */
+    int target = s_screen_top + s_cur_row - 1;
     std::string colored = make_colored_line(s_out_buf, s_fg_r, s_fg_g, s_fg_b, s_bg_r, s_bg_g, s_bg_b);
     if (target < (int)lines.size()) {
-        lines[target] = colored;  /* overwrite existing row (LOCATE went backwards) */
+        lines[target] = colored;
     } else {
-        /* Fill any gap with blank lines, then append */
         while ((int)lines.size() < target)
             lines.push_back("");
         lines.push_back(colored);
@@ -124,7 +126,47 @@ static void commit_line(void)
     s_out_buf.clear();
     s_cur_row++;
     s_cur_col = 1;
+} */
+
+static void commit_line(void)
+{
+    if (!s_active || !s_active->wopr) { s_out_buf.clear(); return; }
+
+    SDL_LockMutex(s_active->line_mtx);
+    auto &lines = s_active->wopr->lines;
+
+    int target = s_screen_top + s_cur_row - 1;
+
+    std::string colored = make_colored_line(s_out_buf, s_fg_r, s_fg_g, s_fg_b,
+                                            s_bg_r, s_bg_g, s_bg_b);
+
+    if (target < (int)lines.size()) {
+        lines[target] = colored;
+    } else {
+        while ((int)lines.size() < target)
+            lines.push_back("");
+        lines.push_back(colored);
+    }
+
+    // --- NEW SCROLLING LOGIC ---
+    if (s_cur_row >= SCREEN_ROWS) {
+        s_screen_top++;
+        if (s_screen_top < 0) s_screen_top = 0;
+    } else {
+        s_cur_row++;
+    }
+
+    if ((int)lines.size() > MAX_WOPR_LINES)
+        lines.erase(lines.begin(), lines.begin() + (lines.size() - MAX_WOPR_LINES));
+
+    SDL_UnlockMutex(s_active->line_mtx);
+
+    s_out_buf.clear();
+    s_cur_col = 1;
 }
+
+
+
 // CP437 bytes 128-255 -> UTF-8 sequences
 static const char *cp437_utf8[128] = {
     "\xc3\x87",  /* 128 U+00C7 */  "\xc3\xbc",  /* 129 U+00FC */
@@ -195,7 +237,15 @@ static const char *cp437_utf8[128] = {
 
 void wopr_basic_push_line(char *text)
 {
+    printf("%s\n", text);
     if (!s_active || !s_active->wopr || !text) return;
+    // BASIC prints CHR$(0) → text[0] == '\0' → kill BASIC thread
+    if (text[0] == '\0') {
+        g_basic_game_over = 1;
+        longjmp(basic_exit_jmp, 1);   // EXACT behavior the old system relied on
+        return;
+    }
+
     for (unsigned char *p = (unsigned char *)text; *p; ++p) {
         if (*p == '\n') {
             commit_line();
