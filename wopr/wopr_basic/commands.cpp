@@ -41,7 +41,7 @@ static void print_using(char *fmt, double val) {
 int g_screen_mode   = 0;
 int g_screen_width  = 640;
 int g_screen_height = 350;
-int g_back_color    = 1;   /* palette index used by CLS */
+int g_back_color    = 0;   /* palette index used by CLS */
 
 #ifdef USE_SDL_WINDOW
 /* ── SDL direct path ────────────────────────────────────────────────────── */
@@ -369,7 +369,6 @@ static int cmd_cls(Interp *ip, char *args) {
         arg = (int)mpf_get_si(n);
         mpf_clear(n);
     }
-    if (g_screen_mode > 0) {
         int c;
         if (arg >= 0) {
             c = arg;
@@ -380,13 +379,12 @@ static int cmd_cls(Interp *ip, char *args) {
         }
 #ifdef USE_SDL_WINDOW
         gfx_cls(c);
+
 #else
         if (c == 0) felix_draw("cls;0");
         else        felix_drawf("cls;%d", c);
 #endif
-    } else {
         display_cls();
-    }
     return 0;
 }
 

@@ -118,7 +118,6 @@ void display_init(void)
     printf("\033[0m\033[2J\033[H");
     fflush(stdout);
 #  endif
-    sound_init();
 #endif
 }
 

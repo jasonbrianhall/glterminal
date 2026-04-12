@@ -4,11 +4,18 @@
  */
 #include "basic.h"
 
+#ifdef USE_SDL_WINDOW
+#include "basic_gfx.h"
+#include "basic_gfx_sdl.h"
+#include "display.h"
+#include "basic.h"       // g_break, BASIC_NS
+#include "DejaVuMono.h"  // DEJAVU_REGULAR_FONT_B64 / _SIZE
+#endif
+
+
 #ifdef _WIN32
 #include <windows.h>
 #include <ctype.h>
-
-
 
 static char *strcasestr(char *haystack, char *needle) {
     if (!*needle) return (char *)haystack;
@@ -81,11 +88,33 @@ void run(void) { run_from(0); }
 void run_from(int start_pc) {
     g_break = 0;
     Interp ip = { .pc = start_pc, .running = 1 };
+    sound_init();
+
+
+#ifdef USE_SDL_WINDOW
+    // ------------------------------------------------------------
+    // SDL WINDOW BUILD — real 60 FPS render loop
+    // ------------------------------------------------------------
+    Uint32 last_frame = SDL_GetTicks();
+
     while (ip.running && ip.pc < g_nlines && !g_break) {
+
+        // Pump SDL events every iteration
+        if (!gfx_sdl_pump())
+            break;
+        gfx_maybe_mark_dirty();
+        // Render at ~60 FPS
+        Uint32 now = SDL_GetTicks();
+        if (now - last_frame >= 16) {
+            gfx_sdl_render();
+            last_frame = now;
+        }
+
+        // Execute one BASIC instruction
         int old_pc = ip.pc;
-        int jumped  = dispatch(&ip, g_lines[ip.pc].text);
+        int jumped = dispatch(&ip, g_lines[ip.pc].text);
+
         if (jumped < 0 && g_error_handler[0]) {
-            /* Runtime error with a handler registered — invoke it */
             g_error_resume_pc = old_pc;
             cmd_goto(&ip, g_error_handler);
             jumped = 1;
@@ -93,6 +122,29 @@ void run_from(int start_pc) {
             ip.pc = old_pc + 1;
         }
     }
+
+    // Final frame
+    gfx_sdl_render();
+
+#else
+    // ------------------------------------------------------------
+    // COMMAND-LINE BUILD — original behavior
+    // ------------------------------------------------------------
+    while (ip.running && ip.pc < g_nlines && !g_break) {
+        int old_pc = ip.pc;
+        int jumped = dispatch(&ip, g_lines[ip.pc].text);
+
+        if (jumped < 0 && g_error_handler[0]) {
+            g_error_resume_pc = old_pc;
+            cmd_goto(&ip, g_error_handler);
+            jumped = 1;
+        } else if (!jumped) {
+            ip.pc = old_pc + 1;
+        }
+    }
+#endif
+
+    // Shared break handling
     if (g_break) {
         g_cont_pc = ip.pc;
         display_newline();
@@ -100,6 +152,8 @@ void run_from(int start_pc) {
         g_break = 0;
     }
 }
+
+
 
 /* ================================================================
  * main — direct-run or interactive REPL

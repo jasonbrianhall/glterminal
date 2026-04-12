@@ -95,7 +95,8 @@ int main(int argc, char **argv) {
     std::vector<int> pf_socks_pending;
 #endif
     bool use_ssh = false;
-    bool force_sdl = false;
+    bool force_sdl = true;   // SDL renderer is the default
+    bool force_gl  = false;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -173,6 +174,12 @@ int main(int argc, char **argv) {
         // Positional: shell command (local mode only)
         if (strcmp(arg, "--sdl") == 0 || strcmp(arg, "-sdl") == 0) {
             force_sdl = true;
+            force_gl  = false;
+            continue;
+        }
+        if (strcmp(arg, "--gl") == 0 || strcmp(arg, "-gl") == 0) {
+            force_gl  = true;
+            force_sdl = false;
             continue;
         }
 
@@ -187,7 +194,8 @@ int main(int argc, char **argv) {
             printf("       flt [options]\n\n");
             printf("Options:\n");
             printf("  [shell]                     Command to run instead of default shell\n");
-            printf("  --sdl                       Force SDL renderer (for testing fallback path)\n");
+            printf("  --gl                        Force OpenGL renderer (default is SDL)\n");
+            printf("  --sdl                       Force SDL renderer (same as default)\n");
 #ifdef USESSH
             printf("\nSSH options:\n");
             printf("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
@@ -257,7 +265,7 @@ int main(int argc, char **argv) {
     }
 
     SDL_GLContext ctx = nullptr;
-    if (!force_sdl) {
+    if (force_gl) {
         ctx = SDL_GL_CreateContext(window);
         if (!ctx) {
             SDL_Log("INFO: GL 3.3 not available (%s), retrying with Compatibility profile\n",
@@ -268,10 +276,10 @@ int main(int argc, char **argv) {
         if (!ctx)
             SDL_Log("INFO: GL 3.3 unavailable (%s), falling back to SDL renderer\n", SDL_GetError());
     } else {
-        SDL_Log("INFO: --sdl flag set, forcing SDL renderer\n");
+        SDL_Log("INFO: Using SDL renderer (default; use --gl for OpenGL)\n");
     }
 
-    if (force_sdl || !ctx) {
+    if (!force_gl || !ctx) {
         g_use_sdl_renderer = true;
         // Recreate the window without the OpenGL flag so the SDL renderer can own it
         SDL_DestroyWindow(window);
@@ -341,7 +349,24 @@ int main(int argc, char **argv) {
     basic_graphics_init(win_w, win_h);
     if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
 
-    term_resize(&term, win_w, win_h);
+    // Helper: correct term.cell_w to match the regular face (s_ft_face_reg) rather
+    // than the bold face (s_ft_face) that term_set_font_size uses internally.
+    auto fix_cell_w = [&]() {
+        FT_Face reg = s_ft_face_reg ? s_ft_face_reg : s_ft_face;
+        FT_Set_Pixel_Sizes(reg, 0, (FT_UInt)g_font_size);
+        FT_UInt gi = FT_Get_Char_Index(reg, 'M');
+        if (gi && FT_Load_Glyph(reg, gi, FT_LOAD_DEFAULT) == 0)
+            term.cell_w = (float)(reg->glyph->advance.x >> 6);
+    };
+
+    // Invalidate glyph cache now that the renderer is up.
+    // Don't call term_set_font_size or SDL_SetWindowSize here — those send
+    // SIGWINCH which confuses the shell and causes double-spacing at startup.
+    ft_invalidate_glyph_cache();
+    fix_cell_w();
+    SDL_GetWindowSize(window, &win_w, &win_h);
+    gl_resize_fbo(win_w, win_h);
+    G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
 
     // ---- SSH: async connection state ----------------------------------------
     // ssh_connect() blocks on network I/O (DNS, TCP, SSH handshake, auth).
@@ -522,6 +547,11 @@ int main(int argc, char **argv) {
 
     uint32_t last_ticks = SDL_GetTicks();
     bool running = true;
+    // Tracks whether the term FBO needs a full clear before the next draw.
+    // Only set on layout changes (resize, theme, font) — NOT on PTY scroll.
+    // PTY-driven all_dirty was clearing the FBO every frame, causing the blink
+    // when holding Enter.
+    bool fbo_needs_clear = true;
 
     // Auto-scroll state for selection drag
     int  autoscroll_mouse_x = 0, autoscroll_mouse_y = 0;
@@ -1070,6 +1100,7 @@ int main(int argc, char **argv) {
                             if (g_menu.sub_open == MENU_ID_THEMES) {
                                 apply_theme(sub_hit);
                                 settings_save();
+                                fbo_needs_clear = true;
                                 term_dirty_all(&term);
                             } else if (g_menu.sub_open == MENU_ID_OPACITY) {
                                 g_opacity = ((float[]){1.0f,0.85f,0.7f,0.5f,0.3f,0.1f})[sub_hit];
@@ -1095,6 +1126,8 @@ int main(int argc, char **argv) {
                                 SDL_GetWindowSize(window, &win_w, &win_h);
                                 font_apply(g_font_list[sub_hit], g_font_list, &term, win_w, win_h);
                                 font_save_config(g_font_list[sub_hit].display_name);
+                                ft_invalidate_glyph_cache();
+                                fbo_needs_clear = true;
                                 G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                                 settings_save();
                                 term_dirty_all(&term);
@@ -1256,6 +1289,9 @@ int main(int argc, char **argv) {
                     if (mod & KMOD_SHIFT) delta *= 4;
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     term_set_font_size(&term, g_font_size + delta, win_w, win_h);
+                    fix_cell_w();
+                    ft_invalidate_glyph_cache();
+                    fbo_needs_clear = true;
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
                     settings_save();
                 } else if (term.mouse_report) {
@@ -1291,6 +1327,7 @@ int main(int argc, char **argv) {
                     g_basic_win_w = win_w;
                     g_basic_win_h = win_h;
                     basic_graphics_init(win_w, win_h);  // update canvas mapping
+                    fbo_needs_clear = true;
 #ifdef USESSH
                     if (use_ssh) ssh_pty_resize(term.cols, term.rows);
 #endif
@@ -1348,10 +1385,24 @@ int main(int argc, char **argv) {
         // buffer always gets the composited frame presented on both back and front buffers.
         if (s_dl_dirty || s_basic_has_content) needs_render = true;
 
+        // SDL mode draws directly to the screen (no persistent FBO), so every
+        // frame must redraw — otherwise the double-buffer swap shows a blank buffer.
+        if (g_use_sdl_renderer) needs_render = true;
+
+        // Any visible overlay must be redrawn every frame so both buffers of the
+        // SDL/GL double-buffer swap chain contain it.
+        if (g_menu.visible || g_help_visible || g_iv.visible || g_wopr.visible
+#ifdef USESSH
+            || g_sftp.visible || g_sftp_console_visible || g_pf_overlay.visible
+#endif
+        ) needs_render = true;
+
         if (needs_render) {
             // Only re-render the terminal FBO if at least one row is dirty,
             // OR if basic_graphics has commands waiting.
-            bool any_dirty = term.all_dirty || s_dl_dirty;
+            // In SDL mode, glyphs aren't cached in s_term_tex so we must always
+            // re-queue them — treat every frame as dirty when using SDL renderer.
+            bool any_dirty = term.all_dirty || s_dl_dirty || g_use_sdl_renderer;
             if (!any_dirty) {
                 for (int r = 0; r < term.rows && !any_dirty; r++)
                     any_dirty = term.dirty_rows[r] != 0;
@@ -1361,8 +1412,14 @@ int main(int argc, char **argv) {
                 float bg_r = THEMES[g_theme_idx].bg_r;
                 float bg_g = THEMES[g_theme_idx].bg_g;
                 float bg_b = THEMES[g_theme_idx].bg_b;
-                if (term.all_dirty)
+                // In SDL mode glyphs aren't cached so we must redraw all rows
+                // every frame. Mark all dirty so term_render redraws everything,
+                // then clear the texture so stale backgrounds don't accumulate.
+                if (g_use_sdl_renderer) term_dirty_all(&term);
+                if (fbo_needs_clear || g_use_sdl_renderer) {
                     gl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
+                    fbo_needs_clear = false;
+                }
                 gl_begin_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
                 basic_render(win_w, win_h); // flush BASIC graphics first (background layer)
                 term_render(&term, 2, 2);   // terminal text on top
@@ -1383,20 +1440,27 @@ int main(int argc, char **argv) {
             float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
             gl_end_frame(t_sec, win_w, win_h);
 
-            // Menu renders after post-process so it's never distorted
-            if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
-            menu_render(&g_menu);
+            // Overlay rendering — each layer only renders if no higher-priority
+            // overlay is active, so they never visually stack on top of each other.
+            // Priority (lowest to highest): menu < SFTP < image viewer < help < WOPR
+            if (g_wopr.visible) {
+                wopr_render(win_w, win_h);
+            } else if (g_help_visible) {
+                help_render(win_w, win_h);
+            } else if (g_iv.visible) {
+                iv_render(win_w, win_h);
+            } else {
 #ifdef USESSH
-            sftp_overlay_render(win_w, win_h);
-            sftp_console_render(win_w, win_h);
-            pf_overlay_render(win_w, win_h);
+                sftp_overlay_render(win_w, win_h);
+                sftp_console_render(win_w, win_h);
+                pf_overlay_render(win_w, win_h);
 #endif
-            // Image viewer (F5) — full-screen overlay
-            iv_render(win_w, win_h);
-            // Help overlay renders last (topmost layer)
-            help_render(win_w, win_h);
-            // WOPR overlay — above everything including help
-            if (g_wopr.visible) wopr_render(win_w, win_h);
+                menu_render(&g_menu);
+            }
+
+            // Flush any geometry queued by overlay renderers (menus, help, etc.)
+            gl_flush_glyphs();
+            gl_flush_verts();
 
             if (g_use_sdl_renderer)
                 SDL_RenderPresent(g_sdl_renderer);

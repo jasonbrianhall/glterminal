@@ -1,5 +1,6 @@
 #include "ft_font.h"
 #include "gl_terminal.h"   // ATTR_BOLD, ATTR_ITALIC
+#include "glyph_atlas.h"   // GlyphAtlas g_atlas
 
 // Embedded font headers
 #include "DejaVuMonoBold.h"
@@ -23,15 +24,14 @@ FT_Face    s_ft_face_reg  = NULL;
 FT_Face    s_ft_face_obl  = NULL;
 FT_Face    s_ft_face_bobl = NULL;
 FT_Face    s_emoji_face   = NULL;
-FT_Face    s_symbols_face = NULL;  // fallback for Misc Symbols block (chess, etc.)
+FT_Face    s_symbols_face = NULL;
 
 unsigned char *s_font_buf      = NULL;
 unsigned char *s_font_buf_reg  = NULL;
 unsigned char *s_font_buf_obl  = NULL;
 unsigned char *s_font_buf_bobl = NULL;
-static unsigned char *s_emoji_buf     = NULL;
+static unsigned char *s_emoji_buf = NULL;
 
-// g_font_size is owned by app_globals.h; ft_font reads it via extern
 extern int g_font_size;
 
 // ============================================================================
@@ -43,10 +43,7 @@ void ft_init(void) {
 
     size_t decoded_size = 0;
     int r = base64_decode(MONOSPACE_FONT_B64, MONOSPACE_FONT_B64_SIZE, &s_font_buf, &decoded_size);
-    if (r != 0 || !s_font_buf) {
-        //SDL_Log("[Font] base64 decode failed\n");
-        return;
-    }
+    if (r != 0 || !s_font_buf) return;
 
     FT_New_Memory_Face(s_ft_lib, s_font_buf, (FT_Long)decoded_size, 0, &s_ft_face);
     SDL_Log("[Font] loaded: %s %s\n", s_ft_face->family_name, s_ft_face->style_name);
@@ -69,16 +66,9 @@ void ft_init(void) {
     if (er == 0 && s_emoji_buf) {
         if (FT_New_Memory_Face(s_ft_lib, s_emoji_buf, (FT_Long)emoji_decoded_size, 0, &s_emoji_face) == 0)
             SDL_Log("[Font] emoji: %s %s\n", s_emoji_face->family_name, s_emoji_face->style_name);
-        else {
-            SDL_Log("[Font] emoji face load failed\n");
-            free(s_emoji_buf); s_emoji_buf = nullptr;
-        }
-    } else {
-        SDL_Log("[Font] emoji base64 decode failed\n");
+        else { free(s_emoji_buf); s_emoji_buf = nullptr; }
     }
 
-    // Load embedded FreeMono as symbols fallback (Misc Symbols U+2600-27BF,
-    // includes chess pieces, card suits, etc.)
     {
         unsigned char *buf = nullptr;
         size_t sz = 0;
@@ -95,10 +85,11 @@ void ft_init(void) {
 }
 
 void ft_shutdown(void) {
+    g_atlas.destroy();
+
     if (s_symbols_face) {
         if (s_symbols_face->generic.data) free(s_symbols_face->generic.data);
-        FT_Done_Face(s_symbols_face);
-        s_symbols_face = nullptr;
+        FT_Done_Face(s_symbols_face); s_symbols_face = nullptr;
     }
     if (s_emoji_face)    FT_Done_Face(s_emoji_face);
     if (s_ft_face_bobl)  FT_Done_Face(s_ft_face_bobl);
@@ -113,8 +104,6 @@ void ft_shutdown(void) {
     if (s_font_buf)      free(s_font_buf);
 }
 
-// Creates a standalone DejaVu Regular face for fixed-size UI rendering.
-// Decodes the font into its own buffer so it is unaffected by font switching.
 FT_Face ft_make_menu_face(int pixel_size) {
     if (!s_ft_lib) return nullptr;
     unsigned char *buf = nullptr;
@@ -123,12 +112,9 @@ FT_Face ft_make_menu_face(int pixel_size) {
         return nullptr;
     FT_Face face = nullptr;
     if (FT_New_Memory_Face(s_ft_lib, buf, (FT_Long)sz, 0, &face) != 0) {
-        free(buf);
-        return nullptr;
+        free(buf); return nullptr;
     }
     FT_Set_Pixel_Sizes(face, 0, (FT_UInt)pixel_size);
-    // Store the buffer pointer in the face's generic field so we can free it later.
-    // Caller frees via:  free(face->generic.data); FT_Done_Face(face);
     face->generic.data      = buf;
     face->generic.finalizer = [](void *obj) {
         FT_Face f = (FT_Face)obj;
@@ -138,6 +124,9 @@ FT_Face ft_make_menu_face(int pixel_size) {
 }
 
 void ft_reload_embedded(void) {
+    // Invalidate the atlas — all cached glyphs are stale after a face reload.
+    g_atlas.clear();
+
     auto free_face = [](FT_Face *face, unsigned char **buf) {
         if (*face) { FT_Done_Face(*face); *face = nullptr; }
         if (*buf)  { free(*buf); *buf = nullptr; }
@@ -199,107 +188,99 @@ bool is_emoji_codepoint(uint32_t cp) {
 }
 
 int cp_to_utf8(uint32_t cp, char *buf) {
-    if (cp < 0x80)      { buf[0]=(char)cp; return 1; }
-    if (cp < 0x800)     { buf[0]=(char)(0xC0|(cp>>6)); buf[1]=(char)(0x80|(cp&0x3F)); return 2; }
-    if (cp < 0x10000)   { buf[0]=(char)(0xE0|(cp>>12)); buf[1]=(char)(0x80|((cp>>6)&0x3F)); buf[2]=(char)(0x80|(cp&0x3F)); return 3; }
+    if (cp < 0x80)    { buf[0]=(char)cp; return 1; }
+    if (cp < 0x800)   { buf[0]=(char)(0xC0|(cp>>6)); buf[1]=(char)(0x80|(cp&0x3F)); return 2; }
+    if (cp < 0x10000) { buf[0]=(char)(0xE0|(cp>>12)); buf[1]=(char)(0x80|((cp>>6)&0x3F)); buf[2]=(char)(0x80|(cp&0x3F)); return 3; }
     buf[0]=(char)(0xF0|(cp>>18)); buf[1]=(char)(0x80|((cp>>12)&0x3F)); buf[2]=(char)(0x80|((cp>>6)&0x3F)); buf[3]=(char)(0x80|(cp&0x3F)); return 4;
 }
 
 // ============================================================================
-// GLYPH / TEXT RENDERING
+// ATLAS-BACKED GLYPH RENDERING
 // ============================================================================
 
-float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
-                 int font_px, int emoji_px, float r, float g, float b, float a,
-                 std::vector<Vertex> &verts) {
-    float glyph_scale = 1.0f;
-    if (face->num_fixed_sizes > 0) {
-        int best = 0;
-        int best_diff = abs(face->available_sizes[0].height - emoji_px);
-        for (int si = 1; si < face->num_fixed_sizes; si++) {
-            int diff = abs(face->available_sizes[si].height - emoji_px);
-            if (diff < best_diff) { best_diff = diff; best = si; }
-        }
-        FT_Select_Size(face, best);
-        glyph_scale = (float)emoji_px / (float)face->available_sizes[best].height;
-    } else {
-        int req_px = (face == s_emoji_face) ? emoji_px : font_px;
-        FT_Set_Pixel_Sizes(face, 0, (FT_UInt)req_px);
-    }
+// Push one quad (6 GlyphVertex) for an atlas-cached glyph.
+// Returns the pixel advance so the caller can advance cx.
+static float push_glyph_quad(const GlyphEntry *e,
+                              float cx, float baseline_y,
+                              int font_px,
+                              float r, float g, float b, float a,
+                              bool is_bitmap_face,
+                              std::vector<GlyphVertex> &verts) {
+    if (e->bw == 0 || e->bh == 0) return (float)e->advance;
 
-    int load_flags = FT_LOAD_RENDER;
-    if (face->num_fixed_sizes > 0 || face == s_emoji_face) load_flags |= FT_LOAD_COLOR;
-
-    FT_UInt gi = FT_Get_Char_Index(face, cp);
-    if (!gi) {
-        //if (cp > 0x7F) SDL_Log("[Glyph] cp=U+%04X not in face '%s'\n", cp, face->family_name);
-        return 0.f;
-    }
-    int load_err = FT_Load_Glyph(face, gi, load_flags);
-    if (load_err) {
-        return 0.f;
-    }
-
-    FT_GlyphSlot slot = face->glyph;
-    FT_Bitmap *bm = &slot->bitmap;
-
-    if (bm->width == 0 || bm->rows == 0) return 0.f;
-
-    float render_scale = glyph_scale;
-    float drawn_w = bm->width * render_scale;
-    float drawn_h = bm->rows  * render_scale;
     float gx, gy;
-    if (face->num_fixed_sizes > 0) {
-        gx = cx + (font_px - drawn_w) * 0.5f;
-        gy = baseline_y - drawn_h;
+    if (is_bitmap_face) {
+        // Bitmap/fixed-size face: center horizontally, align top of cell
+        gx = cx + e->cell_offset_x;
+        gy = baseline_y - (float)e->bh;
     } else {
-        gx = cx + slot->bitmap_left;
-        gy = baseline_y - slot->bitmap_top;
+        gx = cx + (float)e->bearing_x;
+        gy = baseline_y - (float)e->bearing_y;
     }
 
-    if (bm->pixel_mode == FT_PIXEL_MODE_BGRA) {
-        for (int row = 0; row < (int)bm->rows; row++) {
-            for (int col = 0; col < (int)bm->width; col++) {
-                const unsigned char *px = bm->buffer + row * bm->pitch + col * 4;
-                float pb = px[0]/255.f, pg = px[1]/255.f, pr = px[2]/255.f, pa = px[3]/255.f * a;
-                if (pa < 0.01f) continue;
-                float ex = gx + col * render_scale;
-                float ey = gy + row * render_scale;
-                float ps = render_scale < 1.f ? 1.f : render_scale;
-                verts.push_back({ex,      ey,      pr,pg,pb,pa});
-                verts.push_back({ex+ps,   ey,      pr,pg,pb,pa});
-                verts.push_back({ex+ps,   ey+ps,   pr,pg,pb,pa});
-                verts.push_back({ex,      ey,      pr,pg,pb,pa});
-                verts.push_back({ex+ps,   ey+ps,   pr,pg,pb,pa});
-                verts.push_back({ex,      ey+ps,   pr,pg,pb,pa});
-            }
-        }
-    } else {
-        for (int row = 0; row < (int)bm->rows; row++) {
-            for (int col = 0; col < (int)bm->width; col++) {
-                unsigned char pv = bm->buffer[row * bm->pitch + col];
-                if (pv < 1) continue;
-                float fa = a * sqrtf(pv / 255.f);
-                float ex = gx + col * render_scale;
-                float ey = gy + row * render_scale;
-                float ps = render_scale < 1.f ? 1.f : render_scale;
-                verts.push_back({ex,     ey,     r,g,b,fa});
-                verts.push_back({ex+ps,  ey,     r,g,b,fa});
-                verts.push_back({ex+ps,  ey+ps,  r,g,b,fa});
-                verts.push_back({ex,     ey,     r,g,b,fa});
-                verts.push_back({ex+ps,  ey+ps,  r,g,b,fa});
-                verts.push_back({ex,     ey+ps,  r,g,b,fa});
-            }
-        }
-    }
-    return (float)(slot->advance.x >> 6) * render_scale;
+    float x0 = gx,            y0 = gy;
+    float x1 = gx + e->bw,    y1 = gy + e->bh;
+    float u0 = e->u0, v0 = e->v0;
+    float u1 = e->u1, v1 = e->v1;
+    float cg = e->color ? 1.f : 0.f;
+
+    // Two triangles, six vertices
+    GlyphVertex q[6] = {
+        {x0,y0, u0,v0, r,g,b,a, cg},
+        {x1,y0, u1,v0, r,g,b,a, cg},
+        {x1,y1, u1,v1, r,g,b,a, cg},
+        {x0,y0, u0,v0, r,g,b,a, cg},
+        {x1,y1, u1,v1, r,g,b,a, cg},
+        {x0,y1, u0,v1, r,g,b,a, cg},
+    };
+    for (auto &v : q) verts.push_back(v);
+    return (float)e->advance;
 }
 
+// ── draw_glyph: kept for API compatibility with any callers outside draw_text.
+// Now redirects through the atlas instead of rasterizing per-frame.
+float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
+                 int font_px, int emoji_px, float r, float g, float b, float a,
+                 std::vector<Vertex> & /*verts_unused*/) {
+    // We ignore the legacy Vertex vector — glyph data now goes to the glyph
+    // accumulator via draw_glyph_verts.  The old verts param is kept so
+    // existing call sites compile without changes.
+    const GlyphEntry *e = g_atlas.get(face, cp, font_px, emoji_px);
+    if (!e) return 0.f;
+
+    bool is_bitmap = (face->num_fixed_sizes > 0);
+    float tr = r, tg = g, tb = b;
+    // Grayscale emoji (non-color NotoEmoji entries) render white so the tint
+    // colours them; colour BGRA entries ignore tint rgb anyway.
+    if (face == s_emoji_face && !e->color) { tr = 1.f; tg = 1.f; tb = 1.f; }
+
+    GlyphVertex quad[6];
+    // Build quad inline
+    float gx, gy;
+    if (is_bitmap) { gx = cx + e->cell_offset_x; gy = baseline_y - (float)e->bh; }
+    else           { gx = cx + (float)e->bearing_x; gy = baseline_y - (float)e->bearing_y; }
+
+    if (e->bw > 0 && e->bh > 0) {
+        float x0=gx, y0=gy, x1=gx+e->bw, y1=gy+e->bh;
+        float cg = e->color ? 1.f : 0.f;
+        quad[0]={x0,y0,e->u0,e->v0,tr,tg,tb,a,cg};
+        quad[1]={x1,y0,e->u1,e->v0,tr,tg,tb,a,cg};
+        quad[2]={x1,y1,e->u1,e->v1,tr,tg,tb,a,cg};
+        quad[3]={x0,y0,e->u0,e->v0,tr,tg,tb,a,cg};
+        quad[4]={x1,y1,e->u1,e->v1,tr,tg,tb,a,cg};
+        quad[5]={x0,y1,e->u0,e->v1,tr,tg,tb,a,cg};
+        draw_glyph_verts(quad, 6);
+    }
+    return (float)e->advance;
+}
+
+// ── draw_text: atlas-backed, one textured quad per glyph ─────────────────────
 float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
                 float r, float g, float b, float a, uint8_t attrs) {
     if (!s_ft_face || !text || !*text) return x;
 
-    static std::vector<Vertex> verts;
+    // Thread-local reused vector to avoid heap churn per call
+    static std::vector<GlyphVertex> verts;
     verts.clear();
 
     FT_Face base_face = face_for_attrs(attrs);
@@ -308,35 +289,49 @@ float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
     const unsigned char *p = (const unsigned char *)text;
     while (*p) {
         uint32_t cp = next_codepoint(&p);
-        if (!cp) continue;
-        if (cp == 0xFE0F) continue;
+        if (!cp || cp == 0xFE0F) continue;
 
+        // Face selection — mirror original priority order exactly
         FT_Face face = base_face;
-        // Misc Symbols block (U+2600-27BF) — route to symbols face first,
-        // before emoji face, since NotoEmoji may have stub entries for these
         if (s_symbols_face && cp >= 0x2600 && cp <= 0x27BF) {
             if (FT_Get_Char_Index(s_symbols_face, cp)) face = s_symbols_face;
         }
-        // Emoji — only if not already handled by symbols face
         if (face == base_face && s_emoji_face && is_emoji_codepoint(cp)) {
             if (FT_Get_Char_Index(s_emoji_face, cp)) face = s_emoji_face;
         }
 
-        bool is_grayscale_emoji = (face == s_emoji_face && face->num_fixed_sizes == 0);
-        float er = is_grayscale_emoji ? 1.f : r;
-        float eg = is_grayscale_emoji ? 1.f : g;
-        float eb = is_grayscale_emoji ? 1.f : b;
+        float tr = r, tg = g, tb = b;
+        bool is_bitmap = (face->num_fixed_sizes > 0);
+        bool is_gray_emoji = (face == s_emoji_face && !is_bitmap);
+        if (is_gray_emoji) { tr = 1.f; tg = 1.f; tb = 1.f; }
 
-        float adv = draw_glyph(face, cp, cx, y, font_px, emoji_px, er, eg, eb, a, verts);
-        if (adv == 0.f) {
-            if (face != s_emoji_face && s_emoji_face)
-                adv = draw_glyph(s_emoji_face, cp, cx, y, font_px, emoji_px, 1.f, 1.f, 1.f, a, verts);
+        // Try primary face
+        const GlyphEntry *e = g_atlas.get(face, cp, font_px, emoji_px);
+
+        // Fallback chain — same order as original draw_text
+        if (!e && face != s_emoji_face && s_emoji_face)
+            e = g_atlas.get(s_emoji_face, cp, font_px, emoji_px);
+        if (!e && face != s_symbols_face && s_symbols_face)
+            e = g_atlas.get(s_symbols_face, cp, font_px, font_px);
+
+        float adv = 0.f;
+        if (e) {
+            // Determine tint for whichever face actually provided the glyph
+            // (may differ from initial face after fallback)
+            float er = tr, eg = tg, eb = tb;
+            if (!e->color) {
+                // Keep caller tint for normal glyphs; emoji fallbacks go white
+                // (already set above for is_gray_emoji; reset here if we fell
+                // back to emoji face from a non-emoji primary face)
+            }
+
+            adv = push_glyph_quad(e, cx, y, font_px, er, eg, eb, a,
+                                  is_bitmap, verts);
         }
+
+        // Final fallback: use a space-width advance so layout doesn't break
         if (adv == 0.f) {
-            if (face != s_symbols_face && s_symbols_face)
-                adv = draw_glyph(s_symbols_face, cp, cx, y, font_px, font_px, r, g, b, a, verts);
-        }
-        if (adv == 0.f) {
+            // Ask FreeType for the space advance — cheap, no rasterize
             FT_Set_Pixel_Sizes(base_face, 0, (FT_UInt)font_px);
             FT_UInt gi = FT_Get_Char_Index(base_face, ' ');
             if (!FT_Load_Glyph(base_face, gi, FT_LOAD_DEFAULT))
@@ -346,11 +341,12 @@ float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
     }
 
     if (!verts.empty())
-        draw_verts(verts.data(), (int)verts.size(), GL_TRIANGLES);
+        draw_glyph_verts(verts.data(), (int)verts.size());
 
     return cx;
 }
 
+// ── measure_text: unchanged (no rasterization, just advance queries) ──────────
 float measure_text(const char *text, int font_px) {
     if (!s_ft_face || !text) return 0;
     FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)font_px);
@@ -363,4 +359,9 @@ float measure_text(const char *text, int font_px) {
             w += (float)(s_ft_face->glyph->advance.x >> 6);
     }
     return w;
+}
+
+// ── atlas_invalidate: call whenever font_px changes (font size slider, etc.) ──
+void ft_invalidate_glyph_cache(void) {
+    g_atlas.clear();
 }

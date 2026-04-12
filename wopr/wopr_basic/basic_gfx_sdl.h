@@ -9,10 +9,6 @@
 
 #ifdef USE_SDL_WINDOW
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /*
  * gfx_sdl_init — open the SDL window and initialise FreeType.
  *
@@ -65,8 +61,6 @@ void gfx_sdl_render(void);
  */
 void gfx_sdl_mark_dirty(void);
 
-#ifdef __cplusplus
-}
-#endif
+void gfx_maybe_mark_dirty();
 
 #endif /* USE_SDL_WINDOW */

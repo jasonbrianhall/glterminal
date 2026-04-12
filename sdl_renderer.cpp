@@ -13,6 +13,7 @@
 
 #include "gl_renderer.h"   // Vertex, Mat4, GLState, MAX_VERTS, mat4_ortho
 #include "sdl_renderer.h"
+#include "glyph_atlas.h"   // g_atlas, GlyphVertex
 #include "gl_terminal.h"   // MAX_VERTS cross-check
 #include <SDL2/SDL.h>
 #include <string.h>
@@ -86,10 +87,54 @@ void sdl_init_renderer(int w, int h) {
     // Populate stub GLState so mat4/proj references in shared code don't crash
     G.cr = G.cg = G.cb = G.ca = 1.f;
     G.proj = mat4_ortho(0, (float)w, (float)h, 0, -1, 1);
+    // Initialize glyph atlas for SDL path
+    g_atlas.init();
 }
 
 void sdl_resize_fbo(int w, int h) {
     sdl_init_renderer(w, h);  // recreate textures at new size
+}
+
+// Glyph accumulator for SDL path
+static std::vector<SDL_Vertex> s_glyph_sv;
+static std::vector<GlyphVertex> s_glyph_pending;
+
+void sdl_flush_glyphs() {
+    if (s_glyph_pending.empty()) return;
+    if (!g_atlas.sdl_tex) { s_glyph_pending.clear(); return; }
+
+    s_glyph_sv.clear();
+    s_glyph_sv.reserve(s_glyph_pending.size());
+
+    for (auto &gv : s_glyph_pending) {
+        SDL_Vertex sv;
+        sv.position.x  = gv.x;
+        sv.position.y  = gv.y;
+        sv.tex_coord.x = gv.u;
+        sv.tex_coord.y = gv.v;
+        if (gv.color_glyph > 0.5f) {
+            sv.color.r = 255;
+            sv.color.g = 255;
+            sv.color.b = 255;
+            sv.color.a = (Uint8)(gv.tint_a * 255.f);
+        } else {
+            // Grayscale: tint color * atlas alpha (coverage baked into .a)
+            sv.color.r = (Uint8)(gv.tint_r * 255.f);
+            sv.color.g = (Uint8)(gv.tint_g * 255.f);
+            sv.color.b = (Uint8)(gv.tint_b * 255.f);
+            sv.color.a = (Uint8)(gv.tint_a * 255.f);
+        }
+        s_glyph_sv.push_back(sv);
+    }
+
+    SDL_RenderGeometry(g_sdl_renderer, g_atlas.sdl_tex,
+                       s_glyph_sv.data(), (int)s_glyph_sv.size(), nullptr, 0);
+    s_glyph_pending.clear();
+}
+
+void sdl_draw_glyph_verts(GlyphVertex *v, int n) {
+    for (int i = 0; i < n; i++)
+        s_glyph_pending.push_back(v[i]);
 }
 
 void sdl_flush_verts(void) {
@@ -134,17 +179,21 @@ void sdl_clear_term_frame(int, int, float bg_r, float bg_g, float bg_b) {
 }
 
 void sdl_end_term_frame(void) {
+    // Flush only solid-colour geometry (backgrounds, cursor) into s_term_tex.
+    // Glyphs are deferred — see sdl_end_frame where they're drawn to the screen
+    // after the composite blit, avoiding the streaming-texture-as-source-while-
+    // texture-is-render-target conflict in SDL's opengl backend.
     sdl_flush_verts();
     SDL_SetRenderTarget(g_sdl_renderer, nullptr);
 }
 
 void sdl_begin_frame(void) {
     s_accum_n = 0;
-    SDL_SetRenderTarget(g_sdl_renderer, s_composite_tex);
+    // Blit s_term_tex (backgrounds only) to screen first
+    SDL_SetRenderTarget(g_sdl_renderer, nullptr);
     SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_sdl_renderer);
     if (s_basic_has_content && s_basic_tex) {
-        // BASIC layer first (background), then term on top with alpha blend
         SDL_SetTextureBlendMode(s_basic_tex, SDL_BLENDMODE_NONE);
         SDL_RenderCopy(g_sdl_renderer, s_basic_tex, nullptr, nullptr);
         SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_BLEND);
@@ -152,8 +201,11 @@ void sdl_begin_frame(void) {
     } else {
         SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_NONE);
         SDL_RenderCopy(g_sdl_renderer, s_term_tex, nullptr, nullptr);
-        SDL_SetTextureBlendMode(s_term_tex, SDL_BLENDMODE_BLEND);
     }
+    // Flush deferred terminal glyphs directly to screen (target=nullptr).
+    // This avoids SDL opengl backend's conflict between a STREAMING source
+    // texture and a TARGET render target.
+    sdl_flush_glyphs();
 }
 
 // ============================================================================
@@ -342,19 +394,17 @@ void sdl_end_frame(float time, int win_w, int win_h) {
     SDL_SetRenderTarget(g_sdl_renderer, nullptr);
 
     if (!g_render_mode) {
-        SDL_Rect dst = { 0, 0, win_w, win_h };
-        SDL_SetTextureBlendMode(s_composite_tex, SDL_BLENDMODE_NONE);
-        SDL_RenderCopy(g_sdl_renderer, s_composite_tex, nullptr, &dst);
-        SDL_SetTextureBlendMode(s_composite_tex, SDL_BLENDMODE_BLEND);
+        // Screen already has backgrounds + glyphs from sdl_begin_frame.
+        // Nothing more to do for the normal (no post-process) path.
         return;
     }
 
+    // Post-process: read back the screen, apply effects, write back.
+    // We need to read what sdl_begin_frame drew to the screen.
     int tw = s_tex_w, th = s_tex_h;
     std::vector<uint8_t> buf_a(tw * th * 4), buf_b(tw * th * 4);
 
-    SDL_SetRenderTarget(g_sdl_renderer, s_composite_tex);
     SDL_RenderReadPixels(g_sdl_renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, buf_a.data(), tw * 4);
-    SDL_SetRenderTarget(g_sdl_renderer, nullptr);
 
     uint8_t *src = buf_a.data(), *dst2 = buf_b.data();
 
