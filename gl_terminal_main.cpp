@@ -1,12 +1,4 @@
 // gl_terminal_main.cpp  — entry point only
-// Build (local shell):
-//   g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
-//       terminal.cpp term_pty.cpp term_ui.cpp gl_bouncingcircle.cpp
-//       font_manager.cpp basic_graphics.cpp
-//       -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
-//
-// Build (with SSH support):
-//   g++ ... ssh_session.cpp basic_graphics.cpp ... -lssh2 -lcrypto -lssl -DUSESSH -o gl_terminal
 
 #include "gl_terminal.h"
 #include "gl_renderer.h"
