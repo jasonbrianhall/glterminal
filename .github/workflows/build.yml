@@ -64,6 +64,7 @@ jobs:
     - name: Build Windows Executable
       run: |
         make windows SSH=1
+        make -C wopr/wopr_basic windows
 
     - name: Convert PNG Icon to ICO Format
       working-directory: build/windows
@@ -83,6 +84,8 @@ jobs:
         cp ../../README.md . 2>/dev/null || true
         cp ../../LICENSE.md . 2>/dev/null || true
         cp ../../icon.png . 2>/dev/null || true
+        cp ../../wopr/wopr_basic/build/windows/felixbasic.exe . 2>/dev/null || true
+
         DLL_SOURCE="/usr/x86_64-w64-mingw32/sys-root/mingw/bin"
 
         for dll in \
@@ -189,6 +192,7 @@ jobs:
             <DirectoryRef Id="INSTALLFOLDER">
               <Component Id="MainExecutable" Guid="C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F" Win64="yes">
                 <File Id="flt_exe" Name="flt.exe" Source="flt.exe" />
+                <File Id="felixbasic_exe" Name="felixbasic.exe" Source="felixbasic.exe" />
 
                 <!-- Start Menu shortcuts (non-advertised, point at ApplicationProgramsFolder) -->
                 <Shortcut Id="StartMenuShortcut"
@@ -213,7 +217,7 @@ jobs:
                           Name="Felix Basic"
                           Description="Felix Basic"
                           Target="[INSTALLFOLDER]flt.exe"
-                          Arguments="felixbasic.exe"
+                          Arguments="felixbasic"
                           WorkingDirectory="INSTALLFOLDER"
                           Icon="FelixIcon"
                           IconIndex="0" />
@@ -262,7 +266,7 @@ jobs:
                           Name="Felix Basic"
                           Description="Felix Basic"
                           Target="[INSTALLFOLDER]flt.exe"
-                          Arguments="felixbasic.exe"
+                          Arguments="felixbasic"
                           WorkingDirectory="INSTALLFOLDER"
                           Icon="FelixIcon"
                           IconIndex="0" />
@@ -573,7 +577,7 @@ jobs:
           ```cmd
           flt.exe              # Open with cmd.exe (default)
           flt.exe powershell.exe  # Open with PowerShell
-          flt.exe felixbasic.exe  # Open Felix Basic
+          flt.exe felixbasic   # Open Felix Basic
           flt.exe bash         # Open with bash (WSL etc.)
           ```
 
