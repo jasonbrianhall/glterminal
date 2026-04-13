@@ -262,7 +262,7 @@ return 0;
 
     char line[DEFAULT_BUFFER];
     for (;;) {
-        display_print("Ok\n");
+        display_print("\nOk\n");
         display_cursor(1);
         if (!display_getline(line, sizeof line)) break;  /* EOF / game over */
         display_newline();
@@ -278,7 +278,7 @@ return 0;
 
         } else if (strncasecmp(p,"NEW",3)==0 && !isalnum((unsigned char)p[3])) {
             clear_program();
-            display_print("Ok\n");
+            display_print("\nOk\n");
 
         } else if (strncasecmp(p,"FILES",5)==0 || strncasecmp(p,"DIR",3)==0) {
             char *pat = sk(p + (strncasecmp(p,"DIR",3)==0 ? 3 : 5));

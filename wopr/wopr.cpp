@@ -716,7 +716,7 @@ void wopr_render(int win_w, int win_h) {
     bool in_zork    = (w->phase == WoprPhase::PLAYING_ZORK);
     bool in_basic   = (w->phase == WoprPhase::PLAYING_BASIC);
     bool basic_wants_input = in_basic && wopr_basic_is_waiting_input(w);
-    int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell || in_zork || basic_wants_input) ? 1 : 0;
+    int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell || in_zork || basic_wants_input || in_basic) ? 1 : 0;
     int used        = total + crawl_extra + input_extra;
     int start_line  = std::max(0, used - vis_rows);
     // In BASIC mode, always render from s_screen_top (row 1 of current
@@ -793,6 +793,12 @@ void wopr_render(int win_w, int win_h) {
             if (py < y0) py = y;  // fell off top — fall back to bottom
         }
         gl_draw_text(prompt.c_str(), x0, py, pr/255.f, pg/255.f, pb/255.f, 1.f, SCALE);
+    } else if (in_basic) {
+        // REPL mode — BASIC is running but not waiting for INPUT statement
+        std::string prompt = w->input_buf;
+        Uint32 ticks = SDL_GetTicks();
+        if ((ticks / 500) % 2 == 0) prompt += '_';
+        gl_draw_text(prompt.c_str(), x0, y, g_term_r/255.f, g_term_g/255.f, g_term_b/255.f, 1.f, SCALE);
     }
 
     gl_flush_verts();

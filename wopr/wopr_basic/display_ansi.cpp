@@ -319,6 +319,8 @@ int display_getline(char *buf, int bufsz)
         buf[0] = '\0';
         return 0;
     }
+    // Echo the typed line to the terminal buffer
+    wopr_basic_push_line(buf);
     g_basic_suppress_newline = 1;
     SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);

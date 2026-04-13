@@ -505,7 +505,15 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
         }
     } else {
         if (sym == SDLK_ESCAPE)                          { wopr_basic_post_key(27);   return true; }
-        if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) { wopr_basic_post_key('\r'); return true; }
+        if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
+            WoprBasic::wopr_basic_push_line(const_cast<char*>((w->input_buf + "\n").c_str()));
+            w->input_buf.clear();
+            wopr_basic_post_key('\r'); return true;
+        }
+        if (sym == SDLK_BACKSPACE) {
+            if (!w->input_buf.empty()) w->input_buf.pop_back();
+            wopr_basic_post_key('\b'); return true;
+        }
         return true;
     }
 }
@@ -525,8 +533,10 @@ void wopr_basic_text(WoprState *w, const char *text)
         }
         w->input_buf = zs->input_buf;
     } else {
-        for (const char *p = text; *p; ++p)
+        for (const char *p = text; *p; ++p) {
             wopr_basic_post_key(*p);
+            w->input_buf += *p;
+        }
     }
 }
 
