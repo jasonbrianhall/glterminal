@@ -788,13 +788,25 @@ void gl_begin_frame(void) {
     s_glyph_n = 0;
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
 
+    // Always clear s_fbo before compositing — without this, prior frame
+    // contents accumulate and text/graphics ghost across frames.
+    glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
+    glViewport(0, 0, s_fbo_w, s_fbo_h);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
     if (s_basic_has_content && s_basic_fbo_tex) {
+        // Layer 1: blit BASIC graphics into s_fbo (opaque base).
         glBindFramebuffer(GL_READ_FRAMEBUFFER, s_basic_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fbo);
         glBlitFramebuffer(0, 0, s_fbo_w, s_fbo_h,
                           0, 0, s_fbo_w, s_fbo_h,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+        // Layer 2: alpha-blend the terminal FBO on top so cells with a
+        // transparent background (s_basic_palette_active) show BASIC beneath.
         glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
+        glViewport(0, 0, s_fbo_w, s_fbo_h);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glUseProgram(s_quad_prog);

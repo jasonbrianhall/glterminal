@@ -570,17 +570,18 @@ static void execute_cmd(const std::vector<std::string> &a) {
         int c=a.size()>1?clamp_color(argi(a,1)):0;
         float r,g,b; resolve_color(c,&r,&g,&b);
         float alpha = (c == 0) ? 0.f : 1.f;
-        // Remember this as the persistent background for future frames.
         s_bg_r = r; s_bg_g = g; s_bg_b = b; s_bg_a = alpha;
-        // Always wipe the basic FBO to fully transparent first.
-        // This ensures the terminal text/prompt is never permanently hidden.
-        gl_basic_end();
-        gl_basic_clear(s_win_w, s_win_h);
-        gl_basic_begin(s_win_w, s_win_h);
-        // Only draw a solid background if color is non-zero.
-        // cls;0 means "clear graphics, show terminal" — leaves FBO transparent.
-        if (alpha > 0.f)
-            draw_rect(0,0,(float)s_win_w,(float)s_win_h,r,g,b,alpha);
+        // Always do a full reset: clear the FBO, reset content/palette flags.
+        // This ensures every cls — regardless of color — wipes both text and
+        // graphics completely, matching QB BASIC behavior.
+        s_basic_palette_active = false;
+        gl_basic_clear(s_win_w, s_win_h);  // sets s_basic_has_content = false
+        if (alpha > 0.f) {
+            // Fill with the requested background color.
+            gl_basic_begin(s_win_w, s_win_h);
+            draw_rect(0,0,(float)s_win_w,(float)s_win_h,r,g,b,1.f);
+            // gl_basic_end() called by basic_render after the command list.
+        }
         uint8_t cr=(uint8_t)(r*255),cg=(uint8_t)(g*255),cb=(uint8_t)(b*255);
         uint8_t ca=(uint8_t)(alpha*255);
         for(int i=0;i<s_scr_w*s_scr_h;i++){
@@ -619,7 +620,8 @@ static void execute_cmd(const std::vector<std::string> &a) {
         case 22: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // SVGA 256-color
         case 23: s_scr_w=800; s_scr_h=600; g_render_mode=RENDER_MODE_NORMAL; break; // SVGA 256-color
         case 24: s_scr_w=160; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy/PCjr 16-color
-        case 25: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy/PCjr 16-color        case 26: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy
+        case 25: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy/PCjr 16-color
+        case 26: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy
         case 27: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy ETGA
         case 28: s_scr_w=720; s_scr_h=350; g_render_mode=RENDER_MODE_NORMAL; break; // OGA
         default: break;
@@ -686,8 +688,16 @@ static void queue_cmd(const std::vector<std::string> &a) {
     if (a.empty()) return;
     // play is audio-only, execute immediately without queuing for GL frame
     if (a[0] == "play") { execute_cmd(a); return; }
-    // screen mode change also takes effect immediately (no GL draw)
-    if (a[0] == "screen" || a[0] == "palette") { execute_cmd(a); return; }
+    // palette takes effect immediately (no GL draw needed)
+    if (a[0] == "palette") { execute_cmd(a); return; }
+    // screen mode change: update resolution/palette immediately, then queue
+    // an implicit cls;0 so switching modes always wipes text and graphics.
+    if (a[0] == "screen") {
+        execute_cmd(a);
+        s_display_list.push_back({ "cls", {"cls", "0"} });
+        s_dl_dirty = true;
+        return;
+    }
     s_display_list.push_back({ a[0], a });
     s_dl_dirty = true;
 }
@@ -703,10 +713,24 @@ void basic_render(int win_w, int win_h) {
     // The basic FBO is persistent — only redraw when there are new commands.
     if (s_display_list.empty()) return;
 
+    // Open the FBO bracket once for the whole batch.
+    // execute_cmd's cls handler calls gl_basic_clear() + gl_basic_begin()
+    // internally; that re-opens the FBO after the clear so subsequent
+    // commands in the same pass still draw into it.  We must NOT call
+    // gl_basic_begin() a second time after execute_cmd returns — it would
+    // double-bind and corrupt state.  Instead we track whether the FBO is
+    // still open after each command (cls closes-and-reopens, everything
+    // else leaves it open).
     gl_basic_begin(win_w, win_h);
     for (auto &c : s_display_list)
         execute_cmd(c.args);
-    gl_basic_end();
+    // Only close the FBO bracket if BASIC content is still active.
+    // A cls;0 mid-list sets s_basic_has_content=false; calling gl_basic_end
+    // would set it back to true, overriding the reset.
+    if (s_basic_has_content)
+        gl_basic_end();
+    else
+        gl_flush_verts();  // flush any pending draws, leave FBO unbound
     s_display_list.clear();
     s_dl_dirty = false;
 }
