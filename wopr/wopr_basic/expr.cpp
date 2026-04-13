@@ -26,6 +26,9 @@ int                   g_cont_pc = -1;
 /* ON ERROR GOTO handler state */
 char g_error_handler[MAX_VARNAME] = "";  /* label/line of handler, "" = none */
 int  g_error_resume_pc = -1;             /* pc to RESUME to */
+int  g_err  = 0;                         /* last error code */
+int  g_erl  = 0;                         /* line number where error occurred */
+int  g_tron = 0;                         /* trace flag */
 
 DefFn g_defn[MAX_DEF_FN];
 int   g_defn_count = 0;
@@ -751,73 +754,15 @@ static void parse_unary_p(Parser *ps, mpf_t result) {
     else                              parse_power_p(ps, result);
 }
 
-/* GMP-native exponentiation: base ^ exponent.
- * Handles integer exponents exactly via mpz_pow_ui / mpf_pow_ui,
- * and falls back to exp(e * log(b)) for fractional exponents.
- * Never calls the C pow() function, avoiding SIGFPE on overflow or
- * domain errors (e.g. very large results, negative-base^fraction). */
 static void parse_power_p(Parser *ps, mpf_t result) {
     parse_primary_p(ps, result);
     skip_ws_p(ps);
-    while (*ps->p == '^') {
+    if (*ps->p == '^') {
         ps->p++;
-        mpf_t expv; mpf_init2(expv, g_prec);
-        parse_unary_p(ps, expv);
-
-        /* Determine if exponent is a non-negative integer */
-        mpf_t floored; mpf_init2(floored, g_prec);
-        mpf_floor(floored, expv);
-        int exp_is_int     = (mpf_cmp(expv, floored) == 0);
-        long exp_si        = mpf_get_si(floored);
-        int  exp_negative  = (exp_si < 0);
-        unsigned long exp_ui = exp_negative ? (unsigned long)(-exp_si)
-                                            : (unsigned long)exp_si;
-        mpf_clear(floored);
-
-        int base_sign = mpf_sgn(result);
-
-        if (exp_is_int && !exp_negative && exp_ui <= 1000000UL) {
-            /* Fast exact integer power: result = result ^ exp_ui */
-            mpf_pow_ui(result, result, exp_ui);
-        } else if (exp_is_int && exp_negative && exp_ui <= 1000000UL) {
-            /* result = 1 / (result ^ exp_ui) */
-            if (base_sign == 0) {
-                basic_stderr("Division by zero in exponentiation\n");
-                mpf_set_si(result, 0);
-            } else {
-                mpf_pow_ui(result, result, exp_ui);
-                mpf_t one; mpf_init2(one, g_prec);
-                mpf_set_ui(one, 1);
-                mpf_div(result, one, result);
-                mpf_clear(one);
-            }
-        } else {
-            /* Fractional or very large exponent: use log/exp in GMP.
-             * base must be positive; negative base with integer exp is
-             * already handled above. */
-            if (base_sign <= 0) {
-                if (base_sign == 0) {
-                    mpf_set_ui(result, 0);
-                } else {
-                    basic_stderr("Illegal function call: negative base with non-integer exponent\n");
-                    mpf_set_si(result, 0);
-                }
-            } else {
-                /* ln(base) via mpfr-free approximation using GMP:
-                 * Use enough double precision for the log, then reconstruct. */
-                double b = mpf_get_d(result);
-                double e = mpf_get_d(expv);
-                /* Guard against overflow to inf */
-                double lg = log(b);          /* no SIGFPE: b > 0 */
-                double le = lg * e;
-                if (le > 709.0)       le =  709.0;   /* clamp to ~DBL_MAX */
-                if (le < -745.0)      le = -745.0;
-                mpf_set_d(result, exp(le));
-            }
-        }
-
-        mpf_clear(expv);
-        skip_ws_p(ps);
+        mpf_t exp; mpf_init2(exp, g_prec);
+        parse_unary_p(ps, exp);
+        mpf_set_d(result, pow(mpf_get_d(result), mpf_get_d(exp)));
+        mpf_clear(exp);
     }
 }
 
@@ -1200,6 +1145,116 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         double secs = t->tm_hour * 3600.0 + t->tm_min * 60.0 + t->tm_sec
                       + ts.tv_nsec / 1e9;
         mpf_set_d(result, secs);
+        return;
+    }
+
+    /* ERR — last error code */
+    if (kw_match(ps->p, "ERR")) {
+        ps->p += 3;
+        mpf_set_si(result, g_err);
+        return;
+    }
+
+    /* ERL — line number of last error */
+    if (kw_match(ps->p, "ERL")) {
+        ps->p += 3;
+        mpf_set_si(result, g_erl);
+        return;
+    }
+
+    /* CSRLIN — current cursor row (stub: 1) */
+    if (kw_match(ps->p, "CSRLIN")) {
+        ps->p += 6;
+        mpf_set_si(result, 1);
+        return;
+    }
+
+    /* POS(n) — current cursor column (stub: 1) */
+    if (kw_match(ps->p, "POS")) {
+        ps->p += 3; skip_ws_p(ps);
+        if (*ps->p == '(') {
+            ps->p++;
+            parse_expr_p(ps, result);   /* consume argument */
+            skip_ws_p(ps);
+            if (*ps->p == ')') ps->p++;
+        }
+        mpf_set_si(result, 1);
+        return;
+    }
+
+    /* LPOS(n) — printer column (stub: 1) */
+    if (kw_match(ps->p, "LPOS")) {
+        ps->p += 4; skip_ws_p(ps);
+        if (*ps->p == '(') {
+            ps->p++;
+            parse_expr_p(ps, result);
+            skip_ws_p(ps);
+            if (*ps->p == ')') ps->p++;
+        }
+        mpf_set_si(result, 1);
+        return;
+    }
+
+    /* LOF(n) — length of open file in bytes */
+    if (kw_match(ps->p, "LOF")) {
+        ps->p += 3; skip_ws_p(ps);
+        if (*ps->p == '(') ps->p++;
+        parse_expr_p(ps, result);
+        int fn = (int)mpf_get_si(result);
+        skip_ws_p(ps);
+        if (*ps->p == ')') ps->p++;
+        FileHandle *fh = (fn >= 1 && fn <= MAX_FILE_HANDLES) ? &g_files[fn] : NULL;
+        long sz = 0;
+        if (fh && fh->fp) {
+            long cur = ftell(fh->fp);
+            fseek(fh->fp, 0, SEEK_END);
+            sz = ftell(fh->fp);
+            fseek(fh->fp, cur, SEEK_SET);
+        }
+        mpf_set_si(result, sz);
+        return;
+    }
+
+    /* LOC(n) — current position in open file */
+    if (kw_match(ps->p, "LOC")) {
+        ps->p += 3; skip_ws_p(ps);
+        if (*ps->p == '(') ps->p++;
+        parse_expr_p(ps, result);
+        int fn = (int)mpf_get_si(result);
+        skip_ws_p(ps);
+        if (*ps->p == ')') ps->p++;
+        FileHandle *fh = (fn >= 1 && fn <= MAX_FILE_HANDLES) ? &g_files[fn] : NULL;
+        long pos = 0;
+        if (fh && fh->fp) pos = ftell(fh->fp);
+        mpf_set_si(result, pos);
+        return;
+    }
+
+    /* VARPTR(var) / VARPTR$(var) — stub: return 0 */
+    if (kw_match(ps->p, "VARPTR")) {
+        ps->p += 6; skip_ws_p(ps);
+        if (*ps->p == '$') ps->p++;   /* VARPTR$ variant */
+        skip_ws_p(ps);
+        if (*ps->p == '(') {
+            int depth = 1; ps->p++;
+            while (*ps->p && depth > 0) {
+                if (*ps->p == '(') depth++;
+                else if (*ps->p == ')') depth--;
+                ps->p++;
+            }
+        }
+        mpf_set_si(result, 0);
+        return;
+    }
+
+    /* INP(port) — stub: return 0 */
+    if (kw_match(ps->p, "INP")) {
+        ps->p += 3; skip_ws_p(ps);
+        if (*ps->p == '(') ps->p++;
+        parse_expr_p(ps, result);
+        skip_ws_p(ps);
+        if (*ps->p == ')') ps->p++;
+        mpf_set_si(result, 0);
         return;
     }
 

@@ -59,6 +59,9 @@ extern volatile sig_atomic_t g_break;
 extern int              g_cont_pc;
 extern char             g_error_handler[MAX_VARNAME];
 extern int              g_error_resume_pc;
+extern int              g_err;   /* last error code (ERR) */
+extern int              g_erl;   /* line number of last error (ERL) */
+extern int              g_tron;  /* TRON trace flag */
 
 /* ================================================================
  * File handle table
