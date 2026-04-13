@@ -64,7 +64,8 @@ jobs:
     - name: Build Windows Executable
       run: |
         make windows SSH=1
-
+        make -C wopr/wopr_basic windows
+        
     - name: Convert PNG Icon to ICO Format
       working-directory: build/windows
       run: |
