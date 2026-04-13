@@ -2121,22 +2121,48 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
         /* skip type sigil (#, !, %, &) after varname */
         if (*after == '#' || *after == '!' || *after == '%' || *after == '&') after++;
         after = sk(after);
-        if (*after == '=' || *after == '(') return cmd_let(ip, p);
-        /* struct field: name.field = ... or name(i).field = ... */
+        if (*after == '=') return cmd_let(ip, p);
+        /* struct field: name.field = ... */
         if (*after == '.') return cmd_let(ip, p);
-        /* array then dot: name(idx).field */
+        /* name(...) — peek past the argument list to decide: assignment or bare expression */
         if (*after == '(') {
-            int depth = 1; after++;
-            while (*after && depth > 0) {
-                if (*after == '(') depth++;
-                else if (*after == ')') depth--;
-                after++;
+            char *peek = after + 1;
+            int depth = 1;
+            while (*peek && depth > 0) {
+                if (*peek == '(') depth++;
+                else if (*peek == ')') depth--;
+                peek++;
             }
-            after = sk(after);
-            if (*after == '.') return cmd_let(ip, p);
+            peek = sk(peek);
+            /* struct field after subscript: arr(i).field = ... */
+            if (*peek == '.') return cmd_let(ip, p);
+            /* array assignment: arr(i) = ... */
+            if (*peek == '=') return cmd_let(ip, p);
+            /* No '=' — treat as a bare numeric expression and print the result.
+             * Handles: tan(5), sin(3.14), sqr(2), (3+4)*2, etc. */
+            {
+                mpf_t result; mpf_init2(result, g_prec);
+                eval_expr(p, result);
+                char buf[128];
+                gmp_snprintf(buf, sizeof buf, "%.*Fg\n", PRINT_DIGITS, result);
+                display_print(buf);
+                mpf_clear(result);
+                return 0;
+            }
         }
         /* Bare sub call without CALL keyword */
         return cmd_call(ip, p);
+    }
+
+    /* Bare numeric expression starting with unary sign or digit, e.g. -5, 3+4 */
+    if (*p == '-' || *p == '+' || isdigit((unsigned char)*p)) {
+        mpf_t result; mpf_init2(result, g_prec);
+        eval_expr(p, result);
+        char buf[128];
+        gmp_snprintf(buf, sizeof buf, "%.*Fg\n", PRINT_DIGITS, result);
+        display_print(buf);
+        mpf_clear(result);
+        return 0;
     }
 
     basic_stderr("Warning: unknown: %.60s\n", p);

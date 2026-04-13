@@ -195,8 +195,9 @@ void display_print(char *s)
 {
 #ifdef WOPR
     if (strcmp(s, "Ok\n") == 0) return;
-    if (strncmp(s, "WOPR BASIC", 10) == 0) return;
-    if (strncmp(s, "Type NEW,", 9) == 0) return;
+    if (strncmp(s, "Felix BASIC", 11) == 0) return;
+    if (strncmp(s, "In loving memory", 16) == 0) return;
+    if (strncmp(s, "Type HELP", 9) == 0) return;
     g_basic_suppress_newline = 0;
     wopr_basic_push_line(s);
 #elif defined(FELIX_BASIC)
