@@ -330,25 +330,154 @@ int display_getline(char *buf, int bufsz)
     felix_basic_shim_fgets(buf, bufsz);
     return (int)strlen(buf);
 #elif !defined(_WIN32)
-    leave_raw();
+{
+    /* Raw-mode line editor with up/down history */
+    #define HIST_MAX 64
+    static char  s_hist[HIST_MAX][512];
+    static int   s_hist_count = 0;
+    static int   s_hist_head  = 0;   /* circular index of next slot to write */
 
-    struct termios cooked = g_orig_termios;
-    cooked.c_lflag |= (ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
-
-    int len = 0;
-    while (len < bufsz - 1) {
-        char c;
-        ssize_t n = read(STDIN_FILENO, &c, 1);
-        if (n < 0 && errno == EINTR) break;
-        if (n <= 0 || c == '\n') break;
-        if (c == '\r') continue;
-        buf[len++] = c;
+    enter_raw();   /* make sure we're in raw/nonblocking → switch to blocking raw */
+    {
+        /* We want blocking reads, but still raw (no echo, no canonical) */
+        struct termios raw = g_orig_termios;
+        raw.c_lflag &= ~(ECHO | ICANON);
+        raw.c_cc[VMIN]  = 1;
+        raw.c_cc[VTIME] = 0;
+        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+        fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+        g_raw = 1;
     }
-    buf[len] = '\0';
 
-    enter_raw();
+    char tmp[512];
+    int  len    = 0;
+    int  cursor = 0;
+    int  hist_pos = s_hist_count;   /* points past end = "new line" */
+
+    /* saved copy of what the user was typing before scrolling history */
+    char saved[512] = "";
+
+    auto redraw = [&]() {
+        /* Redraw from start of line: CR, reprint prompt+buf, clear tail */
+        write(STDOUT_FILENO, "\r", 1);
+        write(STDOUT_FILENO, tmp, len);
+        write(STDOUT_FILENO, "\033[K", 3);   /* erase to end of line */
+        /* reposition cursor */
+        if (cursor < len) {
+            char mv[16];
+            int back = len - cursor;
+            snprintf(mv, sizeof mv, "\033[%dD", back);
+            write(STDOUT_FILENO, mv, strlen(mv));
+        }
+    };
+
+    for (;;) {
+        unsigned char c;
+        ssize_t n = read(STDIN_FILENO, &c, 1);
+        if (n <= 0) break;
+
+        if (c == '\n' || c == '\r') {
+            write(STDOUT_FILENO, "\r\n", 2);
+            break;
+
+        } else if (c == 127 || c == 8) {   /* Backspace / DEL */
+            if (cursor > 0) {
+                memmove(tmp + cursor - 1, tmp + cursor, len - cursor);
+                cursor--; len--;
+                redraw();
+            }
+
+        } else if (c == 1) {   /* Ctrl-A — home */
+            cursor = 0;
+            redraw();
+
+        } else if (c == 5) {   /* Ctrl-E — end */
+            cursor = len;
+            redraw();
+
+        } else if (c == 11) {  /* Ctrl-K — kill to end */
+            len = cursor;
+            redraw();
+
+        } else if (c == 27) {  /* ESC — expect [ then code */
+            unsigned char seq[4] = {0};
+            if (read(STDIN_FILENO, &seq[0], 1) <= 0) continue;
+            if (seq[0] != '[') continue;
+            if (read(STDIN_FILENO, &seq[1], 1) <= 0) continue;
+
+            if (seq[1] == 'A') {   /* Up arrow — older history */
+                if (s_hist_count == 0) continue;
+                if (hist_pos == s_hist_count) {
+                    /* save current edit */
+                    tmp[len] = '\0';
+                    strncpy(saved, tmp, sizeof saved - 1);
+                }
+                if (hist_pos > 0) hist_pos--;
+                int idx = (s_hist_head - s_hist_count + hist_pos + HIST_MAX) % HIST_MAX;
+                strncpy(tmp, s_hist[idx], sizeof tmp - 1);
+                len = cursor = (int)strlen(tmp);
+                redraw();
+
+            } else if (seq[1] == 'B') {   /* Down arrow — newer history */
+                if (hist_pos < s_hist_count) hist_pos++;
+                if (hist_pos == s_hist_count) {
+                    strncpy(tmp, saved, sizeof tmp - 1);
+                } else {
+                    int idx = (s_hist_head - s_hist_count + hist_pos + HIST_MAX) % HIST_MAX;
+                    strncpy(tmp, s_hist[idx], sizeof tmp - 1);
+                }
+                len = cursor = (int)strlen(tmp);
+                redraw();
+
+            } else if (seq[1] == 'C') {   /* Right arrow */
+                if (cursor < len) {
+                    cursor++;
+                    write(STDOUT_FILENO, "\033[C", 3);
+                }
+
+            } else if (seq[1] == 'D') {   /* Left arrow */
+                if (cursor > 0) {
+                    cursor--;
+                    write(STDOUT_FILENO, "\033[D", 3);
+                }
+
+            } else if (seq[1] == '3') {   /* Delete key: ESC [ 3 ~ */
+                read(STDIN_FILENO, &seq[2], 1);   /* consume ~ */
+                if (cursor < len) {
+                    memmove(tmp + cursor, tmp + cursor + 1, len - cursor - 1);
+                    len--;
+                    redraw();
+                }
+            }
+
+        } else if (c >= 32 && c < 127) {   /* printable */
+            if (len < bufsz - 1 && len < (int)sizeof(tmp) - 1) {
+                memmove(tmp + cursor + 1, tmp + cursor, len - cursor);
+                tmp[cursor++] = (char)c;
+                len++;
+                redraw();
+            }
+        }
+    }
+
+    tmp[len] = '\0';
+
+    /* Add to history if non-empty and different from last entry */
+    if (len > 0) {
+        int last = (s_hist_head - 1 + HIST_MAX) % HIST_MAX;
+        if (s_hist_count == 0 || strcmp(s_hist[last], tmp) != 0) {
+            strncpy(s_hist[s_hist_head], tmp, sizeof s_hist[0] - 1);
+            s_hist_head = (s_hist_head + 1) % HIST_MAX;
+            if (s_hist_count < HIST_MAX) s_hist_count++;
+        }
+    }
+
+    strncpy(buf, tmp, bufsz - 1);
+    buf[bufsz - 1] = '\0';
+    enter_raw();   /* restore nonblocking raw for INKEY$ etc. */
     return len;
+}
 #else
     if (!fgets(buf, bufsz, stdin)) { buf[0] = '\0'; return 0; }
     int len = (int)strlen(buf);
