@@ -738,10 +738,19 @@ void wopr_render(int win_w, int win_h) {
             bg = (uint8_t)line[5] / 255.f;
             bb = (uint8_t)line[6] / 255.f;
             line += 7;
+            // Black fg on black bg = invisible; use default terminal green
+            if (lr == 0.f && lg == 0.f && lb == 0.f &&
+                br == 0.f && bg == 0.f && bb == 0.f) {
+                lr = g_term_r / 255.f;
+                lg = g_term_g / 255.f;
+                lb = g_term_b / 255.f;
+            }
         }
         // Draw background rect if bg color is non-black
-        if (br > 0.f || bg > 0.f || bb > 0.f)
-            gl_draw_rect(x0, y, area_w, ch, br, bg, bb, 1.f);
+        if (br > 0.f || bg > 0.f || bb > 0.f) {
+            float tw = gl_text_width(line, SCALE);
+            gl_draw_rect(x0, y, tw, ch, br, bg, bb, 1.f);
+        }
         gl_draw_text(line, x0, y, lr, lg, lb, 1.f, SCALE);
         y += ch;
     }

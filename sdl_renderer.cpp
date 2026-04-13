@@ -100,6 +100,9 @@ static std::vector<SDL_Vertex> s_glyph_sv;
 static std::vector<GlyphVertex> s_glyph_pending;
 
 void sdl_flush_glyphs() {
+    // Flush any pending solid draws first so Z-order is correct (rects behind text)
+    sdl_flush_verts();
+
     if (s_glyph_pending.empty()) return;
     if (!g_atlas.sdl_tex) { s_glyph_pending.clear(); return; }
 
