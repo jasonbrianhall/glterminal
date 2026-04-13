@@ -286,6 +286,7 @@ int display_inkey(void)
     // Flush any pending partial line so it shows as the prompt while
     // the program spins on INKEY$ waiting for a keypress.
     wopr_basic_flush_partial();
+    if (g_basic_game_over) longjmp(basic_exit_jmp, 1);
     int c = wopr_basic_get_key();
     if (c >= 0) return c;
 #  ifdef _WIN32
