@@ -38,7 +38,7 @@ BASIC_NS_BEGIN
 #define MAX_VARNAME       64
 #define MAX_LINES       8192
 #define MAX_LINE_LEN     512
-#define CTRL_STACK_MAX    64
+#define CTRL_STACK_MAX    16384
 #define MAX_ARRAY_DIMS     2
 #define MAX_ARRAY_SIZE  4096
 #define MAX_FILE_HANDLES  16
