@@ -195,8 +195,9 @@ void display_print(char *s)
 {
 #ifdef WOPR
     if (strcmp(s, "Ok\n") == 0) return;
-    if (strncmp(s, "WOPR BASIC", 10) == 0) return;
-    if (strncmp(s, "Type NEW,", 9) == 0) return;
+    if (strncmp(s, "Felix BASIC", 11) == 0) return;
+    if (strncmp(s, "In loving memory", 16) == 0) return;
+    if (strncmp(s, "Type HELP", 9) == 0) return;
     g_basic_suppress_newline = 0;
     wopr_basic_push_line(s);
 #elif defined(FELIX_BASIC)
@@ -286,6 +287,7 @@ int display_inkey(void)
     // Flush any pending partial line so it shows as the prompt while
     // the program spins on INKEY$ waiting for a keypress.
     wopr_basic_flush_partial();
+    if (g_basic_game_over) longjmp(basic_exit_jmp, 1);
     int c = wopr_basic_get_key();
     if (c >= 0) return c;
 #  ifdef _WIN32
@@ -319,6 +321,8 @@ int display_getline(char *buf, int bufsz)
         buf[0] = '\0';
         return 0;
     }
+    // Echo the typed line to the terminal buffer
+    wopr_basic_push_line(buf);
     g_basic_suppress_newline = 1;
     SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);

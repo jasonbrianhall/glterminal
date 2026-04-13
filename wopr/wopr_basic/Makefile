@@ -1,22 +1,27 @@
 # --------------------------------------------------------------------
 # Toolchain selection
-#   make              → native Linux   (output: build/linux/basic)
-#   make windows      → Windows cross  (output: build/windows/basic.exe)
+#   make                       → native Linux       (output: build/linux/felixbasic)
+#   make windows               → Windows cross      (output: build/windows/felixbasic.exe)
+#   make sdlwindow             → Linux SDL GUI      (output: build/linux/felixbasic_sdlwin)
+#   make sdlwindow TARGET=windows → Windows SDL GUI (output: build/windows/felixbasic_sdlwin.exe)
+#   make help                  → show this help
 # --------------------------------------------------------------------
 ifeq ($(TARGET),windows)
-    CC         = x86_64-w64-mingw32-gcc
+    CC         = x86_64-w64-mingw32-g++
     PKG_CONFIG = mingw64-pkg-config
     BUILDDIR   = build/windows
-    EXE        = $(BUILDDIR)/basic.exe
+    EXE        = $(BUILDDIR)/felixbasic.exe
     CFLAGS     = -O2 -Wall -std=c++11 -DWIN32 -D_WIN32
     LDFLAGS    = -lgmp -lm -mconsole
+    SDL_WIN_EXE = $(BUILDDIR)/felixbasic_sdlwin.exe
 else
     CC         = g++
     PKG_CONFIG = pkg-config
     BUILDDIR   = build/linux
-    EXE        = $(BUILDDIR)/basic
+    EXE        = $(BUILDDIR)/felixbasic
     CFLAGS     = -O2 -Wall -std=c++11
     LDFLAGS    = -lgmp -lm
+    SDL_WIN_EXE = $(BUILDDIR)/felixbasic_sdlwin
 endif
 
 # --------------------------------------------------------------------
@@ -67,29 +72,66 @@ SDL_WIN_OBJS = $(patsubst %.cpp,$(BUILDDIR)/sdlwin/%.o,$(SDL_WIN_SRCS))
 # --------------------------------------------------------------------
 # BUILD TARGETS
 # --------------------------------------------------------------------
-.PHONY: all linux windows sdlwindow clean embed
+.PHONY: all linux windows sdlwindow clean embed help
 
 all: linux
 
+# --------------------------------------------------------------------
+# HELP
+# --------------------------------------------------------------------
+help:
+	@echo ""
+	@echo "Usage: make [TARGET=windows] <target>"
+	@echo ""
+	@echo "Targets:"
+	@echo "  (default) / linux        Build native Linux console binary"
+	@echo "                             Output: build/linux/felixbasic"
+	@echo ""
+	@echo "  windows                  Cross-compile Windows console binary"
+	@echo "                             Requires: x86_64-w64-mingw32-g++"
+	@echo "                             Output: build/windows/felixbasic.exe"
+	@echo ""
+	@echo "  sdlwindow                Build SDL2 GUI window (Linux)"
+	@echo "                             Requires: libsdl2-dev, libfreetype6-dev"
+	@echo "                             Output: build/linux/felixbasic_sdlwin"
+	@echo ""
+	@echo "  sdlwindow TARGET=windows Cross-compile SDL2 GUI window (Windows)"
+	@echo "                             Requires: mingw64 SDL2/FreeType packages"
+	@echo "                             Output: build/windows/felixbasic_sdlwin.exe"
+	@echo ""
+	@echo "  embed FILE=<file.bas>    Embed a BASIC program inline at compile time"
+	@echo "                             Combine with any build target, e.g.:"
+	@echo "                             make embed FILE=myprog.bas"
+	@echo ""
+	@echo "  clean                    Remove all build artifacts and generated headers"
+	@echo ""
+	@echo "Optional variables:"
+	@echo "  TARGET=windows           Cross-compile for Windows (use with any target)"
+	@echo "  FILE=<path>              BASIC source file to embed (used with 'embed')"
+	@echo "  INLINEBASIC=<path>       Alias for FILE when invoking embed directly"
+	@echo ""
+
 linux:
-	$(MAKE) build/linux/basic TARGET=linux
+	$(MAKE) build/linux/felixbasic TARGET=linux
 
 windows:
-	$(MAKE) build/windows/basic.exe TARGET=windows
+	$(MAKE) build/windows/felixbasic.exe TARGET=windows
 
 # SDL window build — direct SDL2 rendering, no OSC escape codes
-# Requires SDL2 + FreeType.  Output: build/linux/basic_sdlwin
+# Requires SDL2 + FreeType.
+# Linux output:   build/linux/felixbasic_sdlwin
+# Windows output: build/windows/felixbasic_sdlwin.exe  (use TARGET=windows)
 sdlwindow:
 ifeq ($(FT_LIBS),)
-	$(error FreeType not found — install libfreetype6-dev)
+	$(error FreeType not found — install libfreetype6-dev (Linux) or the mingw64 FreeType package (Windows cross))
 endif
 ifeq ($(SDL_LIBS),)
-	$(error SDL2 not found — install libsdl2-dev)
+	$(error SDL2 not found — install libsdl2-dev (Linux) or the mingw64 SDL2 package (Windows cross))
 endif
-	$(MAKE) build/linux/basic_sdlwin TARGET=sdlwindow
+	$(MAKE) $(SDL_WIN_EXE) TARGET=$(TARGET)
 
-build/linux/basic_sdlwin: $(SDL_WIN_OBJS)
-	@mkdir -p build/linux
+$(BUILDDIR)/felixbasic_sdlwin $(BUILDDIR)/felixbasic_sdlwin.exe: $(SDL_WIN_OBJS)
+	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -DUSE_SDL_WINDOW $(FT_CFLAGS) -o $@ $(SDL_WIN_OBJS) $(LDFLAGS) $(FT_LIBS)
 
 $(EXE): $(GENERATED_HEADERS) $(OBJS)
