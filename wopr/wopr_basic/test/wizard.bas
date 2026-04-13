@@ -1,3 +1,4 @@
+
 1000 REM *****************************************************
 1005 REM *                                                   *
 1010 REM * WIZARD'S CASTLE GAME FROM JULY/AUGUST 1980        *
@@ -6,6 +7,7 @@
 1025 REM * MODIFIED FOR HEATH MICROSOFT BASIC BY J.F.STETSON *
 1030 REM *                                                   *
 1035 REM *****************************************************
+1036 CLS
 1040 DEFINT A-Z
 1045 DIM C$(34), I$(34), R$(4), W$(8), E$(8)
 1050 DIM L(512), C(3, 4), T(8), O(3), R(3)
