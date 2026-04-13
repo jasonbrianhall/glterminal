@@ -66,6 +66,17 @@ SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || e
   SSH_SUFFIX       = 
 
 # ============================================================================
+# MSIX BUILD  (opt-in via FELIXBASIC=1)
+# Adds -DFELIXBASIC_BUILD to Windows flags so #ifdef FELIXBASIC_BUILD can swap
+# cmd.exe for felixbasic.exe without needing runtime parameters.
+# ============================================================================
+ifeq ($(FELIXBASIC),1)
+  FELIXBASIC_DEFINE = -DFELIXBASIC_BUILD
+else
+  FELIXBASIC_DEFINE =
+endif
+
+# ============================================================================
 # LINUX FLAGS
 # ============================================================================
 CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
@@ -101,7 +112,7 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
                $(SSH_CFLAGS_WIN) \
                -Iwopr \
                -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
-               $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
+               $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
 
 # -mwindows: no console window behind the GL window
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
@@ -115,7 +126,7 @@ CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      $(SSH_CFLAGS_WIN) \
                      -Iwopr \
                      -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
-                     $(SSH_DEFINE) -DDEBUG -g -O0
+                     $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -DDEBUG -g -O0
 
 CFLAGS_WIN         = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -O2
 CFLAGS_WIN_DEBUG   = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -DDEBUG -g -O0
@@ -214,8 +225,13 @@ OBJECTS_WIN_DEBUG   = $(addprefix $(BUILD_DIR_WIN_DEBUG)/,    $(SRCS_WIN:.cpp=.w
 
 EXECUTABLE_LINUX       = flt$(SSH_SUFFIX)
 EXECUTABLE_LINUX_DEBUG = flt_debug$(SSH_SUFFIX)
+ifeq ($(FELIXBASIC),1)
+EXECUTABLE_WIN         = flt-felixbasic$(SSH_SUFFIX).exe
+EXECUTABLE_WIN_DEBUG   = flt-felixbasic_debug$(SSH_SUFFIX).exe
+else
 EXECUTABLE_WIN         = flt$(SSH_SUFFIX).exe
 EXECUTABLE_WIN_DEBUG   = flt_debug$(SSH_SUFFIX).exe
+endif
 
 BUILD_DIR             = build
 BUILD_DIR_LINUX       = $(BUILD_DIR)/linux
@@ -332,8 +348,19 @@ $(BUILD_DIR_LINUX_DEBUG)/wopr/%.debug.o: wopr/%.c
 # ============================================================================
 # WINDOWS BUILD
 # ============================================================================
+# When FELIXBASIC=1, wipe all Windows object files first so every .cpp
+# gets recompiled with -DFELIXBASIC_BUILD (and likewise when switching back).
 .PHONY: flt-windows
+ifeq ($(FELIXBASIC),1)
+flt-windows: clean-win-obj $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
+else
 flt-windows: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
+endif
+
+.PHONY: clean-win-obj
+clean-win-obj:
+	@echo "Cleaning Windows object files (FELIXBASIC build)..."
+	find $(BUILD_DIR_WIN) -type f \( -name "*.win.o" -o -name "*.win.d" \) -delete 2>/dev/null || true
 
 $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN): $(OBJECTS_WIN)
 	@echo "Linking Windows: $@"
@@ -445,6 +472,7 @@ help:
 	@echo "  make              - Linux build (default)"
 	@echo "  make linux        - Linux build"
 	@echo "  make windows      - Windows cross-compile (mingw)"
+	@echo "  make windows FELIXBASIC=1 - Windows build with -DFELIXBASIC_BUILD (felixbasic default shell)"
 	@echo "  make debug        - Debug builds for both platforms"
 	@echo "  make check-deps   - Verify all dependencies are present"
 	@echo "  make clean        - Remove object files and binaries"

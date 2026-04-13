@@ -75,7 +75,12 @@ static inline bool _term_read_dispatch(bool ssh, Terminal *t)
 int main(int argc, char **argv) {
     // ---- Command-line parsing ----
 #ifdef WIN32
+#ifdef FELIXBASIC_BUILD
+    const char *shell = "felixbasic.exe";
+
+#else
     const char *shell = "cmd.exe";
+#endif
 #else
     const char *shell = "/bin/bash";
 #endif
