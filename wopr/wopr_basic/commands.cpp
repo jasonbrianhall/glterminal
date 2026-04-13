@@ -2094,6 +2094,54 @@ static int split_statements(char *line, char *segs[], char **buf_out) {
 /* ================================================================
  * Dispatcher
  * ================================================================ */
+/* Format an mpf value sensibly:
+ * - plain decimal for numbers that fit reasonably (exponent -6..15)
+ * - scientific notation with trailing zeros trimmed otherwise */
+static void print_mpf(mpf_t val) {
+    int bufsz = PRINT_DIGITS + 64;
+    char *buf = (char *)malloc(bufsz);
+    if (!buf) return;
+
+    /* Get scientific form to inspect the exponent */
+    char *tmp = (char *)malloc(bufsz);
+    if (!tmp) { free(buf); return; }
+    gmp_snprintf(tmp, bufsz, "%.*Fe", PRINT_DIGITS, val);
+
+    /* Parse exponent */
+    char *ep = strchr(tmp, 'e');
+    int exp = ep ? atoi(ep + 1) : 0;
+
+    if (exp >= -6 && exp <= 15) {
+        /* Plain decimal — figure out decimal places needed */
+        int dp = PRINT_DIGITS - exp;
+        if (dp < 0) dp = 0;
+        if (dp > PRINT_DIGITS) dp = PRINT_DIGITS;
+        gmp_snprintf(buf, bufsz, "%.*Ff", dp, val);
+        /* Trim trailing zeros after decimal point */
+        if (strchr(buf, '.')) {
+            char *end = buf + strlen(buf) - 1;
+            while (*end == '0') *end-- = '\0';
+            if (*end == '.') *end = '\0';
+        }
+    } else {
+        /* Scientific notation — trim trailing zeros in significand */
+        gmp_snprintf(buf, bufsz, "%.*Fe", PRINT_DIGITS, val);
+        char *e = strchr(buf, 'e');
+        if (e) {
+            char *z = e - 1;
+            while (z > buf && *z == '0') z--;
+            if (*z == '.') z--;
+            memmove(z + 1, e, strlen(e) + 1);
+        }
+    }
+    free(tmp);
+
+    int len = (int)strlen(buf);
+    if (len + 1 < bufsz) { buf[len] = '\n'; buf[len+1] = '\0'; }
+    display_print(buf);
+    free(buf);
+}
+
 int dispatch_one(Interp *ip, char *stmt, char *full_line) {
     char *p = sk(stmt);
     if (!*p) return 0;
@@ -2143,14 +2191,7 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
             {
                 mpf_t result; mpf_init2(result, g_prec);
                 eval_expr(p, result);
-                /* Size = digits + exponent + sign + decimal point + '\n' + slack */
-                int bufsz = PRINT_DIGITS + 32;
-                char *buf = (char *)malloc(bufsz);
-                if (buf) {
-                    gmp_snprintf(buf, bufsz, "%.*Fe\n", PRINT_DIGITS, result);
-                    display_print(buf);
-                    free(buf);
-                }
+                print_mpf(result);
                 mpf_clear(result);
                 return 0;
             }
@@ -2163,13 +2204,7 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
     if (*p == '-' || *p == '+' || *p == '(' || isdigit((unsigned char)*p)) {
         mpf_t result; mpf_init2(result, g_prec);
         eval_expr(p, result);
-        int bufsz = PRINT_DIGITS + 32;
-        char *buf = (char *)malloc(bufsz);
-        if (buf) {
-            gmp_snprintf(buf, bufsz, "%.*Fe\n", PRINT_DIGITS, result);
-            display_print(buf);
-            free(buf);
-        }
+        print_mpf(result);
         mpf_clear(result);
         return 0;
     }
