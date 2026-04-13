@@ -317,24 +317,44 @@ return 0;
             { char cwd[DEFAULT_BUFFER]; if (getcwd(cwd, sizeof cwd)) { char hdr[DEFAULT_BUFFER+16]; snprintf(hdr, sizeof hdr, "  Directory: %s\n\n", cwd); display_print(hdr); } }
             DIR *d = opendir(".");
             if (!d) { perror("opendir"); continue; }
-            struct dirent *de; int count = 0;
+
+            /* Collect entries into two sorted lists: dirs and files */
+            #define MAX_DIR_ENTRIES 2048
+            char dirs[MAX_DIR_ENTRIES][256];
+            char files[MAX_DIR_ENTRIES][256];
+            int ndirs = 0, nfiles = 0;
+
+            struct dirent *de;
             while ((de = readdir(d))) {
                 if (de->d_name[0] == '.') continue;
                 char *nm = de->d_name;
                 struct stat st; bool is_dir = false;
                 if (stat(nm, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = true;
                 if (is_dir) {
-                    char entry[68]; snprintf(entry, sizeof entry, "  %-19s/\n", nm);
-                    display_print(entry); count++;
+                    if (ndirs < MAX_DIR_ENTRIES)
+                        strncpy(dirs[ndirs++], nm, 255);
                 } else {
                     size_t nl = strlen(nm), fl = strlen(filter);
                     if (fl && (nl < fl || strcasecmp(nm + nl - fl, filter) != 0)) continue;
-                    char entry[68]; snprintf(entry, sizeof entry, "  %-20s\n", nm);
-                    display_print(entry); count++;
+                    if (nfiles < MAX_DIR_ENTRIES)
+                        strncpy(files[nfiles++], nm, 255);
                 }
             }
             closedir(d);
-            if (!count) display_print("  (no matching files)\n");
+
+            /* Sort each list alphabetically */
+            auto cmp_str = [](const void *a, const void *b) {
+                return strcasecmp((char *)a, (char *)b);
+            };
+            qsort(dirs,  ndirs,  sizeof dirs[0],  cmp_str);
+            qsort(files, nfiles, sizeof files[0], cmp_str);
+
+            /* Print dirs first, then files */
+            for (int i = 0; i < ndirs;  i++) { char e[272]; snprintf(e, sizeof e, "  %-19s/\n", dirs[i]);  display_print(e); }
+            for (int i = 0; i < nfiles; i++) { char e[272]; snprintf(e, sizeof e, "  %-20s\n",  files[i]); display_print(e); }
+
+            if (!ndirs && !nfiles) display_print("  (no matching files)\n");
+            #undef MAX_DIR_ENTRIES
 
         } else if (strncasecmp(p,"KILL",4)==0 && !isalnum((unsigned char)p[4])) {
             p += 4;
