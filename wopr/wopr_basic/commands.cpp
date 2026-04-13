@@ -508,7 +508,6 @@ static int cmd_do(Interp *ip, char *args) {
             ip->pc = pc; return 1;
         }
     }
-
     if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strcpy(f->varname, "\x02" "DO");
@@ -1809,6 +1808,7 @@ static int cmd_for(Interp *ip, char *args) {
     p = sk(eval_expr(p, limit));
     if (strncasecmp(p, "STEP", 4) == 0) { p = sk(p + 4); eval_expr(p, step); }
     Var *v = var_get(vname); mpf_set(v->num, start);
+
     if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strncpy(f->varname, vname, MAX_VARNAME - 1);
