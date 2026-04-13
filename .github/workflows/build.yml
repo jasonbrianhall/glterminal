@@ -63,7 +63,8 @@ jobs:
 
     - name: Build Windows Executable
       run: |
-        make windows SSH=1
+        make windows
+        make windows FELIXBASIC=1
         make -C wopr/wopr_basic windows
 
     - name: Convert PNG Icon to ICO Format
@@ -455,9 +456,9 @@ jobs:
                 <uap:SplashScreen Image="Assets\FelixTerminalLogo.scale-100.png" />
               </uap:VisualElements>
             </Application>
-            <Application Id="FelixBasic" Executable="Files\felixbasic.exe" EntryPoint="Windows.FullTrustApplication">
+            <Application Id="FelixBasic" Executable="Files\flt-felixbasic.exe" EntryPoint="Windows.FullTrustApplication">
               <uap:VisualElements DisplayName="Felix Basic"
-                                  Description="Felix Basic"
+                                  Description="Felix Basic (A mostly GW-BASIC Compatible Basic)"
                                   Square150x150Logo="Assets\FelixTerminalLogo.scale-100.png"
                                   Square44x44Logo="Assets\FelixTerminal44x44.scale-100.png"
                                   BackgroundColor="#0d1117">
