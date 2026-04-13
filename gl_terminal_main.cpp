@@ -1030,8 +1030,34 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+#ifdef USESSH
+                // SFTP overlay captures all clicks
+                if (g_sftp.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    sftp_overlay_mousedown(ev.button.x, ev.button.y, ev.button.button, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
+#endif
                 // Image viewer captures all clicks
-                if (g_iv.visible) { needs_render = true; break; }
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    iv_mousedown(ev.button.x, ev.button.y, ev.button.button, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
+                // WOPR overlay captures all clicks
+                if (g_wopr.visible) {
+                    needs_render = true;
+                    break;
+                }
+#ifdef USESSH
+                // Port-forward overlay captures all clicks
+                if (g_pf_overlay.visible) {
+                    needs_render = true;
+                    break;
+                }
+#endif
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1156,11 +1182,22 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_wopr.visible) break;
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    if (iv_mousemotion(ev.motion.x, ev.motion.y, win_w, win_h))
+                        needs_render = true;
+                    break;
+                }
                 if (g_help_visible) {
                     if (help_mousemotion(ev.motion.x, ev.motion.y))
                         needs_render = true;
                     break;
                 }
+#ifdef USESSH
+                if (g_sftp.visible) { break; }
+                if (g_pf_overlay.visible) { break; }
+#endif
                 if (g_menu.visible) {
                     int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
                     if (hit >= 0) g_menu.hovered = hit;
@@ -1221,6 +1258,16 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_wopr.visible) { needs_render = true; break; }
+                if (g_iv.visible) {
+                    iv_mouseup(ev.button.x, ev.button.y, ev.button.button);
+                    needs_render = true;
+                    break;
+                }
+#ifdef USESSH
+                if (g_sftp.visible) { needs_render = true; break; }
+                if (g_pf_overlay.visible) { needs_render = true; break; }
+#endif
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1250,6 +1297,29 @@ int main(int argc, char **argv) {
             }
 
             case SDL_MOUSEWHEEL: {
+                if (g_iv.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    iv_mousewheel(ev.wheel.mouseX, ev.wheel.mouseY,
+                                  ev.wheel.y, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
+#ifdef USESSH
+                if (g_sftp_console_visible) {
+                    sftp_console_scroll(ev.wheel.y);
+                    needs_render = true;
+                    break;
+                }
+                if (g_sftp.visible) {
+                    SDL_GetWindowSize(window, &win_w, &win_h);
+                    sftp_overlay_mousewheel(ev.wheel.mouseX, ev.wheel.mouseY,
+                                            ev.wheel.y, win_w);
+                    needs_render = true;
+                    break;
+                }
+                if (g_pf_overlay.visible) { needs_render = true; break; }
+#endif
+                if (g_wopr.visible) { needs_render = true; break; }
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
                     int delta = (ev.wheel.y > 0) ? 1 : -1;
