@@ -751,15 +751,73 @@ static void parse_unary_p(Parser *ps, mpf_t result) {
     else                              parse_power_p(ps, result);
 }
 
+/* GMP-native exponentiation: base ^ exponent.
+ * Handles integer exponents exactly via mpz_pow_ui / mpf_pow_ui,
+ * and falls back to exp(e * log(b)) for fractional exponents.
+ * Never calls the C pow() function, avoiding SIGFPE on overflow or
+ * domain errors (e.g. very large results, negative-base^fraction). */
 static void parse_power_p(Parser *ps, mpf_t result) {
     parse_primary_p(ps, result);
     skip_ws_p(ps);
-    if (*ps->p == '^') {
+    while (*ps->p == '^') {
         ps->p++;
-        mpf_t exp; mpf_init2(exp, g_prec);
-        parse_unary_p(ps, exp);
-        mpf_set_d(result, pow(mpf_get_d(result), mpf_get_d(exp)));
-        mpf_clear(exp);
+        mpf_t expv; mpf_init2(expv, g_prec);
+        parse_unary_p(ps, expv);
+
+        /* Determine if exponent is a non-negative integer */
+        mpf_t floored; mpf_init2(floored, g_prec);
+        mpf_floor(floored, expv);
+        int exp_is_int     = (mpf_cmp(expv, floored) == 0);
+        long exp_si        = mpf_get_si(floored);
+        int  exp_negative  = (exp_si < 0);
+        unsigned long exp_ui = exp_negative ? (unsigned long)(-exp_si)
+                                            : (unsigned long)exp_si;
+        mpf_clear(floored);
+
+        int base_sign = mpf_sgn(result);
+
+        if (exp_is_int && !exp_negative && exp_ui <= 1000000UL) {
+            /* Fast exact integer power: result = result ^ exp_ui */
+            mpf_pow_ui(result, result, exp_ui);
+        } else if (exp_is_int && exp_negative && exp_ui <= 1000000UL) {
+            /* result = 1 / (result ^ exp_ui) */
+            if (base_sign == 0) {
+                basic_stderr("Division by zero in exponentiation\n");
+                mpf_set_si(result, 0);
+            } else {
+                mpf_pow_ui(result, result, exp_ui);
+                mpf_t one; mpf_init2(one, g_prec);
+                mpf_set_ui(one, 1);
+                mpf_div(result, one, result);
+                mpf_clear(one);
+            }
+        } else {
+            /* Fractional or very large exponent: use log/exp in GMP.
+             * base must be positive; negative base with integer exp is
+             * already handled above. */
+            if (base_sign <= 0) {
+                if (base_sign == 0) {
+                    mpf_set_ui(result, 0);
+                } else {
+                    basic_stderr("Illegal function call: negative base with non-integer exponent\n");
+                    mpf_set_si(result, 0);
+                }
+            } else {
+                /* ln(base) via mpfr-free approximation using GMP:
+                 * Use enough double precision for the log, then reconstruct. */
+                double b = mpf_get_d(result);
+                double e = mpf_get_d(expv);
+                /* Guard against overflow to inf */
+                double lg = log(b);          /* no SIGFPE: b > 0 */
+                double le = lg * e;
+                if (le > 709.0)       le =  709.0;   /* clamp to ~DBL_MAX */
+                if (le < -745.0)      le = -745.0;
+                mpf_set_d(result, exp(le));
+            }
+        }
+
+        mpf_clear(expv);
+        skip_ws_p(ps);
     }
 }
 

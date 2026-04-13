@@ -2143,9 +2143,14 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
             {
                 mpf_t result; mpf_init2(result, g_prec);
                 eval_expr(p, result);
-                char buf[128];
-                gmp_snprintf(buf, sizeof buf, "%.*Fg\n", PRINT_DIGITS, result);
-                display_print(buf);
+                /* Size = digits + exponent + sign + decimal point + '\n' + slack */
+                int bufsz = PRINT_DIGITS + 32;
+                char *buf = (char *)malloc(bufsz);
+                if (buf) {
+                    gmp_snprintf(buf, bufsz, "%.*Fe\n", PRINT_DIGITS, result);
+                    display_print(buf);
+                    free(buf);
+                }
                 mpf_clear(result);
                 return 0;
             }
@@ -2154,13 +2159,17 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
         return cmd_call(ip, p);
     }
 
-    /* Bare numeric expression starting with unary sign or digit, e.g. -5, 3+4 */
-    if (*p == '-' || *p == '+' || isdigit((unsigned char)*p)) {
+    /* Bare numeric expression starting with unary sign, digit, or paren */
+    if (*p == '-' || *p == '+' || *p == '(' || isdigit((unsigned char)*p)) {
         mpf_t result; mpf_init2(result, g_prec);
         eval_expr(p, result);
-        char buf[128];
-        gmp_snprintf(buf, sizeof buf, "%.*Fg\n", PRINT_DIGITS, result);
-        display_print(buf);
+        int bufsz = PRINT_DIGITS + 32;
+        char *buf = (char *)malloc(bufsz);
+        if (buf) {
+            gmp_snprintf(buf, bufsz, "%.*Fe\n", PRINT_DIGITS, result);
+            display_print(buf);
+            free(buf);
+        }
         mpf_clear(result);
         return 0;
     }
