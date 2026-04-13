@@ -64,6 +64,7 @@ jobs:
     - name: Build Windows Executable
       run: |
         make windows SSH=1
+        make -C wopr/wopr_basic windows
 
     - name: Convert PNG Icon to ICO Format
       working-directory: build/windows
@@ -83,6 +84,7 @@ jobs:
         cp ../../README.md . 2>/dev/null || true
         cp ../../LICENSE.md . 2>/dev/null || true
         cp ../../icon.png . 2>/dev/null || true
+        cp ../../wopr/wopr_basic/build/windows/felixbasic.exe . 2>/dev/null || true
 
         DLL_SOURCE="/usr/x86_64-w64-mingw32/sys-root/mingw/bin"
 
@@ -343,6 +345,10 @@ jobs:
           exit 1
         }
 
+        if (-not (Test-Path "msix-package/Files/felixbasic.exe")) {
+          Write-Warning "felixbasic.exe not found in package!"
+        }
+
         Write-Host "📦 MSIX package contents:"
         Get-ChildItem "msix-package/Files/" -File | ForEach-Object { Write-Host "  - $_" }
 
@@ -422,6 +428,22 @@ jobs:
                                   BackgroundColor="#0d1117">
                 <uap:DefaultTile Wide310x150Logo="Assets\FelixTerminalWide.scale-100.png"
                                  ShortName="Felix Terminal">
+                  <uap:ShowNameOnTiles>
+                    <uap:ShowOn Tile="square150x150Logo"/>
+                    <uap:ShowOn Tile="wide310x150Logo"/>
+                  </uap:ShowNameOnTiles>
+                </uap:DefaultTile>
+                <uap:SplashScreen Image="Assets\FelixTerminalLogo.scale-100.png" />
+              </uap:VisualElements>
+            </Application>
+            <Application Id="FelixBasic" Executable="Files\felixbasic.exe" EntryPoint="Windows.FullTrustApplication">
+              <uap:VisualElements DisplayName="Felix Basic"
+                                  Description="Felix Basic"
+                                  Square150x150Logo="Assets\FelixTerminalLogo.scale-100.png"
+                                  Square44x44Logo="Assets\FelixTerminal44x44.scale-100.png"
+                                  BackgroundColor="#0d1117">
+                <uap:DefaultTile Wide310x150Logo="Assets\FelixTerminalWide.scale-100.png"
+                                 ShortName="Felix Basic">
                   <uap:ShowNameOnTiles>
                     <uap:ShowOn Tile="square150x150Logo"/>
                     <uap:ShowOn Tile="wide310x150Logo"/>
