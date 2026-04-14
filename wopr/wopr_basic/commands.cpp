@@ -526,13 +526,18 @@ static int eval_one_cmp(char **pp);
 
 /* Evaluate a full boolean expression: one or more comparisons joined by AND/OR */
 static int eval_bool_expr(char **pp) {
+    char *start = *pp;
     int result = eval_one_cmp(pp);
+    basic_stderr("[bool] first cmp='%.40s' -> %d, rem='%.30s'\n", start, result, *pp);
     char *p = sk(*pp);
     while (kw_match(p, "AND") || kw_match(p, "OR")) {
         int is_and = kw_match(p, "AND");
         p = sk(p + (is_and ? 3 : 2));
+        char *term_start = p;
         int next = eval_one_cmp(&p);
+        basic_stderr("[bool] %s cmp='%.40s' -> %d, rem='%.30s'\n", is_and?"AND":"OR", term_start, next, p);
         result = is_and ? (result && next) : (result || next);
+        basic_stderr("[bool] result so far: %d\n", result);
         p = sk(p);
     }
     *pp = p;
@@ -612,7 +617,10 @@ static int cmd_loop(Interp *ip, char *args) {
         keep_looping = eval_bool_expr(&p);
     } else if (kw_match(p, "UNTIL")) {
         p = sk(p + 5);
-        keep_looping = !eval_bool_expr(&p);
+        char *dbg_p = p;
+        int cond = eval_bool_expr(&p);
+        keep_looping = !cond;
+        basic_stderr("[loop until] cond=%d keep=%d args='%.60s'\n", cond, keep_looping, dbg_p);
     }
 
     if (keep_looping) {
@@ -1534,7 +1542,9 @@ static int cmd_line_input(Interp *ip, char *args) {
     char linebuf[DEFAULT_BUFFER];
     display_cursor(1);
     display_getline(linebuf, sizeof linebuf);
+#ifndef USE_SDL_WINDOW
     display_newline();
+#endif
     Var *v = var_get(name);
     free(v->str); v->str = str_dup(linebuf);
     return 0;
@@ -1549,15 +1559,25 @@ static int cmd_input(Interp *ip, char *args) {
         while (*p && *p != '"') display_putchar(*p++);
         if (*p == '"') p++;
         p = sk(p);
-        if (*p == ';' || *p == ',') p = sk(p + 1);
-        display_print("? ");
+        /* semicolon: print "? " after prompt (QBasic default)
+         * comma: no "? " (suppressed)
+         * neither: treat as semicolon */
+        if (*p == ',') {
+            p = sk(p + 1);
+            /* no ? */
+        } else {
+            if (*p == ';') p = sk(p + 1);
+            display_print("? ");
+        }
     } else {
         display_print("? ");
     }
     char linebuf[DEFAULT_BUFFER];
     display_cursor(1);
     display_getline(linebuf, sizeof linebuf);
+#ifndef USE_SDL_WINDOW
     display_newline();
+#endif
     char *tok = linebuf;
     while (*p) {
         char name[MAX_VARNAME];
@@ -2131,7 +2151,11 @@ static int eval_one_cmp(char **pp) {
         if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
             !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
         else if (p[0]=='<'||p[0]=='>'||p[0]=='=') { op2[1]='\0'; oplen=1; }
-        else { cmp=(mpf_sgn(lhs)!=0); mpf_clear(lhs); *pp=p; return cmp; }
+        else { 
+            double dbgv = mpf_get_d(lhs);
+            int dbgcmp = (mpf_sgn(lhs)!=0);
+            basic_stderr("[eval_one_cmp] no-op path: lhs=%.4f -> cmp=%d, rem='%.30s'\n", dbgv, dbgcmp, p);
+            cmp=dbgcmp; mpf_clear(lhs); *pp=p; return cmp; }
         mpf_t rhs; mpf_init2(rhs, g_prec);
         p = sk(eval_expr(sk(p + oplen), rhs));
         int c = mpf_cmp(lhs, rhs);

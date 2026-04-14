@@ -313,6 +313,7 @@ bool gfx_sdl_pump() {
                 BASIC_NS::g_break = 1;
                 key_push(3);
             } else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
+                fprintf(stderr, "[keydown] ENTER pushed\n"); fflush(stderr);
                 key_push('\n');
             } else if (sym == SDLK_BACKSPACE) {
                 key_push(8);
@@ -870,6 +871,7 @@ int display_getline(char *buf, int bufsz) {
     int len = 0;
     s_cursor_vis = true;
     s_needs_render = true;
+    fprintf(stderr, "[getline] waiting for input\n"); fflush(stderr);
     for (;;) {
         // Blink cursor: render every ~500ms toggle
         static Uint32 blink_t = 0;
@@ -885,6 +887,8 @@ int display_getline(char *buf, int bufsz) {
 
         int c = key_pop();
         if (c < 0) { SDL_Delay(10); continue; }
+
+        fprintf(stderr, "[getline] got key: %d '%c'\n", c, (c>=32&&c<127)?(char)c:'?'); fflush(stderr);
 
         if (c == '\n' || c == '\r') break;
         if (c == 8 || c == 127) {  // backspace
@@ -905,6 +909,7 @@ int display_getline(char *buf, int bufsz) {
     s_cursor_vis = false;
     text_newline();
     gfx_sdl_render();
+    fprintf(stderr, "[getline] returning len=%d buf='%s'\n", len, buf); fflush(stderr);
     return len;
 }
 
