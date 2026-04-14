@@ -346,7 +346,13 @@ static char *eval_str_primary(char *p, char *buf, int bufsz) {
         if (*p == '(') p++;
         mpf_t n; mpf_init2(n, g_prec);
         p = eval_expr(sk(p), n);
-        gmp_snprintf(buf, bufsz, "%.6Fg", n);
+        /* BASIC STR$ always prefixes a space for non-negative numbers */
+        char tmp_num[DEFAULT_BUFFER];
+        gmp_snprintf(tmp_num, sizeof tmp_num, "%.6Fg", n);
+        if (mpf_sgn(n) >= 0)
+            snprintf(buf, bufsz, " %s", tmp_num);
+        else
+            snprintf(buf, bufsz, "%s", tmp_num);
         mpf_clear(n);
         if (*sk(p) == ')') p = sk(p) + 1;
         return p;

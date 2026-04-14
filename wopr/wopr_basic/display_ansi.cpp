@@ -358,12 +358,47 @@ int display_getline(char *buf, int bufsz)
     /* saved copy of what the user was typing before scrolling history */
     char saved[512] = "";
 
+    /* Query the current cursor column so redraw can return to it after \r,
+     * preserving whatever prompt was already printed on this line.
+     * We send ESC[6n and read back ESC[row;colR. Fall back to col 0 on failure. */
+    int prompt_col = 0;
+    {
+        /* Switch to blocking for the query response */
+        struct termios tmp_t = g_orig_termios;
+        tmp_t.c_lflag &= ~(ECHO | ICANON);
+        tmp_t.c_cc[VMIN]  = 1;
+        tmp_t.c_cc[VTIME] = 1;
+        int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
+        fcntl(STDIN_FILENO, F_SETFL, fl & ~O_NONBLOCK);
+        tcsetattr(STDIN_FILENO, TCSANOW, &tmp_t);
+
+        write(STDOUT_FILENO, "\033[6n", 4);
+        char rbuf[32]; int ri = 0;
+        /* read ESC [ rows ; cols R */
+        unsigned char ch;
+        while (ri < (int)sizeof(rbuf) - 1) {
+            if (read(STDIN_FILENO, &ch, 1) <= 0) break;
+            rbuf[ri++] = (char)ch;
+            if (ch == 'R') break;
+        }
+        rbuf[ri] = '\0';
+        /* parse \033[row;colR */
+        int row = 0, col = 0;
+        if (sscanf(rbuf, "\033[%d;%dR", &row, &col) == 2 && col > 1)
+            prompt_col = col - 1;   /* 1-based → 0-based offset */
+    }
+
     auto redraw = [&]() {
-        /* Redraw from start of line: CR, reprint prompt+buf, clear tail */
+        /* Return to start of line, skip over the prompt, rewrite input, clear tail */
         write(STDOUT_FILENO, "\r", 1);
+        if (prompt_col > 0) {
+            char mv[16];
+            snprintf(mv, sizeof mv, "\033[%dC", prompt_col);
+            write(STDOUT_FILENO, mv, strlen(mv));
+        }
         write(STDOUT_FILENO, tmp, len);
         write(STDOUT_FILENO, "\033[K", 3);   /* erase to end of line */
-        /* reposition cursor */
+        /* reposition cursor within input */
         if (cursor < len) {
             char mv[16];
             int back = len - cursor;
