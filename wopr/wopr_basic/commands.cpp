@@ -14,8 +14,51 @@
 BASIC_NS_BEGIN
 
 /* ================================================================
- * PRINT USING formatter
+ * Stack trace helper — prints current line and GOSUB call chain,
+ * then exits.  Called from stack overflow and other fatal errors.
  * ================================================================ */
+static void basic_stacktrace(const char *reason) {
+    basic_stderr("\n%s\n", reason);
+    if (g_current_pc >= 0 && g_current_pc < g_nlines)
+        basic_stderr("  at line %d: %s\n",
+                     g_lines[g_current_pc].linenum,
+                     g_lines[g_current_pc].text);
+    basic_stderr("BASIC call stack (most recent first):\n");
+    int shown = 0;
+    for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
+        if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0) {
+            int ret_pc = g_ctrl[fi].line_idx - 1;
+            if (ret_pc >= 0 && ret_pc < g_nlines)
+                basic_stderr("  called from line %d: %s\n",
+                             g_lines[ret_pc].linenum,
+                             g_lines[ret_pc].text);
+            else
+                basic_stderr("  called from line <unknown>\n");
+            shown++;
+        } else if (strcmp(g_ctrl[fi].varname, "\x03" "WHILE") == 0) {
+            int wpc = g_ctrl[fi].line_idx;
+            if (wpc >= 0 && wpc < g_nlines)
+                basic_stderr("  inside WHILE at line %d: %s\n",
+                             g_lines[wpc].linenum, g_lines[wpc].text);
+            shown++;
+        } else if (strcmp(g_ctrl[fi].varname, "\x02" "DO") == 0) {
+            int dpc = g_ctrl[fi].line_idx;
+            if (dpc >= 0 && dpc < g_nlines)
+                basic_stderr("  inside DO at line %d: %s\n",
+                             g_lines[dpc].linenum, g_lines[dpc].text);
+            shown++;
+        } else if (g_ctrl[fi].varname[0] != '\x01' &&
+                   g_ctrl[fi].varname[0] != '\x02' &&
+                   g_ctrl[fi].varname[0] != '\x03') {
+            /* FOR loop frame */
+            basic_stderr("  inside FOR %s loop\n", g_ctrl[fi].varname);
+            shown++;
+        }
+        if (shown >= 32) { basic_stderr("  ... (truncated)\n"); break; }
+    }
+    exit(1);
+}
+
 static void print_using(char *fmt, double val) {
     int before = 0, after = 0, has_dot = 0, has_dollar = 0, has_plus = 0;
     for (char *f = fmt; *f; f++) {
@@ -523,7 +566,7 @@ static int cmd_do(Interp *ip, char *args) {
             ip->pc = pc; return 1;
         }
     }
-    if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return -1; }
+    if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stacktrace("Stack overflow"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strcpy(f->varname, "\x02" "DO");
     f->line_idx = ip->pc;
@@ -582,7 +625,7 @@ static int cmd_while(Interp *ip, char *args) {
                        strcmp(g_ctrl[g_ctrl_top - 1].varname, "\x03" "WHILE") == 0 &&
                        g_ctrl[g_ctrl_top - 1].line_idx == ip->pc);
         if (!already) {
-            if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return -1; }
+            if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stacktrace("Stack overflow"); return -1; }
             CtrlFrame *f = &g_ctrl[g_ctrl_top++];
             strcpy(f->varname, "\x03" "WHILE");
             f->line_idx = ip->pc;
@@ -1077,6 +1120,9 @@ static int cmd_call(Interp *ip, char *args) {
                    && pi < MAX_VARNAME - 1)
                 pname[pi++] = *ps++;
             pname[pi] = '\0';
+            /* skip optional () for array params */
+            ps = sk(ps);
+            if (*ps == '(') { ps++; while (*ps && *ps != ')') ps++; if (*ps == ')') ps++; }
             /* skip optional AS TYPE annotation */
             ps = sk(ps);
             if (strncasecmp(ps, "AS", 2) == 0 && isspace((unsigned char)ps[2])) {
@@ -1087,6 +1133,23 @@ static int cmd_call(Interp *ip, char *args) {
             /* --- evaluate one call-site argument --- */
             cs = sk(cs);
             if (!*cs || *cs == ')') break;
+
+            /* Array passed by reference: "ArrName()" — skip it, all vars are global */
+            {
+                char *look = cs;
+                while (isalnum((unsigned char)*look) || *look == '_') look++;
+                look = sk(look);
+                if (*look == '(') {
+                    char *inner = sk(look + 1);
+                    if (*inner == ')') {
+                        /* bare "()" — array ref, skip the whole token */
+                        cs = sk(inner + 1);
+                        if (*cs == ',') cs = sk(cs + 1);
+                        if (*ps == ',') ps = sk(ps + 1);
+                        continue;
+                    }
+                }
+            }
 
             if (var_is_str_name(pname)) {
                 char sbuf[DEFAULT_BUFFER];
@@ -1887,7 +1950,7 @@ static int cmd_for(Interp *ip, char *args) {
     if (strncasecmp(p, "STEP", 4) == 0) { p = sk(p + 4); eval_expr(p, step); }
     Var *v = var_get(vname); mpf_set(v->num, start);
 
-    if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return -1; }
+    if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stacktrace("Stack overflow"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strncpy(f->varname, vname, MAX_VARNAME - 1);
     mpf_init2(f->limit, g_prec); mpf_set(f->limit, limit);
@@ -1935,7 +1998,7 @@ int cmd_goto(Interp *ip, char *args) {
 }
 
 int cmd_gosub(Interp *ip, char *args) {
-    if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return-1; }
+    if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stacktrace("Stack overflow"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strcpy(f->varname, "\x01" "GOSUB");
     f->line_idx = ip->pc + 1;
@@ -2071,41 +2134,139 @@ static char *find_else(char *p) {
     return NULL;
 }
 
+/* Skip forward past the block starting at start_pc (already inside the IF body)
+ * to the next ELSEIF/ELSE/END IF at the same nesting depth.
+ * Returns the pc of that line, or g_nlines if not found. */
+static int find_block_branch(int start_pc) {
+    int depth = 0;
+    for (int pc = start_pc; pc < g_nlines; pc++) {
+        char *t = sk(g_lines[pc].text);
+        /* nested block IF: no inline body after THEN */
+        if (kw_match(t, "IF")) {
+            char *rest = t + 2;
+            /* scan for THEN at end of line */
+            char *th = NULL;
+            int in_s = 0;
+            for (char *q = rest; *q; q++) {
+                if (*q == '"') { in_s = !in_s; continue; }
+                if (!in_s && kw_match(q, "THEN")) th = q;
+            }
+            if (th) {
+                char *after = sk(th + 4);
+                if (!*after || *after == '\'') depth++;  /* block IF */
+            }
+            continue;
+        }
+        if (kw_match(t, "END") && kw_match(sk(t+3), "IF")) {
+            if (depth == 0) return pc;
+            depth--;
+            continue;
+        }
+        if (depth == 0 && (kw_match(t, "ELSEIF") || kw_match(t, "ELSE")))
+            return pc;
+    }
+    return g_nlines;
+}
+
 static int cmd_if(Interp *ip, char *args) {
     char *p = sk(args);
-    int result = eval_one_cmp(&p);
+    int result = eval_bool_expr(&p);
     p = sk(p);
-    while (kw_match(p,"AND") || kw_match(p,"OR")) {
-        int is_and = kw_match(p,"AND");
-        p = sk(p + (is_and ? 3 : 2));
-        int next = eval_one_cmp(&p);
-        result = is_and ? (result && next) : (result || next);
-        p = sk(p);
-    }
-    if (kw_match(p,"THEN")) p = sk(p + 4);
-    char *else_p = find_else(p);
-    if (result) {
-        char then_clause[MAX_LINE_LEN];
-        if (else_p) {
-            size_t len = (size_t)(else_p - p);
-            if (len >= MAX_LINE_LEN) len = MAX_LINE_LEN - 1;
-            memcpy(then_clause, p, len); then_clause[len] = '\0';
-            p = then_clause;
+    if (kw_match(p, "THEN")) p = sk(p + 4);
+
+    /* ── Single-line IF: something follows THEN on the same line ── */
+    if (*p && *p != '\'' && *p != '\0') {
+        char *else_p = find_else(p);
+        if (result) {
+            char then_clause[MAX_LINE_LEN];
+            if (else_p) {
+                size_t len = (size_t)(else_p - p);
+                if (len >= MAX_LINE_LEN) len = MAX_LINE_LEN - 1;
+                memcpy(then_clause, p, len); then_clause[len] = '\0';
+                p = then_clause;
+            }
+            if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
+            int jumped = dispatch_multi(ip, p);
+            if (!jumped) ip->pc++;
+            return 1;
+        } else {
+            ip->pc++;
+            if (!else_p) return 1;
+            p = sk(else_p + 4);
+            if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
+            dispatch_multi(ip, p);
+            return 1;
         }
-        /* THEN linenum  — bare number jumps directly */
-        if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
-        int jumped = dispatch_multi(ip, p);
-        if (!jumped) ip->pc++;
+    }
+
+    /* ── Block IF: nothing (or comment) after THEN ── */
+    if (result) {
+        /* Execute the body — run loop will hit ELSEIF/ELSE/END IF naturally.
+         * We just advance into the body; the ELSEIF/ELSE/END IF handlers
+         * will skip the remaining branches. */
+        ip->pc++;
         return 1;
     } else {
-        ip->pc++;
-        if (!else_p) return 1;
-        p = sk(else_p + 4);
-        /* ELSE linenum — bare number jumps directly */
-        if (isdigit((unsigned char)*p)) return cmd_goto(ip, p);
-        dispatch_multi(ip, p);
-        return 1;
+        /* Skip to first ELSEIF/ELSE/END IF at this depth */
+        int branch = find_block_branch(ip->pc + 1);
+        if (branch >= g_nlines) { ip->pc = g_nlines; return 1; }
+        char *t = sk(g_lines[branch].text);
+        if (kw_match(t, "ELSEIF")) {
+            /* treat as a new IF on that line */
+            ip->pc = branch;
+            char *ei_args = sk(t + 6);
+            return cmd_if(ip, ei_args);
+        } else if (kw_match(t, "ELSE")) {
+            /* execute from the line after ELSE */
+            ip->pc = branch + 1;
+            return 1;
+        } else {
+            /* END IF — step past it */
+            ip->pc = branch + 1;
+            return 1;
+        }
     }
+}
+
+/* ELSEIF / ELSE / END IF — only reached when we're executing a taken branch
+ * and need to skip to END IF */
+static int cmd_elseif(Interp *ip, char *args) {
+    (void)args;
+    /* We're inside a taken IF/ELSEIF branch and have hit the next ELSEIF —
+     * skip forward to END IF */
+    int end = find_block_branch(ip->pc + 1);
+    /* find_block_branch stops at ELSEIF/ELSE/END IF; keep skipping until END IF */
+    while (end < g_nlines) {
+        char *t = sk(g_lines[end].text);
+        if (kw_match(t, "END") && kw_match(sk(t+3), "IF")) break;
+        end = find_block_branch(end + 1);
+    }
+    ip->pc = (end < g_nlines) ? end + 1 : g_nlines;
+    return 1;
+}
+
+static int cmd_else(Interp *ip, char *args) {
+    (void)args;
+    /* Reached ELSE while executing a taken IF branch — skip to END IF */
+    int depth = 0;
+    int pc = ip->pc + 1;
+    while (pc < g_nlines) {
+        char *t = sk(g_lines[pc].text);
+        if (kw_match(t, "IF")) {
+            char *rest = t + 2; char *th = NULL; int in_s = 0;
+            for (char *q = rest; *q; q++) {
+                if (*q == '"') { in_s = !in_s; continue; }
+                if (!in_s && kw_match(q, "THEN")) th = q;
+            }
+            if (th && !*sk(th + 4)) depth++;
+        } else if (kw_match(t, "END") && kw_match(sk(t+3), "IF")) {
+            if (depth == 0) { ip->pc = pc + 1; return 1; }
+            depth--;
+        }
+        pc++;
+    }
+    ip->pc = g_nlines;
+    return 1;
 }
 
 /* ================================================================
@@ -2266,6 +2427,8 @@ const Command commands[] = {
     { "RETURN",     cmd_return     },
     { "CALL",       cmd_call       },
     { "IF",         cmd_if         },
+    { "ELSEIF",     cmd_elseif     },
+    { "ELSE",       cmd_else       },
     { "LINE INPUT", cmd_line_input },
     { "LINE",       cmd_line_gfx   },
     { "INPUT",      cmd_input      },
