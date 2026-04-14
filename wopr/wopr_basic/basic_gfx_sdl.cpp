@@ -222,7 +222,7 @@ static const Glyph &glyph_get(int cp) {
 
     if (s_ft_face) {
         FT_UInt idx = FT_Get_Char_Index(s_ft_face, (FT_ULong)cp);
-        if (idx && FT_Load_Glyph(s_ft_face, idx, FT_LOAD_RENDER) == 0) {
+        if (idx && FT_Load_Glyph(s_ft_face, idx, FT_LOAD_RENDER | FT_LOAD_NO_HINTING) == 0) {
             FT_Bitmap &b = s_ft_face->glyph->bitmap;
             g.bm_w = (int)b.width; g.bm_h = (int)b.rows;
             g.bearing_x = s_ft_face->glyph->bitmap_left;
@@ -364,24 +364,25 @@ static void render_text_cell(int row, int col) {
     if (g.bm.empty())
         return;
 
-    // Cache keyed by (codepoint, font generation)
+    // Cache keyed by (codepoint, font generation, fg color)
     struct Key {
         int cp;
         int gen;
+        int fg;
         bool operator==(const Key &o) const {
-            return cp == o.cp && gen == o.gen;
+            return cp == o.cp && gen == o.gen && fg == o.fg;
         }
     };
 
     struct KeyHash {
         size_t operator()(const Key &k) const {
-            return (size_t)k.cp ^ ((size_t)k.gen << 16);
+            return (size_t)k.cp ^ ((size_t)k.gen << 16) ^ ((size_t)k.fg << 24);
         }
     };
 
     static std::unordered_map<Key, SDL_Texture*, KeyHash> tex_cache;
 
-    Key key{ ch, s_font_gen };
+    Key key{ ch, s_font_gen, cell.fg & 15 };
     SDL_Texture *tex = nullptr;
 
     auto it = tex_cache.find(key);
