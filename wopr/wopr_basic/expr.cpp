@@ -1144,9 +1144,24 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         skip_ws_p(ps); if (*ps->p == ')') ps->p++;
         return;
     }
-    /* TIMER — seconds since midnight as a float */
+    /* TIMER — seconds since midnight as a float.
+     * QB64 extension: Timer(.001) passes a precision hint — we ignore it
+     * but must consume the argument so parsing continues correctly. */
     if (kw_match(ps->p, "TIMER")) {
         ps->p += 5;
+        /* consume optional argument e.g. Timer(.001) */
+        char *q = ps->p;
+        while (isspace((unsigned char)*q)) q++;
+        if (*q == '(') {
+            q++;
+            int depth = 1;
+            while (*q && depth > 0) {
+                if (*q == '(') depth++;
+                else if (*q == ')') depth--;
+                q++;
+            }
+            ps->p = q;
+        }
         struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
         struct tm *t = localtime(&ts.tv_sec);
         double secs = t->tm_hour * 3600.0 + t->tm_min * 60.0 + t->tm_sec
@@ -1385,21 +1400,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
-    basic_stderr("Parse error near: \"%.40s\"\n", ps->p);
-    basic_stderr("  in line %d: %s\n",
-                 g_lines[g_current_pc].linenum,
-                 g_lines[g_current_pc].text);
-    /* Walk the control stack for GOSUB frames */
-    basic_stderr("BASIC stack trace (most recent call first):\n");
-    for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
-        if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0) {
-            int ret_pc = g_ctrl[fi].line_idx - 1;
-            if (ret_pc >= 0 && ret_pc < g_nlines)
-                basic_stderr("  called from line %d: %s\n",
-                             g_lines[ret_pc].linenum,
-                             g_lines[ret_pc].text);
-        }
-    }
+    basic_stderr("Parse error near: \"%.20s\"\n", ps->p);
     exit(1);
 }
 

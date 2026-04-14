@@ -199,6 +199,25 @@ static int cmd_defseg(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
 static int cmd_defdbl(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
 static int cmd_key(Interp *ip, char *args)    { (void)ip;(void)args; return 0; }
 static int cmd_chain(Interp *ip, char *args)  { (void)ip;(void)args; return 0; }
+static int cmd_fullscreen(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
+
+/* DELAY t# / SLEEP t# — pause for t# seconds (QB64 built-ins) */
+static int cmd_delay(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+    if (!*p || *p == ':') return 0;
+    mpf_t n; mpf_init2(n, g_prec);
+    eval_expr(p, n);
+    double secs = mpf_get_d(n);
+    mpf_clear(n);
+    if (secs > 0) {
+        struct timespec ts;
+        ts.tv_sec  = (time_t)secs;
+        ts.tv_nsec = (long)((secs - (double)ts.tv_sec) * 1e9);
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
 
 /* ================================================================
  * SCREEN mode
@@ -2459,6 +2478,9 @@ const Command commands[] = {
     { "DATA",       cmd_data       },
     { "RESTORE",    cmd_restore    },
     { "CHAIN",      cmd_chain      },
+    { "FULLSCREEN", cmd_fullscreen },
+    { "DELAY",      cmd_delay      },
+    { "SLEEP",      cmd_delay      },
     { NULL,         NULL           }
 };
 
