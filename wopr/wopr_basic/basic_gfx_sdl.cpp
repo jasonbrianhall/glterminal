@@ -343,11 +343,22 @@ static void render_text_cell(int row, int col) {
     const Cell &cell = s_grid[row][col];
     unsigned char ch = (unsigned char)cell.ch;
 
-    if (ch < 0x20)
-        return;
-
     int cx = col * s_cell_w;
     int cy = row * s_cell_h;
+
+    // Draw cell background only for non-space cells so graphics show through.
+    // In graphics mode, text background is transparent (like real QBasic SCREEN 9).
+    if (ch >= 0x20 && ch != ' ' && !s_gfx_active) {
+        Uint32 bg = s_pal[cell.bg & 15];
+        SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(s_renderer,
+            (bg>>16)&0xFF, (bg>>8)&0xFF, bg&0xFF, 255);
+        SDL_Rect bgr = { cx, cy, s_cell_w, s_cell_h };
+        SDL_RenderFillRect(s_renderer, &bgr);
+    }
+
+    if (ch < 0x20)
+        return;
 
     const Glyph &g = glyph_get(ch);
     if (g.bm.empty())

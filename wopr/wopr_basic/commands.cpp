@@ -140,16 +140,12 @@ static void felix_drawf(char *fmt, ...) {
  * For simplicity we map the 16 standard EGA display colours (0-15) and
  * treat any value ≥ 16 as a 6-bit EGA palette entry. */
 static void ega_to_rgb(int ega6, int *r, int *g, int *b) {
-    /* EGA 6-bit: R1 G1 B1 R0 G0 B0 */
-    int r1 = (ega6 >> 5) & 1;
-    int g1 = (ega6 >> 4) & 1;
-    int b1 = (ega6 >> 3) & 1;
-    int r0 = (ega6 >> 2) & 1;
-    int g0 = (ega6 >> 1) & 1;
-    int b0 = (ega6 >> 0) & 1;
-    *r = (r1 * 2 + r0) * 85;
-    *g = (g1 * 2 + g0) * 85;
-    *b = (b1 * 2 + b0) * 85;
+    /* IBM EGA DAC encoding: bit5=R-high, bit4=G-high, bit3=B-high,
+     *                        bit2=R-low,  bit1=G-low,  bit0=B-low
+     * Each channel: high*0xAA + low*0x55  (matches DOSBox/real hardware) */
+    *r = ((ega6>>5)&1)*0xAA + ((ega6>>2)&1)*0x55;
+    *g = ((ega6>>4)&1)*0xAA + ((ega6>>1)&1)*0x55;
+    *b = ((ega6>>3)&1)*0xAA + ((ega6>>0)&1)*0x55;
 }
 
 /* Screen mode → (width, height) */
@@ -420,9 +416,16 @@ static int cmd_cls(Interp *ip, char *args) {
         if (arg >= 0) {
             c = arg;
         } else {
+#ifdef USE_SDL_WINDOW
+            /* In graphics mode, CLS with no arg always clears to color 0
+             * (the background pixel color).  BackColor is a text attribute
+             * used for COLOR statements, not for pixel-buffer clearing. */
+            c = gfx_active() ? 0 : g_back_color;
+#else
             c = g_back_color;
             Var *v = var_find("BACKCOLOR");
             if (v && v->kind == VAR_NUM) c = (int)mpf_get_si(v->num);
+#endif
         }
 #ifdef USE_SDL_WINDOW
         gfx_cls(c);
