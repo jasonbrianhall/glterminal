@@ -1029,7 +1029,70 @@ static int cmd_call(Interp *ip, char *args) {
     while ((isalnum((unsigned char)*p) || *p == '_') && i < MAX_VARNAME - 1)
         name[i++] = *p++;
     name[i] = '\0';
-    /* skip argument list — SUBs aren't scoped yet */
+
+    /* p now points past the name — skip optional parens/spaces to call-site args */
+    p = sk(p);
+    if (*p == '(') p = sk(p + 1);
+
+    /* Find the SUB definition line so we can read its parameter names.
+     * The label points at the "SUB name ..." line itself. */
+    int sub_idx = find_line_by_label(name);
+    char *param_src = NULL;
+    if (sub_idx >= 0) {
+        char *sp = sk(g_lines[sub_idx].text);
+        /* skip "SUB" or "FUNCTION" keyword */
+        if (strncasecmp(sp, "SUB", 3) == 0)      sp = sk(sp + 3);
+        else if (strncasecmp(sp, "FUNCTION", 8) == 0) sp = sk(sp + 8);
+        /* skip sub name */
+        while (isalnum((unsigned char)*sp) || *sp == '_') sp++;
+        sp = sk(sp);
+        if (*sp == '(') sp = sk(sp + 1);
+        param_src = sp;
+    }
+
+    /* Walk call-site args and sub param names in parallel, assigning values */
+    if (param_src && *param_src && *param_src != ')') {
+        char *cs = p;          /* call-site arg pointer */
+        char *ps = param_src;  /* param name pointer    */
+        while (*ps && *ps != ')') {
+            /* --- read one parameter name --- */
+            ps = sk(ps);
+            char pname[MAX_VARNAME]; int pi = 0;
+            while ((isalnum((unsigned char)*ps) || *ps == '_' || *ps == '$')
+                   && pi < MAX_VARNAME - 1)
+                pname[pi++] = *ps++;
+            pname[pi] = '\0';
+            /* skip optional AS TYPE annotation */
+            ps = sk(ps);
+            if (strncasecmp(ps, "AS", 2) == 0 && isspace((unsigned char)ps[2])) {
+                ps = sk(ps + 2);
+                while (isalnum((unsigned char)*ps) || *ps == '_' || *ps == ' ') ps++;
+            }
+
+            /* --- evaluate one call-site argument --- */
+            cs = sk(cs);
+            if (!*cs || *cs == ')') break;
+
+            if (var_is_str_name(pname)) {
+                char sbuf[DEFAULT_BUFFER];
+                cs = sk(eval_str_expr(cs, sbuf, sizeof sbuf));
+                Var *v = var_get(pname);
+                free(v->str);
+                v->str = str_dup(sbuf);
+            } else {
+                mpf_t val; mpf_init2(val, g_prec);
+                cs = sk(eval_expr(cs, val));
+                Var *v = var_get(pname);
+                mpf_set(v->num, val);
+                mpf_clear(val);
+            }
+
+            /* skip separating comma in both lists */
+            if (*cs == ',') cs = sk(cs + 1);
+            if (*ps == ',') ps = sk(ps + 1);
+        }
+    }
+
     return cmd_gosub(ip, name);
 }
 
