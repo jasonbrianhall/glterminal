@@ -835,8 +835,20 @@ int main(int argc, char **argv) {
                 }
                 // F7/WOPR checked before ssh_ready so it works in local sessions
                 if (ev.key.keysym.sym == SDLK_F7) {
-                    if (g_wopr.visible) wopr_close();
-                    else                wopr_open();
+                    if (g_wopr.visible) {
+                        wopr_close();
+                    } else {
+                        // Close all other overlays first
+                        g_help_visible         = false;
+                        g_iv.visible           = false;
+#ifdef USESSH
+                        g_sftp.visible         = false;
+                        g_sftp_console_visible = false;
+                        g_pf_overlay.visible   = false;
+#endif
+                        g_menu.visible         = false;
+                        wopr_open();
+                    }
                     needs_render = true;
                     break;
                 }
@@ -876,6 +888,12 @@ int main(int argc, char **argv) {
                 if (use_ssh && ssh_active()) {
                     if (ev.key.keysym.sym == SDLK_F2) {
                         SDL_Log("[SFTP] F2 upload triggered\n");
+                        g_help_visible = false;
+                        g_iv.visible   = false;
+                        if (g_wopr.visible) wopr_close();
+                        g_pf_overlay.visible   = false;
+                        g_sftp_console_visible = false;
+                        g_menu.visible = false;
                         SDL_GetWindowSize(window, &win_w, &win_h);
                         sftp_overlay_open(SftpOverlayMode::UPLOAD,
                                           guess_remote_cwd().c_str(), win_w, win_h);
@@ -884,6 +902,12 @@ int main(int argc, char **argv) {
                     }
                     if (ev.key.keysym.sym == SDLK_F3) {
                         SDL_Log("[SFTP] F3 download triggered\n");
+                        g_help_visible = false;
+                        g_iv.visible   = false;
+                        if (g_wopr.visible) wopr_close();
+                        g_pf_overlay.visible   = false;
+                        g_sftp_console_visible = false;
+                        g_menu.visible = false;
                         SDL_GetWindowSize(window, &win_w, &win_h);
                         sftp_overlay_open(SftpOverlayMode::DOWNLOAD,
                                           guess_remote_cwd().c_str(), win_w, win_h);
@@ -892,6 +916,12 @@ int main(int argc, char **argv) {
                     }
                     if (ev.key.keysym.sym == SDLK_F4) {
                         SDL_Log("[SFTP] F4 console triggered\n");
+                        g_help_visible = false;
+                        g_iv.visible   = false;
+                        if (g_wopr.visible) wopr_close();
+                        g_pf_overlay.visible = false;
+                        g_sftp.visible       = false;
+                        g_menu.visible       = false;
                         SDL_GetWindowSize(window, &win_w, &win_h);
                         sftp_console_open(win_w, win_h);
                         needs_render = true;
@@ -905,11 +935,31 @@ int main(int argc, char **argv) {
                         break;
                 }
                 if (ev.key.keysym.sym == SDLK_F1) {
+                    // Close all other overlays before toggling help
+                    if (!g_help_visible) {
+                        g_iv.visible = false;
+                        if (g_wopr.visible) wopr_close();
+#ifdef USESSH
+                        g_sftp.visible         = false;
+                        g_sftp_console_visible = false;
+                        g_pf_overlay.visible   = false;
+#endif
+                        g_menu.visible = false;
+                    }
                     g_help_visible = !g_help_visible;
                     needs_render = true;
                     break;
                 }
                 if (ev.key.keysym.sym == SDLK_F5) {
+                    // Close all other overlays before opening image viewer
+                    g_help_visible = false;
+                    if (g_wopr.visible) wopr_close();
+#ifdef USESSH
+                    g_sftp.visible         = false;
+                    g_sftp_console_visible = false;
+                    g_pf_overlay.visible   = false;
+#endif
+                    g_menu.visible = false;
                     SDL_GetWindowSize(window, &win_w, &win_h);
 #ifdef USESSH
                     iv_open(use_ssh && ssh_active(), win_w, win_h);
@@ -921,10 +971,18 @@ int main(int argc, char **argv) {
                 }
 #ifdef USESSH
                 if (ev.key.keysym.sym == SDLK_F6 && use_ssh && ssh_active()) {
-                    if (g_pf_overlay.visible)
+                    if (g_pf_overlay.visible) {
                         g_pf_overlay.visible = false;
-                    else
+                    } else {
+                        // Close all other overlays first
+                        g_help_visible         = false;
+                        g_iv.visible           = false;
+                        if (g_wopr.visible) wopr_close();
+                        g_sftp.visible         = false;
+                        g_sftp_console_visible = false;
+                        g_menu.visible         = false;
                         pf_overlay_open();
+                    }
                     needs_render = true;
                     break;
                 }
@@ -1157,7 +1215,17 @@ int main(int argc, char **argv) {
 #endif
                                 break;
                             case MENU_ID_SELECT_ALL: term_select_all(&term); break;
-                            case MENU_ID_HELP: g_help_visible = true; needs_render = true; break;
+                            case MENU_ID_HELP:
+                                g_iv.visible = false;
+                                if (g_wopr.visible) wopr_close();
+#ifdef USESSH
+                                g_sftp.visible         = false;
+                                g_sftp_console_visible = false;
+                                g_pf_overlay.visible   = false;
+#endif
+                                g_help_visible = true;
+                                needs_render = true;
+                                break;
                             case MENU_ID_QUIT: settings_save(); running = false; break;
                             default:
                                 if (hit < 0) g_menu.visible = false;
