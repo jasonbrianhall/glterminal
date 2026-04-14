@@ -508,7 +508,6 @@ static int cmd_do(Interp *ip, char *args) {
             ip->pc = pc; return 1;
         }
     }
-
     if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strcpy(f->varname, "\x02" "DO");
@@ -808,7 +807,6 @@ static int cmd_on_error(Interp *ip, char *args) {
 static int cmd_resume(Interp *ip, char *args) {
     char *p = sk(args);
     if (kw_match(p, "NEXT")) {
-        /* RESUME NEXT — continue at the line after the error */
         if (g_error_resume_pc >= 0) {
             ip->pc = g_error_resume_pc + 1;
             g_error_resume_pc = -1;
@@ -816,12 +814,159 @@ static int cmd_resume(Interp *ip, char *args) {
         }
         return 0;
     }
-    /* RESUME — retry the line that caused the error */
+    /* RESUME [line] — retry the line that caused the error, or jump to line */
+    p = sk(p);
+    if (isdigit((unsigned char)*p) || isalpha((unsigned char)*p)) {
+        /* RESUME line_number — jump there */
+        char target[MAX_VARNAME]; int i = 0;
+        while ((*p && !isspace((unsigned char)*p)) && i < MAX_VARNAME-1)
+            target[i++] = *p++;
+        target[i] = '\0';
+        g_error_resume_pc = -1;
+        return cmd_goto(ip, target);
+    }
     if (g_error_resume_pc >= 0) {
         ip->pc = g_error_resume_pc;
         g_error_resume_pc = -1;
         return 1;
     }
+    return 0;
+}
+
+/* ================================================================
+ * WRITE — like PRINT but comma-separated with strings quoted
+ * ================================================================ */
+static int cmd_write(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+    /* WRITE #n — file output */
+    if (*p == '#') {
+        p = sk(p + 1);
+        mpf_t n; mpf_init2(n, g_prec);
+        p = sk(eval_expr(p, n));
+        int fn = (int)mpf_get_si(n); mpf_clear(n);
+        if (*p == ',') p = sk(p + 1);
+        FileHandle *fh = fh_get(fn);
+        if (!fh->fp) { basic_stderr("File not open: %d\n", fn); return -1; }
+        int first = 1;
+        while (*p) {
+            if (!first) fprintf(fh->fp, ",");
+            first = 0;
+            if (is_str_token(p)) {
+                char sbuf[1024]; p = sk(eval_str_expr(p, sbuf, sizeof sbuf));
+                fprintf(fh->fp, "\"%s\"", sbuf);
+            } else {
+                mpf_t val; mpf_init2(val, g_prec);
+                p = sk(eval_expr(p, val));
+                /* Write integer if whole, else decimal */
+                double d = mpf_get_d(val);
+                if (d == floor(d) && fabs(d) < 1e15)
+                    fprintf(fh->fp, "%.0f", d);
+                else
+                    fprintf(fh->fp, "%.7G", d);
+                mpf_clear(val);
+            }
+            p = sk(p);
+            if (*p == ',' || *p == ';') p = sk(p + 1);
+            else break;
+        }
+        fprintf(fh->fp, "\n");
+        return 0;
+    }
+    /* WRITE to screen */
+    int first = 1;
+    while (*p) {
+        if (!first) display_putchar(',');
+        first = 0;
+        if (is_str_token(p)) {
+            char sbuf[1024]; p = sk(eval_str_expr(p, sbuf, sizeof sbuf));
+            display_putchar('"');
+            display_print(sbuf);
+            display_putchar('"');
+        } else {
+            mpf_t val; mpf_init2(val, g_prec);
+            p = sk(eval_expr(p, val));
+            double d = mpf_get_d(val);
+            char nbuf[64];
+            if (d == floor(d) && fabs(d) < 1e15)
+                snprintf(nbuf, sizeof nbuf, "%.0f", d);
+            else
+                snprintf(nbuf, sizeof nbuf, "%.7G", d);
+            display_print(nbuf);
+            mpf_clear(val);
+        }
+        p = sk(p);
+        if (*p == ',' || *p == ';') p = sk(p + 1);
+        else break;
+    }
+    display_newline();
+    return 0;
+}
+
+/* ================================================================
+ * TRON / TROFF — trace mode
+ * ================================================================ */
+static int cmd_tron(Interp *ip, char *args) {
+    (void)ip; (void)args;
+    g_tron = 1;
+    return 0;
+}
+static int cmd_troff(Interp *ip, char *args) {
+    (void)ip; (void)args;
+    g_tron = 0;
+    return 0;
+}
+
+/* ================================================================
+ * ERROR n — raise a BASIC error (triggers ON ERROR handler)
+ * ================================================================ */
+static int cmd_error(Interp *ip, char *args) {
+    mpf_t n; mpf_init2(n, g_prec);
+    eval_expr(sk(args), n);
+    g_err = (int)mpf_get_si(n);
+    mpf_clear(n);
+    /* If there's a handler, signal it; otherwise print and stop */
+    if (g_error_handler[0]) {
+        return -1;   /* run loop will jump to handler */
+    }
+    char buf[64];
+    snprintf(buf, sizeof buf, "Error %d\n", g_err);
+    display_print(buf);
+    ip->running = 0;
+    return 0;
+}
+
+/* ================================================================
+ * LPRINT / LLIST — printer stubs (redirect to stdout)
+ * ================================================================ */
+static int cmd_print(Interp *ip, char *args);  /* forward */
+static int cmd_lprint(Interp *ip, char *args) {
+    /* Treat exactly like PRINT */
+    return cmd_print(ip, args);
+}
+static int cmd_llist(Interp *ip, char *args) {
+    (void)ip; (void)args;
+    /* Silently ignore — no printer */
+    return 0;
+}
+
+/* ================================================================
+ * OUT port, val / WAIT port, mask — hardware stubs
+ * ================================================================ */
+static int cmd_out(Interp *ip, char *args) {
+    (void)ip;
+    /* Consume arguments but do nothing */
+    mpf_t a; mpf_init2(a, g_prec);
+    char *p = sk(eval_expr(sk(args), a)); mpf_clear(a);
+    if (*p == ',') { mpf_t b; mpf_init2(b, g_prec); eval_expr(sk(p+1), b); mpf_clear(b); }
+    return 0;
+}
+static int cmd_wait(Interp *ip, char *args) {
+    (void)ip; (void)args;
+    return 0;
+}
+static int cmd_motor(Interp *ip, char *args) {
+    (void)ip; (void)args;
     return 0;
 }
 
@@ -1663,6 +1808,7 @@ static int cmd_for(Interp *ip, char *args) {
     p = sk(eval_expr(p, limit));
     if (strncasecmp(p, "STEP", 4) == 0) { p = sk(p + 4); eval_expr(p, step); }
     Var *v = var_get(vname); mpf_set(v->num, start);
+
     if (g_ctrl_top >= CTRL_STACK_MAX) { basic_stderr("Stack overflow\n"); return -1; }
     CtrlFrame *f = &g_ctrl[g_ctrl_top++];
     strncpy(f->varname, vname, MAX_VARNAME - 1);
@@ -2056,6 +2202,15 @@ const Command commands[] = {
     { "ON ERROR",   cmd_on_error   },
     { "ON",         cmd_on         },
     { "RESUME",     cmd_resume     },
+    { "ERROR",      cmd_error      },
+    { "WRITE",      cmd_write      },
+    { "TRON",       cmd_tron       },
+    { "TROFF",      cmd_troff      },
+    { "LPRINT",     cmd_lprint     },
+    { "LLIST",      cmd_llist      },
+    { "OUT",        cmd_out        },
+    { "WAIT",       cmd_wait       },
+    { "MOTOR",      cmd_motor      },
     { "READ",       cmd_read       },
     { "DATA",       cmd_data       },
     { "RESTORE",    cmd_restore    },
@@ -2094,6 +2249,54 @@ static int split_statements(char *line, char *segs[], char **buf_out) {
 /* ================================================================
  * Dispatcher
  * ================================================================ */
+/* Format an mpf value sensibly:
+ * - plain decimal for numbers that fit reasonably (exponent -6..15)
+ * - scientific notation with trailing zeros trimmed otherwise */
+static void print_mpf(mpf_t val) {
+    int bufsz = PRINT_DIGITS + 64;
+    char *buf = (char *)malloc(bufsz);
+    if (!buf) return;
+
+    /* Get scientific form to inspect the exponent */
+    char *tmp = (char *)malloc(bufsz);
+    if (!tmp) { free(buf); return; }
+    gmp_snprintf(tmp, bufsz, "%.*Fe", PRINT_DIGITS, val);
+
+    /* Parse exponent */
+    char *ep = strchr(tmp, 'e');
+    int exp = ep ? atoi(ep + 1) : 0;
+
+    if (exp >= -6 && exp <= 15) {
+        /* Plain decimal — figure out decimal places needed */
+        int dp = PRINT_DIGITS - exp;
+        if (dp < 0) dp = 0;
+        if (dp > PRINT_DIGITS) dp = PRINT_DIGITS;
+        gmp_snprintf(buf, bufsz, "%.*Ff", dp, val);
+        /* Trim trailing zeros after decimal point */
+        if (strchr(buf, '.')) {
+            char *end = buf + strlen(buf) - 1;
+            while (*end == '0') *end-- = '\0';
+            if (*end == '.') *end = '\0';
+        }
+    } else {
+        /* Scientific notation — trim trailing zeros in significand */
+        gmp_snprintf(buf, bufsz, "%.*Fe", PRINT_DIGITS, val);
+        char *e = strchr(buf, 'e');
+        if (e) {
+            char *z = e - 1;
+            while (z > buf && *z == '0') z--;
+            if (*z == '.') z--;
+            memmove(z + 1, e, strlen(e) + 1);
+        }
+    }
+    free(tmp);
+
+    int len = (int)strlen(buf);
+    if (len + 1 < bufsz) { buf[len] = '\n'; buf[len+1] = '\0'; }
+    display_print(buf);
+    free(buf);
+}
+
 int dispatch_one(Interp *ip, char *stmt, char *full_line) {
     char *p = sk(stmt);
     if (!*p) return 0;
@@ -2143,14 +2346,7 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
             {
                 mpf_t result; mpf_init2(result, g_prec);
                 eval_expr(p, result);
-                /* Size = digits + exponent + sign + decimal point + '\n' + slack */
-                int bufsz = PRINT_DIGITS + 32;
-                char *buf = (char *)malloc(bufsz);
-                if (buf) {
-                    gmp_snprintf(buf, bufsz, "%.*Fe\n", PRINT_DIGITS, result);
-                    display_print(buf);
-                    free(buf);
-                }
+                print_mpf(result);
                 mpf_clear(result);
                 return 0;
             }
@@ -2163,13 +2359,7 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
     if (*p == '-' || *p == '+' || *p == '(' || isdigit((unsigned char)*p)) {
         mpf_t result; mpf_init2(result, g_prec);
         eval_expr(p, result);
-        int bufsz = PRINT_DIGITS + 32;
-        char *buf = (char *)malloc(bufsz);
-        if (buf) {
-            gmp_snprintf(buf, bufsz, "%.*Fe\n", PRINT_DIGITS, result);
-            display_print(buf);
-            free(buf);
-        }
+        print_mpf(result);
         mpf_clear(result);
         return 0;
     }

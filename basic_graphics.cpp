@@ -185,7 +185,9 @@ static void canvas_paint(int x, int y, int fill_color, int border_color) {
 
 static void hw_pset(int x, int y, int color) {
     float r, g, b; resolve_color(color, &r, &g, &b);
-    draw_rect(basic_x(x, s_win_w), basic_y(y, s_win_h), 1.f, 1.f, r, g, b, 1.f);
+    float pw = basic_sx(1, s_win_w); if (pw < 1.f) pw = 1.f;
+    float ph = basic_sy(1, s_win_h); if (ph < 1.f) ph = 1.f;
+    draw_rect(basic_x(x, s_win_w), basic_y(y, s_win_h), pw, ph, r, g, b, 1.f);
 }
 
 // Emit a 1.5px wide line as a screen-space quad (two triangles).
@@ -619,7 +621,8 @@ static void execute_cmd(const std::vector<std::string> &a) {
         case 22: s_scr_w=640; s_scr_h=480; g_render_mode=RENDER_MODE_NORMAL; break; // SVGA 256-color
         case 23: s_scr_w=800; s_scr_h=600; g_render_mode=RENDER_MODE_NORMAL; break; // SVGA 256-color
         case 24: s_scr_w=160; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy/PCjr 16-color
-        case 25: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy/PCjr 16-color        case 26: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy
+        case 25: s_scr_w=320; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy/PCjr 16-color
+        case 26: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy
         case 27: s_scr_w=640; s_scr_h=200; g_render_mode=RENDER_MODE_NORMAL; break; // Tandy ETGA
         case 28: s_scr_w=720; s_scr_h=350; g_render_mode=RENDER_MODE_NORMAL; break; // OGA
         default: break;

@@ -38,7 +38,7 @@ BASIC_NS_BEGIN
 #define MAX_VARNAME       64
 #define MAX_LINES       8192
 #define MAX_LINE_LEN     512
-#define CTRL_STACK_MAX    64
+#define CTRL_STACK_MAX    16384
 #define MAX_ARRAY_DIMS     2
 #define MAX_ARRAY_SIZE  4096
 #define MAX_FILE_HANDLES  16
@@ -59,6 +59,9 @@ extern volatile sig_atomic_t g_break;
 extern int              g_cont_pc;
 extern char             g_error_handler[MAX_VARNAME];
 extern int              g_error_resume_pc;
+extern int              g_err;   /* last error code (ERR) */
+extern int              g_erl;   /* line number of last error (ERL) */
+extern int              g_tron;  /* TRON trace flag */
 
 /* ================================================================
  * File handle table

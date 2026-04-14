@@ -1,4 +1,12 @@
 // gl_terminal_main.cpp  — entry point only
+// Build (local shell):
+//   g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
+//       terminal.cpp term_pty.cpp term_ui.cpp gl_bouncingcircle.cpp
+//       font_manager.cpp basic_graphics.cpp
+//       -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
+//
+// Build (with SSH support):
+//   g++ ... ssh_session.cpp basic_graphics.cpp ... -lssh2 -lcrypto -lssl -DUSESSH -o gl_terminal
 
 #include "gl_terminal.h"
 #include "gl_renderer.h"
@@ -75,12 +83,7 @@ static inline bool _term_read_dispatch(bool ssh, Terminal *t)
 int main(int argc, char **argv) {
     // ---- Command-line parsing ----
 #ifdef WIN32
-#ifdef FELIXBASIC_BUILD
-    const char *shell = "felixbasic.exe";
-
-#else
     const char *shell = "cmd.exe";
-#endif
 #else
     const char *shell = "/bin/bash";
 #endif
@@ -93,7 +96,6 @@ int main(int argc, char **argv) {
 #endif
     bool use_ssh = false;
     bool force_sdl = false;
-    bool force_gl  = true;   // GL renderer is the default
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -171,12 +173,6 @@ int main(int argc, char **argv) {
         // Positional: shell command (local mode only)
         if (strcmp(arg, "--sdl") == 0 || strcmp(arg, "-sdl") == 0) {
             force_sdl = true;
-            force_gl  = false;
-            continue;
-        }
-        if (strcmp(arg, "--gl") == 0 || strcmp(arg, "-gl") == 0) {
-            force_gl  = true;
-            force_sdl = false;
             continue;
         }
 
@@ -191,8 +187,7 @@ int main(int argc, char **argv) {
             printf("       flt [options]\n\n");
             printf("Options:\n");
             printf("  [shell]                     Command to run instead of default shell\n");
-            printf("  --gl                        Force OpenGL renderer (default)\n");
-            printf("  --sdl                       Force SDL renderer\n");
+            printf("  --sdl                       Force SDL renderer (for testing fallback path)\n");
 #ifdef USESSH
             printf("\nSSH options:\n");
             printf("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
@@ -262,7 +257,7 @@ int main(int argc, char **argv) {
     }
 
     SDL_GLContext ctx = nullptr;
-    if (force_gl) {
+    if (!force_sdl) {
         ctx = SDL_GL_CreateContext(window);
         if (!ctx) {
             SDL_Log("INFO: GL 3.3 not available (%s), retrying with Compatibility profile\n",
@@ -273,10 +268,10 @@ int main(int argc, char **argv) {
         if (!ctx)
             SDL_Log("INFO: GL 3.3 unavailable (%s), falling back to SDL renderer\n", SDL_GetError());
     } else {
-        SDL_Log("INFO: Using SDL renderer (use --gl for OpenGL)\n");
+        SDL_Log("INFO: --sdl flag set, forcing SDL renderer\n");
     }
 
-    if (!force_gl || !ctx) {
+    if (force_sdl || !ctx) {
         g_use_sdl_renderer = true;
         // Recreate the window without the OpenGL flag so the SDL renderer can own it
         SDL_DestroyWindow(window);
@@ -346,24 +341,7 @@ int main(int argc, char **argv) {
     basic_graphics_init(win_w, win_h);
     if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
 
-    // Helper: correct term.cell_w to match the regular face (s_ft_face_reg) rather
-    // than the bold face (s_ft_face) that term_set_font_size uses internally.
-    auto fix_cell_w = [&]() {
-        FT_Face reg = s_ft_face_reg ? s_ft_face_reg : s_ft_face;
-        FT_Set_Pixel_Sizes(reg, 0, (FT_UInt)g_font_size);
-        FT_UInt gi = FT_Get_Char_Index(reg, 'M');
-        if (gi && FT_Load_Glyph(reg, gi, FT_LOAD_DEFAULT) == 0)
-            term.cell_w = (float)(reg->glyph->advance.x >> 6);
-    };
-
-    // Invalidate glyph cache now that the renderer is up.
-    // Don't call term_set_font_size or SDL_SetWindowSize here — those send
-    // SIGWINCH which confuses the shell and causes double-spacing at startup.
-    ft_invalidate_glyph_cache();
-    fix_cell_w();
-    SDL_GetWindowSize(window, &win_w, &win_h);
-    gl_resize_fbo(win_w, win_h);
-    G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
+    term_resize(&term, win_w, win_h);
 
     // ---- SSH: async connection state ----------------------------------------
     // ssh_connect() blocks on network I/O (DNS, TCP, SSH handshake, auth).
@@ -385,7 +363,6 @@ int main(int argc, char **argv) {
         bool        pending  = false;
         bool        answered = false;
         bool        secret   = false;  // true = echo *, false = echo chars
-        int         attempt  = 0;      // how many password attempts so far
         SDL_mutex  *mtx      = nullptr;
     } prompt_req;
 
@@ -428,7 +405,6 @@ int main(int argc, char **argv) {
 
             ssh_cfg.prompt_password = [&](const char *prompt_str) -> std::string {
                 SDL_LockMutex(prompt_req.mtx);
-                prompt_req.attempt++;
                 prompt_req.prompt   = prompt_str;
                 prompt_req.response.clear();
                 prompt_req.answered = false;
@@ -447,37 +423,7 @@ int main(int argc, char **argv) {
             };
 
             ssh_thread = std::thread([&]() {
-                // Retry password auth up to 3 times before giving up.
-                // Each failed attempt re-calls prompt_password via ssh_connect.
-                const int MAX_ATTEMPTS = 3;
-                for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-                    ssh_conn_ok = ssh_connect(ssh_cfg, &term);
-                    if (ssh_conn_ok) break;
-                    if (ssh_abort.load()) break;
-
-                    // If we never got a password prompt this attempt, it's a
-                    // network/key/host error rather than a bad password — don't retry.
-                    SDL_LockMutex(prompt_req.mtx);
-                    int got_prompts = prompt_req.attempt;
-                    SDL_UnlockMutex(prompt_req.mtx);
-                    if (got_prompts == 0) break;
-
-                    if (attempt < MAX_ATTEMPTS) {
-                        // Reset attempt counter so the next ssh_connect gets a fresh prompt
-                        SDL_LockMutex(prompt_req.mtx);
-                        prompt_req.attempt = 0;
-                        SDL_UnlockMutex(prompt_req.mtx);
-                        char msg[64];
-                        snprintf(msg, sizeof(msg),
-                                 "\r\nAuthentication failed (attempt %d/%d)\r\n",
-                                 attempt, MAX_ATTEMPTS);
-                        term_feed(&term, msg, (int)strlen(msg));
-                    } else {
-                        term_feed(&term,
-                                  "\r\nAuthentication failed — maximum attempts reached.\r\n",
-                                  52);
-                    }
-                }
+                ssh_conn_ok = ssh_connect(ssh_cfg, &term);
                 ssh_thread_done.store(true);
             });
         }
@@ -578,8 +524,6 @@ int main(int argc, char **argv) {
     bool running = true;
     // Tracks whether the term FBO needs a full clear before the next draw.
     // Only set on layout changes (resize, theme, font) — NOT on PTY scroll.
-    // PTY-driven all_dirty was clearing the FBO every frame, causing the blink
-    // when holding Enter.
     bool fbo_needs_clear = true;
 
     // Auto-scroll state for selection drag
@@ -834,7 +778,6 @@ int main(int argc, char **argv) {
 
                                 ssh_cfg.prompt_password = [&](const char *prompt_str) -> std::string {
                                     SDL_LockMutex(prompt_req.mtx);
-                                    prompt_req.attempt++;
                                     prompt_req.prompt   = prompt_str;
                                     prompt_req.response.clear();
                                     prompt_req.answered = false;
@@ -852,30 +795,7 @@ int main(int argc, char **argv) {
                                     }
                                 };
                                 ssh_thread = std::thread([&]() {
-                                    const int MAX_ATTEMPTS = 3;
-                                    for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-                                        ssh_conn_ok = ssh_connect(ssh_cfg, &term);
-                                        if (ssh_conn_ok) break;
-                                        if (ssh_abort.load()) break;
-                                        SDL_LockMutex(prompt_req.mtx);
-                                        int got_prompts = prompt_req.attempt;
-                                        SDL_UnlockMutex(prompt_req.mtx);
-                                        if (got_prompts == 0) break;
-                                        if (attempt < MAX_ATTEMPTS) {
-                                            SDL_LockMutex(prompt_req.mtx);
-                                            prompt_req.attempt = 0;
-                                            SDL_UnlockMutex(prompt_req.mtx);
-                                            char msg[64];
-                                            snprintf(msg, sizeof(msg),
-                                                     "\r\nAuthentication failed (attempt %d/%d)\r\n",
-                                                     attempt, MAX_ATTEMPTS);
-                                            term_feed(&term, msg, (int)strlen(msg));
-                                        } else {
-                                            term_feed(&term,
-                                                      "\r\nAuthentication failed — maximum attempts reached.\r\n",
-                                                      52);
-                                        }
-                                    }
+                                    ssh_conn_ok = ssh_connect(ssh_cfg, &term);
                                     ssh_thread_done.store(true);
                                 });
                             }
@@ -1113,13 +1033,15 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
-                // SFTP overlay captures clicks
+#ifdef USESSH
+                // SFTP overlay captures all clicks
                 if (g_sftp.visible) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     sftp_overlay_mousedown(ev.button.x, ev.button.y, ev.button.button, win_w, win_h);
                     needs_render = true;
                     break;
                 }
+#endif
                 // Image viewer captures all clicks
                 if (g_iv.visible) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
@@ -1127,6 +1049,18 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+                // WOPR overlay captures all clicks
+                if (g_wopr.visible) {
+                    needs_render = true;
+                    break;
+                }
+#ifdef USESSH
+                // Port-forward overlay captures all clicks
+                if (g_pf_overlay.visible) {
+                    needs_render = true;
+                    break;
+                }
+#endif
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1254,6 +1188,7 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_wopr.visible) break;
                 if (g_iv.visible) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     if (iv_mousemotion(ev.motion.x, ev.motion.y, win_w, win_h))
@@ -1265,6 +1200,10 @@ int main(int argc, char **argv) {
                         needs_render = true;
                     break;
                 }
+#ifdef USESSH
+                if (g_sftp.visible) { break; }
+                if (g_pf_overlay.visible) { break; }
+#endif
                 if (g_menu.visible) {
                     int hit = menu_hit(&g_menu, ev.motion.x, ev.motion.y);
                     if (hit >= 0) g_menu.hovered = hit;
@@ -1325,11 +1264,16 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
+                if (g_wopr.visible) { needs_render = true; break; }
                 if (g_iv.visible) {
                     iv_mouseup(ev.button.x, ev.button.y, ev.button.button);
                     needs_render = true;
                     break;
                 }
+#ifdef USESSH
+                if (g_sftp.visible) { needs_render = true; break; }
+                if (g_pf_overlay.visible) { needs_render = true; break; }
+#endif
                 int r, c;
                 pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2, &r, &c);
                 if (term.mouse_report && !g_menu.visible) {
@@ -1372,7 +1316,6 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
-#endif
                 if (g_sftp.visible) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     sftp_overlay_mousewheel(ev.wheel.mouseX, ev.wheel.mouseY,
@@ -1380,13 +1323,15 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+                if (g_pf_overlay.visible) { needs_render = true; break; }
+#endif
+                if (g_wopr.visible) { needs_render = true; break; }
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
                     int delta = (ev.wheel.y > 0) ? 1 : -1;
                     if (mod & KMOD_SHIFT) delta *= 4;
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     term_set_font_size(&term, g_font_size + delta, win_w, win_h);
-                    fix_cell_w();
                     ft_invalidate_glyph_cache();
                     fbo_needs_clear = true;
                     G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
@@ -1437,10 +1382,6 @@ int main(int argc, char **argv) {
         if (g_render_mode & (RENDER_BIT_CRT | RENDER_BIT_VHS | RENDER_BIT_C64 | RENDER_BIT_COMPOSITE | RENDER_BIT_GHOSTING))
             needs_render = true;
 
-        // Audio visualizer in image viewer needs continuous redraw while playing
-        if (g_iv.visible && g_iv.audio_playing)
-            needs_render = true;
-
         // Notify audio of mode state
         static uint32_t s_prev_render_mode = ~0u;
         if (g_render_mode != s_prev_render_mode) {
@@ -1486,24 +1427,12 @@ int main(int argc, char **argv) {
         // buffer always gets the composited frame presented on both back and front buffers.
         if (s_dl_dirty || s_basic_has_content) needs_render = true;
 
-        // SDL mode draws directly to the screen (no persistent FBO), so every
-        // frame must redraw — otherwise the double-buffer swap shows a blank buffer.
-        if (g_use_sdl_renderer) needs_render = true;
-
-        // Any visible overlay must be redrawn every frame so both buffers of the
-        // SDL/GL double-buffer swap chain contain it.
-        if (g_menu.visible || g_help_visible || g_iv.visible || g_wopr.visible
-#ifdef USESSH
-            || g_sftp.visible || g_sftp_console_visible || g_pf_overlay.visible
-#endif
-        ) needs_render = true;
-
         if (needs_render) {
-            // Only re-render the terminal FBO if at least one row is dirty,
-            // OR if basic_graphics has commands waiting.
-            // In SDL mode, glyphs aren't cached in s_term_tex so we must always
-            // re-queue them — treat every frame as dirty when using SDL renderer.
-            bool any_dirty = term.all_dirty || s_dl_dirty || g_use_sdl_renderer;
+            // Re-render the terminal FBO if rows are dirty, BASIC has commands,
+            // or BASIC is active (s_basic_has_content forces needs_render every
+            // frame for double-buffer correctness — term must also redraw every
+            // frame so both buffers get the composited result, preventing flash).
+            bool any_dirty = term.all_dirty || s_dl_dirty || s_basic_has_content;
             if (!any_dirty) {
                 for (int r = 0; r < term.rows && !any_dirty; r++)
                     any_dirty = term.dirty_rows[r] != 0;
@@ -1513,16 +1442,16 @@ int main(int argc, char **argv) {
                 float bg_r = THEMES[g_theme_idx].bg_r;
                 float bg_g = THEMES[g_theme_idx].bg_g;
                 float bg_b = THEMES[g_theme_idx].bg_b;
-                // In SDL mode glyphs aren't cached so we must redraw all rows
-                // every frame. Mark all dirty so term_render redraws everything,
-                // then clear the texture so stale backgrounds don't accumulate.
-                if (g_use_sdl_renderer) term_dirty_all(&term);
-                if (fbo_needs_clear || g_use_sdl_renderer) {
+                basic_render(win_w, win_h); // updates s_basic_has_content for this frame
+                // When BASIC is active we clear the term FBO transparent every frame
+                // and must redraw ALL rows — not just dirty ones — so the cleared
+                // FBO gets fully repopulated before compositing.
+                if (s_basic_has_content) term_dirty_all(&term);
+                if (fbo_needs_clear || s_basic_has_content) {
                     gl_clear_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
                     fbo_needs_clear = false;
                 }
                 gl_begin_term_frame(win_w, win_h, bg_r, bg_g, bg_b);
-                basic_render(win_w, win_h); // flush BASIC graphics first (background layer)
                 term_render(&term, 2, 2);   // terminal text on top
                 gl_end_term_frame();
             }
@@ -1541,27 +1470,30 @@ int main(int argc, char **argv) {
             float t_sec = (float)(SDL_GetTicks()) / 1000.0f;
             gl_end_frame(t_sec, win_w, win_h);
 
-            // Overlay rendering — each layer only renders if no higher-priority
-            // overlay is active, so they never visually stack on top of each other.
-            // Priority (lowest to highest): menu < SFTP < image viewer < help < WOPR
-            if (g_wopr.visible) {
-                wopr_render(win_w, win_h);
-            } else if (g_help_visible) {
-                help_render(win_w, win_h);
-            } else if (g_iv.visible) {
-                iv_render(win_w, win_h);
-            } else {
+            // Menu renders after post-process so it's never distorted
+            if (!g_use_sdl_renderer) glViewport(0, 0, win_w, win_h);
+            menu_render(&g_menu);
 #ifdef USESSH
-                sftp_overlay_render(win_w, win_h);
-                sftp_console_render(win_w, win_h);
-                pf_overlay_render(win_w, win_h);
+            sftp_overlay_render(win_w, win_h);
+            sftp_console_render(win_w, win_h);
+            pf_overlay_render(win_w, win_h);
 #endif
-                menu_render(&g_menu);
-            }
+            // Image viewer (F5) — full-screen overlay
+            iv_render(win_w, win_h);
+            // Help overlay renders last (topmost layer)
+            help_render(win_w, win_h);
+            // WOPR overlay — above everything including help
+            if (g_wopr.visible) wopr_render(win_w, win_h);
 
-            // Flush any geometry queued by overlay renderers (menus, help, etc.)
-            gl_flush_glyphs();
-            gl_flush_verts();
+            // Flush any glyph/vert geometry queued by overlay renderers
+            // (menus, help, WOPR, etc.) before presenting the frame.
+            // Must be called with framebuffer 0 bound (gl_end_frame leaves it there).
+            if (!g_use_sdl_renderer) {
+                glUseProgram(G.prog);
+                gl_flush_glyphs();
+                gl_flush_verts();
+                glUseProgram(0);
+            }
 
             if (g_use_sdl_renderer)
                 SDL_RenderPresent(g_sdl_renderer);
@@ -1588,7 +1520,6 @@ int main(int argc, char **argv) {
         if (g_sdl_renderer) SDL_DestroyRenderer(g_sdl_renderer);
     }
     SDL_DestroyWindow(window);
-    wopr_close();          // join/detach any running sub-game thread before audio shutdown
     wopr_audio_shutdown();
     crt_audio_shutdown();
     kitty_shutdown();
