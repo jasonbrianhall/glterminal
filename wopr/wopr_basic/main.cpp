@@ -85,6 +85,24 @@ static void install_sigint(void) {
  * ================================================================ */
 void run(void) { run_from(0); }
 
+/* Print a BASIC-level stack trace to stderr */
+static void print_stacktrace(void) {
+    basic_stderr("BASIC stack trace (most recent first):\n");
+    basic_stderr("  line %d: %s\n",
+                 g_lines[g_current_pc].linenum,
+                 g_lines[g_current_pc].text);
+    /* Walk the control stack for GOSUB frames */
+    for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
+        if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0) {
+            int ret_pc = g_ctrl[fi].line_idx - 1;
+            if (ret_pc >= 0 && ret_pc < g_nlines)
+                basic_stderr("  called from line %d: %s\n",
+                             g_lines[ret_pc].linenum,
+                             g_lines[ret_pc].text);
+        }
+    }
+}
+
 void run_from(int start_pc) {
     g_break = 0;
     Interp ip = { .pc = start_pc, .running = 1 };
@@ -112,6 +130,7 @@ void run_from(int start_pc) {
 
         // Execute one BASIC instruction
         int old_pc = ip.pc;
+        g_current_pc = old_pc;
         int jumped = dispatch(&ip, g_lines[ip.pc].text);
 
         if (g_tron) {
@@ -140,6 +159,7 @@ void run_from(int start_pc) {
     // ------------------------------------------------------------
     while (ip.running && ip.pc < g_nlines && !g_break) {
         int old_pc = ip.pc;
+        g_current_pc = old_pc;
         int jumped = dispatch(&ip, g_lines[ip.pc].text);
 
         if (g_tron) {
@@ -403,8 +423,7 @@ return 0;
 
         } else if (strncasecmp(p,"RUN",3)==0 && !isalnum((unsigned char)p[3])) {
             if (g_nlines == 0) { display_print("No program loaded.\n"); continue; }
-            g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0; g_data_count = 0;
-            prescan_data();
+            g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0;
             run();
 
         } else if (strncasecmp(p,"CONT",4)==0 && !isalnum((unsigned char)p[4])) {

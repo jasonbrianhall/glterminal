@@ -459,6 +459,21 @@ static int cmd_return(Interp *ip, char *args);
 static char *parse_field_varname(char *p, char *out);
 static int eval_one_cmp(char **pp);
 
+/* Evaluate a full boolean expression: one or more comparisons joined by AND/OR */
+static int eval_bool_expr(char **pp) {
+    int result = eval_one_cmp(pp);
+    char *p = sk(*pp);
+    while (kw_match(p, "AND") || kw_match(p, "OR")) {
+        int is_and = kw_match(p, "AND");
+        p = sk(p + (is_and ? 3 : 2));
+        int next = eval_one_cmp(&p);
+        result = is_and ? (result && next) : (result || next);
+        p = sk(p);
+    }
+    *pp = p;
+    return result;
+}
+
 /* DO [WHILE|UNTIL cond] — push a loop frame pointing at the DO statement */
 static int cmd_do(Interp *ip, char *args) {
     /* When LOOP sends us back here, the frame already exists — don't push again.
@@ -470,7 +485,7 @@ static int cmd_do(Interp *ip, char *args) {
         if (kw_match(p, "WHILE") || kw_match(p, "UNTIL")) {
             int is_until = kw_match(p, "UNTIL");
             p = sk(p + 5);
-            int cond = eval_one_cmp(&p);
+            int cond = eval_bool_expr(&p);
             if (is_until) cond = !cond;
             if (!cond) {
                 /* skip to after matching LOOP */
@@ -495,7 +510,7 @@ static int cmd_do(Interp *ip, char *args) {
     if (kw_match(p, "WHILE") || kw_match(p, "UNTIL")) {
         int is_until = kw_match(p, "UNTIL");
         p = sk(p + 5);
-        int cond = eval_one_cmp(&p);
+        int cond = eval_bool_expr(&p);
         if (is_until) cond = !cond;
         if (!cond) {
             int depth = 1, pc = ip->pc + 1;
@@ -529,10 +544,10 @@ static int cmd_loop(Interp *ip, char *args) {
 
     if (kw_match(p, "WHILE")) {
         p = sk(p + 5);
-        keep_looping = eval_one_cmp(&p);
+        keep_looping = eval_bool_expr(&p);
     } else if (kw_match(p, "UNTIL")) {
         p = sk(p + 5);
-        keep_looping = !eval_one_cmp(&p);
+        keep_looping = !eval_bool_expr(&p);
     }
 
     if (keep_looping) {
@@ -1041,8 +1056,8 @@ static int cmd_call(Interp *ip, char *args) {
     if (sub_idx >= 0) {
         char *sp = sk(g_lines[sub_idx].text);
         /* skip "SUB" or "FUNCTION" keyword */
-        if (strncasecmp(sp, "SUB", 3) == 0)      sp = sk(sp + 3);
-        else if (strncasecmp(sp, "FUNCTION", 8) == 0) sp = sk(sp + 8);
+        if (strncasecmp(sp, "SUB", 3) == 0)           sp = sk(sp + 3);
+        else if (strncasecmp(sp, "FUNCTION", 8) == 0)  sp = sk(sp + 8);
         /* skip sub name */
         while (isalnum((unsigned char)*sp) || *sp == '_') sp++;
         sp = sk(sp);

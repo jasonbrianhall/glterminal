@@ -21,7 +21,8 @@ volatile sig_atomic_t g_break  = 0;
 #endif
 /* Hosted builds: g_break is a macro (basic_ns.h) expanding to ::BASIC_BREAK_SYM,
  * the C-linkage global defined in main.cpp — no definition needed here. */
-int                   g_cont_pc = -1;
+int                   g_cont_pc    = -1;
+int                   g_current_pc =  0;
 
 /* ON ERROR GOTO handler state */
 char g_error_handler[MAX_VARNAME] = "";  /* label/line of handler, "" = none */
@@ -1384,7 +1385,21 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
-    basic_stderr("Parse error near: \"%.20s\"\n", ps->p);
+    basic_stderr("Parse error near: \"%.40s\"\n", ps->p);
+    basic_stderr("  in line %d: %s\n",
+                 g_lines[g_current_pc].linenum,
+                 g_lines[g_current_pc].text);
+    /* Walk the control stack for GOSUB frames */
+    basic_stderr("BASIC stack trace (most recent call first):\n");
+    for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
+        if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0) {
+            int ret_pc = g_ctrl[fi].line_idx - 1;
+            if (ret_pc >= 0 && ret_pc < g_nlines)
+                basic_stderr("  called from line %d: %s\n",
+                             g_lines[ret_pc].linenum,
+                             g_lines[ret_pc].text);
+        }
+    }
     exit(1);
 }
 

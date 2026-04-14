@@ -57,6 +57,7 @@ extern int              g_option_base;
 extern volatile sig_atomic_t g_break;
 #endif
 extern int              g_cont_pc;
+extern int              g_current_pc;  /* pc of the line currently executing */
 extern char             g_error_handler[MAX_VARNAME];
 extern int              g_error_resume_pc;
 extern int              g_err;   /* last error code (ERR) */
