@@ -403,7 +403,8 @@ return 0;
 
         } else if (strncasecmp(p,"RUN",3)==0 && !isalnum((unsigned char)p[3])) {
             if (g_nlines == 0) { display_print("No program loaded.\n"); continue; }
-            g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0;
+            g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0; g_data_count = 0;
+            prescan_data();
             run();
 
         } else if (strncasecmp(p,"CONT",4)==0 && !isalnum((unsigned char)p[4])) {
