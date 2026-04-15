@@ -288,6 +288,24 @@ void gfx_sdl_shutdown() {
 // Event pump  (must run on main thread)
 // ============================================================================
 static bool s_quit = false;   // set on SDL_QUIT, checked everywhere
+static bool s_fullscreen = false;
+
+// Toggle or set fullscreen state — defined in BASIC_NS to match the header declarations
+BASIC_NS_BEGIN
+
+void gfx_sdl_set_fullscreen(bool fs) {
+    if (!s_window) return;
+    s_fullscreen = fs;
+    SDL_SetWindowFullscreen(s_window,
+        fs ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    s_needs_render = true;
+}
+
+void gfx_sdl_toggle_fullscreen() {
+    gfx_sdl_set_fullscreen(!s_fullscreen);
+}
+
+BASIC_NS_END
 
 bool gfx_sdl_pump() {
     SDL_Event e;
@@ -295,11 +313,13 @@ bool gfx_sdl_pump() {
         switch (e.type) {
         case SDL_QUIT:
             s_quit = true;
-            // Signal the interpreter to stop cleanly
+            // Signal the interpreter to stop cleanly; the window stays
+            // open until display_shutdown() is called after cleanup.
             BASIC_NS::g_break = 1;
-            return false;
+            break;            // keep draining events, don't return false yet
         case SDL_WINDOWEVENT:
-            if (e.window.event == SDL_WINDOWEVENT_RESIZED) {
+            if (e.window.event == SDL_WINDOWEVENT_RESIZED ||
+                e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                 s_win_w = e.window.data1;
                 s_win_h = e.window.data2;
                 ft_set_size_for_window();   // re-fit font to new window size
@@ -312,6 +332,9 @@ bool gfx_sdl_pump() {
                 // Ctrl+C — break like SIGINT
                 BASIC_NS::g_break = 1;
                 key_push(3);
+            } else if (sym == SDLK_F11) {
+                // F11 — toggle fullscreen
+                BASIC_NS::gfx_sdl_toggle_fullscreen();
             } else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
                 fprintf(stderr, "[keydown] ENTER pushed\n"); fflush(stderr);
                 key_push('\n');
@@ -871,8 +894,10 @@ int display_getline(char *buf, int bufsz) {
     int len = 0;
     s_cursor_vis = true;
     s_needs_render = true;
-    fprintf(stderr, "[getline] waiting for input\n"); fflush(stderr);
     for (;;) {
+        // Exit immediately if the window was closed
+        if (s_quit) { buf[0] = '\0'; return -1; }
+
         // Blink cursor: render every ~500ms toggle
         static Uint32 blink_t = 0;
         Uint32 now = SDL_GetTicks();
@@ -883,12 +908,10 @@ int display_getline(char *buf, int bufsz) {
         }
         gfx_sdl_render();
 
-        if (!gfx_sdl_pump()) { buf[len] = '\0'; return len; }
+        if (!gfx_sdl_pump()) { buf[0] = '\0'; return -1; }
 
         int c = key_pop();
         if (c < 0) { SDL_Delay(10); continue; }
-
-        fprintf(stderr, "[getline] got key: %d '%c'\n", c, (c>=32&&c<127)?(char)c:'?'); fflush(stderr);
 
         if (c == '\n' || c == '\r') break;
         if (c == 8 || c == 127) {  // backspace
@@ -909,7 +932,6 @@ int display_getline(char *buf, int bufsz) {
     s_cursor_vis = false;
     text_newline();
     gfx_sdl_render();
-    fprintf(stderr, "[getline] returning len=%d buf='%s'\n", len, buf); fflush(stderr);
     return len;
 }
 

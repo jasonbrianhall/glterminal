@@ -303,7 +303,9 @@ return 0;
         if (!suppress_ok) display_print("\nOk\n");
         suppress_ok = 0;
         display_cursor(1);
-        if (!display_getline(line, sizeof line)) {
+        int _gl_ret = display_getline(line, sizeof line);
+        if (_gl_ret < 0) break;   // window closed (SDL_QUIT)
+        if (!_gl_ret) {
 #if defined(WOPR) || defined(FELIX_BASIC)
             break;  /*   kill-switch from host */
 #else

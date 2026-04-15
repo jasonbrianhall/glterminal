@@ -63,4 +63,12 @@ void gfx_sdl_mark_dirty(void);
 
 void gfx_maybe_mark_dirty();
 
+/*
+ * gfx_sdl_set_fullscreen — enter or leave fullscreen (desktop mode).
+ * gfx_sdl_toggle_fullscreen — flip the current fullscreen state.
+ * Also triggered by F11 in the event pump.
+ */
+void gfx_sdl_set_fullscreen(bool fs);
+void gfx_sdl_toggle_fullscreen(void);
+
 #endif /* USE_SDL_WINDOW */

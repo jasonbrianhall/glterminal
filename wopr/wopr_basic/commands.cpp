@@ -93,6 +93,7 @@ int g_back_color    = 0;   /* palette index used by CLS */
 #ifdef USE_SDL_WINDOW
 /* ── SDL direct path ────────────────────────────────────────────────────── */
 #include "basic_gfx.h"
+#include "basic_gfx_sdl.h"
 
 /* No-op shims so the rest of the file compiles unchanged */
 static void felix_send(char *)  {}
@@ -199,7 +200,25 @@ static int cmd_defseg(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
 static int cmd_defdbl(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
 static int cmd_key(Interp *ip, char *args)    { (void)ip;(void)args; return 0; }
 static int cmd_chain(Interp *ip, char *args)  { (void)ip;(void)args; return 0; }
-static int cmd_fullscreen(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
+static int cmd_fullscreen(Interp *ip, char *args) {
+    (void)ip;
+#ifdef USE_SDL_WINDOW
+    // Optional argument: 0 = windowed, 1 = fullscreen, omitted = toggle
+    char *p = sk(args);
+    if (*p == '\0') {
+        gfx_sdl_toggle_fullscreen();
+    } else {
+        mpf_t v; mpf_init2(v, g_prec);
+        eval_expr(p, v);
+        bool fs = (mpf_get_d(v) != 0.0);
+        mpf_clear(v);
+        gfx_sdl_set_fullscreen(fs);
+    }
+#else
+    (void)args;
+#endif
+    return 0;
+}
 
 /* DELAY t# / SLEEP t# — pause for t# seconds (QB64 built-ins) */
 static int cmd_delay(Interp *ip, char *args) {
