@@ -326,6 +326,7 @@ bool gfx_sdl_init(const char *title, int w, int h) {
     if (!s_renderer)
         s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_SOFTWARE);
     SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");  // nearest-neighbour: crisp pixels
 
     ft_init();
 
@@ -544,25 +545,11 @@ void gfx_sdl_render() {
     // 1. Draw graphics framebuffer (if active)
     //
     if (s_gfx_active && s_gfx_tex) {
-        // Always reset viewport before drawing graphics
         SDL_RenderSetViewport(s_renderer, nullptr);
-
         SDL_UpdateTexture(s_gfx_tex, nullptr, s_pixels.data(), s_gfx_w * 4);
-
-        // Scale graphics to fit window (letterbox only graphics)
-        float sx = (float)s_win_w / s_gfx_w;
-        float sy = (float)s_win_h / s_gfx_h;
-        float scale = std::min(sx, sy);
-        int dw = (int)(s_gfx_w * scale);
-        int dh = (int)(s_gfx_h * scale);
-
-        SDL_Rect dst = {
-            (s_win_w - dw) / 2,
-            (s_win_h - dh) / 2,
-            dw,
-            dh
-        };
-
+        // Window was sized to an exact integer multiple of the pixel buffer,
+        // so stretch to fill — this gives pixel-perfect integer scaling.
+        SDL_Rect dst = { 0, 0, s_win_w, s_win_h };
         SDL_RenderCopy(s_renderer, s_gfx_tex, nullptr, &dst);
     }
 
@@ -667,15 +654,17 @@ static void text_putchar(char c) {
 // basic_gfx.h implementation
 // ============================================================================
 
-// Screen mode dims table
+// Screen mode dims table — pixel buffer dimensions per QBasic spec
 static void screen_mode_dims(int mode, int *w, int *h) {
     static const struct { int m, w, h; } MODES[] = {
-        {1,320,200},{2,640,200},{3,720,348},{4,640,400},{5,160,100},
-        {6,160,200},{7,320,200},{8,640,200},{9,640,350},{10,640,350},
-        {11,640,480},{12,640,480},{13,320,200},{14,320,200},{15,640,200},
-        {16,640,480},{17,640,480},{18,640,480},{19,640,480},{20,512,480},
-        {21,640,400},{22,640,480},{23,800,600},{24,160,200},{25,320,200},
-        {26,640,200},{27,640,200},{28,720,350},{0,0,0}
+        { 1, 320, 200}, { 2, 640, 200}, { 3, 720, 348}, { 4, 640, 400},
+        { 5, 160, 100}, { 6, 160, 200}, { 7, 320, 200}, { 8, 640, 200},
+        { 9, 640, 350}, {10, 640, 350}, {11, 640, 480}, {12, 640, 480},
+        {13, 320, 200}, {14, 320, 200}, {15, 640, 200}, {16, 640, 480},
+        {17, 640, 480}, {18, 640, 480}, {19, 640, 480}, {20, 512, 480},
+        {21, 640, 400}, {22, 640, 480}, {23, 800, 600}, {24, 160, 200},
+        {25, 320, 200}, {26, 640, 200}, {27, 640, 200}, {28, 720, 350},
+        {0, 0, 0}
     };
     *w = 640; *h = 350;
     for (int i = 0; MODES[i].m || MODES[i].w; i++)
@@ -695,6 +684,28 @@ void gfx_screen(int mode) {
     int gw, gh;
     screen_mode_dims(mode, &gw, &gh);
     s_gfx_w = gw; s_gfx_h = gh;
+
+    // Resize the window to show this mode at the best integer scale that
+    // fits the current display, with a minimum of 1×.
+    {
+        SDL_DisplayMode dm;
+        int disp = s_window ? SDL_GetWindowDisplayIndex(s_window) : 0;
+        if (SDL_GetCurrentDisplayMode(disp, &dm) != 0) {
+            dm.w = 1920; dm.h = 1080;
+        }
+        // Leave some headroom for the OS taskbar
+        int max_w = (int)(dm.w * 0.92f);
+        int max_h = (int)(dm.h * 0.92f);
+        int scale = 1;
+        while ((gw * (scale + 1)) <= max_w && (gh * (scale + 1)) <= max_h)
+            scale++;
+        int win_w = gw * scale;
+        int win_h = gh * scale;
+        if (s_window) SDL_SetWindowSize(s_window, win_w, win_h);
+        s_win_w = win_w;
+        s_win_h = win_h;
+    }
+
     s_pixels.assign((size_t)(gw * gh), s_pal[0] | 0xFF000000u);
     if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
     s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
