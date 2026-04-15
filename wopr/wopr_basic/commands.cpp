@@ -1106,6 +1106,13 @@ static int cmd_view_print(Interp *ip, char *args) {
 static int cmd_palette(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
+    // Bare PALETTE with no arguments resets all slots to defaults
+    if (!*p || *p == ':') {
+#ifdef USE_SDL_WINDOW
+        gfx_palette_reset_pub();
+#endif
+        return 0;
+    }
     mpf_t idx, col; mpf_init2(idx, g_prec); mpf_init2(col, g_prec);
     p = sk(eval_expr(p, idx));
     if (*p == ',') p = sk(p + 1);

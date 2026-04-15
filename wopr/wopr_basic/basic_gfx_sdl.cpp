@@ -68,6 +68,19 @@ static inline Uint8 pal_r(int i) { i&=15; return (s_pal[i]>>16)&0xFF; }
 static inline Uint8 pal_g(int i) { i&=15; return (s_pal[i]>> 8)&0xFF; }
 static inline Uint8 pal_b(int i) { i&=15; return (s_pal[i]    )&0xFF; }
 static int s_font_gen;
+static int s_pal_gen;   // bumped whenever any palette slot changes
+
+static const Uint32 s_pal_default[16] = {
+    0xFF000000, 0xFF0000AA, 0xFF00AA00, 0xFF00AAAA,
+    0xFFAA0000, 0xFFAA00AA, 0xFFAA5500, 0xFFAAAAAA,
+    0xFF555555, 0xFF5555FF, 0xFF55FF55, 0xFF55FFFF,
+    0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF,
+};
+
+static void gfx_palette_reset() {
+    memcpy(s_pal, s_pal_default, sizeof(s_pal));
+    s_pal_gen++;
+}
 
 // ============================================================================
 // SDL globals
@@ -305,6 +318,10 @@ void gfx_sdl_toggle_fullscreen() {
     gfx_sdl_set_fullscreen(!s_fullscreen);
 }
 
+void gfx_palette_reset_pub() {
+    gfx_palette_reset();
+}
+
 BASIC_NS_END
 
 bool gfx_sdl_pump() {
@@ -370,9 +387,10 @@ static void render_text_cell(int row, int col) {
     int cx = col * s_cell_w;
     int cy = row * s_cell_h;
 
-    // Draw cell background only for non-space cells so graphics show through.
-    // In graphics mode, text background is transparent (like real QBasic SCREEN 9).
-    if (ch >= 0x20 && ch != ' ' && !s_gfx_active) {
+    // In text mode, always draw the cell background (even spaces) so colored
+    // backgrounds show and old glyphs are properly erased.
+    // In graphics mode, skip background so graphics show through.
+    if (!s_gfx_active) {
         Uint32 bg = s_pal[cell.bg & 15];
         SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_NONE);
         SDL_SetRenderDrawColor(s_renderer,
@@ -381,39 +399,39 @@ static void render_text_cell(int row, int col) {
         SDL_RenderFillRect(s_renderer, &bgr);
     }
 
-    if (ch < 0x20)
+    if (ch < 0x20 || ch == ' ')
         return;
 
     const Glyph &g = glyph_get(ch);
     if (g.bm.empty())
         return;
 
-    // Cache keyed by (codepoint, font generation, fg color)
+    // Cache keyed by (codepoint, font generation, palette generation, fg color)
     struct Key {
         int cp;
         int gen;
+        int pal_gen;
         int fg;
         bool operator==(const Key &o) const {
-            return cp == o.cp && gen == o.gen && fg == o.fg;
+            return cp == o.cp && gen == o.gen && pal_gen == o.pal_gen && fg == o.fg;
         }
     };
 
     struct KeyHash {
         size_t operator()(const Key &k) const {
-            return (size_t)k.cp ^ ((size_t)k.gen << 16) ^ ((size_t)k.fg << 24);
+            return (size_t)k.cp ^ ((size_t)k.gen << 16) ^ ((size_t)k.pal_gen << 20) ^ ((size_t)k.fg << 24);
         }
     };
 
     static std::unordered_map<Key, SDL_Texture*, KeyHash> tex_cache;
 
-    Key key{ ch, s_font_gen, cell.fg & 15 };
+    Key key{ ch, s_font_gen, s_pal_gen, cell.fg & 15 };
     SDL_Texture *tex = nullptr;
 
     auto it = tex_cache.find(key);
     if (it != tex_cache.end()) {
         tex = it->second;
     } else {
-        // Build ARGB texture exactly like pixel renderer
         tex = SDL_CreateTexture(
             s_renderer,
             SDL_PIXELFORMAT_ARGB8888,
@@ -429,8 +447,11 @@ static void render_text_cell(int row, int col) {
 
         for (int i = 0; i < g.bm_w * g.bm_h; i++) {
             Uint8 a = g.bm[i];
-            // ARGB: palette RGB, glyph alpha
-            argb[i] = (fgcol & 0x00FFFFFFu) | ((Uint32)a << 24);
+            // Use full alpha for text rendering — antialiased gray values
+            // look invisible against dark backgrounds at small font sizes.
+            // Threshold at 64: anything above renders fully opaque.
+            Uint8 out_a = (a >= 64) ? 255 : 0;
+            argb[i] = (fgcol & 0x00FFFFFFu) | ((Uint32)out_a << 24);
         }
 
         SDL_UpdateTexture(tex, nullptr, argb.data(), g.bm_w * 4);
@@ -604,6 +625,7 @@ static void screen_mode_dims(int mode, int *w, int *h) {
 }
 
 void gfx_screen(int mode) {
+    gfx_palette_reset();   // SCREEN always resets palette to CGA defaults
     if (mode == 0) {
         s_gfx_active = false;
         if (s_gfx_tex) { SDL_DestroyTexture(s_gfx_tex); s_gfx_tex = nullptr; }
@@ -629,6 +651,7 @@ void gfx_palette(int idx, int r, int g, int b) {
                | ((Uint32)(r & 0xFF) << 16)
                | ((Uint32)(g & 0xFF) <<  8)
                | ((Uint32)(b & 0xFF)      );
+    s_pal_gen++;   // invalidate tex_cache entries baked with old palette
 }
 
 void gfx_cls(int color) {
@@ -889,16 +912,56 @@ int display_getchar(void) {
     return c;
 }
 
-// Blocking line input with echo
+// Blocking line input with echo and command history
 int display_getline(char *buf, int bufsz) {
-    int len = 0;
+    #define SDL_HIST_MAX 64
+    static char s_hist[SDL_HIST_MAX][512];
+    static int  s_hist_count = 0;
+    static int  s_hist_head  = 0;
+
+    // Working buffer separate from buf so we can cancel edits
+    char tmp[512] = "";
+    char saved[512] = "";
+    int  len    = 0;
+    int  cursor = 0;
+    int  hist_pos = s_hist_count;
+
+    // Remember where on the grid this input line started
+    int start_row = s_cur_row;
+    int start_col = s_cur_col;
+
     s_cursor_vis = true;
     s_needs_render = true;
+
+    // Helper: redraw the input line in the grid from start_col
+    auto redraw = [&]() {
+        // Rewrite from start position
+        int col = start_col;
+        int row = start_row;
+        for (int i = 0; i < len; i++) {
+            if (col < s_text_cols && row < TEXT_ROWS)
+                s_grid[row][col] = {tmp[i], (Uint8)s_cur_fg, (Uint8)s_cur_bg};
+            if (++col >= s_text_cols) { col = 0; row++; }
+        }
+        // Erase any old chars after new end
+        int ecol = col, erow = row;
+        for (int i = 0; i < 80; i++) {   // clear up to 80 chars of tail
+            if (ecol < s_text_cols && erow < TEXT_ROWS)
+                s_grid[erow][ecol] = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
+            if (++ecol >= s_text_cols) { ecol = 0; erow++; }
+        }
+        // Place display cursor at edit cursor position
+        int ccol = start_col + cursor;
+        s_cur_row = start_row + ccol / s_text_cols;
+        s_cur_col = ccol % s_text_cols;
+        s_needs_render = true;
+    };
+
     for (;;) {
         // Exit immediately if the window was closed
         if (s_quit) { buf[0] = '\0'; return -1; }
 
-        // Blink cursor: render every ~500ms toggle
+        // Blink cursor
         static Uint32 blink_t = 0;
         Uint32 now = SDL_GetTicks();
         if (now - blink_t > 500) {
@@ -913,24 +976,75 @@ int display_getline(char *buf, int bufsz) {
         int c = key_pop();
         if (c < 0) { SDL_Delay(10); continue; }
 
-        if (c == '\n' || c == '\r') break;
-        if (c == 8 || c == 127) {  // backspace
-            if (len > 0) {
-                len--;
-                s_cur_col = std::max(0, s_cur_col - 1);
-                s_grid[s_cur_row][s_cur_col] = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
-                s_needs_render = true;
+        if (c == '\n' || c == '\r') {
+            // Commit: advance cursor past the typed text
+            s_cur_col = start_col + len;
+            s_cur_row = start_row + s_cur_col / s_text_cols;
+            s_cur_col = s_cur_col % s_text_cols;
+            text_newline();
+            break;
+
+        } else if (c == 8 || c == 127) {   // Backspace
+            if (cursor > 0) {
+                memmove(tmp + cursor - 1, tmp + cursor, len - cursor);
+                cursor--; len--;
+                redraw();
             }
-            continue;
-        }
-        if (len < bufsz - 1) {
-            buf[len++] = (char)c;
-            text_putchar((char)c);
+
+        } else if (c == 0x4B) {   // Left arrow (SDL scan)
+            if (cursor > 0) { cursor--; redraw(); }
+
+        } else if (c == 0x4D) {   // Right arrow
+            if (cursor < len) { cursor++; redraw(); }
+
+        } else if (c == 0x48) {   // Up arrow — history back
+            if (s_hist_count == 0) continue;
+            if (hist_pos == s_hist_count) {
+                tmp[len] = '\0';
+                strncpy(saved, tmp, sizeof saved - 1);
+            }
+            if (hist_pos > 0) hist_pos--;
+            int idx = (s_hist_head - s_hist_count + hist_pos + SDL_HIST_MAX) % SDL_HIST_MAX;
+            strncpy(tmp, s_hist[idx], sizeof tmp - 1);
+            len = cursor = (int)strlen(tmp);
+            redraw();
+
+        } else if (c == 0x50) {   // Down arrow — history forward
+            if (hist_pos < s_hist_count) hist_pos++;
+            if (hist_pos == s_hist_count) {
+                strncpy(tmp, saved, sizeof tmp - 1);
+            } else {
+                int idx = (s_hist_head - s_hist_count + hist_pos + SDL_HIST_MAX) % SDL_HIST_MAX;
+                strncpy(tmp, s_hist[idx], sizeof tmp - 1);
+            }
+            len = cursor = (int)strlen(tmp);
+            redraw();
+
+        } else if (c >= 32 && c < 256) {   // Printable
+            if (len < bufsz - 1 && len < (int)sizeof(tmp) - 1) {
+                memmove(tmp + cursor + 1, tmp + cursor, len - cursor);
+                tmp[cursor++] = (char)c;
+                len++;
+                redraw();
+            }
         }
     }
-    buf[len] = '\0';
+
+    tmp[len] = '\0';
+
+    // Add to history if non-empty and different from last entry
+    if (len > 0) {
+        int last = (s_hist_head - 1 + SDL_HIST_MAX) % SDL_HIST_MAX;
+        if (s_hist_count == 0 || strcmp(s_hist[last], tmp) != 0) {
+            strncpy(s_hist[s_hist_head], tmp, sizeof s_hist[0] - 1);
+            s_hist_head = (s_hist_head + 1) % SDL_HIST_MAX;
+            if (s_hist_count < SDL_HIST_MAX) s_hist_count++;
+        }
+    }
+
+    strncpy(buf, tmp, bufsz - 1);
+    buf[bufsz - 1] = '\0';
     s_cursor_vis = false;
-    text_newline();
     gfx_sdl_render();
     return len;
 }

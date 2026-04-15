@@ -71,4 +71,7 @@ void gfx_maybe_mark_dirty();
 void gfx_sdl_set_fullscreen(bool fs);
 void gfx_sdl_toggle_fullscreen(void);
 
+/* Reset all 16 palette slots to CGA defaults */
+void gfx_palette_reset_pub(void);
+
 #endif /* USE_SDL_WINDOW */
