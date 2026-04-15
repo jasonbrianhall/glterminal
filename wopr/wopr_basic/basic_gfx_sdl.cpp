@@ -353,7 +353,6 @@ bool gfx_sdl_pump() {
                 // F11 — toggle fullscreen
                 BASIC_NS::gfx_sdl_toggle_fullscreen();
             } else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
-                fprintf(stderr, "[keydown] ENTER pushed\n"); fflush(stderr);
                 key_push('\n');
             } else if (sym == SDLK_BACKSPACE) {
                 key_push(8);
@@ -361,10 +360,10 @@ bool gfx_sdl_pump() {
                 key_push(9);
             } else if (sym == SDLK_ESCAPE) {
                 key_push(27);
-            } else if (sym == SDLK_UP)   { key_push(0x48); }
-            else if (sym == SDLK_DOWN)   { key_push(0x50); }
-            else if (sym == SDLK_LEFT)   { key_push(0x4B); }
-            else if (sym == SDLK_RIGHT)  { key_push(0x4D); }
+            } else if (sym == SDLK_UP)    { key_push(0x1000); }
+            else if (sym == SDLK_DOWN)    { key_push(0x1001); }
+            else if (sym == SDLK_LEFT)    { key_push(0x1002); }
+            else if (sym == SDLK_RIGHT)   { key_push(0x1003); }
             break;
         }
         case SDL_TEXTINPUT:
@@ -991,13 +990,13 @@ int display_getline(char *buf, int bufsz) {
                 redraw();
             }
 
-        } else if (c == 0x4B) {   // Left arrow (SDL scan)
+        } else if (c == 0x1002) {   // Left arrow
             if (cursor > 0) { cursor--; redraw(); }
 
-        } else if (c == 0x4D) {   // Right arrow
+        } else if (c == 0x1003) {   // Right arrow
             if (cursor < len) { cursor++; redraw(); }
 
-        } else if (c == 0x48) {   // Up arrow — history back
+        } else if (c == 0x1000) {   // Up arrow — history back
             if (s_hist_count == 0) continue;
             if (hist_pos == s_hist_count) {
                 tmp[len] = '\0';
@@ -1009,7 +1008,7 @@ int display_getline(char *buf, int bufsz) {
             len = cursor = (int)strlen(tmp);
             redraw();
 
-        } else if (c == 0x50) {   // Down arrow — history forward
+        } else if (c == 0x1001) {   // Down arrow — history forward
             if (hist_pos < s_hist_count) hist_pos++;
             if (hist_pos == s_hist_count) {
                 strncpy(tmp, saved, sizeof tmp - 1);
