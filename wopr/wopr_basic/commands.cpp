@@ -13,6 +13,18 @@
 
 BASIC_NS_BEGIN
 
+/* Expand a leading ~/ or ~ to $HOME in-place */
+static void tilde_expand(char *buf, int bufsz) {
+    if (buf[0] != '~') return;
+    if (buf[1] != '/' && buf[1] != '\0') return;
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char tmp[DEFAULT_BUFFER];
+    snprintf(tmp, sizeof(tmp), "%s%s", home, buf + 1);
+    strncpy(buf, tmp, bufsz - 1);
+    buf[bufsz - 1] = '\0';
+}
+
 /* ================================================================
  * Stack trace helper — prints current line and GOSUB call chain,
  * then exits.  Called from stack overflow and other fatal errors.
@@ -203,11 +215,12 @@ static int cmd_chain(Interp *ip, char *args)  { (void)ip;(void)args; return 0; }
 static int cmd_fullscreen(Interp *ip, char *args) {
     (void)ip;
 #ifdef USE_SDL_WINDOW
-    // Optional argument: 0 = windowed, 1 = fullscreen, omitted = toggle
     char *p = sk(args);
-    if (*p == '\0') {
-        gfx_sdl_toggle_fullscreen();
+    if (*p == '\0' || *p == ':') {
+        // No argument — always enter fullscreen
+        gfx_sdl_set_fullscreen(true);
     } else {
+        // Argument: 0 = windowed, non-zero = fullscreen
         mpf_t v; mpf_init2(v, g_prec);
         eval_expr(p, v);
         bool fs = (mpf_get_d(v) != 0.0);
@@ -1638,6 +1651,7 @@ static int cmd_open(Interp *ip, char *args) {
         if (*p == '"') p++;
     }
     filename[fi] = '\0';
+    tilde_expand(filename, sizeof(filename));
     p = sk(p);
     char mode_ch = 'O';
     if (kw_match(p, "FOR")) {

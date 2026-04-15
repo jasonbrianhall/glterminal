@@ -289,6 +289,19 @@ return 0;
         else snprintf((dst), sizeof(dst), "%s.bas", (src)); \
     } while(0)
 
+    /* Expand leading ~/ to $HOME/ */
+    #define EXPAND_TILDE(buf) do { \
+        if ((buf)[0] == '~' && ((buf)[1] == '/' || (buf)[1] == '\0')) { \
+            const char *_home = getenv("HOME"); \
+            if (_home) { \
+                char _tmp[DEFAULT_BUFFER]; \
+                snprintf(_tmp, sizeof(_tmp), "%s%s", _home, (buf) + 1); \
+                strncpy((buf), _tmp, sizeof(buf) - 1); \
+                (buf)[sizeof(buf) - 1] = '\0'; \
+            } \
+        } \
+    } while(0)
+
     /* ----------------------------------------------------------------
      * Interactive REPL
      * ---------------------------------------------------------------- */
@@ -380,27 +393,27 @@ return 0;
 
         } else if (strncasecmp(p,"KILL",4)==0 && !isalnum((unsigned char)p[4])) {
             p += 4;
-            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             char path[DEFAULT_BUFFER]; BAS_EXT(path, name);
             if (remove(path) == 0) printf("Deleted %s\n", path); else perror(path);
 
         } else if (strncasecmp(p,"RENAME",6)==0 && !isalnum((unsigned char)p[6])) {
             p += 6;
             char old[DEFAULT_BUFFER], neo[DEFAULT_BUFFER];
-            PARSE_FILENAME(old, p); p = sk(p); if (*p==',') p++;
-            PARSE_FILENAME(neo, p);
+            PARSE_FILENAME(old, p); EXPAND_TILDE(old); p = sk(p); if (*p==',') p++;
+            PARSE_FILENAME(neo, p); EXPAND_TILDE(neo);
             char op[DEFAULT_BUFFER], np[DEFAULT_BUFFER]; BAS_EXT(op,old); BAS_EXT(np,neo);
             if (rename(op, np) == 0) printf("Renamed %s -> %s\n", op, np); else perror(op);
 
         } else if (strncasecmp(p,"CHDIR",5)==0 || strncasecmp(p,"CD",2)==0) {
             p += strncasecmp(p,"CHDIR",5)==0 ? 5 : 2;
-            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (!*name) { char cwd[DEFAULT_BUFFER]; if(getcwd(cwd,sizeof cwd)) printf("%s\n",cwd); }
             else if (chdir(name)!=0) perror(name);
             else { char cwd[DEFAULT_BUFFER]; if(getcwd(cwd,sizeof cwd)) printf("%s\n",cwd); }
 
         } else if (strncasecmp(p,"MKDIR",5)==0 && !isalnum((unsigned char)p[5])) {
-            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (
 #ifdef _WIN32
                 mkdir(name)
@@ -410,16 +423,16 @@ return 0;
                 != 0) perror(name); else printf("Created %s\n", name);
 
         } else if (strncasecmp(p,"RMDIR",5)==0 && !isalnum((unsigned char)p[5])) {
-            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (rmdir(name)!=0) perror(name); else printf("Removed %s\n", name);
 
         } else if (strncasecmp(p,"LOAD",4)==0 && !isalnum((unsigned char)p[4])) {
-            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (!*name) { display_print("Usage: LOAD \"filename\"\n"); continue; }
             load_program(name);
 
         } else if (strncasecmp(p,"SAVE",4)==0 && !isalnum((unsigned char)p[4])) {
-            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (!*name) { display_print("Usage: SAVE \"filename\"\n"); continue; }
             save_program(name);
 
