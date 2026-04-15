@@ -106,15 +106,17 @@ struct Sprite { int w, h; std::vector<Uint32> px; };
 static std::unordered_map<int, Sprite> s_sprites;
 
 // ============================================================================
-// Text grid
+// Text grid — static max-size buffer; active area is s_text_cols × s_text_rows
 // ============================================================================
-#define TEXT_ROWS     25
-#define TEXT_COLS_80  80
-#define TEXT_COLS_40  40
+#define TEXT_ROWS_MAX  60
+#define TEXT_COLS_MAX  220
+#define TEXT_ROWS_DEF  25    // default (graphics mode / initial)
+#define TEXT_COLS_DEF  80
 
 struct Cell { char ch; Uint8 fg, bg; };
-static Cell s_grid[TEXT_ROWS][TEXT_COLS_80];
-static int  s_text_cols  = TEXT_COLS_80;
+static Cell s_grid[TEXT_ROWS_MAX][TEXT_COLS_MAX];
+static int  s_text_cols  = TEXT_COLS_DEF;
+static int  s_text_rows  = TEXT_ROWS_DEF;
 static int  s_cur_row    = 0, s_cur_col = 0;
 static int  s_cur_fg     = 7, s_cur_bg  = 0;
 static bool s_cursor_vis = true;
@@ -179,25 +181,71 @@ void gfx_maybe_mark_dirty() {
     }
 }
 
+static int s_font_size_override = 0;  // 0 = auto-fit, >0 = manual px height (SCREEN 0 only)
+
+// Recompute cell size and (in SCREEN 0) grid dimensions from current window/font state.
+// In graphics modes the grid stays at 80×25 regardless.
 static void ft_set_size_for_window() {
     if (!s_ft_face) return;
-    // Pick the largest font size where 80 cols × 25 rows fits with padding
-    int avail_w = s_win_w - 2 * TEXT_PAD;
-    int avail_h = s_win_h - 2 * TEXT_PAD;
-    // Binary search for best pixel height
-    int lo = 8, hi = avail_h / TEXT_ROWS;
-    if (hi < lo) hi = lo;
-    while (lo < hi) {
-        int mid = (lo + hi + 1) / 2;
-        FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)mid);
+
+    if (s_gfx_active) {
+        // Graphics mode: size font to fit standard 80×25 into the window.
+        // Keep grid locked at 80×25.
+        s_text_cols = TEXT_COLS_DEF;
+        s_text_rows = TEXT_ROWS_DEF;
+        int avail_w = s_win_w - 2 * TEXT_PAD;
+        int avail_h = s_win_h - 2 * TEXT_PAD;
+        int lo = 6, hi = avail_h / TEXT_ROWS_DEF;
+        if (hi < lo) hi = lo;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) / 2;
+            FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)mid);
+            int adv = (int)(s_ft_face->size->metrics.max_advance >> 6);
+            int ht  = (int)(s_ft_face->size->metrics.height >> 6);
+            if (adv > 0 && ht > 0 && adv * TEXT_COLS_DEF <= avail_w && ht * TEXT_ROWS_DEF <= avail_h)
+                lo = mid;
+            else
+                hi = mid - 1;
+        }
+        FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)lo);
+    } else {
+        // Text mode (SCREEN 0): font size drives how many cols/rows fit.
+        int target;
+        if (s_font_size_override > 0) {
+            target = s_font_size_override;
+        } else {
+            // Auto: pick largest size that fits at least 80×25
+            int avail_w = s_win_w - 2 * TEXT_PAD;
+            int avail_h = s_win_h - 2 * TEXT_PAD;
+            int lo = 6, hi = avail_h / TEXT_ROWS_DEF;
+            if (hi < lo) hi = lo;
+            while (lo < hi) {
+                int mid = (lo + hi + 1) / 2;
+                FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)mid);
+                int adv = (int)(s_ft_face->size->metrics.max_advance >> 6);
+                int ht  = (int)(s_ft_face->size->metrics.height >> 6);
+                if (adv > 0 && ht > 0 && adv * TEXT_COLS_DEF <= avail_w && ht * TEXT_ROWS_DEF <= avail_h)
+                    lo = mid;
+                else
+                    hi = mid - 1;
+            }
+            target = lo;
+        }
+        FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)target);
+
+        // Compute how many cols/rows actually fit at this font size, within limits
         int adv = (int)(s_ft_face->size->metrics.max_advance >> 6);
         int ht  = (int)(s_ft_face->size->metrics.height >> 6);
-        if (adv > 0 && ht > 0 && adv * TEXT_COLS_80 <= avail_w && ht * TEXT_ROWS <= avail_h)
-            lo = mid;
-        else
-            hi = mid - 1;
+        if (adv > 0 && ht > 0) {
+            int cols = (s_win_w - 2 * TEXT_PAD) / adv;
+            int rows = (s_win_h - 2 * TEXT_PAD) / ht;
+            cols = std::max(40,  std::min(TEXT_COLS_MAX, cols));
+            rows = std::max(10,  std::min(TEXT_ROWS_MAX, rows));
+            s_text_cols = cols;
+            s_text_rows = rows;
+        }
     }
-    FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)lo);
+
     int adv = (int)(s_ft_face->size->metrics.max_advance >> 6);
     int ht  = (int)(s_ft_face->size->metrics.height >> 6);
     if (adv > 0) s_cell_w = adv;
@@ -339,7 +387,7 @@ bool gfx_sdl_pump() {
                 e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                 s_win_w = e.window.data1;
                 s_win_h = e.window.data2;
-                ft_set_size_for_window();   // re-fit font to new window size
+                ft_set_size_for_window();
                 s_needs_render = true;
             }
             break;
@@ -369,6 +417,17 @@ bool gfx_sdl_pump() {
         case SDL_TEXTINPUT:
             for (const char *p = e.text.text; *p; p++)
                 key_push((unsigned char)*p);
+            break;
+        case SDL_MOUSEWHEEL:
+            if (!s_gfx_active && (SDL_GetModState() & KMOD_CTRL)) {
+                // Ctrl+scroll in SCREEN 0: resize font → changes cols/rows
+                int delta = (e.wheel.y > 0) ? 1 : -1;
+                if (s_font_size_override == 0)
+                    s_font_size_override = s_cell_h;
+                s_font_size_override = std::max(6, std::min(72, s_font_size_override + delta));
+                ft_set_size_for_window();
+                s_needs_render = true;
+            }
             break;
         default: break;
         }
@@ -512,11 +571,11 @@ void gfx_sdl_render() {
     //
     // QBASIC draws text at the top-left, never centered.
     //
-    SDL_Rect vp = { 0, 0, s_text_cols * s_cell_w, TEXT_ROWS * s_cell_h };
+    SDL_Rect vp = { 0, 0, s_text_cols * s_cell_w, s_text_rows * s_cell_h };
     SDL_RenderSetViewport(s_renderer, &vp);
     SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
 
-    for (int r = 0; r < TEXT_ROWS; r++)
+    for (int r = 0; r < s_text_rows; r++)
         for (int c = 0; c < s_text_cols; c++)
             render_text_cell(r, c);
 
@@ -524,7 +583,7 @@ void gfx_sdl_render() {
     // 3. Draw cursor (in ALL modes)
     //
     if (s_cursor_vis &&
-        s_cur_row < TEXT_ROWS &&
+        s_cur_row < s_text_rows &&
         s_cur_col < s_text_cols)
     {
         int cx = s_cur_col * s_cell_w;
@@ -566,15 +625,15 @@ static inline Uint32 px_get(int x, int y) {
 // Text grid helpers
 // ============================================================================
 static void text_scroll_up() {
-    for (int r = 0; r < TEXT_ROWS - 1; r++)
+    for (int r = 0; r < s_text_rows - 1; r++)
         memcpy(s_grid[r], s_grid[r + 1], sizeof(s_grid[0]));
-    for (auto &c : s_grid[TEXT_ROWS - 1]) c = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
+    for (auto &c : s_grid[s_text_rows - 1]) c = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
     s_needs_render = true;
 }
 
 static void text_newline() {
     s_cur_col = 0;
-    if (++s_cur_row >= TEXT_ROWS) { text_scroll_up(); s_cur_row = TEXT_ROWS - 1; }
+    if (++s_cur_row >= s_text_rows) { text_scroll_up(); s_cur_row = s_text_rows - 1; }
 }
 
 // ESC-sequence filter state — swallows ESC + any following non-alpha bytes
@@ -598,7 +657,7 @@ static void text_putchar(char c) {
     if (c == '\n') { text_newline(); return; }
     if (c == '\r') { s_cur_col = 0;  return; }
     if (uc < 0x20) return;
-    if (s_cur_col < s_text_cols && s_cur_row < TEXT_ROWS)
+    if (s_cur_col < s_text_cols && s_cur_row < s_text_rows)
         s_grid[s_cur_row][s_cur_col] = {c, (Uint8)s_cur_fg, (Uint8)s_cur_bg};
     if (++s_cur_col >= s_text_cols) text_newline();
     s_needs_render = true;
@@ -629,6 +688,7 @@ void gfx_screen(int mode) {
         s_gfx_active = false;
         if (s_gfx_tex) { SDL_DestroyTexture(s_gfx_tex); s_gfx_tex = nullptr; }
         s_pixels.clear(); s_gfx_w = s_gfx_h = 0;
+        ft_set_size_for_window();  // recompute cols/rows for text mode
         s_needs_render = true;
         return;
     }
@@ -641,6 +701,9 @@ void gfx_screen(int mode) {
                                   SDL_TEXTUREACCESS_STREAMING, gw, gh);
     SDL_SetTextureBlendMode(s_gfx_tex, SDL_BLENDMODE_BLEND);
     s_gfx_active = true;
+    s_text_cols = TEXT_COLS_DEF;   // graphics mode: lock to 80×25
+    s_text_rows = TEXT_ROWS_DEF;
+    ft_set_size_for_window();      // recompute cell size for graphics viewport
     s_needs_render = true;
 }
 
@@ -661,7 +724,7 @@ void gfx_cls(int color) {
     }
 
     // 2. Clear text grid to the same background colour
-    for (int r = 0; r < TEXT_ROWS; r++) {
+    for (int r = 0; r < s_text_rows; r++) {
         for (int c = 0; c < s_text_cols; c++) {
             s_grid[r][c] = { ' ', (Uint8)s_cur_fg, (Uint8)(color & 15) };
         }
@@ -840,7 +903,7 @@ void display_cls(void) {
 }
 
 void display_locate(int row, int col) {
-    if (row > 0) s_cur_row = std::min(row - 1, TEXT_ROWS - 1);
+    if (row > 0) s_cur_row = std::min(row - 1, s_text_rows - 1);
     if (col > 0) s_cur_col = std::min(col - 1, s_text_cols - 1);
 }
 
@@ -850,7 +913,7 @@ void display_color(int fg, int bg) {
 }
 
 void display_width(int cols) {
-    s_text_cols = (cols <= 40) ? TEXT_COLS_40 : TEXT_COLS_80;
+    s_text_cols = (cols <= 40) ? 40 : 80;
     s_needs_render = true;
 }
 
@@ -938,14 +1001,14 @@ int display_getline(char *buf, int bufsz) {
         int col = start_col;
         int row = start_row;
         for (int i = 0; i < len; i++) {
-            if (col < s_text_cols && row < TEXT_ROWS)
+            if (col < s_text_cols && row < s_text_rows)
                 s_grid[row][col] = {tmp[i], (Uint8)s_cur_fg, (Uint8)s_cur_bg};
             if (++col >= s_text_cols) { col = 0; row++; }
         }
         // Erase any old chars after new end
         int ecol = col, erow = row;
         for (int i = 0; i < 80; i++) {   // clear up to 80 chars of tail
-            if (ecol < s_text_cols && erow < TEXT_ROWS)
+            if (ecol < s_text_cols && erow < s_text_rows)
                 s_grid[erow][ecol] = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
             if (++ecol >= s_text_cols) { ecol = 0; erow++; }
         }
