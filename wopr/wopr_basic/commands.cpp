@@ -557,19 +557,30 @@ static char *parse_field_varname(char *p, char *out);
 static int eval_one_cmp(char **pp);
 
 /* Evaluate a full boolean expression: one or more comparisons joined by AND/OR */
-static int eval_bool_expr(char **pp) {
-    char *start = *pp;
+/* Parse one AND-chain: cmp (AND cmp)*
+ * AND binds tighter than OR, so this is called per-term by eval_bool_expr. */
+static int eval_and_chain(char **pp) {
     int result = eval_one_cmp(pp);
-    basic_stderr("[bool] first cmp='%.40s' -> %d, rem='%.30s'\n", start, result, *pp);
     char *p = sk(*pp);
-    while (kw_match(p, "AND") || kw_match(p, "OR")) {
-        int is_and = kw_match(p, "AND");
-        p = sk(p + (is_and ? 3 : 2));
-        char *term_start = p;
+    while (kw_match(p, "AND")) {
+        p = sk(p + 3);
         int next = eval_one_cmp(&p);
-        //basic_stderr("[bool] %s cmp='%.40s' -> %d, rem='%.30s'\n", is_and?"AND":"OR", term_start, next, p);
-        result = is_and ? (result && next) : (result || next);
-        //basic_stderr("[bool] result so far: %d\n", result);
+        result = result && next;
+        p = sk(p);
+    }
+    *pp = p;
+    return result;
+}
+
+/* Evaluate a full boolean expression: AND-chains joined by OR.
+ * Precedence: AND > OR  (matches QBasic / standard BASIC behaviour) */
+static int eval_bool_expr(char **pp) {
+    int result = eval_and_chain(pp);
+    char *p = sk(*pp);
+    while (kw_match(p, "OR")) {
+        p = sk(p + 2);
+        int next = eval_and_chain(&p);
+        result = result || next;
         p = sk(p);
     }
     *pp = p;
