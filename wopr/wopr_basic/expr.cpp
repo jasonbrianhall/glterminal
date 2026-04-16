@@ -578,6 +578,7 @@ char *eval_str_or_inkey(char *p, char *buf, int bufsz) {
 typedef struct { char *p; } Parser;
 
 static void parse_expr_p(Parser *ps, mpf_t result);
+static void parse_and_operand_p(Parser *ps, mpf_t result);
 static void parse_term_p(Parser *ps, mpf_t result);
 static void parse_unary_p(Parser *ps, mpf_t result);
 static void parse_power_p(Parser *ps, mpf_t result);
@@ -695,25 +696,115 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
     }
 
     /* -----------------------------------------
-     * 4. Boolean chaining (AND / OR / XOR)
+     * 4. Boolean chaining: AND/XOR bind tighter than OR (QBasic precedence)
+     *    AND/XOR RHS uses parse_and_operand_p (stops before OR).
+     *    OR RHS uses parse_expr_p (which handles the next AND-group).
      * ----------------------------------------- */
+    /* Step 4a: AND / XOR chain (higher precedence) */
     skip_ws_p(ps);
-    while (kw_match(ps->p,"AND") || kw_match(ps->p,"OR") || kw_match(ps->p,"XOR")) {
-        int is_and = kw_match(ps->p,"AND");
+    while (kw_match(ps->p,"AND") || kw_match(ps->p,"XOR")) {
         int is_xor = kw_match(ps->p,"XOR");
-
-        ps->p += is_and ? 3 : (is_xor ? 3 : 2);
+        ps->p += 3;
         skip_ws_p(ps);
-
-        parse_expr_p(ps, rhs);
-
+        parse_and_operand_p(ps, rhs);   /* does NOT consume OR */
         long lv = mpf_get_si(result);
         long rv = mpf_get_si(rhs);
+        mpf_set_si(result, is_xor ? (lv ^ rv) : (lv & rv));
+        skip_ws_p(ps);
+    }
+    /* Step 4b: OR chain (lower precedence) */
+    while (kw_match(ps->p,"OR")) {
+        ps->p += 2;
+        skip_ws_p(ps);
+        parse_expr_p(ps, rhs);          /* full expr: handles next AND-group + OR */
+        long lv = mpf_get_si(result);
+        long rv = mpf_get_si(rhs);
+        mpf_set_si(result, lv | rv);
+        skip_ws_p(ps);
+    }
 
-        if (is_and)      mpf_set_si(result, lv & rv);
-        else if (is_xor) mpf_set_si(result, lv ^ rv);
-        else             mpf_set_si(result, lv | rv);
+    mpf_clear(tmp);
+    mpf_clear(rhs);
+}
 
+/* parse_and_operand_p — like parse_expr_p but stops before OR/XOR.
+ * Used as the RHS of AND so that OR is not greedily consumed. */
+static void parse_and_operand_p(Parser *ps, mpf_t result) {
+    mpf_t tmp; mpf_init2(tmp, g_prec);
+    mpf_t rhs; mpf_init2(rhs, g_prec);
+
+    /* additive */
+    parse_term_p(ps, result);
+    skip_ws_p(ps);
+    while (*ps->p == '+' || *ps->p == '-') {
+        char op = *ps->p++;
+        parse_term_p(ps, tmp);
+        if (op == '+') mpf_add(result, result, tmp);
+        else           mpf_sub(result, result, tmp);
+        skip_ws_p(ps);
+    }
+
+    /* string comparison */
+    if (is_str_token(ps->p)) {
+        char lhs_s[DEFAULT_BUFFER], rhs_s[DEFAULT_BUFFER];
+        ps->p = sk(eval_str_expr(ps->p, lhs_s, sizeof lhs_s));
+        skip_ws_p(ps);
+        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        int oplen = 0;
+        if (!strcmp(op,"<>")||!strcmp(op,"><")||!strcmp(op,"<=")||
+            !strcmp(op,"=<")||!strcmp(op,">=")||!strcmp(op,"=>")) oplen=2;
+        else if (ps->p[0]=='<'||ps->p[0]=='>'||ps->p[0]=='=') { op[1]='\0'; oplen=1; }
+        if (oplen > 0) {
+            ps->p += oplen; skip_ws_p(ps);
+            ps->p = sk(eval_str_expr(ps->p, rhs_s, sizeof rhs_s));
+            int c = strcmp(lhs_s, rhs_s), cmp;
+            if (!strcmp(op,"<>")||!strcmp(op,"><")) cmp=(c!=0);
+            else if (!strcmp(op,"<=")||!strcmp(op,"=<")) cmp=(c<=0);
+            else if (!strcmp(op,">=")||!strcmp(op,"=>")) cmp=(c>=0);
+            else if (op[0]=='<') cmp=(c<0); else if (op[0]=='>') cmp=(c>0);
+            else cmp=(c==0);
+            mpf_set_si(result, cmp ? -1 : 0);
+            skip_ws_p(ps);
+        }
+    } else {
+        /* numeric comparison */
+        skip_ws_p(ps);
+        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        int oplen = 0;
+        if (!strcmp(op,"<>")||!strcmp(op,"><")||!strcmp(op,"<=")||
+            !strcmp(op,"=<")||!strcmp(op,">=")||!strcmp(op,"=>")) oplen=2;
+        else if (ps->p[0]=='<'||ps->p[0]=='>'||ps->p[0]=='=') { op[1]='\0'; oplen=1; }
+        if (oplen > 0) {
+            ps->p += oplen; skip_ws_p(ps);
+            parse_term_p(ps, rhs);
+            skip_ws_p(ps);
+            while (*ps->p=='+' || *ps->p=='-') {
+                char aop = *ps->p++;
+                parse_term_p(ps, tmp);
+                if (aop=='+') mpf_add(rhs,rhs,tmp); else mpf_sub(rhs,rhs,tmp);
+                skip_ws_p(ps);
+            }
+            int c = mpf_cmp(result, rhs), cmp;
+            if (!strcmp(op,"<>")||!strcmp(op,"><")) cmp=(c!=0);
+            else if (!strcmp(op,"<=")||!strcmp(op,"=<")) cmp=(c<=0);
+            else if (!strcmp(op,">=")||!strcmp(op,"=>")) cmp=(c>=0);
+            else if (op[0]=='<') cmp=(c<0); else if (op[0]=='>') cmp=(c>0);
+            else cmp=(c==0);
+            mpf_set_si(result, cmp ? -1 : 0);
+            skip_ws_p(ps);
+        }
+    }
+
+    /* AND/XOR only — does NOT consume OR */
+    skip_ws_p(ps);
+    while (kw_match(ps->p,"AND") || kw_match(ps->p,"XOR")) {
+        int is_xor = kw_match(ps->p,"XOR");
+        ps->p += 3;
+        skip_ws_p(ps);
+        parse_and_operand_p(ps, rhs);
+        long lv = mpf_get_si(result);
+        long rv = mpf_get_si(rhs);
+        mpf_set_si(result, is_xor ? (lv ^ rv) : (lv & rv));
         skip_ws_p(ps);
     }
 
