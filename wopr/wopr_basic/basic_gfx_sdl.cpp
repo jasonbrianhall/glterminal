@@ -119,7 +119,7 @@ static int  s_text_cols  = TEXT_COLS_DEF;
 static int  s_text_rows  = TEXT_ROWS_DEF;
 static int  s_cur_row    = 0, s_cur_col = 0;
 static int  s_cur_fg     = 7, s_cur_bg  = 0;
-static bool s_cursor_vis = true;
+static bool s_cursor_vis = false;
 
 // ============================================================================
 // FreeType / glyph cache
@@ -725,6 +725,7 @@ void gfx_palette(int idx, int r, int g, int b) {
                | ((Uint32)(g & 0xFF) <<  8)
                | ((Uint32)(b & 0xFF)      );
     s_pal_gen++;   // invalidate tex_cache entries baked with old palette
+    s_needs_render = true;
 }
 
 void gfx_cls(int color) {
@@ -745,10 +746,9 @@ void gfx_cls(int color) {
         }
     }
 
-    // 3. Reset cursor and visibility
+    // 3. Reset cursor position (but leave visibility state alone — CLS doesn't change input mode)
     s_cur_row    = 0;
     s_cur_col    = 0;
-    s_cursor_vis = true;
 
     // 4. Mark dirty so it actually redraws
     s_needs_render = true;
@@ -781,6 +781,7 @@ void gfx_box(int x1, int y1, int x2, int y2, int color) {
     gfx_line(x2, y1, x2, y2, color);
     gfx_line(x2, y2, x1, y2, color);
     gfx_line(x1, y2, x1, y1, color);
+    s_needs_render = true;
 }
 
 void gfx_boxfill(int x1, int y1, int x2, int y2, int color) {
@@ -807,6 +808,7 @@ void gfx_circle(int cx, int cy, int radius, int color) {
         if (err <= 0) err += 2*y + 1;
         else          { x--; err += 2*(y - x) + 1; }
     }
+    s_needs_render = true;
 }
 
 void gfx_paint(int x, int y, int fill_color, int border_color) {

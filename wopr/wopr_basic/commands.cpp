@@ -1126,15 +1126,27 @@ static int cmd_palette(Interp *ip, char *args) {
 #endif
         return 0;
     }
-    mpf_t idx, col; mpf_init2(idx, g_prec); mpf_init2(col, g_prec);
-    p = sk(eval_expr(p, idx));
+    mpf_t v0, v1; mpf_init2(v0, g_prec); mpf_init2(v1, g_prec);
+    p = sk(eval_expr(p, v0));
     if (*p == ',') p = sk(p + 1);
-    eval_expr(p, col);
-    int i = (int)mpf_get_si(idx);
-    int c = (int)mpf_get_si(col);
-    mpf_clears(idx, col, NULL);
+    p = sk(eval_expr(p, v1));
+    int i = (int)mpf_get_si(v0);
     int r, g2, b;
-    ega_to_rgb(c, &r, &g2, &b);
+    if (*p == ',') {
+        /* 4-arg form: PALETTE idx, r, g, b */
+        mpf_t vg, vb; mpf_init2(vg, g_prec); mpf_init2(vb, g_prec);
+        p = sk(p + 1); p = sk(eval_expr(p, vg));
+        if (*p == ',') p = sk(p + 1);
+        eval_expr(p, vb);
+        r  = (int)mpf_get_si(v1);
+        g2 = (int)mpf_get_si(vg);
+        b  = (int)mpf_get_si(vb);
+        mpf_clears(vg, vb, NULL);
+    } else {
+        /* 2-arg form: PALETTE idx, ega6 */
+        ega_to_rgb((int)mpf_get_si(v1), &r, &g2, &b);
+    }
+    mpf_clears(v0, v1, NULL);
 #ifdef USE_SDL_WINDOW
     gfx_palette(i, r, g2, b);
 #else
