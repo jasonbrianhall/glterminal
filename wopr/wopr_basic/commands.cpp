@@ -480,12 +480,14 @@ static int cmd_cls(Interp *ip, char *args) {
         }
 #ifdef USE_SDL_WINDOW
         gfx_cls(c);
-
+        /* display_cls() intentionally NOT called here — gfx_cls() already
+         * clears both the pixel buffer and the text grid, and display_cls()
+         * would overwrite with s_cur_bg (color 0), losing the CLS argument. */
 #else
         if (c == 0) felix_draw("cls;0");
         else        felix_drawf("cls;%d", c);
-#endif
         display_cls();
+#endif
     return 0;
 }
 

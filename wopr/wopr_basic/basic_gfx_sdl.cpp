@@ -728,6 +728,10 @@ void gfx_palette(int idx, int r, int g, int b) {
 }
 
 void gfx_cls(int color) {
+    // Update the current background colour so subsequent text output
+    // (PRINT, LOCATE, etc.) uses the same colour as the cleared screen.
+    s_cur_bg = color & 15;
+
     // 1. Clear graphics buffer if active
     if (s_gfx_active) {
         std::fill(s_pixels.begin(), s_pixels.end(),
