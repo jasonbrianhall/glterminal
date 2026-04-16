@@ -120,18 +120,20 @@ void run_from(int start_pc) {
         // Pump SDL events every iteration
         if (!gfx_sdl_pump())
             break;
-        gfx_maybe_mark_dirty();
-        // Render at ~60 FPS
-        Uint32 now = SDL_GetTicks();
-        if (now - last_frame >= 16) {
-            gfx_sdl_render();
-            last_frame = now;
-        }
 
         // Execute one BASIC instruction
         int old_pc = ip.pc;
         g_current_pc = old_pc;
         int jumped = dispatch(&ip, g_lines[ip.pc].text);
+
+        // Render after dispatch: immediately if a draw command marked dirty,
+        // or on the 60 FPS timer for cursor blink / text updates.
+        Uint32 now = SDL_GetTicks();
+        if (now - last_frame >= 16) {
+            gfx_sdl_mark_dirty();   // ensure periodic refresh for text/cursor
+            last_frame = now;
+        }
+        gfx_sdl_render();           // no-op if not dirty
 
         if (g_tron) {
             char tbuf[32];

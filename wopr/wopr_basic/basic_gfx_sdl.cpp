@@ -757,6 +757,7 @@ void gfx_cls(int color) {
 
 void gfx_pset(int x, int y, int color) {
     px_set(x, y, color);
+    s_needs_render = true;
 }
 
 void gfx_line(int x0, int y0, int x1, int y1, int color) {
@@ -770,6 +771,7 @@ void gfx_line(int x0, int y0, int x1, int y1, int color) {
         if (e2 >= dy) { err += dy; x0 += sx; }
         if (e2 <= dx) { err += dx; y0 += sy; }
     }
+    s_needs_render = true;
 }
 
 void gfx_box(int x1, int y1, int x2, int y2, int color) {
