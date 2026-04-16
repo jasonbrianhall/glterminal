@@ -760,6 +760,14 @@ void gfx_pset(int x, int y, int color) {
     s_needs_render = true;
 }
 
+int gfx_point(int x, int y) {
+    if (!s_gfx_active || x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return -1;
+    Uint32 px = s_pixels[(size_t)(y * s_gfx_w + x)] & 0x00FFFFFFu;
+    for (int i = 0; i < 16; i++)
+        if ((s_pal[i] & 0x00FFFFFFu) == px) return i;
+    return -1;  // color not in palette (e.g. after palette remapping)
+}
+
 void gfx_line(int x0, int y0, int x1, int y1, int color) {
     int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
     int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;

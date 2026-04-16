@@ -7,6 +7,10 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+#ifdef USE_SDL_WINDOW
+#include "basic_gfx.h"
+#endif
+
 BASIC_NS_BEGIN
 
 /* ================================================================
@@ -1111,6 +1115,24 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         if (start > (int)strlen(hay)) { mpf_set_si(result, 0); return; }
         char *found = strstr(hay + start - 1, needle);
         mpf_set_si(result, found ? (long)(found - hay + 1) : 0);
+        return;
+    }
+
+    /* POINT(x, y) — returns palette index of pixel at (x,y), or -1 */
+    if (kw_match(ps->p, "POINT")) {
+        ps->p += 5; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        mpf_t mx, my; mpf_init2(mx, g_prec); mpf_init2(my, g_prec);
+        ps->p = (char*)eval_expr(ps->p, mx); skip_ws_p(ps);
+        if (*ps->p == ',') ps->p++;
+        ps->p = (char*)eval_expr(sk(ps->p), my);
+        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        int px = (int)mpf_get_si(mx), py = (int)mpf_get_si(my);
+        mpf_clears(mx, my, NULL);
+#ifdef USE_SDL_WINDOW
+        mpf_set_si(result, gfx_point(px, py));
+#else
+        mpf_set_si(result, -1);
+#endif
         return;
     }
 

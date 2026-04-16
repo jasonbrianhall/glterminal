@@ -1,0 +1,24 @@
+SCREEN 1
+CLS
+
+PRINT "TEST 1: LINE / CIRCLE / PAINT / PSET"
+
+' Crosshair
+LINE (150, 0)-(150, 199), 2
+LINE (0, 100)-(319, 100), 2
+
+' Box
+LINE (50, 50)-(100, 100), 3, B
+
+' Filled box
+LINE (120, 50)-(170, 100), 4, BF
+
+' Circle + paint
+CIRCLE (240, 80), 25, 5
+PAINT (240, 80), 5, 5
+
+' Pixel test
+PSET (10, 10), 1
+IF POINT(10,10) = 1 THEN PRINT "PASS: PSET/POINT" ELSE PRINT "FAIL: PSET/POINT"
+
+SLEEP 2
