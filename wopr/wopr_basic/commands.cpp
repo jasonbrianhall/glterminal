@@ -567,9 +567,9 @@ static int eval_bool_expr(char **pp) {
         p = sk(p + (is_and ? 3 : 2));
         char *term_start = p;
         int next = eval_one_cmp(&p);
-        basic_stderr("[bool] %s cmp='%.40s' -> %d, rem='%.30s'\n", is_and?"AND":"OR", term_start, next, p);
+        //basic_stderr("[bool] %s cmp='%.40s' -> %d, rem='%.30s'\n", is_and?"AND":"OR", term_start, next, p);
         result = is_and ? (result && next) : (result || next);
-        basic_stderr("[bool] result so far: %d\n", result);
+        //basic_stderr("[bool] result so far: %d\n", result);
         p = sk(p);
     }
     *pp = p;
@@ -652,7 +652,7 @@ static int cmd_loop(Interp *ip, char *args) {
         char *dbg_p = p;
         int cond = eval_bool_expr(&p);
         keep_looping = !cond;
-        basic_stderr("[loop until] cond=%d keep=%d args='%.60s'\n", cond, keep_looping, dbg_p);
+        //basic_stderr("[loop until] cond=%d keep=%d args='%.60s'\n", cond, keep_looping, dbg_p);
     }
 
     if (keep_looping) {
@@ -2194,7 +2194,7 @@ static int eval_one_cmp(char **pp) {
         else { 
             double dbgv = mpf_get_d(lhs);
             int dbgcmp = (mpf_sgn(lhs)!=0);
-            basic_stderr("[eval_one_cmp] no-op path: lhs=%.4f -> cmp=%d, rem='%.30s'\n", dbgv, dbgcmp, p);
+            //basic_stderr("[eval_one_cmp] no-op path: lhs=%.4f -> cmp=%d, rem='%.30s'\n", dbgv, dbgcmp, p);
             cmp=dbgcmp; mpf_clear(lhs); *pp=p; return cmp; }
         mpf_t rhs; mpf_init2(rhs, g_prec);
         p = sk(eval_expr(sk(p + oplen), rhs));
