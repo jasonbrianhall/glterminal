@@ -734,9 +734,13 @@ void wopr_render(int win_w, int win_h) {
     w->scroll_offset = std::max(0, std::min(w->scroll_offset, max_scroll));
     int start_line  = std::max(0, bottom_line - w->scroll_offset);
 
-    // In BASIC mode, pin to s_screen_top only when not scrolled back by the user
-    if (in_basic && w->scroll_offset == 0) {
-        start_line = wopr_basic_get_screen_top();
+    // In BASIC mode, never scroll above s_screen_top (the top of the current
+    // virtual screen), but otherwise follow the same bottom-tracking logic as
+    // Zork so that new output scrolls into view automatically.
+    if (in_basic) {
+        int screen_top = wopr_basic_get_screen_top();
+        if (start_line < screen_top)
+            start_line = screen_top;
     }
 
     // ── Scrollbar (right edge, only when there's scrollback available) ────────
