@@ -1402,7 +1402,11 @@ int main(int argc, char **argv) {
                 }
                 if (g_pf_overlay.visible) { needs_render = true; break; }
 #endif
-                if (g_wopr.visible) { needs_render = true; break; }
+                if (g_wopr.visible) {
+                    if (wopr_mousewheel(ev.wheel.y))
+                        needs_render = true;
+                    break;
+                }
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
                     int delta = (ev.wheel.y > 0) ? 1 : -1;

@@ -82,6 +82,15 @@ static void push_line(WoprState *w, const std::string &line) {
     } else {
         w->lines.push_back(line);
     }
+
+    // Cap history at 5000 lines — drop oldest
+    const int MAX_LINES = 5000;
+    if ((int)w->lines.size() > MAX_LINES)
+        w->lines.erase(w->lines.begin(),
+                       w->lines.begin() + ((int)w->lines.size() - MAX_LINES));
+
+    // New content: if user is scrolled back, keep their view position stable.
+    // The clamp in wopr_render will prevent overscrolling automatically.
 }
 
 static void begin_crawl(WoprState *w, const std::string &text) {
@@ -718,11 +727,49 @@ void wopr_render(int win_w, int win_h) {
     bool basic_wants_input = in_basic && wopr_basic_is_waiting_input(w);
     int input_extra = (w->phase == WoprPhase::LOGIN_INPUT || in_shell || in_zork || basic_wants_input || in_basic) ? 1 : 0;
     int used        = total + crawl_extra + input_extra;
-    int start_line  = std::max(0, used - vis_rows);
-    // In BASIC mode, always render from s_screen_top (row 1 of current
-    // screen) so structured full-screen layouts are never cut off at top.
+    int bottom_line = std::max(0, used - vis_rows);  // where we'd be if pinned to bottom
+
+    // Apply scroll offset (clamped so we can't scroll past the top or bottom)
+    int max_scroll  = bottom_line;   // can't scroll up more than this many lines
+    w->scroll_offset = std::max(0, std::min(w->scroll_offset, max_scroll));
+    int start_line  = std::max(0, bottom_line - w->scroll_offset);
+
+    // In BASIC mode, always render from s_screen_top
     if (in_basic) {
         start_line = wopr_basic_get_screen_top();
+        w->scroll_offset = 0;  // BASIC manages its own layout
+    }
+
+    // ── Scrollbar (right edge, only when there's scrollback available) ────────
+    if (max_scroll > 0 && !in_basic) {
+        float sb_x     = (float)win_w - PAD - 4.f;
+        float sb_top   = y0;
+        float sb_h     = vis_rows * ch;
+        float sb_w     = 4.f;
+
+        // Track (dim background)
+        gl_draw_rect(sb_x, sb_top, sb_w, sb_h, 0.f, 0.15f, 0.07f, 0.5f);
+
+        // Thumb — proportional to how much of the history is visible
+        float ratio    = (float)vis_rows / (float)(used > 0 ? used : 1);
+        if (ratio > 1.f) ratio = 1.f;
+        float thumb_h  = sb_h * ratio;
+        if (thumb_h < 8.f) thumb_h = 8.f;
+
+        // Thumb position: 0=bottom, 1=top of scrollback
+        float scroll_frac = (max_scroll > 0)
+            ? (float)w->scroll_offset / (float)max_scroll : 0.f;
+        float thumb_y = sb_top + (sb_h - thumb_h) * (1.f - scroll_frac);
+
+        // Bright when scrolled, dim when at bottom
+        float tb = (w->scroll_offset > 0) ? 0.85f : 0.35f;
+        gl_draw_rect(sb_x, thumb_y, sb_w, thumb_h, 0.f, tb, tb * 0.5f, 0.9f);
+
+        // "SCROLL" hint when user is scrolled back
+        if (w->scroll_offset > 0) {
+            gl_draw_text("^ SCROLLED ^", sb_x - cw * 12.f, sb_top,
+                         0.f, 0.55f, 0.2f, 0.8f, SCALE);
+        }
     }
 
     float y = y0;
@@ -1044,5 +1091,32 @@ bool wopr_mouseup(int x, int y, int button) {
     WoprState *w = &g_wopr;
     if (!w->visible) return false;
     (void)x; (void)y; (void)button;
+    return true;
+}
+
+// delta > 0 = scroll up (towards older lines), delta < 0 = scroll down (towards newer)
+bool wopr_mousewheel(int delta) {
+    WoprState *w = &g_wopr;
+    if (!w->visible) return false;
+
+    // Sub-games with their own UI consume the wheel but don't use terminal scroll
+    switch (w->phase) {
+        case WoprPhase::PLAYING_TTT:
+        case WoprPhase::PLAYING_CHESS:
+        case WoprPhase::PLAYING_MINES:
+        case WoprPhase::PLAYING_MAZE:
+        case WoprPhase::PLAYING_WAR:
+            return true;   // consume without scrolling
+        case WoprPhase::PLAYING_BASIC:
+            return true;   // BASIC manages its own layout
+        default: break;
+    }
+
+    // Terminal scroll path: Zork, shell, login, connecting, etc.
+    const int LINES_PER_TICK = 3;
+    w->scroll_offset += delta * LINES_PER_TICK;
+    if (w->scroll_offset < 0) w->scroll_offset = 0;
+    // Upper clamp is applied each frame in wopr_render — no need to know
+    // total here, it'll be clamped on next render.
     return true;
 }
