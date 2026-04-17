@@ -142,6 +142,8 @@ void wopr_mines_update(WoprState *w, double dt);
 void wopr_mines_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_mines_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_mines_free(WoprState *w);
+void wopr_mines_mousedown(WoprState *w, int x, int y, int button);
+void wopr_mines_mousemove(WoprState *w, int x, int y);
 
 // Falken's Maze
 void wopr_maze_enter(WoprState *w);

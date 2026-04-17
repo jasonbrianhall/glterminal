@@ -164,6 +164,10 @@ void Minesweeper::revealAdjacentCells(int y, int x) {
                 }
             }
         }
+        won = checkWin();
+        if (won) {
+            timer.stop();
+        }
     }
 }
 
