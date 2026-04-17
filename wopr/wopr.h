@@ -101,6 +101,12 @@ void wopr_render(int win_w, int win_h);
 // ─── Input — returns true if event consumed ───────────────────────────────
 bool wopr_keydown(SDL_Keycode sym, const char *text);
 
+// Mouse input — call from SDL_MOUSEBUTTONDOWN / SDL_MOUSEMOTION / SDL_MOUSEBUTTONUP
+// when g_wopr.visible.  Returns true if the event was consumed.
+bool wopr_mousedown(int x, int y, int button);   // button: SDL_BUTTON_*
+bool wopr_mousemove(int x, int y);
+bool wopr_mouseup(int x, int y, int button);
+
 // ─── Audio ────────────────────────────────────────────────────────────────
 bool  wopr_audio_init();
 void  wopr_audio_shutdown();
@@ -121,6 +127,8 @@ void wopr_chess_enter(WoprState *w);
 void wopr_chess_update(WoprState *w, double dt);
 void wopr_chess_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_chess_keydown(WoprState *w, SDL_Keycode sym);
+void wopr_chess_mousedown(WoprState *w, int x, int y, int button);
+void wopr_chess_mousemove(WoprState *w, int x, int y);
 void wopr_chess_free(WoprState *w);
 
 // Minesweeper

@@ -1013,3 +1013,34 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
 
     return true;
 }
+
+// ============================================================================
+// MOUSE INPUT
+// ============================================================================
+
+bool wopr_mousedown(int x, int y, int button) {
+    WoprState *w = &g_wopr;
+    if (!w->visible) return false;
+    switch (w->phase) {
+        case WoprPhase::PLAYING_CHESS:
+            wopr_chess_mousedown(w, x, y, button);
+            return true;
+        default:
+            return true;  // consume — don't let it fall through to terminal
+    }
+}
+
+bool wopr_mousemove(int x, int y) {
+    WoprState *w = &g_wopr;
+    if (!w->visible) return false;
+    if (w->phase == WoprPhase::PLAYING_CHESS)
+        wopr_chess_mousemove(w, x, y);
+    return true;
+}
+
+bool wopr_mouseup(int x, int y, int button) {
+    WoprState *w = &g_wopr;
+    if (!w->visible) return false;
+    (void)x; (void)y; (void)button;
+    return true;
+}

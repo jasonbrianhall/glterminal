@@ -1109,6 +1109,7 @@ int main(int argc, char **argv) {
                 }
                 // WOPR overlay captures all clicks
                 if (g_wopr.visible) {
+                    wopr_mousedown(ev.button.x, ev.button.y, ev.button.button);
                     needs_render = true;
                     break;
                 }
@@ -1256,7 +1257,11 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
-                if (g_wopr.visible) break;
+                if (g_wopr.visible) {
+                    if (wopr_mousemove(ev.motion.x, ev.motion.y))
+                        needs_render = true;
+                    break;
+                }
                 if (g_iv.visible) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     if (iv_mousemotion(ev.motion.x, ev.motion.y, win_w, win_h))
@@ -1332,7 +1337,11 @@ int main(int argc, char **argv) {
                     break;
                 }
 #endif
-                if (g_wopr.visible) { needs_render = true; break; }
+                if (g_wopr.visible) {
+                    wopr_mouseup(ev.button.x, ev.button.y, ev.button.button);
+                    needs_render = true;
+                    break;
+                }
                 if (g_iv.visible) {
                     iv_mouseup(ev.button.x, ev.button.y, ev.button.button);
                     needs_render = true;

@@ -33,6 +33,13 @@ struct WoprChessState {
 
     int    move_count;      // total half-moves played (0-player mode)
     double min_think_ms;    // current minimum think delay in ms
+
+    // Board geometry — set each frame by wopr_chess_render, used by mouse hit-test
+    float  board_bx, board_by;     // top-left pixel of the board grid
+    float  board_cell_w, board_cell_h;
+
+    // Mouse hover (1-player mode): row/col the cursor is over, or -1
+    int    hover_r, hover_c;
 };
 
 struct AiArg {
@@ -124,6 +131,8 @@ void wopr_chess_enter(WoprState *w) {
     s->screen       = SCREEN_LOBBY;
     s->lobby_sel    = 1;
     s->min_think_ms = 1500.0;  // resets only when re-entering from menu
+    s->board_bx = s->board_by = s->board_cell_w = s->board_cell_h = 0.f;
+    s->hover_r = s->hover_c = -1;
     w->sub_state = s;
 }
 
@@ -237,6 +246,12 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     float by = y0;
     float piece_scale = cell_h / fch * 0.75f;
 
+    // Store board geometry for mouse hit-testing
+    s->board_bx     = bx;
+    s->board_by     = by;
+    s->board_cell_w = cell_w;
+    s->board_cell_h = cell_h;
+
     for (int row = 0; row < 8; row++) {
         char rl[4]; snprintf(rl, sizeof(rl), "%d ", 8 - row);
         gl_draw_text(rl, bx - fcw * 3, by + row * cell_h,
@@ -249,10 +264,13 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
             bool light_sq  = ((row + col) % 2 == 0);
             bool is_cursor = (s->num_players == 1 && s->sel_r == row && s->sel_c == col);
             bool is_from   = (s->has_from && s->from_r == row && s->from_c == col);
+            bool is_hover  = (s->num_players == 1 && !s->ai_thinking &&
+                              s->hover_r == row && s->hover_c == col);
 
             float br = light_sq ? 0.05f : 0.0f;
             float bg = light_sq ? 0.22f : 0.08f;
             float bb = light_sq ? 0.05f : 0.0f;
+            if (is_hover)  { br = 0.0f; bg = 0.35f; bb = 0.12f; }  // dim green hover
             if (is_from)   { br = 0.4f; bg = 0.4f; bb = 0.0f; }
             if (is_cursor) { br = 0.0f; bg = 0.6f; bb = 0.2f; }
             gl_draw_rect(cx, cy, cell_w - 1, cell_h - 1, br, bg, bb, 0.9f);
@@ -286,7 +304,7 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
         if ((SDL_GetTicks() / 400) % 2 == 0)
             gl_draw_text("WOPR IS THINKING...", x0, my, 0.f, 1.f, 0.3f, 1.f, scale);
     } else if (s->num_players == 1) {
-        gl_draw_text("ARROWS=MOVE  ENTER=SELECT/PLACE  R=LOBBY  ESC=MENU",
+        gl_draw_text("CLICK=SELECT/MOVE  ARROWS=MOVE  ENTER=CONFIRM  R=LOBBY  ESC=MENU",
                      x0, my, 0.f, 0.5f, 0.15f, 1.f, scale);
     }
 }
@@ -374,4 +392,92 @@ bool wopr_chess_keydown(WoprState *w, SDL_Keycode sym) {
         default: break;
     }
     return true;
+}
+
+// ─── Mouse ────────────────────────────────────────────────────────────────
+
+// Convert pixel (px,py) → board (row,col), returns false if outside board
+static bool pixel_to_board(WoprChessState *s, int px, int py, int *out_r, int *out_c) {
+    if (s->board_cell_w <= 0.f || s->board_cell_h <= 0.f) return false;
+    float rel_x = (float)px - s->board_bx;
+    float rel_y = (float)py - s->board_by;
+    int col = (int)(rel_x / s->board_cell_w);
+    int row = (int)(rel_y / s->board_cell_h);
+    if (col < 0 || col > 7 || row < 0 || row > 7) return false;
+    *out_r = row; *out_c = col;
+    return true;
+}
+
+void wopr_chess_mousemove(WoprState *w, int x, int y) {
+    WoprChessState *s = cs(w);
+    if (!s || s->screen != SCREEN_GAME || s->num_players != 1) return;
+    int r, c;
+    if (pixel_to_board(s, x, y, &r, &c)) {
+        s->hover_r = r; s->hover_c = c;
+    } else {
+        s->hover_r = s->hover_c = -1;
+    }
+}
+
+void wopr_chess_mousedown(WoprState *w, int x, int y, int button) {
+    WoprChessState *s = cs(w);
+    if (!s) return;
+
+    // Lobby: click on option row selects it; double-click (or any click on selected) starts
+    if (s->screen == SCREEN_LOBBY) {
+        // We don't have pixel positions of the lobby rows stored, so just
+        // treat any left-click as pressing Enter (confirm current selection).
+        if (button == SDL_BUTTON_LEFT) {
+            s->num_players = s->lobby_sel;
+            start_game(s);
+        }
+        return;
+    }
+
+    if (button != SDL_BUTTON_LEFT) return;
+    if (s->ai_thinking || s->game_over || s->status != CHESS_PLAYING) return;
+    if (s->num_players == 0) return;
+    if (s->game.turn != WHITE) return;
+
+    int r, c;
+    if (!pixel_to_board(s, x, y, &r, &c)) return;
+
+    // Move the keyboard cursor to wherever the mouse clicked
+    s->sel_r = r; s->sel_c = c;
+
+    if (!s->has_from) {
+        const ChessPiece &p = s->game.board[r][c];
+        if (p.type != EMPTY && p.color == WHITE) {
+            s->has_from = true;
+            s->from_r = r; s->from_c = c;
+            strcpy(s->message, "PIECE SELECTED.  CLICK DESTINATION.");
+        }
+    } else {
+        if (chess_is_valid_move(&s->game, s->from_r, s->from_c, r, c)) {
+            ChessMove mv{s->from_r, s->from_c, r, c, 0};
+            chess_make_move(&s->game, mv);
+            s->has_from = false;
+            s->status = chess_check_game_status(&s->game);
+            if (s->status == CHESS_CHECKMATE_BLACK) {
+                strcpy(s->message, "CHECKMATE!  YOU WIN.");
+                s->game_over = true;
+            } else if (s->status == CHESS_STALEMATE) {
+                strcpy(s->message, "STALEMATE.  DRAW.");
+                s->game_over = true;
+            } else {
+                strcpy(s->message, "WOPR CALCULATING...");
+                start_ai(s);
+            }
+        } else {
+            // Clicked a different own piece — re-select it
+            const ChessPiece &p = s->game.board[r][c];
+            if (p.type != EMPTY && p.color == WHITE) {
+                s->from_r = r; s->from_c = c;
+                strcpy(s->message, "PIECE SELECTED.  CLICK DESTINATION.");
+            } else {
+                s->has_from = false;
+                strcpy(s->message, "INVALID MOVE.");
+            }
+        }
+    }
 }
