@@ -734,14 +734,13 @@ void wopr_render(int win_w, int win_h) {
     w->scroll_offset = std::max(0, std::min(w->scroll_offset, max_scroll));
     int start_line  = std::max(0, bottom_line - w->scroll_offset);
 
-    // In BASIC mode, always render from s_screen_top
-    if (in_basic) {
+    // In BASIC mode, pin to s_screen_top only when not scrolled back by the user
+    if (in_basic && w->scroll_offset == 0) {
         start_line = wopr_basic_get_screen_top();
-        w->scroll_offset = 0;  // BASIC manages its own layout
     }
 
     // ── Scrollbar (right edge, only when there's scrollback available) ────────
-    if (max_scroll > 0 && !in_basic) {
+    if (max_scroll > 0) {
         float sb_x     = (float)win_w - PAD - 4.f;
         float sb_top   = y0;
         float sb_h     = vis_rows * ch;
@@ -1109,16 +1108,12 @@ bool wopr_mousewheel(int delta) {
         case WoprPhase::PLAYING_MAZE:
         case WoprPhase::PLAYING_WAR:
             return true;   // consume without scrolling
-        case WoprPhase::PLAYING_BASIC:
-            return true;   // BASIC manages its own layout
         default: break;
     }
 
-    // Terminal scroll path: Zork, shell, login, connecting, etc.
+    // Terminal scroll: Zork, shell, BASIC, login, connecting, etc.
     const int LINES_PER_TICK = 3;
     w->scroll_offset += delta * LINES_PER_TICK;
     if (w->scroll_offset < 0) w->scroll_offset = 0;
-    // Upper clamp is applied each frame in wopr_render — no need to know
-    // total here, it'll be clamped on next render.
     return true;
 }
