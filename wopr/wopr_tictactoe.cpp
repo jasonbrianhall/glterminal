@@ -35,7 +35,6 @@ struct TttState {
     int  result;     // 0=playing, 1=X wins, -1=O wins, 2=draw
     bool wopr_turn;
     int  num_players;
-    int  player_side;  // 1=player is X, -1=player is O (only relevant when num_players==1)
     double ai_delay;
     double min_think_ms;
     int    game_count;
@@ -161,11 +160,6 @@ static void reset_game(TttState *s) {
         strcpy(s->message, "WOPR X VS WOPR O.  X CALCULATING...");
         s->wopr_turn = true;
         s->ai_delay  = s->min_think_ms / 1000.0 + (rand() % 40) / 1000.0;
-    } else if (s->player_side == -1) {
-        // Player is O — WOPR (X) moves first
-        strcpy(s->message, "WOPR CALCULATES FIRST MOVE...");
-        s->wopr_turn = true;
-        s->ai_delay  = 0.7 + (rand() % 60) / 1000.0;
     } else {
         strcpy(s->message, "YOUR MOVE, PROFESSOR.");
     }
@@ -178,7 +172,6 @@ void wopr_ttt_enter(WoprState *w) {
     TttState *s = new TttState{};
     s->screen        = TTT_LOBBY;
     s->lobby_sel     = 1;
-    s->player_side   = 1;
     s->min_think_ms  = 800.0;
     s->game_count    = 0;
     s->stop_at_game  = 50 + rand() % 51;
@@ -215,20 +208,12 @@ void wopr_ttt_update(WoprState *w, double dt) {
     if (s->wopr_turn) {
         s->ai_delay -= dt;
         if (s->ai_delay <= 0) {
-            // Determine which side moves now.
-            // 0-player: count pieces to figure out whose turn it is (X always first).
-            // 1-player: WOPR always plays the opposite of player_side.
-            int side;
-            if (s->num_players == 0) {
-                int nx = 0, no_ = 0;
-                for (int i = 0; i < 9; i++) {
-                    if (s->board[i] ==  1) nx++;
-                    if (s->board[i] == -1) no_++;
-                }
-                side = (nx == no_) ? 1 : -1;
-            } else {
-                side = -s->player_side;  // WOPR is always the other side
+            int nx = 0, no_ = 0;
+            for (int i = 0; i < 9; i++) {
+                if (s->board[i] ==  1) nx++;
+                if (s->board[i] == -1) no_++;
             }
+            int side = (nx == no_) ? 1 : -1;
 
             int mv = ai_best_move(s->board, side);
             if (mv >= 0) {
@@ -247,11 +232,9 @@ void wopr_ttt_update(WoprState *w, double dt) {
                         snprintf(buf, sizeof(buf), "WOPR %s WINS.  RESTARTING...", winner);
                         strcpy(s->message, buf);
                     } else {
-                        // res==player_side means player won, otherwise WOPR won
-                        bool player_won = (res == s->player_side);
-                        strcpy(s->message, player_won
-                            ? "YOU WIN.  UNEXPECTED OUTCOME."
-                            : "WOPR WINS.  INTERESTING GAME.");
+                        strcpy(s->message, (res == -1)
+                            ? "WOPR WINS.  INTERESTING GAME."
+                            : "YOU WIN.  UNEXPECTED OUTCOME.");
                     }
                 } else if (ttt_full(s->board)) {
                     s->result = 2;
@@ -392,22 +375,18 @@ void wopr_ttt_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
         gl_draw_text("TIC-TAC-TOE  --  WOPR GAMES DIVISION",
                      x0, y0, 0.f, 1.f, 0.6f, 1.f, scale);
         y0 += fch * 3.f;
-        gl_draw_text("SELECT MODE",
+        gl_draw_text("HOW MANY PLAYERS?",
                      x0, y0, 0.f, 1.f, 0.5f, 1.f, scale);
         y0 += fch * 3.f;
 
-        const char *opts[3] = {
-            "0  --  WOPR VS WOPR",
-            "1  --  PLAYER (X) VS WOPR (O)",
-            "2  --  PLAYER (O) VS WOPR (X)",
-        };
-        for (int i = 0; i < 3; i++) {
+        const char *opts[2] = { "0  --  WOPR VS WOPR", "1  --  PLAYER VS WOPR" };
+        for (int i = 0; i < 2; i++) {
             bool sel = (s->lobby_sel == i);
             float lg = sel ? 1.0f : 0.4f, lb = sel ? 0.4f : 0.1f;
             if (sel) gl_draw_text(">", x0, y0 + i*fch*2.5f, 0.f, 1.f, 0.4f, 1.f, scale);
             gl_draw_text(opts[i], x0 + fcw*3, y0 + i*fch*2.5f, 0.f, lg, lb, 1.f, scale);
         }
-        y0 += fch * 8.5f;
+        y0 += fch * 7.f;
         gl_draw_text("UP/DOWN=SELECT  ENTER/CLICK=START  ESC=MENU",
                      x0, y0, 0.f, 0.3f, 0.1f, 1.f, scale);
         return;
@@ -422,10 +401,9 @@ void wopr_ttt_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
         if (g_sdl_window) SDL_GetWindowSize(g_sdl_window, &win_w, &win_h);
     }
 
-    const char *title;
-    if (s->num_players == 0)        title = "TIC-TAC-TOE  --  WOPR VS WOPR";
-    else if (s->player_side == 1)   title = "TIC-TAC-TOE  --  YOU (X) vs WOPR (O)";
-    else                            title = "TIC-TAC-TOE  --  YOU (O) vs WOPR (X)";
+    const char *title = (s->num_players == 0)
+        ? "TIC-TAC-TOE  --  WOPR VS WOPR"
+        : "TIC-TAC-TOE  --  YOU (X) vs WOPR (O)";
     gl_draw_text(title, x0, y0, 0.f, 1.f, 0.6f, 1.f, scale);
     y0 += fch * 2.0f;
 
@@ -469,10 +447,14 @@ void wopr_ttt_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
             gl_draw_rect(cx+thick, cy+thick,
                          cell-2*thick, cell-2*thick,
                          0.8f, 0.65f, 0.05f, (float)wa);
+        } else if (is_hover) {
+            gl_draw_rect(cx+thick, cy+thick,
+                         cell-2*thick, cell-2*thick,
+                         0.1f, 0.5f, 0.45f, 0.25f);
         } else if (is_cursor) {
             gl_draw_rect(cx+thick, cy+thick,
                          cell-2*thick, cell-2*thick,
-                         0.05f, 0.7f, 0.35f, 0.18f);
+                         0.05f, 0.7f, 0.35f, 0.3f);
         }
     }
 
@@ -501,6 +483,7 @@ void wopr_ttt_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
         if (val == 1) {
             // X — cyan/teal
             float alpha = 1.0f;
+            // Dim non-winning pieces when game over and we have a winner
             if (s->result && s->result != 2 && s->has_win_line) {
                 bool in_win = (s->win_line[0]==i || s->win_line[1]==i || s->win_line[2]==i);
                 if (!in_win) alpha = 0.35f;
@@ -516,17 +499,8 @@ void wopr_ttt_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
             draw_o(cx, cy, cell, 0.95f, 0.70f, 0.10f, alpha);
         } else if (i == s->cursor && s->num_players == 1
                    && !s->result && !s->wopr_turn) {
-            // Keyboard cursor on empty cell — ghost preview of player's piece
-            if (s->player_side == 1)
-                draw_x(cx, cy, cell, 0.1f, 0.5f, 0.45f, 0.25f);
-            else
-                draw_o(cx, cy, cell, 0.6f, 0.45f, 0.05f, 0.25f);
-        } else if (i == s->hover_cell) {
-            // Mouse hover — ghost preview of player's piece
-            if (s->player_side == 1)
-                draw_x(cx, cy, cell, 0.1f, 0.5f, 0.45f, 0.20f);
-            else
-                draw_o(cx, cy, cell, 0.6f, 0.45f, 0.05f, 0.20f);
+            // Keyboard cursor on empty cell — faint X preview
+            draw_x(cx, cy, cell, 0.1f, 0.5f, 0.45f, 0.25f);
         }
     }
 
@@ -555,22 +529,11 @@ void wopr_ttt_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     // ── Status text ───────────────────────────────────────────────────────
     float my = by + board_sz + fch * 1.2f;
 
-    // Result colour: player's piece colour on win, WOPR's on loss, grey on draw
+    // Result flash
     float mr = 0.f, mg = 1.f, mb = 0.6f;
-    if (s->result == 2) {
-        mr = 0.7f; mg = 0.7f; mb = 0.7f;   // draw — grey
-    } else if (s->result != 0) {
-        bool player_won = (s->num_players == 1 && s->result == s->player_side);
-        bool x_won      = (s->result == 1);
-        if (s->num_players == 0 || player_won == x_won) {
-            // Whoever won: X=cyan, O=amber
-            if (x_won) { mr = 0.15f; mg = 0.9f;  mb = 0.85f; }
-            else        { mr = 0.95f; mg = 0.70f; mb = 0.1f;  }
-        } else {
-            if (x_won) { mr = 0.15f; mg = 0.9f;  mb = 0.85f; }
-            else        { mr = 0.95f; mg = 0.70f; mb = 0.1f;  }
-        }
-    }
+    if (s->result == 1)       { mr = 0.15f; mg = 0.9f; mb = 0.85f; }  // X wins — cyan
+    else if (s->result == -1) { mr = 0.95f; mg = 0.70f; mb = 0.1f; }  // O wins — amber
+    else if (s->result == 2)  { mr = 0.7f;  mg = 0.7f;  mb = 0.7f; }  // draw — grey
 
     gl_draw_text(s->message, x0, my, mr, mg, mb, 1.f, scale);
     my += fch * 1.5f;
@@ -610,11 +573,11 @@ static int pixel_to_cell(TttState *s, int px, int py) {
 static void ttt_try_place(TttState *s, int idx) {
     if (idx < 0 || idx > 8) return;
     if (s->board[idx] != 0) return;
-    s->cursor     = idx;
-    s->board[idx] = s->player_side;
+    s->cursor    = idx;
+    s->board[idx] = 1;  // player is X
     int res = ttt_winner(s->board);
-    if (res == s->player_side) {
-        s->result = res;
+    if (res == 1) {
+        s->result = 1;
         s->has_win_line = ttt_winner_line(s->board, s->win_line);
         s->win_anim = 0.0;
         strcpy(s->message, "YOU WIN.  UNEXPECTED OUTCOME.");
@@ -633,16 +596,7 @@ void wopr_ttt_mousedown(WoprState *w, int x, int y, int button) {
     if (!s || button != SDL_BUTTON_LEFT) return;
 
     if (s->screen == TTT_LOBBY) {
-        if (s->lobby_sel == 0) {
-            s->num_players = 0;
-            s->player_side = 1;
-        } else if (s->lobby_sel == 1) {
-            s->num_players = 1;
-            s->player_side = 1;   // player is X
-        } else {
-            s->num_players = 1;
-            s->player_side = -1;  // player is O
-        }
+        s->num_players = s->lobby_sel;
         s->screen = TTT_GAME;
         reset_game(s);
         return;
@@ -669,6 +623,7 @@ void wopr_ttt_mousemove(WoprState *w, int x, int y) {
         return;
     }
     int idx = pixel_to_cell(s, x, y);
+    // Only hover over empty cells
     s->hover_cell = (idx >= 0 && s->board[idx] == 0) ? idx : -1;
 }
 
@@ -681,19 +636,12 @@ bool wopr_ttt_keydown(WoprState *w, SDL_Keycode sym) {
     // ── Lobby ─────────────────────────────────────────────────────────────
     if (s->screen == TTT_LOBBY) {
         switch (sym) {
-            case SDLK_UP:   case SDLK_w: s->lobby_sel = (s->lobby_sel + 2) % 3; break;
-            case SDLK_DOWN: case SDLK_s: s->lobby_sel = (s->lobby_sel + 1) % 3; break;
+            case SDLK_UP:   case SDLK_w: s->lobby_sel = 0; break;
+            case SDLK_DOWN: case SDLK_s: s->lobby_sel = 1; break;
             case SDLK_0: s->lobby_sel = 0; break;
             case SDLK_1: s->lobby_sel = 1; break;
-            case SDLK_2: s->lobby_sel = 2; break;
             case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
-                if (s->lobby_sel == 0) {
-                    s->num_players = 0; s->player_side = 1;
-                } else if (s->lobby_sel == 1) {
-                    s->num_players = 1; s->player_side = 1;
-                } else {
-                    s->num_players = 1; s->player_side = -1;
-                }
+                s->num_players = s->lobby_sel;
                 s->screen = TTT_GAME;
                 reset_game(s);
                 break;

@@ -119,6 +119,8 @@ void wopr_ttt_enter(WoprState *w);
 void wopr_ttt_update(WoprState *w, double dt);
 void wopr_ttt_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_ttt_keydown(WoprState *w, SDL_Keycode sym);
+void wopr_ttt_mousedown(WoprState *w, int x, int y, int button);
+void wopr_ttt_mousemove(WoprState *w, int x, int y);
 void wopr_ttt_free(WoprState *w);
 
 // Chess
