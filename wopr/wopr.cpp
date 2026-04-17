@@ -1021,17 +1021,22 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
 bool wopr_mousedown(int x, int y, int button) {
     WoprState *w = &g_wopr;
     if (!w->visible) return false;
-    if (w->phase == WoprPhase::PLAYING_CHESS) {
-        wopr_chess_mousedown(w, x, y, button);
+    switch (w->phase) {
+        case WoprPhase::PLAYING_TTT:   wopr_ttt_mousedown(w, x, y, button);   break;
+        case WoprPhase::PLAYING_CHESS: wopr_chess_mousedown(w, x, y, button); break;
+        default: break;
     }
-    return true;   // consume — never let clicks fall through to terminal
+    return true;
 }
 
 bool wopr_mousemove(int x, int y) {
     WoprState *w = &g_wopr;
     if (!w->visible) return false;
-    if (w->phase == WoprPhase::PLAYING_CHESS)
-        wopr_chess_mousemove(w, x, y);
+    switch (w->phase) {
+        case WoprPhase::PLAYING_TTT:   wopr_ttt_mousemove(w, x, y);   break;
+        case WoprPhase::PLAYING_CHESS: wopr_chess_mousemove(w, x, y); break;
+        default: break;
+    }
     return true;
 }
 

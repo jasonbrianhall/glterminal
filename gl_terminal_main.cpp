@@ -24,7 +24,6 @@
 #include "font_manager.h"
 #include "image_viewer.h"
 #include "wopr/wopr.h"
-#include "wopr/wopr_chess_pieces.h"
 #ifdef USESSH
 #  include "ssh_session.h"
 #  include "sftp_overlay.h"
@@ -1599,7 +1598,6 @@ int main(int argc, char **argv) {
     }
     SDL_DestroyWindow(window);
     wopr_close();          // join/detach any running sub-game thread before audio shutdown
-    chess_pieces_gl_shutdown();
     wopr_audio_shutdown();
     crt_audio_shutdown();
     kitty_shutdown();
