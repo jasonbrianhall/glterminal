@@ -101,9 +101,8 @@ void wopr_render(int win_w, int win_h);
 // ─── Input — returns true if event consumed ───────────────────────────────
 bool wopr_keydown(SDL_Keycode sym, const char *text);
 
-// Mouse input — call from SDL_MOUSEBUTTONDOWN / SDL_MOUSEMOTION / SDL_MOUSEBUTTONUP
-// when g_wopr.visible.  Returns true if the event was consumed.
-bool wopr_mousedown(int x, int y, int button);   // button: SDL_BUTTON_*
+// Mouse — call from SDL_MOUSEBUTTONDOWN / SDL_MOUSEMOTION / SDL_MOUSEBUTTONUP
+bool wopr_mousedown(int x, int y, int button);
 bool wopr_mousemove(int x, int y);
 bool wopr_mouseup(int x, int y, int button);
 
