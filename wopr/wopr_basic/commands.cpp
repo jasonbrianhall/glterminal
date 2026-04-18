@@ -714,26 +714,35 @@ static int cmd_loop(Interp *ip, char *args) {
     if (fi < 0) { basic_stderr("LOOP without DO\n"); return -1; }
 
     char *p = sk(args);
-    int keep_looping = 1;   /* default: infinite loop, need explicit WHILE/UNTIL to stop */
+    int keep_looping = 1;
 
     if (kw_match(p, "WHILE")) {
         p = sk(p + 5);
         keep_looping = eval_bool_expr(&p);
     } else if (kw_match(p, "UNTIL")) {
         p = sk(p + 5);
-        char *dbg_p = p;
         int cond = eval_bool_expr(&p);
         keep_looping = !cond;
-        //basic_stderr("[loop until] cond=%d keep=%d args='%.60s'\n", cond, keep_looping, dbg_p);
     }
 
     if (keep_looping) {
-        /* loop back to the DO line itself — cmd_do will skip if already tracked,
-           and will re-check DO WHILE/UNTIL condition on re-entry */
+#ifdef USE_SDL_WINDOW
+        /* Cap DO loops to 60 fps so animation is always visible regardless
+         * of how fast or slow the loop body runs.  The limit field of the
+         * DO frame is unused; we repurpose it as a millisecond timestamp. */
+        {
+            Uint32 now = SDL_GetTicks();
+            Uint32 last = (Uint32)mpf_get_ui(g_ctrl[fi].limit);
+            if (last == 0 || now - last >= 16) {
+                mpf_set_ui(g_ctrl[fi].limit, (unsigned long)now);
+                ::gfx_sdl_pump();
+                ::gfx_sdl_render();
+            }
+        }
+#endif
         ip->pc = g_ctrl[fi].line_idx;
         return 1;
     } else {
-        /* exit — pop frame, return 0 so run loop advances past LOOP line */
         mpf_clear(g_ctrl[fi].limit); mpf_clear(g_ctrl[fi].step);
         g_ctrl_top = fi;
         return 0;
@@ -905,8 +914,26 @@ static int cmd_select(Interp *ip, char *args) {
     ip->pc = pc + 1; return 1;
 }
 
+static int cmd_case(Interp *ip, char *args) {
+    (void)args;
+    /* Reached a CASE line during normal execution — a prior CASE body just
+     * finished.  Jump forward to END SELECT at the same nesting depth. */
+    int depth = 0, pc = ip->pc + 1;
+    while (pc < g_nlines) {
+        char *t = sk(g_lines[pc].text);
+        if (kw_match(t, "SELECT")) depth++;
+        else if (kw_match(t, "END") && kw_match(sk(t + 3), "SELECT")) {
+            if (depth == 0) { ip->pc = pc + 1; return 1; }
+            depth--;
+        }
+        pc++;
+    }
+    ip->pc = g_nlines;
+    return 1;
+}
+
 static int cmd_end_select(Interp *ip, char *args) {
-    (void)ip; (void)args; return 0;   /* normal fall-through after a matched CASE */
+    (void)ip; (void)args; return 0;
 }
 
 /* ================================================================
@@ -1902,6 +1929,7 @@ static int cmd_put_graphics(Interp *ip, char *args) {
     if (kw_match(p, "XOR"))  mode = "xor";
     int xor_mode = (strcmp(mode, "xor") == 0) ? 1 : 0;
 
+
 #ifdef USE_SDL_WINDOW
     /* Screen-captured sprite (registered via GET) takes priority */
     bool is_captured = false;
@@ -2186,16 +2214,27 @@ static int cmd_next(Interp *ip, char *args) {
     if (done) { mpf_clear(f->limit); mpf_clear(f->step); g_ctrl_top = fi; return 0; }
 
 #ifdef USE_SDL_WINDOW
-    /* Pump SDL events every 500 iterations so the window stays responsive
-     * and tight delay loops (FOR d=1 TO 5000) don't freeze the display.
-     * Also insert a small sleep to give legacy timing loops real duration. */
+    /* Pace FOR loops to ~1 million iterations/second (4MHz PC equivalent).
+     * Check wall clock every 1000 iterations and sleep if running ahead. */
     {
-        static int s_next_ticks = 0;
-        if (++s_next_ticks >= 500) {
-            s_next_ticks = 0;
+        static int    s_for_count = 0;
+        static Uint32 s_for_t0    = 0;
+        static long   s_for_total = 0;
+        if (++s_for_count >= 1000) {
+            s_for_count = 0;
+            s_for_total += 1000;
+            if (s_for_t0 == 0 || s_for_total > 60000000L) {
+                /* First call or reset every ~60 seconds to prevent overflow/drift */
+                s_for_t0    = SDL_GetTicks();
+                s_for_total = 1000;
+            }
             ::gfx_sdl_pump();
             ::gfx_sdl_render();
-            SDL_Delay(1);   /* ~1ms per 500 iterations ≈ scales legacy loops */
+            /* At 1M iters/sec, 1000 iters should take 1ms */
+            Uint32 target_ms = (Uint32)(s_for_total / 1000);
+            Uint32 elapsed   = SDL_GetTicks() - s_for_t0;
+            if (target_ms > elapsed + 1)
+                SDL_Delay(target_ms - elapsed - 1);
         }
     }
 #endif
@@ -2674,7 +2713,7 @@ const Command commands[] = {
     { "WHILE",      cmd_while      },
     { "WEND",       cmd_wend       },
     { "SELECT",     cmd_select     },
-    { "CASE",       cmd_rem        },  /* consumed by cmd_select scan; skip if reached */
+    { "CASE",       cmd_case       },  /* reached after a case body completes — jump to END SELECT */
     { "GOTO",       cmd_goto       },
     { "GOSUB",      cmd_gosub      },
     { "RETURN",     cmd_return     },

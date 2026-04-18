@@ -546,7 +546,12 @@ void gfx_sdl_render() {
     //
     if (s_gfx_active && s_gfx_tex) {
         SDL_RenderSetViewport(s_renderer, nullptr);
-        SDL_UpdateTexture(s_gfx_tex, nullptr, s_pixels.data(), s_gfx_w * 4);
+        // s_pixels stores palette index in the alpha byte (0xIIRRGGBB).
+        // SDL texture needs proper 0xFF alpha for opaque rendering.
+        std::vector<Uint32> tex_pixels(s_pixels.size());
+        for (size_t i = 0; i < s_pixels.size(); i++)
+            tex_pixels[i] = s_pixels[i] | 0xFF000000u;
+        SDL_UpdateTexture(s_gfx_tex, nullptr, tex_pixels.data(), s_gfx_w * 4);
         // Window was sized to an exact integer multiple of the pixel buffer,
         // so stretch to fill — this gives pixel-perfect integer scaling.
         SDL_Rect dst = { 0, 0, s_win_w, s_win_h };
@@ -597,15 +602,23 @@ void gfx_sdl_mark_dirty() { s_needs_render = true; }
 
 // ============================================================================
 // Pixel helpers
+// Pixel format: 0xIIRRGGBB where II = palette index (0-15), stored in alpha slot.
+// This lets XOR mode operate on the index exactly like EGA hardware.
 // ============================================================================
 static inline void px_set(int x, int y, int color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
-    s_pixels[(size_t)(y * s_gfx_w + x)] = s_pal[color & 15] | 0xFF000000u;
+    int idx = color & 15;
+    s_pixels[(size_t)(y * s_gfx_w + x)] = ((Uint32)idx << 24) | (s_pal[idx] & 0x00FFFFFFu);
 }
 
 static inline Uint32 px_get(int x, int y) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return 0;
     return s_pixels[(size_t)(y * s_gfx_w + x)];
+}
+
+// Extract the stored palette index from a pixel value
+static inline int px_index(Uint32 pixel) {
+    return (int)((pixel >> 24) & 0xFF) & 15;
 }
 
 // ============================================================================
@@ -724,7 +737,14 @@ void gfx_palette(int idx, int r, int g, int b) {
                | ((Uint32)(r & 0xFF) << 16)
                | ((Uint32)(g & 0xFF) <<  8)
                | ((Uint32)(b & 0xFF)      );
-    s_pal_gen++;   // invalidate tex_cache entries baked with old palette
+    s_pal_gen++;
+    // Update RGB of any pixel in the buffer already using this index
+    Uint32 new_rgb = s_pal[idx] & 0x00FFFFFFu;
+    Uint32 tag     = (Uint32)idx << 24;
+    for (auto &px : s_pixels) {
+        if ((px >> 24) == (Uint32)idx)
+            px = tag | new_rgb;
+    }
     s_needs_render = true;
 }
 
@@ -735,8 +755,9 @@ void gfx_cls(int color) {
 
     // 1. Clear graphics buffer if active
     if (s_gfx_active) {
-        std::fill(s_pixels.begin(), s_pixels.end(),
-                  s_pal[color & 15] | 0xFF000000u);
+        int ci = color & 15;
+        Uint32 fill = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
+        std::fill(s_pixels.begin(), s_pixels.end(), fill);
     }
 
     // 2. Clear text grid to the same background colour
@@ -762,10 +783,7 @@ void gfx_pset(int x, int y, int color) {
 
 int gfx_point(int x, int y) {
     if (!s_gfx_active || x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return -1;
-    Uint32 px = s_pixels[(size_t)(y * s_gfx_w + x)] & 0x00FFFFFFu;
-    for (int i = 0; i < 16; i++)
-        if ((s_pal[i] & 0x00FFFFFFu) == px) return i;
-    return -1;  // color not in palette (e.g. after palette remapping)
+    return px_index(s_pixels[(size_t)(y * s_gfx_w + x)]);
 }
 
 void gfx_line(int x0, int y0, int x1, int y1, int color) {
@@ -797,7 +815,8 @@ void gfx_boxfill(int x1, int y1, int x2, int y2, int color) {
     if (y1 > y2) std::swap(y1, y2);
     x1 = std::max(x1, 0); y1 = std::max(y1, 0);
     x2 = std::min(x2, s_gfx_w - 1); y2 = std::min(y2, s_gfx_h - 1);
-    Uint32 col = s_pal[color & 15] | 0xFF000000u;
+    int ci = color & 15;
+    Uint32 col = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
     for (int y = y1; y <= y2; y++) {
         Uint32 *row = s_pixels.data() + (size_t)(y * s_gfx_w);
         std::fill(row + x1, row + x2 + 1, col);
@@ -821,8 +840,10 @@ void gfx_circle(int cx, int cy, int radius, int color) {
 
 void gfx_paint(int x, int y, int fill_color, int border_color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
-    Uint32 fill   = s_pal[fill_color   & 15] | 0xFF000000u;
-    Uint32 border = s_pal[border_color & 15] | 0xFF000000u;
+    int fill_idx   = fill_color   & 15;
+    int border_idx = border_color & 15;
+    Uint32 fill   = ((Uint32)fill_idx   << 24) | (s_pal[fill_idx]   & 0x00FFFFFFu);
+    Uint32 border = ((Uint32)border_idx << 24) | (s_pal[border_idx] & 0x00FFFFFFu);
 
     /* Border fill: paint all connected pixels that are NOT the border color.
      * Unlike flood fill, interior pixel colors are irrelevant — only the
@@ -900,9 +921,13 @@ void gfx_put(int id, int x, int y, int xor_mode) {
             int dx = x + col, dy = y + row;
             if (dx < 0 || dy < 0 || dx >= s_gfx_w || dy >= s_gfx_h) continue;
             Uint32 src = sp.px[(size_t)(row * sp.w + col)];
-            size_t idx = (size_t)(dy * s_gfx_w + dx);
-            if (xor_mode) s_pixels[idx] ^= (src & 0x00FFFFFFu);
-            else          s_pixels[idx]  =  src;
+            size_t pidx = (size_t)(dy * s_gfx_w + dx);
+            if (xor_mode) {
+                int new_ci = (px_index(s_pixels[pidx]) ^ px_index(src)) & 15;
+                s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
+            } else {
+                s_pixels[pidx] = src;
+            }
         }
     }
     s_needs_render = true;
@@ -947,12 +972,16 @@ void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) 
                 if (byte_off < bpp_row)
                     pal_idx |= (((plane[byte_off] >> bit) & 1) << p);
             }
-            Uint32 color = s_pal[pal_idx & 15];
+            pal_idx &= 15;
             int dx = x + col, dy = y + row;
             if (dx < 0 || dy < 0 || dx >= s_gfx_w || dy >= s_gfx_h) continue;
-            size_t idx = (size_t)(dy * s_gfx_w + dx);
-            if (xor_mode) s_pixels[idx] ^= (color & 0x00FFFFFFu);
-            else          s_pixels[idx]  =  color;
+            size_t pidx = (size_t)(dy * s_gfx_w + dx);
+            if (xor_mode) {
+                int new_ci = (px_index(s_pixels[pidx]) ^ pal_idx) & 15;
+                s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
+            } else {
+                s_pixels[pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
+            }
         }
     }
     s_needs_render = true;
