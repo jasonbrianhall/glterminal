@@ -16,6 +16,7 @@ Line g_lines[MAX_LINES];
 int  g_nlines = 0;
 
 char *g_data[MAX_DATA_ITEMS];
+int   g_data_line[MAX_DATA_ITEMS];
 int   g_data_count = 0;
 int   g_data_pos   = 0;
 
@@ -489,8 +490,11 @@ void prescan_data(void) {
                 while (i > 0 && item[i-1] == ' ') i--;
             }
             item[i] = '\0';
-            if (g_data_count < MAX_DATA_ITEMS)
-                g_data[g_data_count++] = str_dup(item);
+            if (g_data_count < MAX_DATA_ITEMS) {
+                g_data[g_data_count]      = str_dup(item);
+                g_data_line[g_data_count] = li;
+                g_data_count++;
+            }
             p = sk(p);
             if (*p == ',') p++;
         }

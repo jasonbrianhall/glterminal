@@ -128,6 +128,7 @@ void clear_program(void);
  * DATA / READ / RESTORE
  * ================================================================ */
 extern char *g_data[MAX_DATA_ITEMS];
+extern int   g_data_line[MAX_DATA_ITEMS];  /* program line index of each DATA item */
 extern int   g_data_count;
 extern int   g_data_pos;
 

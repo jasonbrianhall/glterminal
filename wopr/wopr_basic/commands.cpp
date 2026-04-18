@@ -11,6 +11,12 @@
 #include <windows.h>
 #endif
 
+#ifdef USE_SDL_WINDOW
+/* Forward declarations — defined at global scope in basic_gfx_sdl.cpp. */
+bool gfx_sdl_pump(void);
+void gfx_sdl_render(void);
+#endif
+
 BASIC_NS_BEGIN
 
 /* Expand a leading ~/ or ~ to $HOME in-place */
@@ -1890,15 +1896,56 @@ static int cmd_put_graphics(Interp *ip, char *args) {
     char vname[MAX_VARNAME];
     p = sk(read_varname(sk(p), vname));
     Var *v = var_get(vname);
-    int id = sprite_id_for(v);
     /* optional mode: PSET or XOR */
     char *mode = "pset";
     p = sk(p); if (*p == ',') p = sk(p + 1);
     if (kw_match(p, "XOR"))  mode = "xor";
+    int xor_mode = (strcmp(mode, "xor") == 0) ? 1 : 0;
+
 #ifdef USE_SDL_WINDOW
-    gfx_put(id, (int)x, (int)y, (strcmp(mode, "xor") == 0) ? 1 : 0);
+    /* Screen-captured sprite (registered via GET) takes priority */
+    bool is_captured = false;
+    for (int i = 0; i < g_nsprites; i++)
+        if (g_sprites[i].var == v) { is_captured = true; break; }
+
+    if (!is_captured && v->kind == VAR_ARRAY_NUM && v->arr_num) {
+        /* DATA-loaded sprite array: decode as GW-BASIC EGA planar format */
+        int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
+        int *raw = (int *)malloc((size_t)total * 4);
+        if (raw) {
+            for (int i = 0; i < total; i++)
+                raw[i] = (int)mpf_get_si(v->arr_num[i]);
+            gfx_put_array(raw, total, (int)x, (int)y, xor_mode);
+            free(raw);
+        }
+        return 0;
+    }
+    int id = sprite_id_for(v);
+    gfx_put(id, (int)x, (int)y, xor_mode);
 #else
-    felix_drawf("put;%d;%d;%d;%s", id, (int)x, (int)y, mode);
+    /* OSC path: if it's a numeric array (DATA-loaded), encode and send inline */
+    if (v->kind == VAR_ARRAY_NUM && v->arr_num) {
+        int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
+        /* Build a hex string of the raw int32 bytes */
+        char *hexbuf = (char *)malloc((size_t)total * 8 + 64);
+        if (hexbuf) {
+            int off = snprintf(hexbuf, 64, "putarr;%d;%d;%s;", (int)x, (int)y, mode);
+            for (int i = 0; i < total; i++) {
+                int val = (int)mpf_get_si(v->arr_num[i]);
+                unsigned char b[4];
+                b[0] = (unsigned char)(val & 0xFF);
+                b[1] = (unsigned char)((val >> 8) & 0xFF);
+                b[2] = (unsigned char)((val >> 16) & 0xFF);
+                b[3] = (unsigned char)((val >> 24) & 0xFF);
+                off += snprintf(hexbuf + off, 9, "%02x%02x%02x%02x", b[0], b[1], b[2], b[3]);
+            }
+            felix_draw(hexbuf);
+            free(hexbuf);
+        }
+    } else {
+        int id = sprite_id_for(v);
+        felix_drawf("put;%d;%d;%d;%s", id, (int)x, (int)y, mode);
+    }
 #endif
     return 0;
 }
@@ -2137,6 +2184,22 @@ static int cmd_next(Interp *ip, char *args) {
              ? (mpf_cmp(cv->num, f->limit) > 0)
              : (mpf_cmp(cv->num, f->limit) < 0);
     if (done) { mpf_clear(f->limit); mpf_clear(f->step); g_ctrl_top = fi; return 0; }
+
+#ifdef USE_SDL_WINDOW
+    /* Pump SDL events every 500 iterations so the window stays responsive
+     * and tight delay loops (FOR d=1 TO 5000) don't freeze the display.
+     * Also insert a small sleep to give legacy timing loops real duration. */
+    {
+        static int s_next_ticks = 0;
+        if (++s_next_ticks >= 500) {
+            s_next_ticks = 0;
+            ::gfx_sdl_pump();
+            ::gfx_sdl_render();
+            SDL_Delay(1);   /* ~1ms per 500 iterations ≈ scales legacy loops */
+        }
+    }
+#endif
+
     ip->pc = f->line_idx + 1; return 1;
 }
 
@@ -2437,7 +2500,33 @@ static int cmd_else(Interp *ip, char *args) {
  * DATA / READ / RESTORE
  * ================================================================ */
 static int cmd_data(Interp *ip, char *args)    { (void)ip;(void)args; return 0; }
-static int cmd_restore(Interp *ip, char *args) { (void)ip;(void)args; g_data_pos=0; return 0; }
+static int cmd_restore(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+    if (!*p || *p == ':' || *p == '\'') {
+        g_data_pos = 0;
+        return 0;
+    }
+    /* RESTORE label or RESTORE linenum — seek to first DATA item at or after that line */
+    int target_idx = -1;
+    if (isdigit((unsigned char)*p)) {
+        int linenum = atoi(p);
+        target_idx = find_line_idx(linenum);
+    } else {
+        char lname[MAX_VARNAME]; int i = 0;
+        while ((isalnum((unsigned char)*p) || *p == '_') && i < MAX_VARNAME - 1)
+            lname[i++] = *p++;
+        lname[i] = '\0';
+        target_idx = find_line_by_label(lname);
+    }
+    if (target_idx < 0) { g_data_pos = 0; return 0; }
+    /* Find the first data item whose line index >= target_idx */
+    for (int i = 0; i < g_data_count; i++) {
+        if (g_data_line[i] >= target_idx) { g_data_pos = i; return 0; }
+    }
+    g_data_pos = g_data_count;  /* past end — no data found after label */
+    return 0;
+}
 
 static int cmd_read(Interp *ip, char *args) {
     (void)ip;

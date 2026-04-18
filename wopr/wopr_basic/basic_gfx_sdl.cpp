@@ -906,6 +906,58 @@ void gfx_put(int id, int x, int y, int xor_mode) {
         }
     }
     s_needs_render = true;
+    gfx_sdl_pump();
+    gfx_sdl_render();
+}
+
+void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) {
+    if (!s_gfx_active || !raw_longs || count < 1) return;
+
+    // GW-BASIC / QB GET array format for EGA SCREEN 9 (and similar planar modes):
+    //   Bytes 0-1 (word LE): pixel width
+    //   Bytes 2-3 (word LE): pixel height
+    //   Remaining bytes: 4 EGA bit-planes stored row by row.
+    //     For each row: plane0_bytes, plane1_bytes, plane2_bytes, plane3_bytes
+    //     where bytes_per_plane_row = ceil(width / 8), 1 bit per pixel, MSB = leftmost pixel.
+    //   Color index for pixel col = bit col from each plane's byte(s), assembled as:
+    //     color = plane0_bit | (plane1_bit<<1) | (plane2_bit<<2) | (plane3_bit<<3)
+
+    const unsigned char *raw = reinterpret_cast<const unsigned char *>(raw_longs);
+    int total_bytes = count * 4;
+
+    int w = (int)(raw[0] | (raw[1] << 8));
+    int h = (int)(raw[2] | (raw[3] << 8));
+    if (w <= 0 || h <= 0 || w > 2048 || h > 2048) return;
+
+    int bpp_row = (w + 7) / 8;          // bytes per row per plane
+    int row_stride = bpp_row * 4;       // 4 planes per row
+    int needed = 4 + row_stride * h;
+    if (needed > total_bytes) return;
+
+    const unsigned char *pixels = raw + 4;
+
+    for (int row = 0; row < h; row++) {
+        const unsigned char *row_base = pixels + row * row_stride;
+        for (int col = 0; col < w; col++) {
+            int byte_off = col / 8;
+            int bit      = 7 - (col % 8);   // MSB = leftmost pixel
+            int pal_idx  = 0;
+            for (int p = 0; p < 4; p++) {
+                const unsigned char *plane = row_base + p * bpp_row;
+                if (byte_off < bpp_row)
+                    pal_idx |= (((plane[byte_off] >> bit) & 1) << p);
+            }
+            Uint32 color = s_pal[pal_idx & 15];
+            int dx = x + col, dy = y + row;
+            if (dx < 0 || dy < 0 || dx >= s_gfx_w || dy >= s_gfx_h) continue;
+            size_t idx = (size_t)(dy * s_gfx_w + dx);
+            if (xor_mode) s_pixels[idx] ^= (color & 0x00FFFFFFu);
+            else          s_pixels[idx]  =  color;
+        }
+    }
+    s_needs_render = true;
+    gfx_sdl_pump();
+    gfx_sdl_render();
 }
 
 int gfx_active(void) { return s_gfx_active ? 1 : 0; }
