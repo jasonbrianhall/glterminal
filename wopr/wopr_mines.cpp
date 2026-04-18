@@ -36,6 +36,7 @@ struct WoprMinesState {
 };
 
 static WoprMinesState *ms(WoprState *w) { return (WoprMinesState *)w->sub_state; }
+static void wopr_mines_set_cursor(SDL_SystemCursor id);  // forward decl
 
 // ─── Helper: hit-test pixel (px,py) → board (row,col), returns false if miss
 static bool pixel_to_cell(WoprMinesState *s, int px, int py, int &row, int &col)
@@ -64,6 +65,7 @@ void wopr_mines_enter(WoprState *w) {
 void wopr_mines_free(WoprState *w) {
     delete ms(w);
     w->sub_state = nullptr;
+    wopr_mines_set_cursor(SDL_SYSTEM_CURSOR_ARROW);
 }
 
 void wopr_mines_update(WoprState *w, double /*dt*/) {
@@ -365,9 +367,15 @@ void wopr_mines_mousedown(WoprState *w, int px, int py, int button) {
     }
 }
 
+static void wopr_mines_set_cursor(SDL_SystemCursor id) {
+    static SDL_SystemCursor last = SDL_SYSTEM_CURSOR_ARROW;
+    if (id != last) { SDL_SetCursor(SDL_CreateSystemCursor(id)); last = id; }
+}
+
 void wopr_mines_mousemove(WoprState *w, int px, int py) {
     WoprMinesState *s = ms(w);
     if (!s) return;
+    Minesweeper &m = s->ms;
 
     int row, col;
     if (pixel_to_cell(s, px, py, row, col)) {
@@ -377,4 +385,43 @@ void wopr_mines_mousemove(WoprState *w, int px, int py) {
         s->hover_row = -1;
         s->hover_col = -1;
     }
+
+    SDL_SystemCursor cursor_id = SDL_SYSTEM_CURSOR_ARROW;
+
+    // Hand on difficulty buttons (always clickable)
+    for (int i = 0; i < 3; i++) {
+        if (s->btn_w[i] > 0.f &&
+            (float)px >= s->btn_x[i] && (float)px <= s->btn_x[i] + s->btn_w[i] &&
+            (float)py >= s->btn_y[i] && (float)py <= s->btn_y[i] + s->btn_h) {
+            cursor_id = SDL_SYSTEM_CURSOR_HAND;
+            wopr_mines_set_cursor(cursor_id);
+            return;
+        }
+    }
+
+    // Hand on game-over/won board (click to restart)
+    if (m.gameOver || m.won) {
+        if (s->hover_row >= 0)
+            cursor_id = SDL_SYSTEM_CURSOR_HAND;
+        wopr_mines_set_cursor(cursor_id);
+        return;
+    }
+
+    // During play: hand on any interactive cell
+    if (s->hover_row >= 0) {
+        bool revealed = m.revealed[s->hover_row][s->hover_col];
+        bool flagged  = m.flagged[s->hover_row][s->hover_col];
+        if (!revealed) {
+            // Unrevealed: left-click reveals, right-click flags — always interactive
+            cursor_id = SDL_SYSTEM_CURSOR_HAND;
+        } else {
+            // Revealed number cell: chordable if it has adjacent mines
+            int adj = m.countAdjacentMines(s->hover_col, s->hover_row);
+            if (adj > 0)
+                cursor_id = SDL_SYSTEM_CURSOR_HAND;
+        }
+        (void)flagged;  // flagged cells are unrevealed, already handled above
+    }
+
+    wopr_mines_set_cursor(cursor_id);
 }

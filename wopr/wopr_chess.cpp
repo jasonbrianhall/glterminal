@@ -72,6 +72,7 @@ static void *ai_worker(void *arg) {
 }
 
 static WoprChessState *cs(WoprState *w) { return (WoprChessState *)w->sub_state; }
+static void wopr_chess_set_cursor(SDL_SystemCursor id);  // forward decl
 
 // ─── AI ───────────────────────────────────────────────────────────────────
 
@@ -131,6 +132,8 @@ void wopr_chess_free(WoprState *w) {
     if (!s) return;
     delete s;
     w->sub_state = nullptr;
+    // Restore default cursor when leaving chess
+    wopr_chess_set_cursor(SDL_SYSTEM_CURSOR_ARROW);
 }
 
 void wopr_chess_update(WoprState *w, double dt) {
@@ -141,25 +144,6 @@ void wopr_chess_update(WoprState *w, double dt) {
     if (s->ai_thinking && s->ai_done) {
         s->ai_thinking = false;
         ChessMove mv = s->ai_result;
-
-        // Validate the AI move is fully legal (doesn't leave own king in check).
-        // chess_ai_compute_move may not enforce this, so we double-check and
-        // fall back to the first legal move from chess_get_all_moves if needed.
-        if (mv.from_row >= 0) {
-            bool legal = chess_is_valid_move(&s->game, mv.from_row, mv.from_col,
-                                             mv.to_row, mv.to_col);
-            if (legal) {
-                ChessGameState tmp = s->game;
-                chess_make_move(&tmp, mv);
-                if (chess_is_in_check(&tmp, s->game.turn)) legal = false;
-            }
-            if (!legal) {
-                ChessMove legal_moves[256];
-                int n = chess_get_all_moves(&s->game, s->game.turn, legal_moves);
-                mv = (n > 0) ? legal_moves[0] : ChessMove{-1,-1,-1,-1,0};
-            }
-        }
-
         if (mv.from_row >= 0) {
             s->last_from_r = mv.from_row; s->last_from_c = mv.from_col;
             s->last_to_r   = mv.to_row;   s->last_to_c   = mv.to_col;
@@ -438,12 +422,35 @@ static bool pixel_to_board(WoprChessState *s, int px, int py, int *out_r, int *o
     return true;
 }
 
+static void wopr_chess_set_cursor(SDL_SystemCursor id) {
+    static SDL_SystemCursor last = SDL_SYSTEM_CURSOR_ARROW;
+    if (id != last) { SDL_SetCursor(SDL_CreateSystemCursor(id)); last = id; }
+}
+
 void wopr_chess_mousemove(WoprState *w, int x, int y) {
     WoprChessState *s = cs(w);
     if (!s || s->screen != SCREEN_GAME || s->num_players != 1) return;
     int r, c;
     if (pixel_to_board(s, x, y, &r, &c)) { s->hover_r = r; s->hover_c = c; }
     else                                  { s->hover_r = s->hover_c = -1; }
+
+    SDL_SystemCursor cursor_id = SDL_SYSTEM_CURSOR_ARROW;
+    if (!s->ai_thinking && !s->game_over && s->status == CHESS_PLAYING
+            && s->game.turn == WHITE && s->hover_r >= 0) {
+        if (!s->has_from) {
+            const ChessPiece &p = s->game.board[s->hover_r][s->hover_c];
+            if (p.type != EMPTY && p.color == WHITE)
+                cursor_id = SDL_SYSTEM_CURSOR_HAND;
+        } else {
+            const ChessPiece &p = s->game.board[s->hover_r][s->hover_c];
+            bool is_own  = (p.type != EMPTY && p.color == WHITE);
+            bool is_dest = chess_is_valid_move(&s->game, s->from_r, s->from_c,
+                                               s->hover_r, s->hover_c);
+            if (is_own || is_dest)
+                cursor_id = SDL_SYSTEM_CURSOR_HAND;
+        }
+    }
+    wopr_chess_set_cursor(cursor_id);
 }
 
 void wopr_chess_mousedown(WoprState *w, int x, int y, int button) {
