@@ -141,6 +141,25 @@ void wopr_chess_update(WoprState *w, double dt) {
     if (s->ai_thinking && s->ai_done) {
         s->ai_thinking = false;
         ChessMove mv = s->ai_result;
+
+        // Validate the AI move is fully legal (doesn't leave own king in check).
+        // chess_ai_compute_move may not enforce this, so we double-check and
+        // fall back to the first legal move from chess_get_all_moves if needed.
+        if (mv.from_row >= 0) {
+            bool legal = chess_is_valid_move(&s->game, mv.from_row, mv.from_col,
+                                             mv.to_row, mv.to_col);
+            if (legal) {
+                ChessGameState tmp = s->game;
+                chess_make_move(&tmp, mv);
+                if (chess_is_in_check(&tmp, s->game.turn)) legal = false;
+            }
+            if (!legal) {
+                ChessMove legal_moves[256];
+                int n = chess_get_all_moves(&s->game, s->game.turn, legal_moves);
+                mv = (n > 0) ? legal_moves[0] : ChessMove{-1,-1,-1,-1,0};
+            }
+        }
+
         if (mv.from_row >= 0) {
             s->last_from_r = mv.from_row; s->last_from_c = mv.from_col;
             s->last_to_r   = mv.to_row;   s->last_to_c   = mv.to_col;

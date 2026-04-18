@@ -2178,21 +2178,21 @@ void update_beat_chess(void *vis_ptr, double dt) {
                                 chess->last_move_end_time = 0.0;
 
                                 if (chess->status == CHESS_CHECKMATE_WHITE) {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! Black wins!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! Black wins! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 0.85;
                                     chess->status_flash_color[1] = 0.65;
                                     chess->status_flash_color[2] = 0.13;
                                     chess->is_checkmate = true;
                                     chess->check_display_timer = 0;  // Hide CHECK
                                 } else if (chess->status == CHESS_CHECKMATE_BLACK) {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! White wins!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! White wins! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 1.0;
                                     chess->status_flash_color[1] = 1.0;
                                     chess->status_flash_color[2] = 1.0;
                                     chess->is_checkmate = true;
                                     chess->check_display_timer = 0;  // Hide CHECK
                                 } else {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Stalemate!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Stalemate! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 0.7;
                                     chess->status_flash_color[1] = 0.7;
                                     chess->status_flash_color[2] = 0.7;
@@ -2266,28 +2266,49 @@ void update_beat_chess(void *vis_ptr, double dt) {
     // Handle game over
     if (chess->status != CHESS_PLAYING) {
         if (chess->waiting_for_restart) {
+            // Allow left-click anywhere to restart
+            bool click_restart = false;
+            {
+                bool is_pressed = vis->mouse_left_pressed;
+                bool was_pressed = chess->selected_piece_was_pressed;
+                bool just_clicked = (was_pressed && !is_pressed);
+                chess->selected_piece_was_pressed = is_pressed;
+                if (just_clicked) click_restart = true;
+            }
+
+            bool beat_restart = false;
             if (beat_chess_detect_beat(vis)) {
                 chess->beats_since_game_over++;
                 chess->time_since_last_move = 0;
-                
-                if (chess->beats_since_game_over >= 2) {
-                    // Restart game
-                    chess_init_board(&chess->game);
-                    chess->status = CHESS_PLAYING;
-                    chess->beats_since_game_over = 0;
-                    chess->waiting_for_restart = false;
-                    chess->move_count = 0;
-                    chess->eval_bar_position = 0;
-                    chess->eval_bar_target = 0;
-                    chess->time_thinking = 0;
-                    snprintf(chess->status_text, sizeof(chess->status_text), "New game! White to move");
-                    chess->status_flash_color[0] = 0.0;
-                    chess->status_flash_color[1] = 1.0;
-                    chess->status_flash_color[2] = 1.0;
-                    chess->status_flash_timer = 1.0;
-                    
-                    chess_start_thinking(&chess->thinking_state, &chess->game);
-                }
+                if (chess->beats_since_game_over >= 2) beat_restart = true;
+            }
+
+            if (click_restart || beat_restart) {
+                // Restart game
+                chess_stop_thinking(&chess->thinking_state);
+                chess_init_board(&chess->game);
+                chess->status = CHESS_PLAYING;
+                chess->beats_since_game_over = 0;
+                chess->waiting_for_restart = false;
+                chess->move_count = 0;
+                chess->eval_bar_position = 0;
+                chess->eval_bar_target = 0;
+                chess->time_thinking = 0;
+                chess->last_move_glow = 0;
+                chess->animation_progress = 0;
+                chess->is_animating = false;
+                chess->last_from_row = -1;
+                chess->is_in_check = false;
+                chess->check_display_timer = 0;
+                chess->is_checkmate = false;
+                chess->is_stalemate = false;
+                chess->has_selected_piece = false;
+                snprintf(chess->status_text, sizeof(chess->status_text), "New game! White to move");
+                chess->status_flash_color[0] = 0.0;
+                chess->status_flash_color[1] = 1.0;
+                chess->status_flash_color[2] = 1.0;
+                chess->status_flash_timer = 1.0;
+                chess_start_thinking(&chess->thinking_state, &chess->game);
             }
         }
         return;
@@ -2491,7 +2512,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
         // Check move limit
         if (chess->move_count >= MAX_MOVES_BEFORE_DRAW) {
             snprintf(chess->status_text, sizeof(chess->status_text),
-                    "Draw by move limit! New game in 2 beats...");
+                    "Draw by move limit! Click or wait 2 beats for new game...");
             chess->status = CHESS_STALEMATE;
             chess->is_stalemate = true;
             chess->check_display_timer = 0;  // Hide CHECK
@@ -2509,7 +2530,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
             
             if (chess->status == CHESS_CHECKMATE_WHITE) {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Checkmate! White wins! New game in 2 beats...");
+                        "Checkmate! White wins! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 1.0;
                 chess->status_flash_color[1] = 1.0;
                 chess->status_flash_color[2] = 1.0;
@@ -2518,7 +2539,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->status_flash_timer = 2.0;
             } else if (chess->status == CHESS_CHECKMATE_BLACK) {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Checkmate! Black wins! New game in 2 beats...");
+                        "Checkmate! Black wins! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 0.85;
                 chess->status_flash_color[1] = 0.65;
                 chess->status_flash_color[2] = 0.13;
@@ -2527,7 +2548,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->status_flash_timer = 2.0;
             } else {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Stalemate! New game in 2 beats...");
+                        "Stalemate! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 0.7;
                 chess->status_flash_color[1] = 0.7;
                 chess->status_flash_color[2] = 0.7;
