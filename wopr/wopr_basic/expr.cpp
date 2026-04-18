@@ -1461,6 +1461,129 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         ps->p = save;
     }
 
+    /* User-defined FUNCTION (SUB/FUNCTION label in the program).
+     * Detected when the name followed by '(' matches a program label.
+     * We run the function body inline by temporarily pushing a GOSUB frame,
+     * executing lines until RETURN, then reading the return variable. */
+    if (isalpha((unsigned char)*ps->p)) {
+        char *fname_start = ps->p;
+        char fname[MAX_VARNAME]; int fi2 = 0;
+        char *pp = ps->p;
+        while ((isalnum((unsigned char)*pp) || *pp == '_') && fi2 < MAX_VARNAME - 1)
+            fname[fi2++] = (char)toupper((unsigned char)*pp++);
+        fname[fi2] = '\0';
+        char *after_name = pp;
+        while (isspace((unsigned char)*after_name)) after_name++;
+
+        if (*after_name == '(' && find_line_by_label(fname) >= 0) {
+            /* It's a user-defined FUNCTION call */
+            ps->p = after_name + 1;  /* skip '(' */
+            skip_ws_p(ps);
+
+            /* Find the FUNCTION definition line to get parameter names */
+            int sub_idx = find_line_by_label(fname);
+            /* Collect parameter names from FUNCTION definition */
+            char param_names[16][MAX_VARNAME];
+            int  n_params = 0;
+            if (sub_idx >= 0) {
+                char *sp = sk(g_lines[sub_idx].text);
+                if (strncasecmp(sp, "FUNCTION", 8) == 0) sp = sk(sp + 8);
+                else if (strncasecmp(sp, "SUB", 3) == 0) sp = sk(sp + 3);
+                while (isalnum((unsigned char)*sp) || *sp == '_') sp++;
+                sp = sk(sp);
+                if (*sp == '(') {
+                    sp = sk(sp + 1);
+                    while (*sp && *sp != ')' && n_params < 16) {
+                        char pname[MAX_VARNAME]; int pi = 0;
+                        while (*sp && *sp != ',' && *sp != ')' && pi < MAX_VARNAME - 1) {
+                            if (!isspace((unsigned char)*sp)) pname[pi++] = (char)toupper((unsigned char)*sp);
+                            sp++;
+                        }
+                        pname[pi] = '\0';
+                        /* strip type sigil */
+                        if (pi > 0 && (pname[pi-1]=='!' || pname[pi-1]=='#' ||
+                                       pname[pi-1]=='%' || pname[pi-1]=='&'))
+                            pname[pi-1] = '\0';
+                        /* strip AS TYPE annotation */
+                        char *as_p = strstr(pname, "AS");
+                        if (as_p) *as_p = '\0';
+                        if (pname[0]) strncpy(param_names[n_params++], pname, MAX_VARNAME-1);
+                        if (*sp == ',') sp++;
+                        sp = sk(sp);
+                    }
+                }
+            }
+
+            /* Evaluate and assign arguments */
+            for (int ai = 0; ai < n_params; ai++) {
+                skip_ws_p(ps);
+                if (*ps->p == ')' || *ps->p == '\0') break;
+                mpf_t arg; mpf_init2(arg, g_prec);
+                parse_expr_p(ps, arg);
+                Var *pv = var_get(param_names[ai]);
+                mpf_set(pv->num, arg);
+                mpf_clear(arg);
+                skip_ws_p(ps);
+                if (*ps->p == ',') ps->p++;
+            }
+            /* consume closing paren and any remaining args */
+            skip_ws_p(ps);
+            if (*ps->p != ')') {
+                int depth = 1;
+                while (*ps->p && depth > 0) {
+                    if (*ps->p == '(') depth++;
+                    else if (*ps->p == ')') depth--;
+                    if (depth > 0) ps->p++;
+                }
+            }
+            if (*ps->p == ')') ps->p++;
+
+            /* Push GOSUB frame and run the function body */
+            if (g_ctrl_top < CTRL_STACK_MAX) {
+                CtrlFrame *fr = &g_ctrl[g_ctrl_top++];
+                strcpy(fr->varname, "\x01" "GOSUB");
+                fr->line_idx = g_current_pc + 1;  /* return address */
+                mpf_init2(fr->limit, g_prec); mpf_set_ui(fr->limit, 0);
+                mpf_init2(fr->step,  g_prec); mpf_set_ui(fr->step,  0);
+
+                int saved_pc = g_current_pc;
+                int pc = sub_idx + 1;  /* first line of function body */
+                while (pc >= 0 && pc < g_nlines) {
+                    g_current_pc = pc;
+                    char *line = g_lines[pc].text;
+                    char *t = sk(line);
+                    /* Stop at END FUNCTION / END SUB */
+                    if ((strncasecmp(t,"END",3)==0) &&
+                        (kw_match(sk(t+3),"FUNCTION") || kw_match(sk(t+3),"SUB"))) {
+                        pc++;
+                        break;
+                    }
+                    Interp tmp_ip; tmp_ip.pc = pc; tmp_ip.running = 1;
+                    int jumped = dispatch(&tmp_ip, line);
+                    if (!tmp_ip.running) break;
+                    pc = jumped ? tmp_ip.pc : pc + 1;
+                    /* If RETURN was hit, the GOSUB frame will be popped */
+                    if (g_ctrl_top == 0 ||
+                        strcmp(g_ctrl[g_ctrl_top-1].varname, "\x01""GOSUB") != 0) break;
+                }
+                /* Pop GOSUB frame if still there */
+                if (g_ctrl_top > 0 &&
+                    strcmp(g_ctrl[g_ctrl_top-1].varname, "\x01""GOSUB") == 0) {
+                    mpf_clear(g_ctrl[g_ctrl_top-1].limit);
+                    mpf_clear(g_ctrl[g_ctrl_top-1].step);
+                    g_ctrl_top--;
+                }
+                g_current_pc = saved_pc;
+            }
+
+            /* Read return value — stored in variable named after function */
+            Var *rv = var_find(fname);
+            if (rv) mpf_set(result, rv->num);
+            else    mpf_set_ui(result, 0);
+            return;
+        }
+    }
+
     /* Variable or array element — check CONST table first */
     if (isalpha((unsigned char)*ps->p)) {
         char name[MAX_VARNAME];
