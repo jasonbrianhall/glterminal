@@ -87,6 +87,14 @@ ChessAIMoveResult chess_ai_compute_move(ChessGameState *game, ChessAIConfig conf
     ensure_seeded();
     clock_t think_start = clock();
 
+    /* Clear stale transposition table and killer move entries from any previous
+     * search (e.g. BeatChess background thread).  Without this, hash collisions
+     * can cause minimax to return cached scores for wrong positions, leading the
+     * AI to pick moves like a pawn push while the king is in check. */
+    chess_clear_transposition_table();
+    KillerMoveTable local_killers;
+    chess_clear_killers(&local_killers);
+
     /* Initialize result */
     result.move.from_row = -1;
     result.move.from_col = -1;
@@ -140,7 +148,7 @@ ChessAIMoveResult chess_ai_compute_move(ChessGameState *game, ChessAIConfig conf
         
         /* Evaluate this move using minimax from opponent's perspective */
         bool opponent_is_white = (temp.turn == WHITE);
-        int score = chess_minimax(&temp, config.search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
+        int score = chess_minimax_enhanced(&temp, config.search_depth - 1, config.search_depth - 1, INT_MIN, INT_MAX, opponent_is_white, &local_killers);
         
         result.total_moves_evaluated++;
         

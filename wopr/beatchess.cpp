@@ -389,138 +389,172 @@ void chess_init_board(ChessGameState *game) {
 bool chess_is_valid_move(ChessGameState *game, int fr, int fc, int tr, int tc) {
     if (!chess_is_in_bounds(fr, fc) || !chess_is_in_bounds(tr, tc)) return false;
     if (fr == tr && fc == tc) return false;
-    
-    ChessPiece piece = game->board[fr][fc];
+
+    ChessPiece piece  = game->board[fr][fc];
     ChessPiece target = game->board[tr][tc];
-    
+
     if (piece.type == EMPTY || piece.color != game->turn) return false;
     if (target.color == piece.color) return false;
-    
+
     int dr = tr - fr;
     int dc = tc - fc;
-    
+
+    bool ok = false;
+
     switch (piece.type) {
         case PAWN: {
             int direction = (piece.color == WHITE) ? -1 : 1;
             int start_row = (piece.color == WHITE) ? 6 : 1;
-            
+
             // Normal pawn moves
             if (dc == 0 && target.type == EMPTY) {
-                if (dr == direction) return true;
-                if (fr == start_row && dr == 2 * direction && 
-                    game->board[fr + direction][fc].type == EMPTY) return true;
+                if (dr == direction) {
+                    ok = true;
+                } else if (fr == start_row && dr == 2 * direction &&
+                           game->board[fr + direction][fc].type == EMPTY) {
+                    ok = true;
+                }
             }
             // Regular captures
-            if (abs(dc) == 1 && dr == direction && target.type != EMPTY) return true;
-            
+            else if (abs(dc) == 1 && dr == direction && target.type != EMPTY) {
+                ok = true;
+            }
             // En passant capture
-            if (abs(dc) == 1 && dr == direction && target.type == EMPTY) {
-                // Validate en_passant state is initialized and in bounds
+            else if (abs(dc) == 1 && dr == direction && target.type == EMPTY) {
                 if (game->en_passant_col >= 0 && game->en_passant_col < BOARD_SIZE &&
                     game->en_passant_row >= 0 && game->en_passant_row < BOARD_SIZE &&
                     game->en_passant_col == tc && game->en_passant_row == tr) {
-                    return true;
+                    ok = true;
                 }
             }
-            return false;
+            break;
         }
-        
+
         case KNIGHT:
-            return (abs(dr) == 2 && abs(dc) == 1) || (abs(dr) == 1 && abs(dc) == 2);
-        
+            ok = (abs(dr) == 2 && abs(dc) == 1) || (abs(dr) == 1 && abs(dc) == 2);
+            break;
+
         case BISHOP:
-            return abs(dr) == abs(dc) && abs(dr) > 0 && chess_is_path_clear(game, fr, fc, tr, tc);
-        
+            ok = (abs(dr) == abs(dc) && abs(dr) > 0 &&
+                  chess_is_path_clear(game, fr, fc, tr, tc));
+            break;
+
         case ROOK:
-            return (dr == 0 || dc == 0) && (dr != 0 || dc != 0) && chess_is_path_clear(game, fr, fc, tr, tc);
-        
+            ok = ((dr == 0 || dc == 0) && (dr != 0 || dc != 0) &&
+                  chess_is_path_clear(game, fr, fc, tr, tc));
+            break;
+
         case QUEEN:
-            return ((dr == 0 || dc == 0) || (abs(dr) == abs(dc))) && 
-                   (dr != 0 || dc != 0) &&
-                   chess_is_path_clear(game, fr, fc, tr, tc);
-        
+            ok = (((dr == 0 || dc == 0) || (abs(dr) == abs(dc))) &&
+                  (dr != 0 || dc != 0) &&
+                  chess_is_path_clear(game, fr, fc, tr, tc));
+            break;
+
         case KING: {
             // Normal king move
             if (abs(dr) <= 1 && abs(dc) <= 1 && (dr != 0 || dc != 0)) {
-                return true;
-            }
-            
-            // Castling
-            if (dr == 0 && abs(dc) == 2) {
+                ok = true;
+            } else if (dr == 0 && abs(dc) == 2) {
+                bool castle_ok = true;
+
                 // Must not have moved king
-                if (piece.color == WHITE && game->white_king_moved) return false;
-                if (piece.color == BLACK && game->black_king_moved) return false;
-                
-                // Kingside castling (king moves to g file)
-                if (dc == 2) {
-                    // Rook must not have moved
-                    if (piece.color == WHITE && game->white_rook_h_moved) return false;
-                    if (piece.color == BLACK && game->black_rook_h_moved) return false;
-                    
-                    // Rook must still be on starting square
-                    ChessPiece rook = game->board[fr][7];
-                    if (rook.type != ROOK || rook.color != piece.color) return false;
-                    
-                    // Check path is clear (f and g files)
-                    if (game->board[fr][5].type != EMPTY) return false;
-                    if (game->board[fr][6].type != EMPTY) return false;
-                    
-                    // Check king is not currently in check
-                    if (chess_is_in_check(game, piece.color)) return false;
-                    
-                    // Check king doesn't pass through check (f file - intermediate square)
-                    ChessGameState temp = *game;
-                    temp.board[fr][5] = piece;
-                    temp.board[fr][4].type = EMPTY;
-                    if (chess_is_in_check(&temp, piece.color)) return false;
-                    
-                    // Check king doesn't end in check (g file - final square)
-                    temp.board[fr][6] = piece;
-                    temp.board[fr][5].type = EMPTY;
-                    if (chess_is_in_check(&temp, piece.color)) return false;
-                    
-                    return true;
-                }
-                
-                // Queenside castling (king moves to c file)
-                if (dc == -2) {
-                    // Rook must not have moved
-                    if (piece.color == WHITE && game->white_rook_a_moved) return false;
-                    if (piece.color == BLACK && game->black_rook_a_moved) return false;
-                    
-                    // Rook must still be on starting square
-                    ChessPiece rook = game->board[fr][0];
-                    if (rook.type != ROOK || rook.color != piece.color) return false;
-                    
-                    // Check path is clear (a, b, c, d files)
-                    if (game->board[fr][1].type != EMPTY) return false;
-                    if (game->board[fr][2].type != EMPTY) return false;
-                    if (game->board[fr][3].type != EMPTY) return false;
-                    
-                    // Check king is not currently in check
-                    if (chess_is_in_check(game, piece.color)) return false;
-                    
-                    // Check king doesn't pass through check (d file - intermediate square)
-                    ChessGameState temp = *game;
-                    temp.board[fr][3] = piece;
-                    temp.board[fr][4].type = EMPTY;
-                    if (chess_is_in_check(&temp, piece.color)) return false;
-                    
-                    // Check king doesn't end in check (c file - final square)
-                    temp.board[fr][2] = piece;
-                    temp.board[fr][3].type = EMPTY;
-                    if (chess_is_in_check(&temp, piece.color)) return false;
-                    
-                    return true;
+                if (piece.color == WHITE && game->white_king_moved) castle_ok = false;
+                if (piece.color == BLACK && game->black_king_moved) castle_ok = false;
+
+                if (castle_ok && dc == 2) {
+                    // Kingside castling
+                    if (piece.color == WHITE && game->white_rook_h_moved) castle_ok = false;
+                    if (piece.color == BLACK && game->black_rook_h_moved) castle_ok = false;
+
+                    if (castle_ok) {
+                        ChessPiece rook = game->board[fr][7];
+                        if (rook.type != ROOK || rook.color != piece.color) castle_ok = false;
+                    }
+                    if (castle_ok && game->board[fr][5].type != EMPTY) castle_ok = false;
+                    if (castle_ok && game->board[fr][6].type != EMPTY) castle_ok = false;
+
+                    if (castle_ok) {
+                        if (chess_is_in_check(game, piece.color)) castle_ok = false;
+                    }
+                    if (castle_ok) {
+                        ChessGameState temp = *game;
+                        temp.board[fr][5] = piece;
+                        temp.board[fr][4].type  = EMPTY;
+                        temp.board[fr][4].color = NONE;
+                        if (chess_is_in_check(&temp, piece.color)) castle_ok = false;
+                    }
+                    if (castle_ok) {
+                        ChessGameState temp = *game;
+                        temp.board[fr][6] = piece;
+                        temp.board[fr][4].type  = EMPTY;
+                        temp.board[fr][4].color = NONE;
+                        if (chess_is_in_check(&temp, piece.color)) castle_ok = false;
+                    }
+
+                    if (castle_ok) ok = true;
+                } else if (castle_ok && dc == -2) {
+                    // Queenside castling
+                    if (piece.color == WHITE && game->white_rook_a_moved) castle_ok = false;
+                    if (piece.color == BLACK && game->black_rook_a_moved) castle_ok = false;
+
+                    if (castle_ok) {
+                        ChessPiece rook = game->board[fr][0];
+                        if (rook.type != ROOK || rook.color != piece.color) castle_ok = false;
+                    }
+                    if (castle_ok && game->board[fr][1].type != EMPTY) castle_ok = false;
+                    if (castle_ok && game->board[fr][2].type != EMPTY) castle_ok = false;
+                    if (castle_ok && game->board[fr][3].type != EMPTY) castle_ok = false;
+
+                    if (castle_ok) {
+                        if (chess_is_in_check(game, piece.color)) castle_ok = false;
+                    }
+                    if (castle_ok) {
+                        ChessGameState temp = *game;
+                        temp.board[fr][3] = piece;
+                        temp.board[fr][4].type  = EMPTY;
+                        temp.board[fr][4].color = NONE;
+                        if (chess_is_in_check(&temp, piece.color)) castle_ok = false;
+                    }
+                    if (castle_ok) {
+                        ChessGameState temp = *game;
+                        temp.board[fr][2] = piece;
+                        temp.board[fr][4].type  = EMPTY;
+                        temp.board[fr][4].color = NONE;
+                        if (chess_is_in_check(&temp, piece.color)) castle_ok = false;
+                    }
+
+                    if (castle_ok) ok = true;
                 }
             }
-            return false;
+            break;
         }
-        
+
         default:
-            return false;
+            ok = false;
+            break;
     }
+
+    if (!ok) return false;
+
+    // FINAL LEGALITY CHECK: move must not leave own king in check
+    ChessGameState temp = *game;
+    ChessMove mv;
+    mv.from_row = fr;
+    mv.from_col = fc;
+    mv.to_row   = tr;
+    mv.to_col   = tc;
+    mv.score    = 0;
+
+    chess_make_move(&temp, mv);
+
+    if (chess_is_in_check(&temp, piece.color)) {
+        return false;
+    }
+
+    return true;
 }
+
+
 
 bool chess_is_in_check(ChessGameState *game, ChessColor color) {
     int king_r = -1, king_c = -1;
@@ -2144,21 +2178,21 @@ void update_beat_chess(void *vis_ptr, double dt) {
                                 chess->last_move_end_time = 0.0;
 
                                 if (chess->status == CHESS_CHECKMATE_WHITE) {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! Black wins!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! Black wins! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 0.85;
                                     chess->status_flash_color[1] = 0.65;
                                     chess->status_flash_color[2] = 0.13;
                                     chess->is_checkmate = true;
                                     chess->check_display_timer = 0;  // Hide CHECK
                                 } else if (chess->status == CHESS_CHECKMATE_BLACK) {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! White wins!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! White wins! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 1.0;
                                     chess->status_flash_color[1] = 1.0;
                                     chess->status_flash_color[2] = 1.0;
                                     chess->is_checkmate = true;
                                     chess->check_display_timer = 0;  // Hide CHECK
                                 } else {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Stalemate!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Stalemate! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 0.7;
                                     chess->status_flash_color[1] = 0.7;
                                     chess->status_flash_color[2] = 0.7;
@@ -2232,28 +2266,49 @@ void update_beat_chess(void *vis_ptr, double dt) {
     // Handle game over
     if (chess->status != CHESS_PLAYING) {
         if (chess->waiting_for_restart) {
+            // Allow left-click anywhere to restart
+            bool click_restart = false;
+            {
+                bool is_pressed = vis->mouse_left_pressed;
+                bool was_pressed = chess->selected_piece_was_pressed;
+                bool just_clicked = (was_pressed && !is_pressed);
+                chess->selected_piece_was_pressed = is_pressed;
+                if (just_clicked) click_restart = true;
+            }
+
+            bool beat_restart = false;
             if (beat_chess_detect_beat(vis)) {
                 chess->beats_since_game_over++;
                 chess->time_since_last_move = 0;
-                
-                if (chess->beats_since_game_over >= 2) {
-                    // Restart game
-                    chess_init_board(&chess->game);
-                    chess->status = CHESS_PLAYING;
-                    chess->beats_since_game_over = 0;
-                    chess->waiting_for_restart = false;
-                    chess->move_count = 0;
-                    chess->eval_bar_position = 0;
-                    chess->eval_bar_target = 0;
-                    chess->time_thinking = 0;
-                    snprintf(chess->status_text, sizeof(chess->status_text), "New game! White to move");
-                    chess->status_flash_color[0] = 0.0;
-                    chess->status_flash_color[1] = 1.0;
-                    chess->status_flash_color[2] = 1.0;
-                    chess->status_flash_timer = 1.0;
-                    
-                    chess_start_thinking(&chess->thinking_state, &chess->game);
-                }
+                if (chess->beats_since_game_over >= 2) beat_restart = true;
+            }
+
+            if (click_restart || beat_restart) {
+                // Restart game
+                chess_stop_thinking(&chess->thinking_state);
+                chess_init_board(&chess->game);
+                chess->status = CHESS_PLAYING;
+                chess->beats_since_game_over = 0;
+                chess->waiting_for_restart = false;
+                chess->move_count = 0;
+                chess->eval_bar_position = 0;
+                chess->eval_bar_target = 0;
+                chess->time_thinking = 0;
+                chess->last_move_glow = 0;
+                chess->animation_progress = 0;
+                chess->is_animating = false;
+                chess->last_from_row = -1;
+                chess->is_in_check = false;
+                chess->check_display_timer = 0;
+                chess->is_checkmate = false;
+                chess->is_stalemate = false;
+                chess->has_selected_piece = false;
+                snprintf(chess->status_text, sizeof(chess->status_text), "New game! White to move");
+                chess->status_flash_color[0] = 0.0;
+                chess->status_flash_color[1] = 1.0;
+                chess->status_flash_color[2] = 1.0;
+                chess->status_flash_timer = 1.0;
+                chess_start_thinking(&chess->thinking_state, &chess->game);
             }
         }
         return;
@@ -2457,7 +2512,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
         // Check move limit
         if (chess->move_count >= MAX_MOVES_BEFORE_DRAW) {
             snprintf(chess->status_text, sizeof(chess->status_text),
-                    "Draw by move limit! New game in 2 beats...");
+                    "Draw by move limit! Click or wait 2 beats for new game...");
             chess->status = CHESS_STALEMATE;
             chess->is_stalemate = true;
             chess->check_display_timer = 0;  // Hide CHECK
@@ -2475,7 +2530,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
             
             if (chess->status == CHESS_CHECKMATE_WHITE) {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Checkmate! White wins! New game in 2 beats...");
+                        "Checkmate! White wins! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 1.0;
                 chess->status_flash_color[1] = 1.0;
                 chess->status_flash_color[2] = 1.0;
@@ -2484,7 +2539,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->status_flash_timer = 2.0;
             } else if (chess->status == CHESS_CHECKMATE_BLACK) {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Checkmate! Black wins! New game in 2 beats...");
+                        "Checkmate! Black wins! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 0.85;
                 chess->status_flash_color[1] = 0.65;
                 chess->status_flash_color[2] = 0.13;
@@ -2493,7 +2548,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->status_flash_timer = 2.0;
             } else {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Stalemate! New game in 2 beats...");
+                        "Stalemate! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 0.7;
                 chess->status_flash_color[1] = 0.7;
                 chess->status_flash_color[2] = 0.7;

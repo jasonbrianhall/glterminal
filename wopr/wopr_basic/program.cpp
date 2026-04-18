@@ -260,6 +260,14 @@ void load(char *filename) {
 
             if (starts_with_if) {
                 STORE_SEG(num, p);
+            } else if (strncasecmp(p, "REM", 3) == 0 &&
+                       !isalnum((unsigned char)p[3]) && p[3] != '_') {
+                /* REM lines must never be colon-split — the rest of the
+                 * text is a comment, colons and all. */
+                STORE_SEG(num, p);
+            } else if (p[0] == '\'') {
+                /* Apostrophe comment — same treatment as REM. */
+                STORE_SEG(num, p);
             } else {
                 char *seg = p;
                 int in_str = 0;

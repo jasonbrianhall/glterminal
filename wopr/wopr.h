@@ -78,6 +78,9 @@ struct WoprState {
     // Phase timer (used for delays/transitions)
     double       phase_timer = 0.0;
 
+    // Scroll offset for the terminal log (lines from bottom; 0 = pinned to bottom)
+    int          scroll_offset = 0;
+
     // Sub-game state — opaque blobs owned by sub-modules
     void        *sub_state = nullptr;
 };
@@ -101,6 +104,12 @@ void wopr_render(int win_w, int win_h);
 // ─── Input — returns true if event consumed ───────────────────────────────
 bool wopr_keydown(SDL_Keycode sym, const char *text);
 
+// Mouse — call from SDL_MOUSEBUTTONDOWN / SDL_MOUSEMOTION / SDL_MOUSEBUTTONUP / SDL_MOUSEWHEEL
+bool wopr_mousedown(int x, int y, int button);
+bool wopr_mousemove(int x, int y);
+bool wopr_mouseup(int x, int y, int button);
+bool wopr_mousewheel(int delta);   // delta>0 = scroll up (towards older lines)
+
 // ─── Audio ────────────────────────────────────────────────────────────────
 bool  wopr_audio_init();
 void  wopr_audio_shutdown();
@@ -115,6 +124,8 @@ void wopr_ttt_update(WoprState *w, double dt);
 void wopr_ttt_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_ttt_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_ttt_free(WoprState *w);
+void wopr_ttt_mousedown(WoprState *w, int x, int y, int button);
+void wopr_ttt_mousemove(WoprState *w, int x, int y);
 
 // Chess
 void wopr_chess_enter(WoprState *w);
@@ -122,6 +133,8 @@ void wopr_chess_update(WoprState *w, double dt);
 void wopr_chess_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_chess_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_chess_free(WoprState *w);
+void wopr_chess_mousedown(WoprState *w, int x, int y, int button);
+void wopr_chess_mousemove(WoprState *w, int x, int y);
 
 // Minesweeper
 void wopr_mines_enter(WoprState *w);
@@ -129,6 +142,8 @@ void wopr_mines_update(WoprState *w, double dt);
 void wopr_mines_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_mines_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_mines_free(WoprState *w);
+void wopr_mines_mousedown(WoprState *w, int x, int y, int button);
+void wopr_mines_mousemove(WoprState *w, int x, int y);
 
 // Falken's Maze
 void wopr_maze_enter(WoprState *w);

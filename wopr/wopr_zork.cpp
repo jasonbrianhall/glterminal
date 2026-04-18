@@ -39,7 +39,11 @@ extern "C" void wopr_zork_push_line(const char *line)
         return;
     }
     SDL_LockMutex(s_active->line_mtx);
-    s_active->wopr->lines.push_back(std::string(line));
+    auto &lines = s_active->wopr->lines;
+    lines.push_back(std::string(line));
+    const int MAX_LINES = 5000;
+    if ((int)lines.size() > MAX_LINES)
+        lines.erase(lines.begin(), lines.begin() + ((int)lines.size() - MAX_LINES));
     SDL_UnlockMutex(s_active->line_mtx);
 }
 

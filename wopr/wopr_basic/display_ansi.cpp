@@ -510,7 +510,20 @@ int display_getline(char *buf, int bufsz)
 
     strncpy(buf, tmp, bufsz - 1);
     buf[bufsz - 1] = '\0';
-    enter_raw();   /* restore nonblocking raw for INKEY$ etc. */
+    /* Restore nonblocking raw mode for INKEY$ etc.
+     * We can't use enter_raw() here because g_raw is already 1 (we
+     * switched to blocking inside the line editor without clearing it),
+     * so enter_raw() would early-return and stdin would stay blocking. */
+    {
+        struct termios raw = g_orig_termios;
+        raw.c_lflag &= ~(ECHO | ICANON);
+        raw.c_cc[VMIN]  = 0;
+        raw.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+        fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+        g_raw = 1;
+    }
     return len;
 }
 #else

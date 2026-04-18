@@ -68,6 +68,19 @@ static inline Uint8 pal_r(int i) { i&=15; return (s_pal[i]>>16)&0xFF; }
 static inline Uint8 pal_g(int i) { i&=15; return (s_pal[i]>> 8)&0xFF; }
 static inline Uint8 pal_b(int i) { i&=15; return (s_pal[i]    )&0xFF; }
 static int s_font_gen;
+static int s_pal_gen;   // bumped whenever any palette slot changes
+
+static const Uint32 s_pal_default[16] = {
+    0xFF000000, 0xFF0000AA, 0xFF00AA00, 0xFF00AAAA,
+    0xFFAA0000, 0xFFAA00AA, 0xFFAA5500, 0xFFAAAAAA,
+    0xFF555555, 0xFF5555FF, 0xFF55FF55, 0xFF55FFFF,
+    0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF,
+};
+
+static void gfx_palette_reset() {
+    memcpy(s_pal, s_pal_default, sizeof(s_pal));
+    s_pal_gen++;
+}
 
 // ============================================================================
 // SDL globals
@@ -93,18 +106,20 @@ struct Sprite { int w, h; std::vector<Uint32> px; };
 static std::unordered_map<int, Sprite> s_sprites;
 
 // ============================================================================
-// Text grid
+// Text grid — static max-size buffer; active area is s_text_cols × s_text_rows
 // ============================================================================
-#define TEXT_ROWS     25
-#define TEXT_COLS_80  80
-#define TEXT_COLS_40  40
+#define TEXT_ROWS_MAX  60
+#define TEXT_COLS_MAX  220
+#define TEXT_ROWS_DEF  25    // default (graphics mode / initial)
+#define TEXT_COLS_DEF  80
 
 struct Cell { char ch; Uint8 fg, bg; };
-static Cell s_grid[TEXT_ROWS][TEXT_COLS_80];
-static int  s_text_cols  = TEXT_COLS_80;
+static Cell s_grid[TEXT_ROWS_MAX][TEXT_COLS_MAX];
+static int  s_text_cols  = TEXT_COLS_DEF;
+static int  s_text_rows  = TEXT_ROWS_DEF;
 static int  s_cur_row    = 0, s_cur_col = 0;
 static int  s_cur_fg     = 7, s_cur_bg  = 0;
-static bool s_cursor_vis = true;
+static bool s_cursor_vis = false;
 
 // ============================================================================
 // FreeType / glyph cache
@@ -166,25 +181,71 @@ void gfx_maybe_mark_dirty() {
     }
 }
 
+static int s_font_size_override = 0;  // 0 = auto-fit, >0 = manual px height (SCREEN 0 only)
+
+// Recompute cell size and (in SCREEN 0) grid dimensions from current window/font state.
+// In graphics modes the grid stays at 80×25 regardless.
 static void ft_set_size_for_window() {
     if (!s_ft_face) return;
-    // Pick the largest font size where 80 cols × 25 rows fits with padding
-    int avail_w = s_win_w - 2 * TEXT_PAD;
-    int avail_h = s_win_h - 2 * TEXT_PAD;
-    // Binary search for best pixel height
-    int lo = 8, hi = avail_h / TEXT_ROWS;
-    if (hi < lo) hi = lo;
-    while (lo < hi) {
-        int mid = (lo + hi + 1) / 2;
-        FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)mid);
+
+    if (s_gfx_active) {
+        // Graphics mode: size font to fit standard 80×25 into the window.
+        // Keep grid locked at 80×25.
+        s_text_cols = TEXT_COLS_DEF;
+        s_text_rows = TEXT_ROWS_DEF;
+        int avail_w = s_win_w - 2 * TEXT_PAD;
+        int avail_h = s_win_h - 2 * TEXT_PAD;
+        int lo = 6, hi = avail_h / TEXT_ROWS_DEF;
+        if (hi < lo) hi = lo;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) / 2;
+            FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)mid);
+            int adv = (int)(s_ft_face->size->metrics.max_advance >> 6);
+            int ht  = (int)(s_ft_face->size->metrics.height >> 6);
+            if (adv > 0 && ht > 0 && adv * TEXT_COLS_DEF <= avail_w && ht * TEXT_ROWS_DEF <= avail_h)
+                lo = mid;
+            else
+                hi = mid - 1;
+        }
+        FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)lo);
+    } else {
+        // Text mode (SCREEN 0): font size drives how many cols/rows fit.
+        int target;
+        if (s_font_size_override > 0) {
+            target = s_font_size_override;
+        } else {
+            // Auto: pick largest size that fits at least 80×25
+            int avail_w = s_win_w - 2 * TEXT_PAD;
+            int avail_h = s_win_h - 2 * TEXT_PAD;
+            int lo = 6, hi = avail_h / TEXT_ROWS_DEF;
+            if (hi < lo) hi = lo;
+            while (lo < hi) {
+                int mid = (lo + hi + 1) / 2;
+                FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)mid);
+                int adv = (int)(s_ft_face->size->metrics.max_advance >> 6);
+                int ht  = (int)(s_ft_face->size->metrics.height >> 6);
+                if (adv > 0 && ht > 0 && adv * TEXT_COLS_DEF <= avail_w && ht * TEXT_ROWS_DEF <= avail_h)
+                    lo = mid;
+                else
+                    hi = mid - 1;
+            }
+            target = lo;
+        }
+        FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)target);
+
+        // Compute how many cols/rows actually fit at this font size, within limits
         int adv = (int)(s_ft_face->size->metrics.max_advance >> 6);
         int ht  = (int)(s_ft_face->size->metrics.height >> 6);
-        if (adv > 0 && ht > 0 && adv * TEXT_COLS_80 <= avail_w && ht * TEXT_ROWS <= avail_h)
-            lo = mid;
-        else
-            hi = mid - 1;
+        if (adv > 0 && ht > 0) {
+            int cols = (s_win_w - 2 * TEXT_PAD) / adv;
+            int rows = (s_win_h - 2 * TEXT_PAD) / ht;
+            cols = std::max(40,  std::min(TEXT_COLS_MAX, cols));
+            rows = std::max(10,  std::min(TEXT_ROWS_MAX, rows));
+            s_text_cols = cols;
+            s_text_rows = rows;
+        }
     }
-    FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)lo);
+
     int adv = (int)(s_ft_face->size->metrics.max_advance >> 6);
     int ht  = (int)(s_ft_face->size->metrics.height >> 6);
     if (adv > 0) s_cell_w = adv;
@@ -222,7 +283,7 @@ static const Glyph &glyph_get(int cp) {
 
     if (s_ft_face) {
         FT_UInt idx = FT_Get_Char_Index(s_ft_face, (FT_ULong)cp);
-        if (idx && FT_Load_Glyph(s_ft_face, idx, FT_LOAD_RENDER) == 0) {
+        if (idx && FT_Load_Glyph(s_ft_face, idx, FT_LOAD_RENDER | FT_LOAD_NO_HINTING) == 0) {
             FT_Bitmap &b = s_ft_face->glyph->bitmap;
             g.bm_w = (int)b.width; g.bm_h = (int)b.rows;
             g.bearing_x = s_ft_face->glyph->bitmap_left;
@@ -265,6 +326,7 @@ bool gfx_sdl_init(const char *title, int w, int h) {
     if (!s_renderer)
         s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_SOFTWARE);
     SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");  // nearest-neighbour: crisp pixels
 
     ft_init();
 
@@ -288,6 +350,28 @@ void gfx_sdl_shutdown() {
 // Event pump  (must run on main thread)
 // ============================================================================
 static bool s_quit = false;   // set on SDL_QUIT, checked everywhere
+static bool s_fullscreen = false;
+
+// Toggle or set fullscreen state — defined in BASIC_NS to match the header declarations
+BASIC_NS_BEGIN
+
+void gfx_sdl_set_fullscreen(bool fs) {
+    if (!s_window) return;
+    s_fullscreen = fs;
+    SDL_SetWindowFullscreen(s_window,
+        fs ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    s_needs_render = true;
+}
+
+void gfx_sdl_toggle_fullscreen() {
+    gfx_sdl_set_fullscreen(!s_fullscreen);
+}
+
+void gfx_palette_reset_pub() {
+    gfx_palette_reset();
+}
+
+BASIC_NS_END
 
 bool gfx_sdl_pump() {
     SDL_Event e;
@@ -295,14 +379,16 @@ bool gfx_sdl_pump() {
         switch (e.type) {
         case SDL_QUIT:
             s_quit = true;
-            // Signal the interpreter to stop cleanly
+            // Signal the interpreter to stop cleanly; the window stays
+            // open until display_shutdown() is called after cleanup.
             BASIC_NS::g_break = 1;
-            return false;
+            break;            // keep draining events, don't return false yet
         case SDL_WINDOWEVENT:
-            if (e.window.event == SDL_WINDOWEVENT_RESIZED) {
+            if (e.window.event == SDL_WINDOWEVENT_RESIZED ||
+                e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                 s_win_w = e.window.data1;
                 s_win_h = e.window.data2;
-                ft_set_size_for_window();   // re-fit font to new window size
+                ft_set_size_for_window();
                 s_needs_render = true;
             }
             break;
@@ -312,6 +398,9 @@ bool gfx_sdl_pump() {
                 // Ctrl+C — break like SIGINT
                 BASIC_NS::g_break = 1;
                 key_push(3);
+            } else if (sym == SDLK_F11) {
+                // F11 — toggle fullscreen
+                BASIC_NS::gfx_sdl_toggle_fullscreen();
             } else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
                 key_push('\n');
             } else if (sym == SDLK_BACKSPACE) {
@@ -320,15 +409,26 @@ bool gfx_sdl_pump() {
                 key_push(9);
             } else if (sym == SDLK_ESCAPE) {
                 key_push(27);
-            } else if (sym == SDLK_UP)   { key_push(0x48); }
-            else if (sym == SDLK_DOWN)   { key_push(0x50); }
-            else if (sym == SDLK_LEFT)   { key_push(0x4B); }
-            else if (sym == SDLK_RIGHT)  { key_push(0x4D); }
+            } else if (sym == SDLK_UP)    { key_push(0x1000); }
+            else if (sym == SDLK_DOWN)    { key_push(0x1001); }
+            else if (sym == SDLK_LEFT)    { key_push(0x1002); }
+            else if (sym == SDLK_RIGHT)   { key_push(0x1003); }
             break;
         }
         case SDL_TEXTINPUT:
             for (const char *p = e.text.text; *p; p++)
                 key_push((unsigned char)*p);
+            break;
+        case SDL_MOUSEWHEEL:
+            if (!s_gfx_active && (SDL_GetModState() & KMOD_CTRL)) {
+                // Ctrl+scroll in SCREEN 0: resize font → changes cols/rows
+                int delta = (e.wheel.y > 0) ? 1 : -1;
+                if (s_font_size_override == 0)
+                    s_font_size_override = s_cell_h;
+                s_font_size_override = std::max(6, std::min(72, s_font_size_override + delta));
+                ft_set_size_for_window();
+                s_needs_render = true;
+            }
             break;
         default: break;
         }
@@ -343,41 +443,54 @@ static void render_text_cell(int row, int col) {
     const Cell &cell = s_grid[row][col];
     unsigned char ch = (unsigned char)cell.ch;
 
-    if (ch < 0x20)
-        return;
-
     int cx = col * s_cell_w;
     int cy = row * s_cell_h;
+
+    // In text mode, always draw the cell background (even spaces) so colored
+    // backgrounds show and old glyphs are properly erased.
+    // In graphics mode, skip background so graphics show through.
+    if (!s_gfx_active) {
+        Uint32 bg = s_pal[cell.bg & 15];
+        SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(s_renderer,
+            (bg>>16)&0xFF, (bg>>8)&0xFF, bg&0xFF, 255);
+        SDL_Rect bgr = { cx, cy, s_cell_w, s_cell_h };
+        SDL_RenderFillRect(s_renderer, &bgr);
+    }
+
+    if (ch < 0x20 || ch == ' ')
+        return;
 
     const Glyph &g = glyph_get(ch);
     if (g.bm.empty())
         return;
 
-    // Cache keyed by (codepoint, font generation)
+    // Cache keyed by (codepoint, font generation, palette generation, fg color)
     struct Key {
         int cp;
         int gen;
+        int pal_gen;
+        int fg;
         bool operator==(const Key &o) const {
-            return cp == o.cp && gen == o.gen;
+            return cp == o.cp && gen == o.gen && pal_gen == o.pal_gen && fg == o.fg;
         }
     };
 
     struct KeyHash {
         size_t operator()(const Key &k) const {
-            return (size_t)k.cp ^ ((size_t)k.gen << 16);
+            return (size_t)k.cp ^ ((size_t)k.gen << 16) ^ ((size_t)k.pal_gen << 20) ^ ((size_t)k.fg << 24);
         }
     };
 
     static std::unordered_map<Key, SDL_Texture*, KeyHash> tex_cache;
 
-    Key key{ ch, s_font_gen };
+    Key key{ ch, s_font_gen, s_pal_gen, cell.fg & 15 };
     SDL_Texture *tex = nullptr;
 
     auto it = tex_cache.find(key);
     if (it != tex_cache.end()) {
         tex = it->second;
     } else {
-        // Build ARGB texture exactly like pixel renderer
         tex = SDL_CreateTexture(
             s_renderer,
             SDL_PIXELFORMAT_ARGB8888,
@@ -393,8 +506,11 @@ static void render_text_cell(int row, int col) {
 
         for (int i = 0; i < g.bm_w * g.bm_h; i++) {
             Uint8 a = g.bm[i];
-            // ARGB: palette RGB, glyph alpha
-            argb[i] = (fgcol & 0x00FFFFFFu) | ((Uint32)a << 24);
+            // Use full alpha for text rendering — antialiased gray values
+            // look invisible against dark backgrounds at small font sizes.
+            // Threshold at 64: anything above renders fully opaque.
+            Uint8 out_a = (a >= 64) ? 255 : 0;
+            argb[i] = (fgcol & 0x00FFFFFFu) | ((Uint32)out_a << 24);
         }
 
         SDL_UpdateTexture(tex, nullptr, argb.data(), g.bm_w * 4);
@@ -429,25 +545,11 @@ void gfx_sdl_render() {
     // 1. Draw graphics framebuffer (if active)
     //
     if (s_gfx_active && s_gfx_tex) {
-        // Always reset viewport before drawing graphics
         SDL_RenderSetViewport(s_renderer, nullptr);
-
         SDL_UpdateTexture(s_gfx_tex, nullptr, s_pixels.data(), s_gfx_w * 4);
-
-        // Scale graphics to fit window (letterbox only graphics)
-        float sx = (float)s_win_w / s_gfx_w;
-        float sy = (float)s_win_h / s_gfx_h;
-        float scale = std::min(sx, sy);
-        int dw = (int)(s_gfx_w * scale);
-        int dh = (int)(s_gfx_h * scale);
-
-        SDL_Rect dst = {
-            (s_win_w - dw) / 2,
-            (s_win_h - dh) / 2,
-            dw,
-            dh
-        };
-
+        // Window was sized to an exact integer multiple of the pixel buffer,
+        // so stretch to fill — this gives pixel-perfect integer scaling.
+        SDL_Rect dst = { 0, 0, s_win_w, s_win_h };
         SDL_RenderCopy(s_renderer, s_gfx_tex, nullptr, &dst);
     }
 
@@ -456,11 +558,11 @@ void gfx_sdl_render() {
     //
     // QBASIC draws text at the top-left, never centered.
     //
-    SDL_Rect vp = { 0, 0, s_text_cols * s_cell_w, TEXT_ROWS * s_cell_h };
+    SDL_Rect vp = { 0, 0, s_text_cols * s_cell_w, s_text_rows * s_cell_h };
     SDL_RenderSetViewport(s_renderer, &vp);
     SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
 
-    for (int r = 0; r < TEXT_ROWS; r++)
+    for (int r = 0; r < s_text_rows; r++)
         for (int c = 0; c < s_text_cols; c++)
             render_text_cell(r, c);
 
@@ -468,7 +570,7 @@ void gfx_sdl_render() {
     // 3. Draw cursor (in ALL modes)
     //
     if (s_cursor_vis &&
-        s_cur_row < TEXT_ROWS &&
+        s_cur_row < s_text_rows &&
         s_cur_col < s_text_cols)
     {
         int cx = s_cur_col * s_cell_w;
@@ -510,15 +612,15 @@ static inline Uint32 px_get(int x, int y) {
 // Text grid helpers
 // ============================================================================
 static void text_scroll_up() {
-    for (int r = 0; r < TEXT_ROWS - 1; r++)
+    for (int r = 0; r < s_text_rows - 1; r++)
         memcpy(s_grid[r], s_grid[r + 1], sizeof(s_grid[0]));
-    for (auto &c : s_grid[TEXT_ROWS - 1]) c = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
+    for (auto &c : s_grid[s_text_rows - 1]) c = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
     s_needs_render = true;
 }
 
 static void text_newline() {
     s_cur_col = 0;
-    if (++s_cur_row >= TEXT_ROWS) { text_scroll_up(); s_cur_row = TEXT_ROWS - 1; }
+    if (++s_cur_row >= s_text_rows) { text_scroll_up(); s_cur_row = s_text_rows - 1; }
 }
 
 // ESC-sequence filter state — swallows ESC + any following non-alpha bytes
@@ -542,7 +644,7 @@ static void text_putchar(char c) {
     if (c == '\n') { text_newline(); return; }
     if (c == '\r') { s_cur_col = 0;  return; }
     if (uc < 0x20) return;
-    if (s_cur_col < s_text_cols && s_cur_row < TEXT_ROWS)
+    if (s_cur_col < s_text_cols && s_cur_row < s_text_rows)
         s_grid[s_cur_row][s_cur_col] = {c, (Uint8)s_cur_fg, (Uint8)s_cur_bg};
     if (++s_cur_col >= s_text_cols) text_newline();
     s_needs_render = true;
@@ -552,15 +654,17 @@ static void text_putchar(char c) {
 // basic_gfx.h implementation
 // ============================================================================
 
-// Screen mode dims table
+// Screen mode dims table — pixel buffer dimensions per QBasic spec
 static void screen_mode_dims(int mode, int *w, int *h) {
     static const struct { int m, w, h; } MODES[] = {
-        {1,320,200},{2,640,200},{3,720,348},{4,640,400},{5,160,100},
-        {6,160,200},{7,320,200},{8,640,200},{9,640,350},{10,640,350},
-        {11,640,480},{12,640,480},{13,320,200},{14,320,200},{15,640,200},
-        {16,640,480},{17,640,480},{18,640,480},{19,640,480},{20,512,480},
-        {21,640,400},{22,640,480},{23,800,600},{24,160,200},{25,320,200},
-        {26,640,200},{27,640,200},{28,720,350},{0,0,0}
+        { 1, 320, 200}, { 2, 640, 200}, { 3, 720, 348}, { 4, 640, 400},
+        { 5, 160, 100}, { 6, 160, 200}, { 7, 320, 200}, { 8, 640, 200},
+        { 9, 640, 350}, {10, 640, 350}, {11, 640, 480}, {12, 640, 480},
+        {13, 320, 200}, {14, 320, 200}, {15, 640, 200}, {16, 640, 480},
+        {17, 640, 480}, {18, 640, 480}, {19, 640, 480}, {20, 512, 480},
+        {21, 640, 400}, {22, 640, 480}, {23, 800, 600}, {24, 160, 200},
+        {25, 320, 200}, {26, 640, 200}, {27, 640, 200}, {28, 720, 350},
+        {0, 0, 0}
     };
     *w = 640; *h = 350;
     for (int i = 0; MODES[i].m || MODES[i].w; i++)
@@ -568,22 +672,49 @@ static void screen_mode_dims(int mode, int *w, int *h) {
 }
 
 void gfx_screen(int mode) {
+    gfx_palette_reset();   // SCREEN always resets palette to CGA defaults
     if (mode == 0) {
         s_gfx_active = false;
         if (s_gfx_tex) { SDL_DestroyTexture(s_gfx_tex); s_gfx_tex = nullptr; }
         s_pixels.clear(); s_gfx_w = s_gfx_h = 0;
+        ft_set_size_for_window();  // recompute cols/rows for text mode
         s_needs_render = true;
         return;
     }
     int gw, gh;
     screen_mode_dims(mode, &gw, &gh);
     s_gfx_w = gw; s_gfx_h = gh;
+
+    // Resize the window to show this mode at the best integer scale that
+    // fits the current display, with a minimum of 1×.
+    {
+        SDL_DisplayMode dm;
+        int disp = s_window ? SDL_GetWindowDisplayIndex(s_window) : 0;
+        if (SDL_GetCurrentDisplayMode(disp, &dm) != 0) {
+            dm.w = 1920; dm.h = 1080;
+        }
+        // Leave some headroom for the OS taskbar
+        int max_w = (int)(dm.w * 0.92f);
+        int max_h = (int)(dm.h * 0.92f);
+        int scale = 1;
+        while ((gw * (scale + 1)) <= max_w && (gh * (scale + 1)) <= max_h)
+            scale++;
+        int win_w = gw * scale;
+        int win_h = gh * scale;
+        if (s_window) SDL_SetWindowSize(s_window, win_w, win_h);
+        s_win_w = win_w;
+        s_win_h = win_h;
+    }
+
     s_pixels.assign((size_t)(gw * gh), s_pal[0] | 0xFF000000u);
     if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
     s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                   SDL_TEXTUREACCESS_STREAMING, gw, gh);
     SDL_SetTextureBlendMode(s_gfx_tex, SDL_BLENDMODE_BLEND);
     s_gfx_active = true;
+    s_text_cols = TEXT_COLS_DEF;   // graphics mode: lock to 80×25
+    s_text_rows = TEXT_ROWS_DEF;
+    ft_set_size_for_window();      // recompute cell size for graphics viewport
     s_needs_render = true;
 }
 
@@ -593,9 +724,15 @@ void gfx_palette(int idx, int r, int g, int b) {
                | ((Uint32)(r & 0xFF) << 16)
                | ((Uint32)(g & 0xFF) <<  8)
                | ((Uint32)(b & 0xFF)      );
+    s_pal_gen++;   // invalidate tex_cache entries baked with old palette
+    s_needs_render = true;
 }
 
 void gfx_cls(int color) {
+    // Update the current background colour so subsequent text output
+    // (PRINT, LOCATE, etc.) uses the same colour as the cleared screen.
+    s_cur_bg = color & 15;
+
     // 1. Clear graphics buffer if active
     if (s_gfx_active) {
         std::fill(s_pixels.begin(), s_pixels.end(),
@@ -603,16 +740,15 @@ void gfx_cls(int color) {
     }
 
     // 2. Clear text grid to the same background colour
-    for (int r = 0; r < TEXT_ROWS; r++) {
+    for (int r = 0; r < s_text_rows; r++) {
         for (int c = 0; c < s_text_cols; c++) {
             s_grid[r][c] = { ' ', (Uint8)s_cur_fg, (Uint8)(color & 15) };
         }
     }
 
-    // 3. Reset cursor and visibility
+    // 3. Reset cursor position (but leave visibility state alone — CLS doesn't change input mode)
     s_cur_row    = 0;
     s_cur_col    = 0;
-    s_cursor_vis = true;
 
     // 4. Mark dirty so it actually redraws
     s_needs_render = true;
@@ -621,6 +757,15 @@ void gfx_cls(int color) {
 
 void gfx_pset(int x, int y, int color) {
     px_set(x, y, color);
+    s_needs_render = true;
+}
+
+int gfx_point(int x, int y) {
+    if (!s_gfx_active || x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return -1;
+    Uint32 px = s_pixels[(size_t)(y * s_gfx_w + x)] & 0x00FFFFFFu;
+    for (int i = 0; i < 16; i++)
+        if ((s_pal[i] & 0x00FFFFFFu) == px) return i;
+    return -1;  // color not in palette (e.g. after palette remapping)
 }
 
 void gfx_line(int x0, int y0, int x1, int y1, int color) {
@@ -634,6 +779,7 @@ void gfx_line(int x0, int y0, int x1, int y1, int color) {
         if (e2 >= dy) { err += dy; x0 += sx; }
         if (e2 <= dx) { err += dx; y0 += sy; }
     }
+    s_needs_render = true;
 }
 
 void gfx_box(int x1, int y1, int x2, int y2, int color) {
@@ -643,6 +789,7 @@ void gfx_box(int x1, int y1, int x2, int y2, int color) {
     gfx_line(x2, y1, x2, y2, color);
     gfx_line(x2, y2, x1, y2, color);
     gfx_line(x1, y2, x1, y1, color);
+    s_needs_render = true;
 }
 
 void gfx_boxfill(int x1, int y1, int x2, int y2, int color) {
@@ -669,56 +816,63 @@ void gfx_circle(int cx, int cy, int radius, int color) {
         if (err <= 0) err += 2*y + 1;
         else          { x--; err += 2*(y - x) + 1; }
     }
+    s_needs_render = true;
 }
 
 void gfx_paint(int x, int y, int fill_color, int border_color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
-    Uint32 target = px_get(x, y);
     Uint32 fill   = s_pal[fill_color   & 15] | 0xFF000000u;
     Uint32 border = s_pal[border_color & 15] | 0xFF000000u;
-    if (target == fill || target == border) return;
 
-    // Scanline flood fill — avoids stack overflow for large areas
+    /* Border fill: paint all connected pixels that are NOT the border color.
+     * Unlike flood fill, interior pixel colors are irrelevant — only the
+     * border color stops the fill. Seed must not be border or already filled. */
+    if (px_get(x, y) == border || px_get(x, y) == fill) return;
+
     struct Span { int x0, x1, y, dy; };
-    std::vector<Span> stack;
-    stack.push_back({x, x, y, 1});
-    stack.push_back({x, x, y - 1, -1});
+    std::vector<Span> stk;
+    stk.push_back({x, x, y,      1});
+    stk.push_back({x, x, y - 1, -1});
 
-    while (!stack.empty()) {
-        auto [x0, x1, sy, dy] = stack.back(); stack.pop_back();
+    while (!stk.empty()) {
+        auto [x0, x1, sy, dy] = stk.back(); stk.pop_back();
+        if (sy < 0 || sy >= s_gfx_h) continue;
+
+        /* Extend left until border */
         int nx0 = x0;
-        // extend left
-        while (nx0 > 0 && px_get(nx0 - 1, sy) == target) nx0--;
-        // extend right
+        while (nx0 > 0 && px_get(nx0 - 1, sy) != border) nx0--;
+        /* Extend right until border */
         int nx1 = x1;
-        while (nx1 < s_gfx_w - 1 && px_get(nx1 + 1, sy) == target) nx1++;
-        // fill span
-        for (int i = nx0; i <= nx1; i++) {
+        while (nx1 < s_gfx_w - 1 && px_get(nx1 + 1, sy) != border) nx1++;
+
+        /* Fill the span */
+        for (int i = nx0; i <= nx1; i++)
             s_pixels[(size_t)(sy * s_gfx_w + i)] = fill;
-        }
-        // push child spans
+
+        /* Push child spans in forward direction */
         int ny = sy + dy;
         if (ny >= 0 && ny < s_gfx_h) {
             int i = nx0;
             while (i <= nx1) {
-                while (i <= nx1 && px_get(i, ny) != target) i++;
+                while (i <= nx1 && px_get(i, ny) == border) i++;
                 if (i > nx1) break;
                 int js = i;
-                while (i <= nx1 && px_get(i, ny) == target) i++;
-                stack.push_back({js, i - 1, ny, dy});
+                while (i <= nx1 && px_get(i, ny) != border) i++;
+                stk.push_back({js, i - 1, ny, dy});
             }
         }
-        // also push opposite spans for leaky areas
+
+        /* Push spans that extend beyond seed range in reverse direction */
         ny = sy - dy;
         if (ny >= 0 && ny < s_gfx_h) {
             int i = nx0;
             while (i <= nx1) {
-                while (i <= nx1 && px_get(i, ny) != target) i++;
+                while (i <= nx1 && px_get(i, ny) == border) i++;
                 if (i > nx1) break;
                 int js = i;
-                while (i <= nx1 && px_get(i, ny) == target) i++;
+                while (i <= nx1 && px_get(i, ny) != border) i++;
                 if (js < x0 || i - 1 > x1)
-                    stack.push_back({js, i - 1, ny, -dy});
+                    stk.push_back({js, i - 1, ny, -dy});
             }
         }
     }
@@ -776,7 +930,7 @@ void display_cls(void) {
 }
 
 void display_locate(int row, int col) {
-    if (row > 0) s_cur_row = std::min(row - 1, TEXT_ROWS - 1);
+    if (row > 0) s_cur_row = std::min(row - 1, s_text_rows - 1);
     if (col > 0) s_cur_col = std::min(col - 1, s_text_cols - 1);
 }
 
@@ -786,7 +940,7 @@ void display_color(int fg, int bg) {
 }
 
 void display_width(int cols) {
-    s_text_cols = (cols <= 40) ? TEXT_COLS_40 : TEXT_COLS_80;
+    s_text_cols = (cols <= 40) ? 40 : 80;
     s_needs_render = true;
 }
 
@@ -847,13 +1001,56 @@ int display_getchar(void) {
     return c;
 }
 
-// Blocking line input with echo
+// Blocking line input with echo and command history
 int display_getline(char *buf, int bufsz) {
-    int len = 0;
+    #define SDL_HIST_MAX 64
+    static char s_hist[SDL_HIST_MAX][512];
+    static int  s_hist_count = 0;
+    static int  s_hist_head  = 0;
+
+    // Working buffer separate from buf so we can cancel edits
+    char tmp[512] = "";
+    char saved[512] = "";
+    int  len    = 0;
+    int  cursor = 0;
+    int  hist_pos = s_hist_count;
+
+    // Remember where on the grid this input line started
+    int start_row = s_cur_row;
+    int start_col = s_cur_col;
+
     s_cursor_vis = true;
     s_needs_render = true;
+
+    // Helper: redraw the input line in the grid from start_col
+    auto redraw = [&]() {
+        // Rewrite from start position
+        int col = start_col;
+        int row = start_row;
+        for (int i = 0; i < len; i++) {
+            if (col < s_text_cols && row < s_text_rows)
+                s_grid[row][col] = {tmp[i], (Uint8)s_cur_fg, (Uint8)s_cur_bg};
+            if (++col >= s_text_cols) { col = 0; row++; }
+        }
+        // Erase any old chars after new end
+        int ecol = col, erow = row;
+        for (int i = 0; i < 80; i++) {   // clear up to 80 chars of tail
+            if (ecol < s_text_cols && erow < s_text_rows)
+                s_grid[erow][ecol] = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
+            if (++ecol >= s_text_cols) { ecol = 0; erow++; }
+        }
+        // Place display cursor at edit cursor position
+        int ccol = start_col + cursor;
+        s_cur_row = start_row + ccol / s_text_cols;
+        s_cur_col = ccol % s_text_cols;
+        s_needs_render = true;
+    };
+
     for (;;) {
-        // Blink cursor: render every ~500ms toggle
+        // Exit immediately if the window was closed
+        if (s_quit) { buf[0] = '\0'; return -1; }
+
+        // Blink cursor
         static Uint32 blink_t = 0;
         Uint32 now = SDL_GetTicks();
         if (now - blink_t > 500) {
@@ -863,29 +1060,80 @@ int display_getline(char *buf, int bufsz) {
         }
         gfx_sdl_render();
 
-        if (!gfx_sdl_pump()) { buf[len] = '\0'; return len; }
+        if (!gfx_sdl_pump()) { buf[0] = '\0'; return -1; }
 
         int c = key_pop();
         if (c < 0) { SDL_Delay(10); continue; }
 
-        if (c == '\n' || c == '\r') break;
-        if (c == 8 || c == 127) {  // backspace
-            if (len > 0) {
-                len--;
-                s_cur_col = std::max(0, s_cur_col - 1);
-                s_grid[s_cur_row][s_cur_col] = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
-                s_needs_render = true;
+        if (c == '\n' || c == '\r') {
+            // Commit: advance cursor past the typed text
+            s_cur_col = start_col + len;
+            s_cur_row = start_row + s_cur_col / s_text_cols;
+            s_cur_col = s_cur_col % s_text_cols;
+            text_newline();
+            break;
+
+        } else if (c == 8 || c == 127) {   // Backspace
+            if (cursor > 0) {
+                memmove(tmp + cursor - 1, tmp + cursor, len - cursor);
+                cursor--; len--;
+                redraw();
             }
-            continue;
-        }
-        if (len < bufsz - 1) {
-            buf[len++] = (char)c;
-            text_putchar((char)c);
+
+        } else if (c == 0x1002) {   // Left arrow
+            if (cursor > 0) { cursor--; redraw(); }
+
+        } else if (c == 0x1003) {   // Right arrow
+            if (cursor < len) { cursor++; redraw(); }
+
+        } else if (c == 0x1000) {   // Up arrow — history back
+            if (s_hist_count == 0) continue;
+            if (hist_pos == s_hist_count) {
+                tmp[len] = '\0';
+                strncpy(saved, tmp, sizeof saved - 1);
+            }
+            if (hist_pos > 0) hist_pos--;
+            int idx = (s_hist_head - s_hist_count + hist_pos + SDL_HIST_MAX) % SDL_HIST_MAX;
+            strncpy(tmp, s_hist[idx], sizeof tmp - 1);
+            len = cursor = (int)strlen(tmp);
+            redraw();
+
+        } else if (c == 0x1001) {   // Down arrow — history forward
+            if (hist_pos < s_hist_count) hist_pos++;
+            if (hist_pos == s_hist_count) {
+                strncpy(tmp, saved, sizeof tmp - 1);
+            } else {
+                int idx = (s_hist_head - s_hist_count + hist_pos + SDL_HIST_MAX) % SDL_HIST_MAX;
+                strncpy(tmp, s_hist[idx], sizeof tmp - 1);
+            }
+            len = cursor = (int)strlen(tmp);
+            redraw();
+
+        } else if (c >= 32 && c < 256) {   // Printable
+            if (len < bufsz - 1 && len < (int)sizeof(tmp) - 1) {
+                memmove(tmp + cursor + 1, tmp + cursor, len - cursor);
+                tmp[cursor++] = (char)c;
+                len++;
+                redraw();
+            }
         }
     }
-    buf[len] = '\0';
+
+    tmp[len] = '\0';
+
+    // Add to history if non-empty and different from last entry
+    if (len > 0) {
+        int last = (s_hist_head - 1 + SDL_HIST_MAX) % SDL_HIST_MAX;
+        if (s_hist_count == 0 || strcmp(s_hist[last], tmp) != 0) {
+            strncpy(s_hist[s_hist_head], tmp, sizeof s_hist[0] - 1);
+            s_hist_head = (s_hist_head + 1) % SDL_HIST_MAX;
+            if (s_hist_count < SDL_HIST_MAX) s_hist_count++;
+        }
+    }
+
+    strncpy(buf, tmp, bufsz - 1);
+    buf[bufsz - 1] = '\0';
     s_cursor_vis = false;
-    text_newline();
     gfx_sdl_render();
     return len;
 }

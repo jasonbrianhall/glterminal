@@ -85,6 +85,24 @@ static void install_sigint(void) {
  * ================================================================ */
 void run(void) { run_from(0); }
 
+/* Print a BASIC-level stack trace to stderr */
+static void print_stacktrace(void) {
+    basic_stderr("BASIC stack trace (most recent first):\n");
+    basic_stderr("  line %d: %s\n",
+                 g_lines[g_current_pc].linenum,
+                 g_lines[g_current_pc].text);
+    /* Walk the control stack for GOSUB frames */
+    for (int fi = g_ctrl_top - 1; fi >= 0; fi--) {
+        if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0) {
+            int ret_pc = g_ctrl[fi].line_idx - 1;
+            if (ret_pc >= 0 && ret_pc < g_nlines)
+                basic_stderr("  called from line %d: %s\n",
+                             g_lines[ret_pc].linenum,
+                             g_lines[ret_pc].text);
+        }
+    }
+}
+
 void run_from(int start_pc) {
     g_break = 0;
     Interp ip = { .pc = start_pc, .running = 1 };
@@ -102,17 +120,20 @@ void run_from(int start_pc) {
         // Pump SDL events every iteration
         if (!gfx_sdl_pump())
             break;
-        gfx_maybe_mark_dirty();
-        // Render at ~60 FPS
-        Uint32 now = SDL_GetTicks();
-        if (now - last_frame >= 16) {
-            gfx_sdl_render();
-            last_frame = now;
-        }
 
         // Execute one BASIC instruction
         int old_pc = ip.pc;
+        g_current_pc = old_pc;
         int jumped = dispatch(&ip, g_lines[ip.pc].text);
+
+        // Render after dispatch: immediately if a draw command marked dirty,
+        // or on the 60 FPS timer for cursor blink / text updates.
+        Uint32 now = SDL_GetTicks();
+        if (now - last_frame >= 16) {
+            gfx_sdl_mark_dirty();   // ensure periodic refresh for text/cursor
+            last_frame = now;
+        }
+        gfx_sdl_render();           // no-op if not dirty
 
         if (g_tron) {
             char tbuf[32];
@@ -140,6 +161,7 @@ void run_from(int start_pc) {
     // ------------------------------------------------------------
     while (ip.running && ip.pc < g_nlines && !g_break) {
         int old_pc = ip.pc;
+        g_current_pc = old_pc;
         int jumped = dispatch(&ip, g_lines[ip.pc].text);
 
         if (g_tron) {
@@ -269,6 +291,19 @@ return 0;
         else snprintf((dst), sizeof(dst), "%s.bas", (src)); \
     } while(0)
 
+    /* Expand leading ~/ to $HOME/ */
+    #define EXPAND_TILDE(buf) do { \
+        if ((buf)[0] == '~' && ((buf)[1] == '/' || (buf)[1] == '\0')) { \
+            const char *_home = getenv("HOME"); \
+            if (_home) { \
+                char _tmp[DEFAULT_BUFFER]; \
+                snprintf(_tmp, sizeof(_tmp), "%s%s", _home, (buf) + 1); \
+                strncpy((buf), _tmp, sizeof(buf) - 1); \
+                (buf)[sizeof(buf) - 1] = '\0'; \
+            } \
+        } \
+    } while(0)
+
     /* ----------------------------------------------------------------
      * Interactive REPL
      * ---------------------------------------------------------------- */
@@ -283,7 +318,9 @@ return 0;
         if (!suppress_ok) display_print("\nOk\n");
         suppress_ok = 0;
         display_cursor(1);
-        if (!display_getline(line, sizeof line)) {
+        int _gl_ret = display_getline(line, sizeof line);
+        if (_gl_ret < 0) break;   // window closed (SDL_QUIT)
+        if (!_gl_ret) {
 #if defined(WOPR) || defined(FELIX_BASIC)
             break;  /*   kill-switch from host */
 #else
@@ -358,27 +395,27 @@ return 0;
 
         } else if (strncasecmp(p,"KILL",4)==0 && !isalnum((unsigned char)p[4])) {
             p += 4;
-            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             char path[DEFAULT_BUFFER]; BAS_EXT(path, name);
             if (remove(path) == 0) printf("Deleted %s\n", path); else perror(path);
 
         } else if (strncasecmp(p,"RENAME",6)==0 && !isalnum((unsigned char)p[6])) {
             p += 6;
             char old[DEFAULT_BUFFER], neo[DEFAULT_BUFFER];
-            PARSE_FILENAME(old, p); p = sk(p); if (*p==',') p++;
-            PARSE_FILENAME(neo, p);
+            PARSE_FILENAME(old, p); EXPAND_TILDE(old); p = sk(p); if (*p==',') p++;
+            PARSE_FILENAME(neo, p); EXPAND_TILDE(neo);
             char op[DEFAULT_BUFFER], np[DEFAULT_BUFFER]; BAS_EXT(op,old); BAS_EXT(np,neo);
             if (rename(op, np) == 0) printf("Renamed %s -> %s\n", op, np); else perror(op);
 
         } else if (strncasecmp(p,"CHDIR",5)==0 || strncasecmp(p,"CD",2)==0) {
             p += strncasecmp(p,"CHDIR",5)==0 ? 5 : 2;
-            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (!*name) { char cwd[DEFAULT_BUFFER]; if(getcwd(cwd,sizeof cwd)) printf("%s\n",cwd); }
             else if (chdir(name)!=0) perror(name);
             else { char cwd[DEFAULT_BUFFER]; if(getcwd(cwd,sizeof cwd)) printf("%s\n",cwd); }
 
         } else if (strncasecmp(p,"MKDIR",5)==0 && !isalnum((unsigned char)p[5])) {
-            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (
 #ifdef _WIN32
                 mkdir(name)
@@ -388,16 +425,16 @@ return 0;
                 != 0) perror(name); else printf("Created %s\n", name);
 
         } else if (strncasecmp(p,"RMDIR",5)==0 && !isalnum((unsigned char)p[5])) {
-            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (rmdir(name)!=0) perror(name); else printf("Removed %s\n", name);
 
         } else if (strncasecmp(p,"LOAD",4)==0 && !isalnum((unsigned char)p[4])) {
-            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (!*name) { display_print("Usage: LOAD \"filename\"\n"); continue; }
             load_program(name);
 
         } else if (strncasecmp(p,"SAVE",4)==0 && !isalnum((unsigned char)p[4])) {
-            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p);
+            p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (!*name) { display_print("Usage: SAVE \"filename\"\n"); continue; }
             save_program(name);
 

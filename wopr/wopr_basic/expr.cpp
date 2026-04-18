@@ -7,6 +7,10 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+#ifdef USE_SDL_WINDOW
+#include "basic_gfx.h"
+#endif
+
 BASIC_NS_BEGIN
 
 /* ================================================================
@@ -21,7 +25,8 @@ volatile sig_atomic_t g_break  = 0;
 #endif
 /* Hosted builds: g_break is a macro (basic_ns.h) expanding to ::BASIC_BREAK_SYM,
  * the C-linkage global defined in main.cpp — no definition needed here. */
-int                   g_cont_pc = -1;
+int                   g_cont_pc    = -1;
+int                   g_current_pc =  0;
 
 /* ON ERROR GOTO handler state */
 char g_error_handler[MAX_VARNAME] = "";  /* label/line of handler, "" = none */
@@ -577,6 +582,7 @@ char *eval_str_or_inkey(char *p, char *buf, int bufsz) {
 typedef struct { char *p; } Parser;
 
 static void parse_expr_p(Parser *ps, mpf_t result);
+static void parse_and_operand_p(Parser *ps, mpf_t result);
 static void parse_term_p(Parser *ps, mpf_t result);
 static void parse_unary_p(Parser *ps, mpf_t result);
 static void parse_power_p(Parser *ps, mpf_t result);
@@ -694,25 +700,115 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
     }
 
     /* -----------------------------------------
-     * 4. Boolean chaining (AND / OR / XOR)
+     * 4. Boolean chaining: AND/XOR bind tighter than OR (QBasic precedence)
+     *    AND/XOR RHS uses parse_and_operand_p (stops before OR).
+     *    OR RHS uses parse_expr_p (which handles the next AND-group).
      * ----------------------------------------- */
+    /* Step 4a: AND / XOR chain (higher precedence) */
     skip_ws_p(ps);
-    while (kw_match(ps->p,"AND") || kw_match(ps->p,"OR") || kw_match(ps->p,"XOR")) {
-        int is_and = kw_match(ps->p,"AND");
+    while (kw_match(ps->p,"AND") || kw_match(ps->p,"XOR")) {
         int is_xor = kw_match(ps->p,"XOR");
-
-        ps->p += is_and ? 3 : (is_xor ? 3 : 2);
+        ps->p += 3;
         skip_ws_p(ps);
-
-        parse_expr_p(ps, rhs);
-
+        parse_and_operand_p(ps, rhs);   /* does NOT consume OR */
         long lv = mpf_get_si(result);
         long rv = mpf_get_si(rhs);
+        mpf_set_si(result, is_xor ? (lv ^ rv) : (lv & rv));
+        skip_ws_p(ps);
+    }
+    /* Step 4b: OR chain (lower precedence) */
+    while (kw_match(ps->p,"OR")) {
+        ps->p += 2;
+        skip_ws_p(ps);
+        parse_expr_p(ps, rhs);          /* full expr: handles next AND-group + OR */
+        long lv = mpf_get_si(result);
+        long rv = mpf_get_si(rhs);
+        mpf_set_si(result, lv | rv);
+        skip_ws_p(ps);
+    }
 
-        if (is_and)      mpf_set_si(result, lv & rv);
-        else if (is_xor) mpf_set_si(result, lv ^ rv);
-        else             mpf_set_si(result, lv | rv);
+    mpf_clear(tmp);
+    mpf_clear(rhs);
+}
 
+/* parse_and_operand_p — like parse_expr_p but stops before OR/XOR.
+ * Used as the RHS of AND so that OR is not greedily consumed. */
+static void parse_and_operand_p(Parser *ps, mpf_t result) {
+    mpf_t tmp; mpf_init2(tmp, g_prec);
+    mpf_t rhs; mpf_init2(rhs, g_prec);
+
+    /* additive */
+    parse_term_p(ps, result);
+    skip_ws_p(ps);
+    while (*ps->p == '+' || *ps->p == '-') {
+        char op = *ps->p++;
+        parse_term_p(ps, tmp);
+        if (op == '+') mpf_add(result, result, tmp);
+        else           mpf_sub(result, result, tmp);
+        skip_ws_p(ps);
+    }
+
+    /* string comparison */
+    if (is_str_token(ps->p)) {
+        char lhs_s[DEFAULT_BUFFER], rhs_s[DEFAULT_BUFFER];
+        ps->p = sk(eval_str_expr(ps->p, lhs_s, sizeof lhs_s));
+        skip_ws_p(ps);
+        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        int oplen = 0;
+        if (!strcmp(op,"<>")||!strcmp(op,"><")||!strcmp(op,"<=")||
+            !strcmp(op,"=<")||!strcmp(op,">=")||!strcmp(op,"=>")) oplen=2;
+        else if (ps->p[0]=='<'||ps->p[0]=='>'||ps->p[0]=='=') { op[1]='\0'; oplen=1; }
+        if (oplen > 0) {
+            ps->p += oplen; skip_ws_p(ps);
+            ps->p = sk(eval_str_expr(ps->p, rhs_s, sizeof rhs_s));
+            int c = strcmp(lhs_s, rhs_s), cmp;
+            if (!strcmp(op,"<>")||!strcmp(op,"><")) cmp=(c!=0);
+            else if (!strcmp(op,"<=")||!strcmp(op,"=<")) cmp=(c<=0);
+            else if (!strcmp(op,">=")||!strcmp(op,"=>")) cmp=(c>=0);
+            else if (op[0]=='<') cmp=(c<0); else if (op[0]=='>') cmp=(c>0);
+            else cmp=(c==0);
+            mpf_set_si(result, cmp ? -1 : 0);
+            skip_ws_p(ps);
+        }
+    } else {
+        /* numeric comparison */
+        skip_ws_p(ps);
+        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        int oplen = 0;
+        if (!strcmp(op,"<>")||!strcmp(op,"><")||!strcmp(op,"<=")||
+            !strcmp(op,"=<")||!strcmp(op,">=")||!strcmp(op,"=>")) oplen=2;
+        else if (ps->p[0]=='<'||ps->p[0]=='>'||ps->p[0]=='=') { op[1]='\0'; oplen=1; }
+        if (oplen > 0) {
+            ps->p += oplen; skip_ws_p(ps);
+            parse_term_p(ps, rhs);
+            skip_ws_p(ps);
+            while (*ps->p=='+' || *ps->p=='-') {
+                char aop = *ps->p++;
+                parse_term_p(ps, tmp);
+                if (aop=='+') mpf_add(rhs,rhs,tmp); else mpf_sub(rhs,rhs,tmp);
+                skip_ws_p(ps);
+            }
+            int c = mpf_cmp(result, rhs), cmp;
+            if (!strcmp(op,"<>")||!strcmp(op,"><")) cmp=(c!=0);
+            else if (!strcmp(op,"<=")||!strcmp(op,"=<")) cmp=(c<=0);
+            else if (!strcmp(op,">=")||!strcmp(op,"=>")) cmp=(c>=0);
+            else if (op[0]=='<') cmp=(c<0); else if (op[0]=='>') cmp=(c>0);
+            else cmp=(c==0);
+            mpf_set_si(result, cmp ? -1 : 0);
+            skip_ws_p(ps);
+        }
+    }
+
+    /* AND/XOR only — does NOT consume OR */
+    skip_ws_p(ps);
+    while (kw_match(ps->p,"AND") || kw_match(ps->p,"XOR")) {
+        int is_xor = kw_match(ps->p,"XOR");
+        ps->p += 3;
+        skip_ws_p(ps);
+        parse_and_operand_p(ps, rhs);
+        long lv = mpf_get_si(result);
+        long rv = mpf_get_si(rhs);
+        mpf_set_si(result, is_xor ? (lv ^ rv) : (lv & rv));
         skip_ws_p(ps);
     }
 
@@ -1022,6 +1118,24 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
+    /* POINT(x, y) — returns palette index of pixel at (x,y), or -1 */
+    if (kw_match(ps->p, "POINT")) {
+        ps->p += 5; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        mpf_t mx, my; mpf_init2(mx, g_prec); mpf_init2(my, g_prec);
+        ps->p = (char*)eval_expr(ps->p, mx); skip_ws_p(ps);
+        if (*ps->p == ',') ps->p++;
+        ps->p = (char*)eval_expr(sk(ps->p), my);
+        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        int px = (int)mpf_get_si(mx), py = (int)mpf_get_si(my);
+        mpf_clears(mx, my, NULL);
+#ifdef USE_SDL_WINDOW
+        mpf_set_si(result, gfx_point(px, py));
+#else
+        mpf_set_si(result, -1);
+#endif
+        return;
+    }
+
     /* SIN(x) */
     if (kw_match(ps->p, "SIN")) {
         ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
@@ -1143,9 +1257,24 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         skip_ws_p(ps); if (*ps->p == ')') ps->p++;
         return;
     }
-    /* TIMER — seconds since midnight as a float */
+    /* TIMER — seconds since midnight as a float.
+     * QB64 extension: Timer(.001) passes a precision hint — we ignore it
+     * but must consume the argument so parsing continues correctly. */
     if (kw_match(ps->p, "TIMER")) {
         ps->p += 5;
+        /* consume optional argument e.g. Timer(.001) */
+        char *q = ps->p;
+        while (isspace((unsigned char)*q)) q++;
+        if (*q == '(') {
+            q++;
+            int depth = 1;
+            while (*q && depth > 0) {
+                if (*q == '(') depth++;
+                else if (*q == ')') depth--;
+                q++;
+            }
+            ps->p = q;
+        }
         struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
         struct tm *t = localtime(&ts.tv_sec);
         double secs = t->tm_hour * 3600.0 + t->tm_min * 60.0 + t->tm_sec
