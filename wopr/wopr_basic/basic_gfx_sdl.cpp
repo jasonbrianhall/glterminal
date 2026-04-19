@@ -106,6 +106,8 @@ static bool                 s_truecolor  = false;  // true when SCREEN _NEWIMAGE
 struct Sprite { int w, h; std::vector<Uint32> px; };
 static std::unordered_map<int, Sprite> s_sprites;
 
+void gfx_sprites_clear(void) { s_sprites.clear(); }
+
 // ============================================================================
 // Text grid — static max-size buffer; active area is s_text_cols × s_text_rows
 // ============================================================================
@@ -958,11 +960,16 @@ void gfx_put(int id, int x, int y, int xor_mode) {
             if (dx < 0 || dy < 0 || dx >= s_gfx_w || dy >= s_gfx_h) continue;
             Uint32 src = sp.px[(size_t)(row * sp.w + col)];
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
+            // Re-resolve palette index to *current* palette RGB at blit time.
+            // The sprite was captured when the palette may have been remapped
+            // (e.g. gorilla invisible trick), so we must not blit stale RGB.
+            int ci = px_index(src);
+            Uint32 cur_px = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
             if (xor_mode) {
-                int new_ci = (px_index(s_pixels[pidx]) ^ px_index(src)) & 15;
+                int new_ci = (px_index(s_pixels[pidx]) ^ ci) & 15;
                 s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
-                s_pixels[pidx] = src;
+                s_pixels[pidx] = cur_px;
             }
         }
     }

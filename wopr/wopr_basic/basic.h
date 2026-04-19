@@ -232,6 +232,9 @@ int dispatch_multi(Interp *ip, char *clause);
 int cmd_goto(Interp *ip, char *args);
 int cmd_gosub(Interp *ip, char *args);
 
+/* Sprite registry reset — call on program clear/restart */
+void sprites_reset(void);
+
 /* ================================================================
  * Main interpreter loop (main.c)
  * ================================================================ */

@@ -83,6 +83,9 @@ int  gfx_active(void);
 int  gfx_width(void);
 int  gfx_height(void);
 
+/* Clear all captured sprites (call on program restart to avoid stale Var* refs). */
+void gfx_sprites_clear(void);
+
 #ifdef __cplusplus
 }
 #endif

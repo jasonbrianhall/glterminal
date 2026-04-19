@@ -199,6 +199,15 @@ static struct { Var *var; int id; } g_sprites[MAX_SPRITES];
 static int g_nsprites = 0;
 static int g_next_sprite_id = 1;
 
+/* Called by clear_program() on RUN/NEW to invalidate stale Var* pointers */
+void sprites_reset(void) {
+    g_nsprites = 0;
+    g_next_sprite_id = 1;
+#ifdef USE_SDL_WINDOW
+    gfx_sprites_clear();
+#endif
+}
+
 static int sprite_id_for(Var *var) {
     for (int i = 0; i < g_nsprites; i++)
         if (g_sprites[i].var == var) return g_sprites[i].id;

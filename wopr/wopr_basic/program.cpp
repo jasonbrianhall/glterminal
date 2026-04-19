@@ -538,6 +538,7 @@ void clear_program(void) {
     g_cont_pc     = -1;
     label_clear();
     const_clear();
+    sprites_reset();
     for (int i = 1; i <= MAX_FILE_HANDLES; i++)
         if (g_files[i].fp) { fclose(g_files[i].fp); g_files[i].fp = NULL; g_files[i].mode = 0; }
 }
