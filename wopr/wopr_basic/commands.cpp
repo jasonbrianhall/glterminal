@@ -623,16 +623,17 @@ static int cmd_locate(Interp *ip, char *args) {
     mpf_init2(row, g_prec); mpf_init2(col, g_prec); mpf_init2(cur, g_prec);
     mpf_set_ui(row, 0); mpf_set_ui(col, 0); mpf_set_ui(cur, 1);
 
+    int has_cur = 0;
     if (*p && *p != ',') p = sk(eval_expr(p, row));
     if (*p == ',') p = sk(p + 1); else goto locate_done;
     if (*p && *p != ',') p = sk(eval_expr(p, col));
     if (*p == ',') p = sk(p + 1); else goto locate_done;
-    if (*p && *p != ',') p = sk(eval_expr(p, cur));
+    if (*p && *p != ',') { p = sk(eval_expr(p, cur)); has_cur = 1; }
 
     locate_done:
     if (mpf_get_si(row) > 0 || mpf_get_si(col) > 0)
         display_locate((int)mpf_get_si(row), (int)mpf_get_si(col));
-    display_cursor((int)mpf_get_si(cur));
+    if (has_cur) display_cursor((int)mpf_get_si(cur));
     mpf_clears(row, col, cur, NULL);
     return 0;
 }
