@@ -1386,8 +1386,6 @@ static int cmd_call(Interp *ip, char *args) {
         }
     }
 
-    /* Don't GOSUB to a label that doesn't exist — silently skip.
-     * This handles bare sub calls to undefined/external subs. */
     if (find_line_by_label(name) < 0) return 0;
     return cmd_gosub(ip, name);
 }
@@ -1943,8 +1941,6 @@ static int cmd_get_graphics(Interp *ip, char *args) {
     read_varname(sk(p), vname);
     Var *v = var_get(vname);
     int id = sprite_id_for(v);
-    basic_stderr("GET: var=%s id=%d x1=%d y1=%d x2=%d y2=%d\n",
-                 vname, id, (int)x1, (int)y1, (int)x2, (int)y2);
 #ifdef USE_SDL_WINDOW
     gfx_get(id, (int)x1, (int)y1, (int)x2, (int)y2);
 #else
@@ -1969,8 +1965,6 @@ static int cmd_put_graphics(Interp *ip, char *args) {
     if (kw_match(p, "XOR"))  mode = "xor";
     int xor_mode = (strcmp(mode, "xor") == 0) ? 1 : 0;
 
-    basic_stderr("PUT: var=%s x=%d y=%d kind=%d arr_num=%p nsprites=%d\n",
-                 vname, (int)x, (int)y, v->kind, (void*)v->arr_num, g_nsprites);
 
 #ifdef USE_SDL_WINDOW
     /* Screen-captured sprite (registered via GET) takes priority */
@@ -2732,7 +2726,6 @@ const Command commands[] = {
     { "END FUNCTION",cmd_end_sub   },
     { "END IF",     cmd_rem        },
     { "END",        cmd_end        },
-    { "ELSE",       cmd_rem        },
     { "SUB",        cmd_rem        },
     { "FUNCTION",   cmd_rem        },
     { "EXIT",       cmd_exit       },
