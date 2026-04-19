@@ -276,7 +276,6 @@ void load(char *filename) {
                 for (c = p; *c; c++) {
                     if (*c == '"') { in_str = !in_str; continue; }
                     if (in_str) continue;
-                    if (*c == '\'') { *c = '\0'; if (*seg && !(strncasecmp(seg,"REM",3)==0 && !isalnum((unsigned char)seg[3]))) STORE_SEG(num, seg); seg = NULL; break; }
                     if (*c == ':') {
                         *c = '\0';
                         STORE_SEG(num, seg);
@@ -315,6 +314,24 @@ void load(char *filename) {
 
     while (fgets(buf, sizeof buf, f)) {
         buf[strcspn(buf, "\r\n")] = '\0';
+        /* Line continuation: if line ends with _ (before any comment),
+         * strip the _ and append the next line. */
+        {
+            char *tail = buf + strlen(buf) - 1;
+            while (tail > buf && isspace((unsigned char)*tail)) tail--;
+            while (*tail == '_' && tail > buf) {
+                *tail = '\0';
+                char cont[MAX_LINE_LEN];
+                if (!fgets(cont, sizeof cont, f)) break;
+                cont[strcspn(cont, "\r\n")] = '\0';
+                char *cp = cont; while (isspace((unsigned char)*cp)) cp++;
+                /* append with a space */
+                int cur = (int)strlen(buf);
+                snprintf(buf + cur, MAX_LINE_LEN - cur, " %s", cp);
+                tail = buf + strlen(buf) - 1;
+                while (tail > buf && isspace((unsigned char)*tail)) tail--;
+            }
+        }
         char *p = buf;
         while (isspace((unsigned char)*p)) p++;
 
@@ -438,8 +455,7 @@ void load(char *filename) {
             for (c = p; *c; c++) {
                 if (*c == '"') { in_str = !in_str; continue; }
                 if (in_str) continue;
-                if (*c == '\'') { *c = '\0'; if (*seg) STORE_FREE(seg); seg = NULL; break; }
-                    if (*c == ':') {
+                if (*c == ':') {
                     /* peek ahead: is the colon immediately followed by a
                        label-continuation (alpha + eventual ':')? 
                        No — just treat it as a statement separator. */

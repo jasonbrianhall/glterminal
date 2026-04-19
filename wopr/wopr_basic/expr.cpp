@@ -994,6 +994,44 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
+    /* _NEWIMAGE(w, h, depth) — QB64 compat: pick a screen mode by size.
+     * We ignore depth (always palette mode) and return a fake mode number
+     * that cmd_screen will interpret via screen_dims matching. */
+    if (kw_match(ps->p, "_NEWIMAGE")) {
+        ps->p += 9; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        mpf_t mw; mpf_init2(mw, g_prec); parse_expr_p(ps, mw);
+        int nw = (int)mpf_get_si(mw); mpf_clear(mw);
+        skip_ws_p(ps); if (*ps->p == ',') ps->p++;
+        mpf_t mh; mpf_init2(mh, g_prec); parse_expr_p(ps, mh);
+        int nh = (int)mpf_get_si(mh); mpf_clear(mh);
+        /* consume depth arg if present */
+        skip_ws_p(ps); if (*ps->p == ',') { ps->p++; mpf_t md; mpf_init2(md, g_prec); parse_expr_p(ps, md); mpf_clear(md); }
+        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        /* Pick best matching standard mode: prefer 12(640x480), 23(800x600), 9(640x350) */
+        int best = 12;
+        if (nw >= 800 || nh >= 600) best = 23;
+        else if (nh <= 350)         best = 9;
+        mpf_set_si(result, best);
+        return;
+    }
+
+    /* _RGB(r, g, b) — QB64 compat: return packed 0x00RRGGBB value.
+     * Drawing commands call color_resolve() to map to nearest palette entry. */
+    if (kw_match(ps->p, "_RGB")) {
+        ps->p += 4; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        mpf_t mr; mpf_init2(mr, g_prec); parse_expr_p(ps, mr); int rr = (int)mpf_get_si(mr); mpf_clear(mr);
+        skip_ws_p(ps); if (*ps->p == ',') ps->p++;
+        mpf_t mg; mpf_init2(mg, g_prec); parse_expr_p(ps, mg); int gg = (int)mpf_get_si(mg); mpf_clear(mg);
+        skip_ws_p(ps); if (*ps->p == ',') ps->p++;
+        mpf_t mb; mpf_init2(mb, g_prec); parse_expr_p(ps, mb); int bb = (int)mpf_get_si(mb); mpf_clear(mb);
+        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        rr &= 255; gg &= 255; bb &= 255;
+        /* Store as 0x01RRGGBB — high byte 0x01 flags this as a truecolor value */
+        long packed = 0x01000000L | ((long)rr << 16) | ((long)gg << 8) | bb;
+        mpf_set_si(result, packed);
+        return;
+    }
+
     /* INT(x) */
     if (kw_match(ps->p, "INT")) {
         ps->p += 3; skip_ws_p(ps); if (*ps->p == '(') ps->p++;

@@ -19,6 +19,32 @@ void gfx_sdl_render(void);
 
 BASIC_NS_BEGIN
 
+/* Resolve a color value: if it has the 0x01000000 truecolor flag set (from
+ * _RGB), find the nearest CGA palette entry by RGB distance.
+ * Otherwise treat as a palette index 0-15. */
+static int color_resolve(long packed) {
+    if ((packed & 0xFF000000L) != 0x01000000L)
+        return (int)(packed & 15);
+    int r = (int)((packed >> 16) & 0xFF);
+    int g = (int)((packed >>  8) & 0xFF);
+    int b = (int)( packed        & 0xFF);
+    /* Standard CGA/EGA 16-color palette (RGB) */
+    static const int pal[16][3] = {
+        {  0,  0,  0},{  0,  0,170},{  0,170,  0},{  0,170,170},
+        {170,  0,  0},{170,  0,170},{170, 85,  0},{170,170,170},
+        { 85, 85, 85},{ 85, 85,255},{ 85,255, 85},{ 85,255,255},
+        {255, 85, 85},{255, 85,255},{255,255, 85},{255,255,255}
+    };
+    int best = 0, bestd = 0x7fffffff;
+    for (int i = 0; i < 16; i++) {
+        int dr = r - pal[i][0], dg = g - pal[i][1], db = b - pal[i][2];
+        int d = dr*dr + dg*dg + db*db;
+        if (d < bestd) { bestd = d; best = i; }
+    }
+    return best;
+}
+
+
 /* Expand a leading ~/ or ~ to $HOME in-place */
 static void tilde_expand(char *buf, int bufsz) {
     if (buf[0] != '~') return;
@@ -1994,24 +2020,34 @@ static int cmd_circle(Interp *ip, char *args) {
     mpf_t mr; mpf_init2(mr, g_prec);
     p = sk(eval_expr(p, mr));
     double r = mpf_get_d(mr); mpf_clear(mr);
-    int color = 15;
+    long color_raw = 15;
     if (*p == ',') {
         p = sk(p + 1);
         mpf_t mc; mpf_init2(mc, g_prec);
         p = sk(eval_expr(p, mc));
-        color = (int)mpf_get_si(mc); mpf_clear(mc);
+        color_raw = mpf_get_si(mc); mpf_clear(mc);
     }
-    /* consume optional start_angle, end_angle, aspect — not supported by Felix,
-     * just draw the full circle. Handle empty args like CIRCLE x,y,r,c,,,aspect */
+    int color = color_resolve(color_raw);
+    /* consume optional start_angle, end_angle, aspect, filled-flag (QB64 7th param F)
+     * Handle empty args like CIRCLE x,y,r,c,,,F */
+    int filled = 0;
+    int arg_n = 0;
     while (*p == ',') {
         p = sk(p + 1);
+        if (*p == 'F' || *p == 'f') { filled = 1; p++; continue; }
         if (*p == ',' || *p == '\0' || *p == ':') continue; /* empty arg */
         mpf_t tmp; mpf_init2(tmp, g_prec);
         p = sk(eval_expr(p, tmp));
         mpf_clear(tmp);
+        arg_n++;
     }
 #ifdef USE_SDL_WINDOW
-    gfx_circle((int)x, (int)y, (int)(r + 0.5), color);
+    if (filled) {
+        gfx_circle((int)x, (int)y, (int)(r + 0.5), color);
+        gfx_paint((int)x, (int)y, color, color);
+    } else {
+        gfx_circle((int)x, (int)y, (int)(r + 0.5), color);
+    }
 #else
     felix_drawf("circle;%d;%d;%d;%d",
                 (int)x, (int)y, (int)(r + 0.5), color);
@@ -2773,8 +2809,6 @@ static int split_statements(char *line, char *segs[], char **buf_out) {
             char *rest = p + 1;
             while (isspace((unsigned char)*rest)) rest++;
             if (strncasecmp(rest,"REM",3)==0 && !isalnum((unsigned char)rest[3]) && rest[3]!='_')
-                { *p = '\0'; break; }
-            if (*rest == '\'')
                 { *p = '\0'; break; }
             if (strncasecmp(rest,"IF",2)==0 && !isalnum((unsigned char)rest[2]) && rest[2]!='_')
                 { *p = '\0'; if (n < MAX_STMTS) segs[n++] = rest; break; }
