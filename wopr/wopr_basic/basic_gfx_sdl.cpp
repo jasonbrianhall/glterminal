@@ -1035,7 +1035,7 @@ int gfx_height(void) { return s_gfx_h; }
 BASIC_NS_BEGIN
 
 void display_init(void) {
-    gfx_sdl_init("WOPR BASIC", 800, 600);
+    gfx_sdl_init("Felix BASIC", 800, 600);
 }
 
 void display_shutdown(void) {

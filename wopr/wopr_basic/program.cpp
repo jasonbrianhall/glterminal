@@ -276,6 +276,7 @@ void load(char *filename) {
                 for (c = p; *c; c++) {
                     if (*c == '"') { in_str = !in_str; continue; }
                     if (in_str) continue;
+                    if (*c == '\'') { *c = '\0'; if (*seg && !(strncasecmp(seg,"REM",3)==0 && !isalnum((unsigned char)seg[3]))) STORE_SEG(num, seg); seg = NULL; break; }
                     if (*c == ':') {
                         *c = '\0';
                         STORE_SEG(num, seg);
@@ -286,7 +287,12 @@ void load(char *filename) {
                         int is_apos = (*seg == '\'');
                         int is_if   = (strncasecmp(seg, "IF", 2) == 0 &&
                                        !isalnum((unsigned char)seg[2]) && seg[2] != '_');
-                        if (is_rem || is_apos || is_if) {
+                        if (is_rem || is_apos) {
+                            /* Rest of line is a comment — discard, stop scanning */
+                            seg = NULL;
+                            break;
+                        }
+                        if (is_if) {
                             STORE_SEG(num, seg);
                             seg = NULL;
                             break;
@@ -314,8 +320,7 @@ void load(char *filename) {
 
     while (fgets(buf, sizeof buf, f)) {
         buf[strcspn(buf, "\r\n")] = '\0';
-        /* Line continuation: if line ends with _ (before any comment),
-         * strip the _ and append the next line. */
+        /* Line continuation: join lines ending with _ */
         {
             char *tail = buf + strlen(buf) - 1;
             while (tail > buf && isspace((unsigned char)*tail)) tail--;
@@ -325,7 +330,6 @@ void load(char *filename) {
                 if (!fgets(cont, sizeof cont, f)) break;
                 cont[strcspn(cont, "\r\n")] = '\0';
                 char *cp = cont; while (isspace((unsigned char)*cp)) cp++;
-                /* append with a space */
                 int cur = (int)strlen(buf);
                 snprintf(buf + cur, MAX_LINE_LEN - cur, " %s", cp);
                 tail = buf + strlen(buf) - 1;
@@ -455,6 +459,7 @@ void load(char *filename) {
             for (c = p; *c; c++) {
                 if (*c == '"') { in_str = !in_str; continue; }
                 if (in_str) continue;
+                if (*c == '\'') { *c = '\0'; if (*seg) STORE_FREE(seg); seg = NULL; break; }
                 if (*c == ':') {
                     /* peek ahead: is the colon immediately followed by a
                        label-continuation (alpha + eventual ':')? 
