@@ -103,7 +103,7 @@ static bool                 s_truecolor  = false;  // true when SCREEN _NEWIMAGE
 // ============================================================================
 // Sprite store
 // ============================================================================
-struct Sprite { int w, h; std::vector<Uint32> px; };
+struct Sprite { int w, h; std::vector<Uint32> px; int bg_color = 0; };
 static std::unordered_map<int, Sprite> s_sprites;
 
 void gfx_sprites_clear(void) { s_sprites.clear(); }
@@ -337,6 +337,7 @@ bool gfx_sdl_init(const char *title, int w, int h) {
         for (auto &c : row) c = {' ', 7, 0};
 
     s_needs_render = true;
+    SDL_StartTextInput();
     return true;
 }
 
@@ -575,9 +576,9 @@ void gfx_sdl_render() {
             render_text_cell(r, c);
 
     //
-    // 3. Draw cursor (text mode only — hidden in graphics modes)
+    // 3. Draw cursor (in ALL modes)
     //
-    if (!s_gfx_active && s_cursor_vis &&
+    if (s_cursor_vis &&
         s_cur_row < s_text_rows &&
         s_cur_col < s_text_cols)
     {
@@ -759,7 +760,7 @@ void gfx_screen(int mode) {
         s_win_h = win_h;
     }
 
-    s_pixels.assign((size_t)(gw * gh), s_pal[0] | 0xFF000000u);
+    s_pixels.assign((size_t)(gw * gh), color_to_pixel(0));
     if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
     s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                   SDL_TEXTUREACCESS_STREAMING, gw, gh);
@@ -981,6 +982,8 @@ void gfx_get(int id, int x1, int y1, int x2, int y2) {
     for (int row = 0; row < h; row++)
         for (int col = 0; col < w; col++)
             sp.px[(size_t)(row * w + col)] = px_get(x1 + col, y1 + row);
+    // Record the current background fill colour so gfx_put PSET can skip it.
+    sp.bg_color = s_cur_bg & 15;
 }
 
 void gfx_put(int id, int x, int y, int xor_mode) {
@@ -994,12 +997,12 @@ void gfx_put(int id, int x, int y, int xor_mode) {
             Uint32 src = sp.px[(size_t)(row * sp.w + col)];
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
             int ci = px_index(src);
-            Uint32 cur_px = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
             if (xor_mode) {
                 int new_ci = (px_index(s_pixels[pidx]) ^ ci) & 15;
                 s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
-                s_pixels[pidx] = cur_px;
+                if (ci == sp.bg_color) continue;  // background colour at GET time = transparent
+                s_pixels[pidx] = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
             }
         }
     }
@@ -1053,7 +1056,6 @@ void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) 
                 int new_ci = (px_index(s_pixels[pidx]) ^ pal_idx) & 15;
                 s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
-                if (pal_idx == 0) continue;  // color 0 = transparent background
                 s_pixels[pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
             }
         }
@@ -1124,6 +1126,9 @@ void display_spc(int n) {
 }
 
 void display_cursor(int visible) {
+    // In graphics mode the cursor is managed solely by display_getline;
+    // PRINT/INPUT calls to display_cursor must not interfere.
+    if (s_gfx_active) return;
     s_cursor_vis = (visible != 0);
     s_needs_render = true;
 }

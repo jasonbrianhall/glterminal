@@ -905,7 +905,15 @@ static int cmd_select(Interp *ip, char *args) {
             if (sel_is_str) {
                 char cval[1024];
                 t = eval_str_expr(t, cval, sizeof cval);
-                matched = (strcmp(sel_s, cval) == 0);
+                t = sk(t);
+                if (kw_match(t, "TO")) {
+                    t = sk(t + 2);
+                    char cval2[1024];
+                    t = eval_str_expr(t, cval2, sizeof cval2);
+                    matched = (strcmp(sel_s, cval) >= 0 && strcmp(sel_s, cval2) <= 0);
+                } else {
+                    matched = (strcmp(sel_s, cval) == 0);
+                }
             } else if (kw_match(t, "IS")) {
                 /* CASE IS op val */
                 t = sk(t + 2);
