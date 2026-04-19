@@ -1,5 +1,5 @@
 /*
- * main.c — Main interpreter loop, SIGINT handler, interactive REPL,
+ * main.c Main interpreter loop, SIGINT handler, interactive REPL,
  *           and program entry point.
  */
 #include "basic.h"
@@ -38,13 +38,6 @@ static char *strcasestr(char *haystack, char *needle) {
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
-/*
- * C-linkage storage — defined before the namespace opens.
- * BASIC_AUTOLOAD_SYM / BASIC_BREAK_SYM expand to the unique C symbol name
- * for this build variant (e.g. g_autoload_path / g_break for WOPR,
- * fb_autoload_path / fb_g_break for FELIX_BASIC).
- * The host binary references these by their plain C names directly.
- */
 #if defined(WOPR) || defined(FELIX_BASIC)
     char                    BASIC_AUTOLOAD_SYM[DEFAULT_BUFFER] = {0};
     volatile sig_atomic_t   BASIC_BREAK_SYM         = 0;
@@ -53,16 +46,11 @@ static char *strcasestr(char *haystack, char *needle) {
 BASIC_NS_BEGIN
 
 #if defined(WOPR) || defined(FELIX_BASIC)
-/* g_autoload_path is a reference into the C-linkage buffer so host and
- * interpreter share the same storage.  g_break is handled by the macro
- * in basic_ns.h — no namespace-level variable needed. */
+
 char (&g_autoload_path)[DEFAULT_BUFFER] = ::BASIC_AUTOLOAD_SYM;
 #endif
 
 
-/* ================================================================
- * SIGINT handler — sets g_break so the run loop can stop cleanly
- * ================================================================ */
 static void sigint_handler(int sig) {
     (void)sig;
     g_break = 1;
@@ -110,9 +98,6 @@ void run_from(int start_pc) {
 
 
 #ifdef USE_SDL_WINDOW
-    // ------------------------------------------------------------
-    // SDL WINDOW BUILD — real 60 FPS render loop
-    // ------------------------------------------------------------
     Uint32 last_frame = SDL_GetTicks();
 
     while (ip.running && ip.pc < g_nlines && !g_break) {
@@ -156,9 +141,6 @@ void run_from(int start_pc) {
     gfx_sdl_render();
 
 #else
-    // ------------------------------------------------------------
-    // COMMAND-LINE BUILD — original behavior
-    // ------------------------------------------------------------
     while (ip.running && ip.pc < g_nlines && !g_break) {
         int old_pc = ip.pc;
         g_current_pc = old_pc;
@@ -193,9 +175,6 @@ void run_from(int start_pc) {
 
 
 
-/* ================================================================
- * main — direct-run or interactive REPL
- * ================================================================ */
 #if defined(WOPR) || defined(FELIX_BASIC)
 int basic_main(void) {
 #else
@@ -322,9 +301,9 @@ return 0;
         if (_gl_ret < 0) break;   // window closed (SDL_QUIT)
         if (!_gl_ret) {
 #if defined(WOPR) || defined(FELIX_BASIC)
-            break;  /*   kill-switch from host */
+            break;  /* \00 kill-switch from host */
 #else
-            continue;  /* bare Enter in CLI — just loop */
+            continue;  /* bare Enter in CLI just loop */
 #endif
         }
         char *p = line;
@@ -527,7 +506,7 @@ return 0;
 
         } else if (strncasecmp(p,"HELP",4)==0) {
             display_print(
-                "Felix BASIC — Command Reference\n"
+                "Felix BASIC Command Reference\n"
                 "--------------------------------\n"
                 "PROGRAM CONTROL\n"
                 "  NEW              Clear the current program\n"
@@ -565,7 +544,7 @@ return 0;
                 while (isdigit((unsigned char)*scan)) scan++;
                 char *after_digits = scan;
                 while (isspace((unsigned char)*scan)) scan++;
-                int is_expr = (*after_digits != ' ' && !isspace((unsigned char)*after_digits))
+                int is_expr = (*after_digits != '\00' && !isspace((unsigned char)*after_digits))
                               ? strchr("+-*/^\%.", *after_digits) != NULL
                               : (*scan == '+' || *scan == '-' || *scan == '*' ||
                                  *scan == '/' || *scan == '^' || *scan == '%' ||
@@ -611,7 +590,7 @@ return 0;
 BASIC_NS_END
 
 /* ================================================================
- * C-linkage entry points — outside the namespace.
+ * C-linkage entry points outside the namespace.
  *
  *  WOPR build:         extern "C" int basic_main(void)
  *  FELIX_BASIC build:  extern "C" int fb_basic_main(void)
