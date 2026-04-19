@@ -575,9 +575,9 @@ void gfx_sdl_render() {
             render_text_cell(r, c);
 
     //
-    // 3. Draw cursor (in ALL modes)
+    // 3. Draw cursor (text mode only — hidden in graphics modes)
     //
-    if (s_cursor_vis &&
+    if (!s_gfx_active && s_cursor_vis &&
         s_cur_row < s_text_rows &&
         s_cur_col < s_text_cols)
     {
@@ -1053,6 +1053,7 @@ void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) 
                 int new_ci = (px_index(s_pixels[pidx]) ^ pal_idx) & 15;
                 s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
+                if (pal_idx == 0) continue;  // color 0 = transparent background
                 s_pixels[pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
             }
         }
