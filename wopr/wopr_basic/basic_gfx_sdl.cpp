@@ -878,6 +878,39 @@ void gfx_circle(int cx, int cy, int radius, int color) {
     s_needs_render = true;
 }
 
+void gfx_arc(int cx, int cy, int radius, double start_a, double end_a, int color) {
+    if (radius <= 0) return;
+    // QB BASIC arc convention:
+    //   angles in radians, 0 = right (3 o'clock), increase counter-clockwise
+    //   negative angle = draw radius line to that angle endpoint
+    // Normalize: if end <= start, wrap end by adding 2*pi
+    const double PI2 = 6.283185307179586;
+    double sa = start_a, ea = end_a;
+    // Handle negative angles (radius line indicator — just use absolute value)
+    if (sa < 0) sa = -sa;
+    if (ea < 0) ea = -ea;
+    // Normalize to [0, 2pi)
+    while (sa < 0)    sa += PI2;
+    while (sa >= PI2) sa -= PI2;
+    while (ea < 0)    ea += PI2;
+    while (ea >= PI2) ea -= PI2;
+    // If end <= start, arc wraps around
+    if (ea <= sa) ea += PI2;
+    // Step around the arc in small increments
+    int steps = (int)(radius * (ea - sa)) + 4;
+    if (steps < 4) steps = 4;
+    double step = (ea - sa) / steps;
+    for (int i = 0; i <= steps; i++) {
+        double angle = sa + i * step;
+        // QB: 0=right, CCW. In screen coords y increases down, so:
+        // x = cx + r*cos(angle), y = cy - r*sin(angle)
+        int px = cx + (int)(radius * cos(angle) + 0.5);
+        int py = cy - (int)(radius * sin(angle) + 0.5);
+        px_set(px, py, color);
+    }
+    s_needs_render = true;
+}
+
 void gfx_paint(int x, int y, int fill_color, int border_color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
     Uint32 fill   = color_to_pixel(fill_color);
@@ -942,8 +975,6 @@ void gfx_get(int id, int x1, int y1, int x2, int y2) {
     if (x1 > x2) std::swap(x1, x2);
     if (y1 > y2) std::swap(y1, y2);
     int w = x2 - x1 + 1, h = y2 - y1 + 1;
-    fprintf(stderr, "gfx_get: id=%d x1=%d y1=%d x2=%d y2=%d w=%d h=%d gfx=%dx%d\n",
-            id, x1, y1, x2, y2, w, h, s_gfx_w, s_gfx_h);
     Sprite &sp = s_sprites[id];
     sp.w = w; sp.h = h;
     sp.px.resize((size_t)(w * h));
@@ -954,12 +985,8 @@ void gfx_get(int id, int x1, int y1, int x2, int y2) {
 
 void gfx_put(int id, int x, int y, int xor_mode) {
     auto it = s_sprites.find(id);
-    fprintf(stderr, "gfx_put: id=%d x=%d y=%d found=%d sprite_count=%d gfx=%dx%d\n",
-            id, x, y, it != s_sprites.end() ? 1 : 0, (int)s_sprites.size(), s_gfx_w, s_gfx_h);
     if (it == s_sprites.end()) return;
     const Sprite &sp = it->second;
-    fprintf(stderr, "gfx_put: sprite w=%d h=%d pixels=%d\n",
-            sp.w, sp.h, (int)sp.px.size());
     for (int row = 0; row < sp.h; row++) {
         for (int col = 0; col < sp.w; col++) {
             int dx = x + col, dy = y + row;

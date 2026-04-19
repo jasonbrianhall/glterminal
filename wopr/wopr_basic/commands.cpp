@@ -2040,23 +2040,28 @@ static int cmd_circle(Interp *ip, char *args) {
         }
     }
     int color = color_resolve(color_raw);
-    /* consume optional start_angle, end_angle, aspect, filled-flag (QB64 7th param F)
-     * Handle empty args like CIRCLE x,y,r,c,,,F */
-    int filled = 0;
+    /* Parse optional start_angle, end_angle, aspect */
+    double start_angle = 0.0, end_angle = 0.0;
+    int has_arc = 0, filled = 0;
     int arg_n = 0;
     while (*p == ',') {
         p = sk(p + 1);
         if (*p == 'F' || *p == 'f') { filled = 1; p++; continue; }
-        if (*p == ',' || *p == '\0' || *p == ':') continue; /* empty arg */
+        if (*p == ',' || *p == '\0' || *p == ':') { arg_n++; continue; }
         mpf_t tmp; mpf_init2(tmp, g_prec);
         p = sk(eval_expr(p, tmp));
-        mpf_clear(tmp);
+        double val = mpf_get_d(tmp); mpf_clear(tmp);
+        if (arg_n == 0)      { start_angle = val; has_arc = 1; }
+        else if (arg_n == 1) { end_angle   = val; has_arc = 1; }
+        /* arg_n==2 is aspect ratio — ignored */
         arg_n++;
     }
 #ifdef USE_SDL_WINDOW
     if (filled) {
         gfx_circle((int)x, (int)y, (int)(r + 0.5), color);
         gfx_paint((int)x, (int)y, color, color);
+    } else if (has_arc) {
+        gfx_arc((int)x, (int)y, (int)(r + 0.5), start_angle, end_angle, color);
     } else {
         gfx_circle((int)x, (int)y, (int)(r + 0.5), color);
     }

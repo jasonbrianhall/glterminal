@@ -55,6 +55,10 @@ void gfx_boxfill(int x1, int y1, int x2, int y2, int color);
 /* Draw a circle outline. */
 void gfx_circle(int cx, int cy, int radius, int color);
 
+/* Draw a circle arc from start_angle to end_angle (radians, QB convention:
+ * 0=right, increases counter-clockwise). Negative angles draw a radius line. */
+void gfx_arc(int cx, int cy, int radius, double start_angle, double end_angle, int color);
+
 /* Flood-fill from (x,y) with fill_color, stopping at border_color. */
 void gfx_paint(int x, int y, int fill_color, int border_color);
 
@@ -83,7 +87,6 @@ int  gfx_active(void);
 int  gfx_width(void);
 int  gfx_height(void);
 
-/* Clear all captured sprites (call on program restart to avoid stale Var* refs). */
 void gfx_sprites_clear(void);
 
 #ifdef __cplusplus
