@@ -1544,13 +1544,14 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
                             sp++;
                         }
                         pname[pi] = '\0';
-                        /* strip type sigil */
-                        if (pi > 0 && (pname[pi-1]=='!' || pname[pi-1]=='#' ||
-                                       pname[pi-1]=='%' || pname[pi-1]=='&'))
-                            pname[pi-1] = '\0';
+                        /* Keep type sigil (!, #, %, &) — it is part of the var name.
+                         * e.g. FUNCTION Scl(n!) uses n! inside the body. */
                         /* strip AS TYPE annotation */
                         char *as_p = strstr(pname, "AS");
                         if (as_p) *as_p = '\0';
+                        /* strip trailing space left by AS removal */
+                        int plen = strlen(pname);
+                        while (plen > 0 && pname[plen-1] == ' ') pname[--plen] = '\0';
                         if (pname[0]) strncpy(param_names[n_params++], pname, MAX_VARNAME-1);
                         if (*sp == ',') sp++;
                         sp = sk(sp);

@@ -942,6 +942,8 @@ void gfx_get(int id, int x1, int y1, int x2, int y2) {
     if (x1 > x2) std::swap(x1, x2);
     if (y1 > y2) std::swap(y1, y2);
     int w = x2 - x1 + 1, h = y2 - y1 + 1;
+    fprintf(stderr, "gfx_get: id=%d x1=%d y1=%d x2=%d y2=%d w=%d h=%d gfx=%dx%d\n",
+            id, x1, y1, x2, y2, w, h, s_gfx_w, s_gfx_h);
     Sprite &sp = s_sprites[id];
     sp.w = w; sp.h = h;
     sp.px.resize((size_t)(w * h));
@@ -952,17 +954,18 @@ void gfx_get(int id, int x1, int y1, int x2, int y2) {
 
 void gfx_put(int id, int x, int y, int xor_mode) {
     auto it = s_sprites.find(id);
+    fprintf(stderr, "gfx_put: id=%d x=%d y=%d found=%d sprite_count=%d gfx=%dx%d\n",
+            id, x, y, it != s_sprites.end() ? 1 : 0, (int)s_sprites.size(), s_gfx_w, s_gfx_h);
     if (it == s_sprites.end()) return;
     const Sprite &sp = it->second;
+    fprintf(stderr, "gfx_put: sprite w=%d h=%d pixels=%d\n",
+            sp.w, sp.h, (int)sp.px.size());
     for (int row = 0; row < sp.h; row++) {
         for (int col = 0; col < sp.w; col++) {
             int dx = x + col, dy = y + row;
             if (dx < 0 || dy < 0 || dx >= s_gfx_w || dy >= s_gfx_h) continue;
             Uint32 src = sp.px[(size_t)(row * sp.w + col)];
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
-            // Re-resolve palette index to *current* palette RGB at blit time.
-            // The sprite was captured when the palette may have been remapped
-            // (e.g. gorilla invisible trick), so we must not blit stale RGB.
             int ci = px_index(src);
             Uint32 cur_px = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
             if (xor_mode) {
