@@ -994,9 +994,10 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
-    /* _NEWIMAGE(w, h, depth) — QB64 compat: pick a screen mode by size.
-     * We ignore depth (always palette mode) and return a fake mode number
-     * that cmd_screen will interpret via screen_dims matching. */
+    /* _NEWIMAGE(w, h, depth) — QB64 compat.
+     * depth=32 → truecolor: encode as negative value -(w*100000 + h) so
+     * cmd_screen can decode width/height and call gfx_screen_tc().
+     * Other depths → pick nearest standard palette mode. */
     if (kw_match(ps->p, "_NEWIMAGE")) {
         ps->p += 9; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
         mpf_t mw; mpf_init2(mw, g_prec); parse_expr_p(ps, mw);
@@ -1004,14 +1005,19 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         skip_ws_p(ps); if (*ps->p == ',') ps->p++;
         mpf_t mh; mpf_init2(mh, g_prec); parse_expr_p(ps, mh);
         int nh = (int)mpf_get_si(mh); mpf_clear(mh);
-        /* consume depth arg if present */
-        skip_ws_p(ps); if (*ps->p == ',') { ps->p++; mpf_t md; mpf_init2(md, g_prec); parse_expr_p(ps, md); mpf_clear(md); }
+        int depth = 0;
+        skip_ws_p(ps); if (*ps->p == ',') { ps->p++; mpf_t md; mpf_init2(md, g_prec); parse_expr_p(ps, md); depth=(int)mpf_get_si(md); mpf_clear(md); }
         skip_ws_p(ps); if (*ps->p == ')') ps->p++;
-        /* Pick best matching standard mode: prefer 12(640x480), 23(800x600), 9(640x350) */
-        int best = 12;
-        if (nw >= 800 || nh >= 600) best = 23;
-        else if (nh <= 350)         best = 9;
-        mpf_set_si(result, best);
+        if (depth == 32) {
+            /* Encode: negative, upper bits = w, lower 5 digits = h */
+            long encoded = -((long)nw * 100000L + (long)nh);
+            mpf_set_si(result, encoded);
+        } else {
+            int best = 12;
+            if (nw >= 800 || nh >= 600) best = 23;
+            else if (nh <= 350)         best = 9;
+            mpf_set_si(result, best);
+        }
         return;
     }
 

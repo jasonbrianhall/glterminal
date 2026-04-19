@@ -17,6 +17,10 @@ extern "C" {
 
 /* ── Lifecycle ─────────────────────────────────────────────────────────────── */
 
+/* Open a truecolor (32-bit ARGB) graphics surface of arbitrary size.
+ * No palette — colors passed to gfx_* are 0x00RRGGBB packed values. */
+void gfx_screen_tc(int w, int h);
+
 /* Set the active SCREEN mode (0 = text, 1-28 = graphics).
  * Allocates / resizes the pixel buffer and SDL texture as needed.
  * mode 0 destroys the graphics surface and returns to text mode. */

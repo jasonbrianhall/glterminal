@@ -98,6 +98,7 @@ static SDL_Texture         *s_gfx_tex = nullptr;
 static std::vector<Uint32>  s_pixels;          // ARGB, gfx_w × gfx_h
 static int                  s_gfx_w = 0, s_gfx_h = 0;
 static bool                 s_gfx_active = false;
+static bool                 s_truecolor  = false;  // true when SCREEN _NEWIMAGE(...,32)
 
 // ============================================================================
 // Sprite store
@@ -546,8 +547,8 @@ void gfx_sdl_render() {
     //
     if (s_gfx_active && s_gfx_tex) {
         SDL_RenderSetViewport(s_renderer, nullptr);
-        // s_pixels stores palette index in the alpha byte (0xIIRRGGBB).
-        // SDL texture needs proper 0xFF alpha for opaque rendering.
+        // Palette mode: alpha byte holds palette index — replace with 0xFF for rendering.
+        // Truecolor mode: pixels already have 0xFF alpha, OR is a no-op.
         std::vector<Uint32> tex_pixels(s_pixels.size());
         for (size_t i = 0; i < s_pixels.size(); i++)
             tex_pixels[i] = s_pixels[i] | 0xFF000000u;
@@ -602,13 +603,22 @@ void gfx_sdl_mark_dirty() { s_needs_render = true; }
 
 // ============================================================================
 // Pixel helpers
-// Pixel format: 0xIIRRGGBB where II = palette index (0-15), stored in alpha slot.
-// This lets XOR mode operate on the index exactly like EGA hardware.
+// Palette mode:   0xIIRRGGBB where II = palette index (0-15) in alpha slot.
+// Truecolor mode: 0xFFRRGGBB — full ARGB, alpha always 0xFF.
 // ============================================================================
+static inline Uint32 color_to_pixel(int color) {
+    if (s_truecolor) {
+        // color is 0x00RRGGBB from _RGB() or similar
+        return 0xFF000000u | (Uint32)(color & 0x00FFFFFFu);
+    } else {
+        int idx = color & 15;
+        return ((Uint32)idx << 24) | (s_pal[idx] & 0x00FFFFFFu);
+    }
+}
+
 static inline void px_set(int x, int y, int color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
-    int idx = color & 15;
-    s_pixels[(size_t)(y * s_gfx_w + x)] = ((Uint32)idx << 24) | (s_pal[idx] & 0x00FFFFFFu);
+    s_pixels[(size_t)(y * s_gfx_w + x)] = color_to_pixel(color);
 }
 
 static inline Uint32 px_get(int x, int y) {
@@ -616,7 +626,7 @@ static inline Uint32 px_get(int x, int y) {
     return s_pixels[(size_t)(y * s_gfx_w + x)];
 }
 
-// Extract the stored palette index from a pixel value
+// Extract the stored palette index from a pixel value (palette mode only)
 static inline int px_index(Uint32 pixel) {
     return (int)((pixel >> 24) & 0xFF) & 15;
 }
@@ -684,7 +694,35 @@ static void screen_mode_dims(int mode, int *w, int *h) {
         if (MODES[i].m == mode) { *w = MODES[i].w; *h = MODES[i].h; return; }
 }
 
+void gfx_screen_tc(int w, int h) {
+    // Truecolor SCREEN — no palette, direct 32-bit ARGB pixels
+    s_truecolor = true;
+    gfx_palette_reset();
+    s_gfx_w = w; s_gfx_h = h;
+    // Size window to fit display
+    {
+        SDL_DisplayMode dm;
+        int disp = s_window ? SDL_GetWindowDisplayIndex(s_window) : 0;
+        if (SDL_GetCurrentDisplayMode(disp, &dm) != 0) { dm.w = 1920; dm.h = 1080; }
+        int max_w = (int)(dm.w * 0.92f), max_h = (int)(dm.h * 0.92f);
+        int scale = 1;
+        while ((w*(scale+1)) <= max_w && (h*(scale+1)) <= max_h) scale++;
+        s_win_w = w * scale; s_win_h = h * scale;
+        if (s_window) SDL_SetWindowSize(s_window, s_win_w, s_win_h);
+    }
+    s_pixels.assign((size_t)(w * h), 0xFF000000u);
+    if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
+    s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
+                                  SDL_TEXTUREACCESS_STREAMING, w, h);
+    SDL_SetTextureBlendMode(s_gfx_tex, SDL_BLENDMODE_NONE);
+    s_gfx_active = true;
+    s_text_cols = TEXT_COLS_DEF; s_text_rows = TEXT_ROWS_DEF;
+    ft_set_size_for_window();
+    s_needs_render = true;
+}
+
 void gfx_screen(int mode) {
+    s_truecolor = false;
     gfx_palette_reset();   // SCREEN always resets palette to CGA defaults
     if (mode == 0) {
         s_gfx_active = false;
@@ -840,10 +878,8 @@ void gfx_circle(int cx, int cy, int radius, int color) {
 
 void gfx_paint(int x, int y, int fill_color, int border_color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
-    int fill_idx   = fill_color   & 15;
-    int border_idx = border_color & 15;
-    Uint32 fill   = ((Uint32)fill_idx   << 24) | (s_pal[fill_idx]   & 0x00FFFFFFu);
-    Uint32 border = ((Uint32)border_idx << 24) | (s_pal[border_idx] & 0x00FFFFFFu);
+    Uint32 fill   = color_to_pixel(fill_color);
+    Uint32 border = color_to_pixel(border_color);
 
     /* Border fill: paint all connected pixels that are NOT the border color.
      * Unlike flood fill, interior pixel colors are irrelevant — only the

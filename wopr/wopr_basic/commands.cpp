@@ -19,29 +19,13 @@ void gfx_sdl_render(void);
 
 BASIC_NS_BEGIN
 
-/* Resolve a color value: if it has the 0x01000000 truecolor flag set (from
- * _RGB), find the nearest CGA palette entry by RGB distance.
- * Otherwise treat as a palette index 0-15. */
+/* Resolve a color value from _RGB() encoding (0x01RRGGBB) to a raw 0x00RRGGBB
+ * int that gfx_* functions accept. In truecolor mode gfx_* uses the full value;
+ * in palette mode gfx_* takes only the low 4 bits (palette index). */
 static int color_resolve(long packed) {
-    if ((packed & 0xFF000000L) != 0x01000000L)
-        return (int)(packed & 15);
-    int r = (int)((packed >> 16) & 0xFF);
-    int g = (int)((packed >>  8) & 0xFF);
-    int b = (int)( packed        & 0xFF);
-    /* Standard CGA/EGA 16-color palette (RGB) */
-    static const int pal[16][3] = {
-        {  0,  0,  0},{  0,  0,170},{  0,170,  0},{  0,170,170},
-        {170,  0,  0},{170,  0,170},{170, 85,  0},{170,170,170},
-        { 85, 85, 85},{ 85, 85,255},{ 85,255, 85},{ 85,255,255},
-        {255, 85, 85},{255, 85,255},{255,255, 85},{255,255,255}
-    };
-    int best = 0, bestd = 0x7fffffff;
-    for (int i = 0; i < 16; i++) {
-        int dr = r - pal[i][0], dg = g - pal[i][1], db = b - pal[i][2];
-        int d = dr*dr + dg*dg + db*db;
-        if (d < bestd) { bestd = d; best = i; }
-    }
-    return best;
+    if ((packed & 0xFF000000L) == 0x01000000L)
+        return (int)(packed & 0x00FFFFFFu);  /* strip our flag byte → 0x00RRGGBB */
+    return (int)(packed & 0x00FFFFFFu);      /* already a plain value */
 }
 
 
@@ -345,16 +329,32 @@ static int cmd_screen(Interp *ip, char *args) {
     if (!*p || *p == ':') return 0;
     mpf_t n; mpf_init2(n, g_prec);
     eval_expr(p, n);
-    int mode = (int)mpf_get_si(n);
+    long encoded = mpf_get_si(n);
     mpf_clear(n);
-    g_screen_mode = mode;
-    screen_dims(mode, &g_screen_width, &g_screen_height);
+    if (encoded < 0) {
+        /* Truecolor sentinel from _NEWIMAGE(w,h,32): encoded = -(w*100000+h) */
+        long val = -encoded;
+        int tw = (int)(val / 100000L);
+        int th = (int)(val % 100000L);
+        g_screen_mode = -1;  /* truecolor pseudo-mode */
+        g_screen_width  = tw;
+        g_screen_height = th;
 #ifdef USE_SDL_WINDOW
-    gfx_screen(mode);   /* allocates / frees the pixel buffer directly */
+        gfx_screen_tc(tw, th);
 #else
-    if (mode == 0) felix_draw("cls;0");
-    else           felix_sendf("screen;%d", mode);
+        felix_sendf("screen;12");  /* best fallback */
 #endif
+    } else {
+        int mode = (int)encoded;
+        g_screen_mode = mode;
+        screen_dims(mode, &g_screen_width, &g_screen_height);
+#ifdef USE_SDL_WINDOW
+        gfx_screen(mode);
+#else
+        if (mode == 0) felix_draw("cls;0");
+        else           felix_sendf("screen;%d", mode);
+#endif
+    }
     return 0;
 }
 static int cmd_beep(Interp *ip, char *args) {
@@ -2023,9 +2023,11 @@ static int cmd_circle(Interp *ip, char *args) {
     long color_raw = 15;
     if (*p == ',') {
         p = sk(p + 1);
-        mpf_t mc; mpf_init2(mc, g_prec);
-        p = sk(eval_expr(p, mc));
-        color_raw = mpf_get_si(mc); mpf_clear(mc);
+        if (*p != ',' && *p != ' ' && *p != ':') {
+            mpf_t mc; mpf_init2(mc, g_prec);
+            p = sk(eval_expr(p, mc));
+            color_raw = mpf_get_si(mc); mpf_clear(mc);
+        }
     }
     int color = color_resolve(color_raw);
     /* consume optional start_angle, end_angle, aspect, filled-flag (QB64 7th param F)
