@@ -276,6 +276,7 @@ void load(char *filename) {
                 for (c = p; *c; c++) {
                     if (*c == '"') { in_str = !in_str; continue; }
                     if (in_str) continue;
+                    if (*c == '\'') { *c = '\0'; if (*seg && !(strncasecmp(seg,"REM",3)==0 && !isalnum((unsigned char)seg[3]))) STORE_SEG(num, seg); seg = NULL; break; }
                     if (*c == ':') {
                         *c = '\0';
                         STORE_SEG(num, seg);
@@ -437,7 +438,8 @@ void load(char *filename) {
             for (c = p; *c; c++) {
                 if (*c == '"') { in_str = !in_str; continue; }
                 if (in_str) continue;
-                if (*c == ':') {
+                if (*c == '\'') { *c = '\0'; if (*seg) STORE_FREE(seg); seg = NULL; break; }
+                    if (*c == ':') {
                     /* peek ahead: is the colon immediately followed by a
                        label-continuation (alpha + eventual ':')? 
                        No — just treat it as a statement separator. */

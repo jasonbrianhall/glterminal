@@ -2774,6 +2774,8 @@ static int split_statements(char *line, char *segs[], char **buf_out) {
             while (isspace((unsigned char)*rest)) rest++;
             if (strncasecmp(rest,"REM",3)==0 && !isalnum((unsigned char)rest[3]) && rest[3]!='_')
                 { *p = '\0'; break; }
+            if (*rest == '\'')
+                { *p = '\0'; break; }
             if (strncasecmp(rest,"IF",2)==0 && !isalnum((unsigned char)rest[2]) && rest[2]!='_')
                 { *p = '\0'; if (n < MAX_STMTS) segs[n++] = rest; break; }
             *p = '\0';
