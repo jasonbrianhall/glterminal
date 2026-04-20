@@ -17,6 +17,11 @@ bool gfx_sdl_pump(void);
 void gfx_sdl_render(void);
 #endif
 
+/* gfx_screen_ex lives in global scope (like all gfx_* functions). */
+#ifdef USE_SDL_WINDOW
+void gfx_screen_ex(int mode, int colorswitch, int apage, int vpage);
+#endif
+
 BASIC_NS_BEGIN
 
 /* Current Graphics Position — updated by PSET, PRESET, LINE endpoint */
@@ -334,33 +339,54 @@ static int cmd_delay(Interp *ip, char *args) {
 /* ================================================================
  * SCREEN mode
  * ================================================================ */
+
+
 static int cmd_screen(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
     if (!*p || *p == ':') return 0;
+
+    /* Parse up to 4 args: mode [, colorswitch [, apage [, vpage]]] */
+    auto next_arg = [&](long def) -> long {
+        if (*p == ',') {
+            p = sk(p + 1);
+            if (*p == ',' || *p == ':' || *p == ' ') return def;
+            mpf_t n; mpf_init2(n, g_prec);
+            p = sk(eval_expr(p, n));
+            long v = mpf_get_si(n); mpf_clear(n);
+            return v;
+        }
+        return def;
+    };
+
     mpf_t n; mpf_init2(n, g_prec);
-    eval_expr(p, n);
+    p = sk(eval_expr(p, n));
     long encoded = mpf_get_si(n);
     mpf_clear(n);
+
+    long colorswitch = next_arg(0);
+    long apage       = next_arg(-1);   /* -1 = unchanged */
+    long vpage       = next_arg(-1);   /* -1 = unchanged */
+
     if (encoded < 0) {
         /* Truecolor sentinel from _NEWIMAGE(w,h,32): encoded = -(w*100000+h) */
         long val = -encoded;
         int tw = (int)(val / 100000L);
         int th = (int)(val % 100000L);
-        g_screen_mode = -1;  /* truecolor pseudo-mode */
+        g_screen_mode = -1;
         g_screen_width  = tw;
         g_screen_height = th;
 #ifdef USE_SDL_WINDOW
         gfx_screen_tc(tw, th);
 #else
-        felix_sendf("screen;12");  /* best fallback */
+        felix_sendf("screen;12");
 #endif
     } else {
         int mode = (int)encoded;
         g_screen_mode = mode;
         screen_dims(mode, &g_screen_width, &g_screen_height);
 #ifdef USE_SDL_WINDOW
-        gfx_screen(mode);
+        ::gfx_screen_ex(mode, (int)colorswitch, (int)apage, (int)vpage);
         g_gfx_x = 0.0; g_gfx_y = 0.0;  /* reset Current Graphics Position */
 #else
         if (mode == 0) felix_draw("cls;0");

@@ -69,6 +69,12 @@ void gfx_maybe_mark_dirty();
  * Also triggered by F11 in the event pump.
  */
 void gfx_sdl_set_fullscreen(bool fs);
+
+/*
+ * gfx_screen_ex — extended SCREEN init with page support.
+ * apage = active draw page (-1 = unchanged), vpage = visible page (-1 = unchanged).
+ */
+void gfx_screen_ex(int mode, int colorswitch, int apage, int vpage);
 void gfx_sdl_toggle_fullscreen(void);
 
 /* Reset all 16 palette slots to CGA defaults */
