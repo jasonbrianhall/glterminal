@@ -94,17 +94,11 @@ static Uint32        s_last_dirty = 0;
 // ============================================================================
 // Graphics surface
 // ============================================================================
-static SDL_Texture         *s_gfx_tex  = nullptr;
-static const int            GFX_PAGES  = 4;
-static std::vector<Uint32>  s_pages[GFX_PAGES]; // ARGB pixel buffers, one per page
-static int                  s_draw_page = 0;     // page written to by gfx_* calls
-static int                  s_vis_page  = 0;     // page shown by gfx_sdl_render()
-// Convenience reference — always points to s_pages[s_draw_page]
-static std::vector<Uint32> *s_pixels_ptr = &s_pages[0];
+static SDL_Texture         *s_gfx_tex = nullptr;
+static std::vector<Uint32>  s_pixels;          // ARGB, gfx_w × gfx_h
 static int                  s_gfx_w = 0, s_gfx_h = 0;
 static bool                 s_gfx_active = false;
 static bool                 s_truecolor  = false;  // true when SCREEN _NEWIMAGE(...,32)
-static float                s_par        = 1.0f;   // pixel aspect ratio (Y stretch)
 
 // ============================================================================
 // Sprite store
@@ -559,13 +553,12 @@ void gfx_sdl_render() {
         SDL_RenderSetViewport(s_renderer, nullptr);
         // Palette mode: alpha byte holds palette index — replace with 0xFF for rendering.
         // Truecolor mode: pixels already have 0xFF alpha, OR is a no-op.
-        std::vector<Uint32> &vis = s_pages[s_vis_page];
-        std::vector<Uint32> tex_pixels(vis.size());
-        for (size_t i = 0; i < vis.size(); i++)
-            tex_pixels[i] = vis[i] | 0xFF000000u;
+        std::vector<Uint32> tex_pixels(s_pixels.size());
+        for (size_t i = 0; i < s_pixels.size(); i++)
+            tex_pixels[i] = s_pixels[i] | 0xFF000000u;
         SDL_UpdateTexture(s_gfx_tex, nullptr, tex_pixels.data(), s_gfx_w * 4);
-        // Window was sized to gfx_w*scale × gfx_h*PAR*scale so stretching
-        // to fill gives correct pixel aspect ratio for the active SCREEN mode.
+        // Window was sized to an exact integer multiple of the pixel buffer,
+        // so stretch to fill — this gives pixel-perfect integer scaling.
         SDL_Rect dst = { 0, 0, s_win_w, s_win_h };
         SDL_RenderCopy(s_renderer, s_gfx_tex, nullptr, &dst);
     }
@@ -612,20 +605,6 @@ void gfx_sdl_render() {
 
 void gfx_sdl_mark_dirty() { s_needs_render = true; }
 
-/* Switch active draw page and/or visual (display) page.
- * Pass -1 to leave a page unchanged. QB4 SCREEN mode, colorBurst, aPage, vPage. */
-extern "C" void gfx_set_pages(int draw_page, int vis_page) {
-    if (!s_gfx_active) return;
-    if (draw_page >= 0 && draw_page < GFX_PAGES) {
-        s_draw_page  = draw_page;
-        s_pixels_ptr = &s_pages[draw_page];
-    }
-    if (vis_page >= 0 && vis_page < GFX_PAGES) {
-        s_vis_page = vis_page;
-        s_needs_render = true;
-    }
-}
-
 // ============================================================================
 // Pixel helpers
 // Palette mode:   0xIIRRGGBB where II = palette index (0-15) in alpha slot.
@@ -643,12 +622,12 @@ static inline Uint32 color_to_pixel(int color) {
 
 static inline void px_set(int x, int y, int color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
-    (*s_pixels_ptr)[(size_t)(y * s_gfx_w + x)] = color_to_pixel(color);
+    s_pixels[(size_t)(y * s_gfx_w + x)] = color_to_pixel(color);
 }
 
 static inline Uint32 px_get(int x, int y) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return 0;
-    return (*s_pixels_ptr)[(size_t)(y * s_gfx_w + x)];
+    return s_pixels[(size_t)(y * s_gfx_w + x)];
 }
 
 // Extract the stored palette index from a pixel value (palette mode only)
@@ -719,38 +698,9 @@ static void screen_mode_dims(int mode, int *w, int *h) {
         if (MODES[i].m == mode) { *w = MODES[i].w; *h = MODES[i].h; return; }
 }
 
-/* Pixel aspect ratio for each SCREEN mode: how many window-pixels tall one
- * logical pixel should appear, relative to its width = 1.
- * All of these were designed for a 4:3 CGA/EGA/VGA monitor.
- *   640×200 → needs 2.4× Y stretch  (5:12 dot clock on 4:3 screen)
- *   320×200 → needs 1.2× Y stretch
- *   640×350 → needs ~1.37× Y stretch
- *   Everything at 640×480 or 640×400 is already square (1.0)
- */
-static float screen_mode_par(int mode) {
-    switch (mode) {
-        // 640×200 modes
-        case  2: case  8: case 15: case 26: case 27: return 2.4f;
-        // 320×200 modes
-        case  1: case  5: case  7: case 13: case 14:
-        case 24: case 25: return 1.2f;
-        // 160×200
-        case  6: return 1.2f;
-        // 640×350 EGA
-        case  9: case 10: return 480.0f / 350.0f;  // ~1.371
-        // 720×350
-        case 28: return 480.0f / 350.0f;
-        // 720×348
-        case  3: return 1.0f;
-        // Everything else is square
-        default: return 1.0f;
-    }
-}
-
 void gfx_screen_tc(int w, int h) {
-    // Truecolor SCREEN — no palette, direct 32-bit ARGB pixels, always square
+    // Truecolor SCREEN — no palette, direct 32-bit ARGB pixels
     s_truecolor = true;
-    s_par = 1.0f;
     gfx_palette_reset();
     s_gfx_w = w; s_gfx_h = h;
     // Size window to fit display
@@ -764,10 +714,7 @@ void gfx_screen_tc(int w, int h) {
         s_win_w = w * scale; s_win_h = h * scale;
         if (s_window) SDL_SetWindowSize(s_window, s_win_w, s_win_h);
     }
-    for (int p = 0; p < GFX_PAGES; p++)
-        s_pages[p].assign((size_t)(w * h), 0xFF000000u);
-    s_draw_page = 0; s_vis_page = 0;
-    s_pixels_ptr = &s_pages[0];
+    s_pixels.assign((size_t)(w * h), 0xFF000000u);
     if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
     s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                   SDL_TEXTUREACCESS_STREAMING, w, h);
@@ -784,9 +731,7 @@ void gfx_screen(int mode) {
     if (mode == 0) {
         s_gfx_active = false;
         if (s_gfx_tex) { SDL_DestroyTexture(s_gfx_tex); s_gfx_tex = nullptr; }
-        for (int p = 0; p < GFX_PAGES; p++) s_pages[p].clear();
-        s_gfx_w = s_gfx_h = 0;
-        s_draw_page = 0; s_vis_page = 0; s_pixels_ptr = &s_pages[0];
+        s_pixels.clear(); s_gfx_w = s_gfx_h = 0;
         ft_set_size_for_window();  // recompute cols/rows for text mode
         s_needs_render = true;
         return;
@@ -794,12 +739,9 @@ void gfx_screen(int mode) {
     int gw, gh;
     screen_mode_dims(mode, &gw, &gh);
     s_gfx_w = gw; s_gfx_h = gh;
-    s_par = screen_mode_par(mode);
 
     // Resize the window to show this mode at the best integer scale that
     // fits the current display, with a minimum of 1×.
-    // For non-square-pixel modes (e.g. 640×200 with PAR=2.4), we size the
-    // window so that the stretched pixel height also fits.
     {
         SDL_DisplayMode dm;
         int disp = s_window ? SDL_GetWindowDisplayIndex(s_window) : 0;
@@ -810,21 +752,16 @@ void gfx_screen(int mode) {
         int max_w = (int)(dm.w * 0.92f);
         int max_h = (int)(dm.h * 0.92f);
         int scale = 1;
-        // Grow scale while BOTH the pixel-width and the PAR-corrected pixel-height fit
-        while ((gw * (scale + 1)) <= max_w &&
-               ((int)(gh * s_par + 0.5f) * (scale + 1)) <= max_h)
+        while ((gw * (scale + 1)) <= max_w && (gh * (scale + 1)) <= max_h)
             scale++;
         int win_w = gw * scale;
-        int win_h = (int)(gh * s_par * scale + 0.5f);
+        int win_h = gh * scale;
         if (s_window) SDL_SetWindowSize(s_window, win_w, win_h);
         s_win_w = win_w;
         s_win_h = win_h;
     }
 
-    for (int p = 0; p < GFX_PAGES; p++)
-        s_pages[p].assign((size_t)(gw * gh), color_to_pixel(0));
-    s_draw_page = 0; s_vis_page = 0;
-    s_pixels_ptr = &s_pages[0];
+    s_pixels.assign((size_t)(gw * gh), color_to_pixel(0));
     if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
     s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                   SDL_TEXTUREACCESS_STREAMING, gw, gh);
@@ -846,7 +783,7 @@ void gfx_palette(int idx, int r, int g, int b) {
     // Update RGB of any pixel in the buffer already using this index
     Uint32 new_rgb = s_pal[idx] & 0x00FFFFFFu;
     Uint32 tag     = (Uint32)idx << 24;
-    for (auto &px : (*s_pixels_ptr)) {
+    for (auto &px : s_pixels) {
         if ((px >> 24) == (Uint32)idx)
             px = tag | new_rgb;
     }
@@ -862,7 +799,7 @@ void gfx_cls(int color) {
     if (s_gfx_active) {
         int ci = color & 15;
         Uint32 fill = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
-        std::fill((*s_pixels_ptr).begin(), (*s_pixels_ptr).end(), fill);
+        std::fill(s_pixels.begin(), s_pixels.end(), fill);
     }
 
     // 2. Clear text grid to the same background colour
@@ -888,7 +825,7 @@ void gfx_pset(int x, int y, int color) {
 
 int gfx_point(int x, int y) {
     if (!s_gfx_active || x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return -1;
-    return px_index((*s_pixels_ptr)[(size_t)(y * s_gfx_w + x)]);
+    return px_index(s_pixels[(size_t)(y * s_gfx_w + x)]);
 }
 
 void gfx_line(int x0, int y0, int x1, int y1, int color) {
@@ -923,92 +860,54 @@ void gfx_boxfill(int x1, int y1, int x2, int y2, int color) {
     int ci = color & 15;
     Uint32 col = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
     for (int y = y1; y <= y2; y++) {
-        Uint32 *row = (*s_pixels_ptr).data() + (size_t)(y * s_gfx_w);
+        Uint32 *row = s_pixels.data() + (size_t)(y * s_gfx_w);
         std::fill(row + x1, row + x2 + 1, col);
     }
     s_needs_render = true;
 }
 
-/* Draw an ellipse using the midpoint algorithm.
- * rx = horizontal radius (pixels), ry = vertical radius (pixels).
- * When s_par != 1.0, callers pass ry = radius / s_par so that the
- * SDL stretch blit makes it appear circular on screen. */
-static void draw_ellipse(int cx, int cy, int rx, int ry, int color) {
-    if (rx <= 0 || ry <= 0) return;
-    long long rx2 = (long long)rx * rx;
-    long long ry2 = (long long)ry * ry;
-    long long x = rx, y = 0;
-    long long dx = 2 * ry2 * x;
-    long long dy = 0;
-    long long err = rx2 - ry2 * rx + ry2 / 4;  /* starting error */
-
-    /* Region 1 — slope |dy/dx| < 1 */
-    while (dx > dy) {
-        px_set((int)(cx + x), (int)(cy + y), color);
-        px_set((int)(cx - x), (int)(cy + y), color);
-        px_set((int)(cx + x), (int)(cy - y), color);
-        px_set((int)(cx - x), (int)(cy - y), color);
-        y++;
-        dy += 2 * rx2;
-        if (err < 0) {
-            err += dy + rx2;
-        } else {
-            x--;
-            dx -= 2 * ry2;
-            err += dy - dx + rx2;
-        }
-    }
-    /* Region 2 — slope |dy/dx| >= 1 */
-    err = (long long)(ry2 * (x + 0.5) * (x + 0.5) + rx2 * (y - 1) * (y - 1) - rx2 * ry2);
-    while (y <= ry) {
-        px_set((int)(cx + x), (int)(cy + y), color);
-        px_set((int)(cx - x), (int)(cy + y), color);
-        px_set((int)(cx + x), (int)(cy - y), color);
-        px_set((int)(cx - x), (int)(cy - y), color);
-        y++;
-        dy += 2 * rx2;
-        if (err > 0) {
-            err += rx2 - dy;
-        } else {
-            x++;
-            dx += 2 * ry2;
-            err += dx + rx2 - dy;
-        }
-    }
-}
-
 void gfx_circle(int cx, int cy, int radius, int color) {
-    /* Apply inverse PAR to Y radius so the SDL stretch makes it look circular. */
-    int ry = (s_par > 1.001f) ? (int)(radius / s_par + 0.5f) : radius;
-    draw_ellipse(cx, cy, radius, ry, color);
+    int x = radius, y = 0, err = 0;
+    while (x >= y) {
+        px_set(cx+x, cy+y, color); px_set(cx+y, cy+x, color);
+        px_set(cx-y, cy+x, color); px_set(cx-x, cy+y, color);
+        px_set(cx-x, cy-y, color); px_set(cx-y, cy-x, color);
+        px_set(cx+y, cy-x, color); px_set(cx+x, cy-y, color);
+        y++;
+        if (err <= 0) err += 2*y + 1;
+        else          { x--; err += 2*(y - x) + 1; }
+    }
     s_needs_render = true;
 }
 
 void gfx_arc(int cx, int cy, int radius, double start_a, double end_a, int color) {
     if (radius <= 0) return;
-    /* Apply inverse PAR to Y radius — same correction as gfx_circle. */
-    double ry = (s_par > 1.001f) ? (radius / s_par) : (double)radius;
-
     // QB BASIC arc convention:
     //   angles in radians, 0 = right (3 o'clock), increase counter-clockwise
     //   negative angle = draw radius line to that angle endpoint
+    // Normalize: if end <= start, wrap end by adding 2*pi
     const double PI2 = 6.283185307179586;
     double sa = start_a, ea = end_a;
+    // Handle negative angles (radius line indicator — just use absolute value)
     if (sa < 0) sa = -sa;
     if (ea < 0) ea = -ea;
+    // Normalize to [0, 2pi)
     while (sa < 0)    sa += PI2;
     while (sa >= PI2) sa -= PI2;
     while (ea < 0)    ea += PI2;
     while (ea >= PI2) ea -= PI2;
+    // If end <= start, arc wraps around
     if (ea <= sa) ea += PI2;
-    // Use enough steps for smooth arc at the larger of rx/ry
+    // Step around the arc in small increments
     int steps = (int)(radius * (ea - sa)) + 4;
     if (steps < 4) steps = 4;
     double step = (ea - sa) / steps;
     for (int i = 0; i <= steps; i++) {
         double angle = sa + i * step;
+        // QB: 0=right, CCW. In screen coords y increases down, so:
+        // x = cx + r*cos(angle), y = cy - r*sin(angle)
         int px = cx + (int)(radius * cos(angle) + 0.5);
-        int py = cy - (int)(ry     * sin(angle) + 0.5);
+        int py = cy - (int)(radius * sin(angle) + 0.5);
         px_set(px, py, color);
     }
     s_needs_render = true;
@@ -1042,7 +941,7 @@ void gfx_paint(int x, int y, int fill_color, int border_color) {
 
         /* Fill the span */
         for (int i = nx0; i <= nx1; i++)
-            (*s_pixels_ptr)[(size_t)(sy * s_gfx_w + i)] = fill;
+            s_pixels[(size_t)(sy * s_gfx_w + i)] = fill;
 
         /* Push child spans in forward direction */
         int ny = sy + dy;
@@ -1100,11 +999,11 @@ void gfx_put(int id, int x, int y, int xor_mode) {
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
             int ci = px_index(src);
             if (xor_mode) {
-                int new_ci = (px_index((*s_pixels_ptr)[pidx]) ^ ci) & 15;
-                (*s_pixels_ptr)[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
+                int new_ci = (px_index(s_pixels[pidx]) ^ ci) & 15;
+                s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
                 if (ci == sp.bg_color) continue;  // background colour at GET time = transparent
-                (*s_pixels_ptr)[pidx] = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
+                s_pixels[pidx] = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
             }
         }
     }
@@ -1155,10 +1054,10 @@ void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) 
             if (dx < 0 || dy < 0 || dx >= s_gfx_w || dy >= s_gfx_h) continue;
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
             if (xor_mode) {
-                int new_ci = (px_index((*s_pixels_ptr)[pidx]) ^ pal_idx) & 15;
-                (*s_pixels_ptr)[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
+                int new_ci = (px_index(s_pixels[pidx]) ^ pal_idx) & 15;
+                s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
-                (*s_pixels_ptr)[pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
+                s_pixels[pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
             }
         }
     }

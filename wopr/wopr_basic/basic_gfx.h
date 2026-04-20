@@ -89,11 +89,6 @@ int  gfx_height(void);
 
 void gfx_sprites_clear(void);
 
-/* Page flipping — QB4 SCREEN aPage, vPage semantics.
- * draw_page: page written to by gfx_* calls (-1 = no change).
- * vis_page:  page shown by the renderer           (-1 = no change). */
-void gfx_set_pages(int draw_page, int vis_page);
-
 #ifdef __cplusplus
 }
 #endif

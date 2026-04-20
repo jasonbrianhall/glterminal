@@ -28,12 +28,6 @@ static int color_resolve(long packed) {
     return (int)(packed & 0x00FFFFFFu);      /* already a plain value */
 }
 
-/* ================================================================
- * Graphics pen position — updated by LINE, PSET, PRESET.
- * LINE -(x,y) draws from the last pen position (QB4 semantics).
- * ================================================================ */
-static double s_pen_x = 0.0, s_pen_y = 0.0;
-
 
 /* Expand a leading ~/ or ~ to $HOME in-place */
 static void tilde_expand(char *buf, int bufsz) {
@@ -341,67 +335,34 @@ static int cmd_screen(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
     if (!*p || *p == ':') return 0;
-
-    /* Truecolor sentinel: _NEWIMAGE(w,h,32) encodes as a single large negative.
-     * Detect this before comma-splitting since it's the entire first arg. */
-    {
-        mpf_t n; mpf_init2(n, g_prec);
-        eval_expr(p, n);
-        long encoded = mpf_get_si(n);
-        mpf_clear(n);
-        if (encoded < 0) {
-            long val = -encoded;
-            int tw = (int)(val / 100000L);
-            int th = (int)(val % 100000L);
-            g_screen_mode = -1;
-            g_screen_width  = tw;
-            g_screen_height = th;
+    mpf_t n; mpf_init2(n, g_prec);
+    eval_expr(p, n);
+    long encoded = mpf_get_si(n);
+    mpf_clear(n);
+    if (encoded < 0) {
+        /* Truecolor sentinel from _NEWIMAGE(w,h,32): encoded = -(w*100000+h) */
+        long val = -encoded;
+        int tw = (int)(val / 100000L);
+        int th = (int)(val % 100000L);
+        g_screen_mode = -1;  /* truecolor pseudo-mode */
+        g_screen_width  = tw;
+        g_screen_height = th;
 #ifdef USE_SDL_WINDOW
-            gfx_screen_tc(tw, th);
+        gfx_screen_tc(tw, th);
 #else
-            felix_sendf("screen;12");
+        felix_sendf("screen;12");  /* best fallback */
 #endif
-            return 0;
-        }
-    }
-
-    /* Parse up to 4 comma-separated args: mode, colorBurst, aPage, vPage.
-     * Any omitted arg stays -1 (meaning "don't change"). */
-    int vals[4] = {-1, -1, -1, -1};
-    for (int i = 0; i < 4; i++) {
-        p = sk(p);
-        if (*p == '\0' || *p == ':') break;
-        if (*p != ',') {
-            mpf_t n; mpf_init2(n, g_prec);
-            p = sk(eval_expr(p, n));
-            vals[i] = (int)mpf_get_si(n);
-            mpf_clear(n);
-        }
-        p = sk(p);
-        if (*p == ',') { p++; } else break;
-    }
-
-    int mode = vals[0];  /* -1 if omitted */
-
+    } else {
+        int mode = (int)encoded;
+        g_screen_mode = mode;
+        screen_dims(mode, &g_screen_width, &g_screen_height);
 #ifdef USE_SDL_WINDOW
-    /* If mode is absent or unchanged, this is purely a page-flip call */
-    if (mode < 0 || mode == g_screen_mode) {
-        gfx_set_pages(vals[2], vals[3]);
-        return 0;
-    }
-#endif
-
-    if (mode < 0) return 0;
-
-    g_screen_mode = mode;
-    screen_dims(mode, &g_screen_width, &g_screen_height);
-#ifdef USE_SDL_WINDOW
-    gfx_screen(mode);
-    gfx_set_pages(vals[2], vals[3]);  /* honor page args on mode-change line too */
+        gfx_screen(mode);
 #else
-    if (mode == 0) felix_draw("cls;0");
-    else           felix_sendf("screen;%d", mode);
+        if (mode == 0) felix_draw("cls;0");
+        else           felix_sendf("screen;%d", mode);
 #endif
+    }
     return 0;
 }
 static int cmd_beep(Interp *ip, char *args) {
@@ -612,7 +573,6 @@ static int cmd_cls(Interp *ip, char *args) {
         }
 #ifdef USE_SDL_WINDOW
         gfx_cls(c);
-        s_pen_x = 0.0; s_pen_y = 0.0;
         /* display_cls() intentionally NOT called here — gfx_cls() already
          * clears both the pixel buffer and the text grid, and display_cls()
          * would overwrite with s_cur_bg (color 0), losing the CLS argument. */
@@ -2127,9 +2087,9 @@ static int cmd_circle(Interp *ip, char *args) {
 static int cmd_line_gfx(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
-    double x1 = s_pen_x, y1 = s_pen_y, x2, y2;
+    double x1 = 0, y1 = 0, x2, y2;
 
-    /* optional start point — if omitted, continue from current pen position */
+    /* optional start point */
     if (*p == '(') {
         p = sk(parse_xy(p, &x1, &y1));
     }
@@ -2160,8 +2120,6 @@ static int cmd_line_gfx(Interp *ip, char *args) {
     felix_drawf("line;%d;%d;%d;%d;%d%s",
                 (int)x1, (int)y1, (int)x2, (int)y2, color, suffix);
 #endif
-    /* Update pen to endpoint (QB4 semantics — BOX forms don't move pen) */
-    if (suffix[0] == '\0') { s_pen_x = x2; s_pen_y = y2; }
     return 0;
 }
 
@@ -2218,32 +2176,6 @@ static int cmd_pset(Interp *ip, char *args) {
 #else
     felix_drawf("pset;%d;%d;%d", (int)x, (int)y, color);
 #endif
-    s_pen_x = x; s_pen_y = y;
-    return 0;
-}
-
-/* ================================================================
- * PRESET (x, y) [, color]  — like PSET but defaults to background (0)
- * Also moves the graphics pen without drawing if color matches bg.
- * ================================================================ */
-static int cmd_preset(Interp *ip, char *args) {
-    (void)ip;
-    char *p = sk(args);
-    double x, y;
-    p = sk(parse_xy(p, &x, &y));
-    int color = 0;   /* PRESET default is background color */
-    if (*p == ',') {
-        p = sk(p + 1);
-        mpf_t mc; mpf_init2(mc, g_prec);
-        eval_expr(p, mc);
-        color = (int)mpf_get_si(mc); mpf_clear(mc);
-    }
-#ifdef USE_SDL_WINDOW
-    gfx_pset((int)x, (int)y, color);
-#else
-    felix_drawf("pset;%d;%d;%d", (int)x, (int)y, color);
-#endif
-    s_pen_x = x; s_pen_y = y;
     return 0;
 }
 
@@ -2802,7 +2734,6 @@ const Command commands[] = {
     { "DRAW",       cmd_draw       },
     { "CIRCLE",     cmd_circle     },
     { "PSET",       cmd_pset       },
-    { "PRESET",     cmd_preset     },
     { "PAINT",      cmd_paint      },
     { "END SELECT", cmd_end_select },
     { "END SUB",    cmd_end_sub    },
