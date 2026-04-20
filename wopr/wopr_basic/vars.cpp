@@ -50,7 +50,7 @@ Var *var_find(char *name) {
 }
 
 Var *var_create(char *name) {
-    if (g_nvar >= MAX_VARS) { basic_stderr("Too many variables\n"); exit(1); }
+    if (g_nvar >= MAX_VARS) { basic_stderr("Too many variables %i/%i\n", g_nvar, MAX_VARS); exit(1); }
     Var *v = &g_vars[g_nvar++];
     memset(v, 0, sizeof(*v));
     strncpy(v->name, name, MAX_VARNAME - 1);
