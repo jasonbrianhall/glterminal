@@ -415,7 +415,7 @@ bool gfx_sdl_pump() {
                 // F11 — toggle fullscreen
                 BASIC_NS::gfx_sdl_toggle_fullscreen();
             } else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
-                key_push('\n');
+                key_push('\r');
             } else if (sym == SDLK_BACKSPACE) {
                 key_push(8);
             } else if (sym == SDLK_TAB) {
