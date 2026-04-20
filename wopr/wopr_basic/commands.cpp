@@ -19,6 +19,9 @@ void gfx_sdl_render(void);
 
 BASIC_NS_BEGIN
 
+/* Current Graphics Position — updated by PSET, PRESET, LINE endpoint */
+static double g_gfx_x = 0.0, g_gfx_y = 0.0;
+
 /* Resolve a color value from _RGB() encoding (0x01RRGGBB) to a raw 0x00RRGGBB
  * int that gfx_* functions accept. In truecolor mode gfx_* uses the full value;
  * in palette mode gfx_* takes only the low 4 bits (palette index). */
@@ -358,6 +361,7 @@ static int cmd_screen(Interp *ip, char *args) {
         screen_dims(mode, &g_screen_width, &g_screen_height);
 #ifdef USE_SDL_WINDOW
         gfx_screen(mode);
+        g_gfx_x = 0.0; g_gfx_y = 0.0;  /* reset Current Graphics Position */
 #else
         if (mode == 0) felix_draw("cls;0");
         else           felix_sendf("screen;%d", mode);
@@ -2087,9 +2091,10 @@ static int cmd_circle(Interp *ip, char *args) {
 static int cmd_line_gfx(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
-    double x1 = 0, y1 = 0, x2, y2;
+    /* Default start point is the Current Graphics Position */
+    double x1 = g_gfx_x, y1 = g_gfx_y, x2, y2;
 
-    /* optional start point */
+    /* optional explicit start point */
     if (*p == '(') {
         p = sk(parse_xy(p, &x1, &y1));
     }
@@ -2111,6 +2116,9 @@ static int cmd_line_gfx(Interp *ip, char *args) {
         if (kw_match(p, "BF")) suffix = ";BF";
         else if (*p == 'B' || *p == 'b') suffix = ";B";
     }
+
+    /* Update Current Graphics Position to endpoint */
+    g_gfx_x = x2; g_gfx_y = y2;
 
 #ifdef USE_SDL_WINDOW
     if      (strcmp(suffix, ";BF") == 0) gfx_boxfill((int)x1,(int)y1,(int)x2,(int)y2, color);
@@ -2171,6 +2179,31 @@ static int cmd_pset(Interp *ip, char *args) {
         eval_expr(p, mc);
         color = (int)mpf_get_si(mc); mpf_clear(mc);
     }
+    g_gfx_x = x; g_gfx_y = y;  /* update Current Graphics Position */
+#ifdef USE_SDL_WINDOW
+    gfx_pset((int)x, (int)y, color);
+#else
+    felix_drawf("pset;%d;%d;%d", (int)x, (int)y, color);
+#endif
+    return 0;
+}
+
+/* ================================================================
+ * PRESET (x, y) [, color]   — like PSET but default color is 0 (background)
+ * ================================================================ */
+static int cmd_preset(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+    double x, y;
+    p = sk(parse_xy(p, &x, &y));
+    int color = 0;
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t mc; mpf_init2(mc, g_prec);
+        eval_expr(p, mc);
+        color = (int)mpf_get_si(mc); mpf_clear(mc);
+    }
+    g_gfx_x = x; g_gfx_y = y;  /* update Current Graphics Position */
 #ifdef USE_SDL_WINDOW
     gfx_pset((int)x, (int)y, color);
 #else
@@ -2733,6 +2766,7 @@ const Command commands[] = {
     { "PUT",        cmd_put_graphics },
     { "DRAW",       cmd_draw       },
     { "CIRCLE",     cmd_circle     },
+    { "PRESET",     cmd_preset     },
     { "PSET",       cmd_pset       },
     { "PAINT",      cmd_paint      },
     { "END SELECT", cmd_end_select },
