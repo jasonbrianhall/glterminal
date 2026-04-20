@@ -452,8 +452,9 @@ static void render_text_cell(int row, int col) {
 
     // In text mode, always draw the cell background (even spaces) so colored
     // backgrounds show and old glyphs are properly erased.
-    // In graphics mode, skip background so graphics show through.
-    if (!s_gfx_active) {
+    // In graphics mode, only draw bg for cells with actual content so the
+    // graphics pixel buffer shows through empty cells.
+    if (!s_gfx_active || (ch >= 0x20 && ch != ' ')) {
         Uint32 bg = s_pal[cell.bg & 15];
         SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_NONE);
         SDL_SetRenderDrawColor(s_renderer,
