@@ -94,8 +94,13 @@ static Uint32        s_last_dirty = 0;
 // ============================================================================
 // Graphics surface
 // ============================================================================
-static SDL_Texture         *s_gfx_tex = nullptr;
-static std::vector<Uint32>  s_pixels;          // ARGB, gfx_w × gfx_h
+static SDL_Texture         *s_gfx_tex  = nullptr;
+static const int            GFX_PAGES  = 4;
+static std::vector<Uint32>  s_pages[GFX_PAGES]; // ARGB pixel buffers, one per page
+static int                  s_draw_page = 0;     // page written to by gfx_* calls
+static int                  s_vis_page  = 0;     // page shown by gfx_sdl_render()
+// Convenience reference — always points to s_pages[s_draw_page]
+static std::vector<Uint32> *s_pixels_ptr = &s_pages[0];
 static int                  s_gfx_w = 0, s_gfx_h = 0;
 static bool                 s_gfx_active = false;
 static bool                 s_truecolor  = false;  // true when SCREEN _NEWIMAGE(...,32)
@@ -554,9 +559,10 @@ void gfx_sdl_render() {
         SDL_RenderSetViewport(s_renderer, nullptr);
         // Palette mode: alpha byte holds palette index — replace with 0xFF for rendering.
         // Truecolor mode: pixels already have 0xFF alpha, OR is a no-op.
-        std::vector<Uint32> tex_pixels(s_pixels.size());
-        for (size_t i = 0; i < s_pixels.size(); i++)
-            tex_pixels[i] = s_pixels[i] | 0xFF000000u;
+        std::vector<Uint32> &vis = s_pages[s_vis_page];
+        std::vector<Uint32> tex_pixels(vis.size());
+        for (size_t i = 0; i < vis.size(); i++)
+            tex_pixels[i] = vis[i] | 0xFF000000u;
         SDL_UpdateTexture(s_gfx_tex, nullptr, tex_pixels.data(), s_gfx_w * 4);
         // Window was sized to gfx_w*scale × gfx_h*PAR*scale so stretching
         // to fill gives correct pixel aspect ratio for the active SCREEN mode.
@@ -606,6 +612,20 @@ void gfx_sdl_render() {
 
 void gfx_sdl_mark_dirty() { s_needs_render = true; }
 
+/* Switch active draw page and/or visual (display) page.
+ * Pass -1 to leave a page unchanged. QB4 SCREEN mode, colorBurst, aPage, vPage. */
+extern "C" void gfx_set_pages(int draw_page, int vis_page) {
+    if (!s_gfx_active) return;
+    if (draw_page >= 0 && draw_page < GFX_PAGES) {
+        s_draw_page  = draw_page;
+        s_pixels_ptr = &s_pages[draw_page];
+    }
+    if (vis_page >= 0 && vis_page < GFX_PAGES) {
+        s_vis_page = vis_page;
+        s_needs_render = true;
+    }
+}
+
 // ============================================================================
 // Pixel helpers
 // Palette mode:   0xIIRRGGBB where II = palette index (0-15) in alpha slot.
@@ -623,12 +643,12 @@ static inline Uint32 color_to_pixel(int color) {
 
 static inline void px_set(int x, int y, int color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
-    s_pixels[(size_t)(y * s_gfx_w + x)] = color_to_pixel(color);
+    (*s_pixels_ptr)[(size_t)(y * s_gfx_w + x)] = color_to_pixel(color);
 }
 
 static inline Uint32 px_get(int x, int y) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return 0;
-    return s_pixels[(size_t)(y * s_gfx_w + x)];
+    return (*s_pixels_ptr)[(size_t)(y * s_gfx_w + x)];
 }
 
 // Extract the stored palette index from a pixel value (palette mode only)
@@ -744,7 +764,10 @@ void gfx_screen_tc(int w, int h) {
         s_win_w = w * scale; s_win_h = h * scale;
         if (s_window) SDL_SetWindowSize(s_window, s_win_w, s_win_h);
     }
-    s_pixels.assign((size_t)(w * h), 0xFF000000u);
+    for (int p = 0; p < GFX_PAGES; p++)
+        s_pages[p].assign((size_t)(w * h), 0xFF000000u);
+    s_draw_page = 0; s_vis_page = 0;
+    s_pixels_ptr = &s_pages[0];
     if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
     s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                   SDL_TEXTUREACCESS_STREAMING, w, h);
@@ -761,7 +784,9 @@ void gfx_screen(int mode) {
     if (mode == 0) {
         s_gfx_active = false;
         if (s_gfx_tex) { SDL_DestroyTexture(s_gfx_tex); s_gfx_tex = nullptr; }
-        s_pixels.clear(); s_gfx_w = s_gfx_h = 0;
+        for (int p = 0; p < GFX_PAGES; p++) s_pages[p].clear();
+        s_gfx_w = s_gfx_h = 0;
+        s_draw_page = 0; s_vis_page = 0; s_pixels_ptr = &s_pages[0];
         ft_set_size_for_window();  // recompute cols/rows for text mode
         s_needs_render = true;
         return;
@@ -796,7 +821,10 @@ void gfx_screen(int mode) {
         s_win_h = win_h;
     }
 
-    s_pixels.assign((size_t)(gw * gh), color_to_pixel(0));
+    for (int p = 0; p < GFX_PAGES; p++)
+        s_pages[p].assign((size_t)(gw * gh), color_to_pixel(0));
+    s_draw_page = 0; s_vis_page = 0;
+    s_pixels_ptr = &s_pages[0];
     if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
     s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                   SDL_TEXTUREACCESS_STREAMING, gw, gh);
@@ -818,7 +846,7 @@ void gfx_palette(int idx, int r, int g, int b) {
     // Update RGB of any pixel in the buffer already using this index
     Uint32 new_rgb = s_pal[idx] & 0x00FFFFFFu;
     Uint32 tag     = (Uint32)idx << 24;
-    for (auto &px : s_pixels) {
+    for (auto &px : (*s_pixels_ptr)) {
         if ((px >> 24) == (Uint32)idx)
             px = tag | new_rgb;
     }
@@ -834,7 +862,7 @@ void gfx_cls(int color) {
     if (s_gfx_active) {
         int ci = color & 15;
         Uint32 fill = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
-        std::fill(s_pixels.begin(), s_pixels.end(), fill);
+        std::fill((*s_pixels_ptr).begin(), (*s_pixels_ptr).end(), fill);
     }
 
     // 2. Clear text grid to the same background colour
@@ -860,7 +888,7 @@ void gfx_pset(int x, int y, int color) {
 
 int gfx_point(int x, int y) {
     if (!s_gfx_active || x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return -1;
-    return px_index(s_pixels[(size_t)(y * s_gfx_w + x)]);
+    return px_index((*s_pixels_ptr)[(size_t)(y * s_gfx_w + x)]);
 }
 
 void gfx_line(int x0, int y0, int x1, int y1, int color) {
@@ -895,7 +923,7 @@ void gfx_boxfill(int x1, int y1, int x2, int y2, int color) {
     int ci = color & 15;
     Uint32 col = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
     for (int y = y1; y <= y2; y++) {
-        Uint32 *row = s_pixels.data() + (size_t)(y * s_gfx_w);
+        Uint32 *row = (*s_pixels_ptr).data() + (size_t)(y * s_gfx_w);
         std::fill(row + x1, row + x2 + 1, col);
     }
     s_needs_render = true;
@@ -1014,7 +1042,7 @@ void gfx_paint(int x, int y, int fill_color, int border_color) {
 
         /* Fill the span */
         for (int i = nx0; i <= nx1; i++)
-            s_pixels[(size_t)(sy * s_gfx_w + i)] = fill;
+            (*s_pixels_ptr)[(size_t)(sy * s_gfx_w + i)] = fill;
 
         /* Push child spans in forward direction */
         int ny = sy + dy;
@@ -1072,11 +1100,11 @@ void gfx_put(int id, int x, int y, int xor_mode) {
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
             int ci = px_index(src);
             if (xor_mode) {
-                int new_ci = (px_index(s_pixels[pidx]) ^ ci) & 15;
-                s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
+                int new_ci = (px_index((*s_pixels_ptr)[pidx]) ^ ci) & 15;
+                (*s_pixels_ptr)[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
                 if (ci == sp.bg_color) continue;  // background colour at GET time = transparent
-                s_pixels[pidx] = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
+                (*s_pixels_ptr)[pidx] = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
             }
         }
     }
@@ -1127,10 +1155,10 @@ void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) 
             if (dx < 0 || dy < 0 || dx >= s_gfx_w || dy >= s_gfx_h) continue;
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
             if (xor_mode) {
-                int new_ci = (px_index(s_pixels[pidx]) ^ pal_idx) & 15;
-                s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
+                int new_ci = (px_index((*s_pixels_ptr)[pidx]) ^ pal_idx) & 15;
+                (*s_pixels_ptr)[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
-                s_pixels[pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
+                (*s_pixels_ptr)[pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
             }
         }
     }
