@@ -177,12 +177,28 @@ static void felix_drawf(char *fmt, ...) {
  * For simplicity we map the 16 standard EGA display colours (0-15) and
  * treat any value ≥ 16 as a 6-bit EGA palette entry. */
 static void ega_to_rgb(int ega6, int *r, int *g, int *b) {
-    /* IBM EGA DAC encoding: bit5=R-high, bit4=G-high, bit3=B-high,
-     *                        bit2=R-low,  bit1=G-low,  bit0=B-low
-     * Each channel: high*0xAA + low*0x55  (matches DOSBox/real hardware) */
-    *r = ((ega6>>5)&1)*0xAA + ((ega6>>2)&1)*0x55;
-    *g = ((ega6>>4)&1)*0xAA + ((ega6>>1)&1)*0x55;
-    *b = ((ega6>>3)&1)*0xAA + ((ega6>>0)&1)*0x55;
+    /* QB SCREEN 9 PALETTE color-number to RGB.
+     * Colors 0-15: standard CGA 16-color table (hardcoded, includes brown/gray).
+     * Colors 16-63: EGA extended palette.
+     *   Primary bits  (2,1,0) contribute 0xAA (2/3 intensity) to R,G,B.
+     *   Secondary bits (5,4,3) contribute 0x55 (1/3 intensity) to R,G,B.
+     * Formula: r_bits = (bit2<<1)|bit5, then r = r_bits*85.
+     * Gives EGA 46 -> #FFAA55 (orange) as expected for gorilla.bas. */
+    static const int cga16[16][3] = {
+        {0,0,0},{0,0,0xAA},{0,0xAA,0},{0,0xAA,0xAA},
+        {0xAA,0,0},{0xAA,0,0xAA},{0xAA,0x55,0},{0xAA,0xAA,0xAA},
+        {0x55,0x55,0x55},{0x55,0x55,0xFF},{0x55,0xFF,0x55},{0x55,0xFF,0xFF},
+        {0xFF,0x55,0x55},{0xFF,0x55,0xFF},{0xFF,0xFF,0x55},{0xFF,0xFF,0xFF}
+    };
+    if (ega6 >= 0 && ega6 < 16) {
+        *r = cga16[ega6][0]; *g = cga16[ega6][1]; *b = cga16[ega6][2];
+        return;
+    }
+    /* Extended colors 16-63: primary bits at 2,1,0 (high); secondary at 5,4,3 (low) */
+    int rb = (((ega6>>2)&1)<<1) | ((ega6>>5)&1);
+    int gb = (((ega6>>1)&1)<<1) | ((ega6>>4)&1);
+    int bb = (((ega6>>0)&1)<<1) | ((ega6>>3)&1);
+    *r = rb * 85; *g = gb * 85; *b = bb * 85;
 }
 
 /* Screen mode → (width, height) */
@@ -586,21 +602,15 @@ static int cmd_cls(Interp *ip, char *args) {
         arg = (int)mpf_get_si(n);
         mpf_clear(n);
     }
-        int c;
-        if (arg >= 0) {
-            c = arg;
-        } else {
-#ifdef USE_SDL_WINDOW
-            /* In graphics mode, CLS with no arg always clears to color 0
-             * (the background pixel color).  BackColor is a text attribute
-             * used for COLOR statements, not for pixel-buffer clearing. */
-            c = gfx_active() ? 0 : g_back_color;
-#else
-            c = g_back_color;
-            Var *v = var_find("BACKCOLOR");
-            if (v && v->kind == VAR_NUM) c = (int)mpf_get_si(v->num);
-#endif
-        }
+        /* QB CLS semantics:
+         *   CLS 1 = clear graphics viewport only
+         *   CLS 2 = clear text viewport only (no-op in pixel-buffer mode)
+         *   CLS (no arg) = clear both
+         * The arg is NOT a color index. Always clear to background (index 0). */
+        if (arg == 2) return 0;  /* text-only clear: no-op in graphics mode */
+        /* arg==1 or no arg: clear graphics to background color */
+        int c = 0;  /* always clear pixel buffer to color index 0 (background) */
+        (void)arg;
 #ifdef USE_SDL_WINDOW
         gfx_cls(c);
         /* display_cls() intentionally NOT called here — gfx_cls() already
