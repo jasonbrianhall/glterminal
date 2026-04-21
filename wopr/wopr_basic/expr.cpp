@@ -1559,6 +1559,18 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
                 }
             }
 
+            /* Save old parameter values (all vars are global; we must restore
+             * them after the call so the caller's variables are not clobbered).
+             * e.g. FnRan(x) uses param "x" which would overwrite the caller's x. */
+            mpf_t saved_params[16];
+            bool  param_was_num[16];
+            for (int ai = 0; ai < n_params; ai++) {
+                Var *pv = var_find(param_names[ai]);
+                param_was_num[ai] = (pv && pv->kind == VAR_NUM);
+                mpf_init2(saved_params[ai], g_prec);
+                if (param_was_num[ai]) mpf_set(saved_params[ai], pv->num);
+            }
+
             /* Evaluate and assign arguments */
             for (int ai = 0; ai < n_params; ai++) {
                 skip_ws_p(ps);
@@ -1619,6 +1631,15 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
                     g_ctrl_top--;
                 }
                 g_current_pc = saved_pc;
+            }
+
+            /* Restore caller's variables that were overwritten by parameters */
+            for (int ai = 0; ai < n_params; ai++) {
+                if (param_was_num[ai]) {
+                    Var *pv = var_find(param_names[ai]);
+                    if (pv) mpf_set(pv->num, saved_params[ai]);
+                }
+                mpf_clear(saved_params[ai]);
             }
 
             /* Read return value — stored in variable named after function */

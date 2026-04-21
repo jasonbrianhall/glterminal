@@ -403,6 +403,36 @@ void load(char *filename) {
         normalize_kw(p, normbuf, sizeof normbuf);
         p = normbuf;
 
+        /* Register colon-terminated goto-labels (e.g. "InitVars:").
+         * A pure label line is an identifier immediately followed by ':'
+         * with nothing else on the line (after skipping whitespace).
+         * We add it to the pending buffer so it points at the next real
+         * statement, and skip storing this line as an executable statement. */
+        {
+            char *lp = p;
+            char lname[MAX_VARNAME]; int li = 0;
+            while ((isalnum((unsigned char)*lp) || *lp == '_') && li < MAX_VARNAME - 1)
+                lname[li++] = (char)toupper((unsigned char)*lp++);
+            lname[li] = '\0';
+            while (isspace((unsigned char)*lp)) lp++;
+            if (li > 0 && *lp == ':') {
+                char *after_colon = lp + 1;
+                while (isspace((unsigned char)*after_colon)) after_colon++;
+                /* Only treat as a pure label if nothing follows the colon
+                 * (or only a comment follows), so we don't misfire on
+                 * things like "FOR i = 1 TO n:" */
+                if (*after_colon == '\0' || *after_colon == '\'') {
+                    if (pending_count < 8) {
+                        strncpy(pending_buf + pending_count * MAX_VARNAME,
+                                lname, MAX_VARNAME - 1);
+                        pending_buf[(pending_count + 1) * MAX_VARNAME - 1] = '\0';
+                        pending_count++;
+                    }
+                    continue;  /* don't store the label line as a statement */
+                }
+            }
+        }
+
         /* Register SUB/FUNCTION names as labels so bare calls can find them */
         if ((strncasecmp(p, "SUB ", 4) == 0 || strncasecmp(p, "FUNCTION ", 9) == 0)) {
             char *np = strncasecmp(p, "SUB ", 4) == 0 ? p + 4 : p + 9;

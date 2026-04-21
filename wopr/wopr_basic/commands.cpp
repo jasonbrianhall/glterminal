@@ -1327,8 +1327,13 @@ static int cmd_poke(Interp *ip, char *args) {
  * END IF is similar.
  * ================================================================ */
 static int cmd_end_sub(Interp *ip, char *args) {
-    /* Treat as RETURN — end of an inline sub body */
-    return cmd_return(ip, args);
+    /* Only act as RETURN if we are inside a GOSUB/CALL frame.
+     * During linear execution (falling through a SUB/FUNCTION body
+     * that was never called) there is no frame -- skip silently. */
+    for (int fi = g_ctrl_top - 1; fi >= 0; fi--)
+        if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0)
+            return cmd_return(ip, args);
+    return 0;
 }
 
 /* ================================================================
