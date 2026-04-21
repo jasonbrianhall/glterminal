@@ -109,32 +109,6 @@ void run_from(int start_pc) {
         // Execute one BASIC instruction
         int old_pc = ip.pc;
         g_current_pc = old_pc;
-
-        // Skip SUB/FUNCTION bodies during linear execution.
-        // When the interpreter falls through to a SUB or FUNCTION line
-        // (rather than entering via GOSUB/CALL), jump past its END SUB/
-        // END FUNCTION so the body lines don't execute as main code.
-        {
-            char *ln = g_lines[ip.pc].text;
-            while (isspace((unsigned char)*ln)) ln++;
-            bool is_sub = (strncasecmp(ln, "SUB ", 4) == 0 ||
-                           strncasecmp(ln, "FUNCTION ", 9) == 0);
-            if (is_sub) {
-                int depth = 1, skip_pc = ip.pc + 1;
-                while (skip_pc < g_nlines && depth > 0) {
-                    char *sl = g_lines[skip_pc].text;
-                    while (isspace((unsigned char)*sl)) sl++;
-                    if (strncasecmp(sl, "SUB ", 4) == 0 ||
-                        strncasecmp(sl, "FUNCTION ", 9) == 0) depth++;
-                    else if (strncasecmp(sl, "END SUB", 7) == 0 ||
-                             strncasecmp(sl, "END FUNCTION", 12) == 0) depth--;
-                    skip_pc++;
-                }
-                ip.pc = skip_pc;
-                continue;
-            }
-        }
-
         int jumped = dispatch(&ip, g_lines[ip.pc].text);
 
         // Render after dispatch: immediately if a draw command marked dirty,
