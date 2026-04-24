@@ -11,7 +11,7 @@
 //   - 300-baud simulated login sequence (FALKEN / JOSHUA)
 //   - WOPR game menu
 //   - Playable: Tic-Tac-Toe, Chess, Minesweeper, Falken's Maze,
-//               Global Thermonuclear War, Zork
+//               Global Thermonuclear War, Zork, Willy the Worm
 // ============================================================================
 
 enum class WoprPhase {
@@ -29,6 +29,7 @@ enum class WoprPhase {
     PLAYING_WAR,
     PLAYING_ZORK,
     PLAYING_BASIC,
+    PLAYING_WILLY,    // Willy the Worm
     FAREWELL,         // "A STRANGE GAME..." on exit
 };
 
@@ -42,6 +43,7 @@ enum class WoprGame {
     ZORK,
     BASIC,
     WIZARD,
+    WILLY_WORM,
     // Sentinel
     COUNT
 };
@@ -181,3 +183,14 @@ void wopr_basic_free(WoprState *w);
 
 // Wizard's Castle (BASIC program, shares the BASIC sub-game machinery)
 void wopr_wizard_enter(WoprState *w);
+
+// Willy the Worm
+void wopr_willy_enter(WoprState *w);
+void wopr_willy_update(WoprState *w, double dt);
+void wopr_willy_render(WoprState *w, int x, int y, int cw, int ch, int cols);
+bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym);
+void wopr_willy_keyup(WoprState *w, SDL_Keycode sym);
+void wopr_willy_free(WoprState *w);
+void wopr_willy_mousedown(WoprState *w, int x, int y, int button);
+void wopr_willy_mouseup(WoprState *w, int x, int y, int button);
+void wopr_willy_textinput(WoprState *w, const char *text);
