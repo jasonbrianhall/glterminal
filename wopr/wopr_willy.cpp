@@ -1,19 +1,12 @@
 // =============================================================================
-// wopr_willy.cpp  —  Willy the Worm embedded inside the WOPR overlay
+// wopr_willy.cpp  —  Willy the Worm inside the WOPR overlay
 //
-// Ported from the GTK/Cairo version in willy.cpp / willy.h.
-// Renders entirely through gl_draw_rect() — each pixel of a willy.chr
-// 8x8 bitmap sprite becomes one scaled rectangle, matching the look of
-// the original game exactly.
+// Ported directly from the C++ willy.cpp / willy.h.
+// Renders via gl_draw_rect() using willy.chr bitmap sprites.
+// Both assets are compiled in via wopr_willy_assets.h (compressed with zlib).
 //
-// Both levels.json and willy.chr are compiled in as zlib-compressed blobs
-// via wopr_willy_assets.h.  Disk fallback is used if the header is absent.
-//
-// To regenerate the header (run from the directory containing the assets):
+// To regenerate the header:
 //   python3 gen_willy_assets.py levels.json willy.chr wopr_willy_assets.h
-//
-// Build: link with -lminiz  (or add miniz.c to your sources).
-// No GTK / Cairo / SDL_mixer dependency.
 // =============================================================================
 
 #include "wopr.h"
@@ -23,6 +16,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <random>
@@ -30,635 +25,711 @@
 #include <string>
 #include <vector>
 
-// Compiled-in compressed assets.
-// Falls back gracefully to disk if the header hasn't been generated yet.
 #if __has_include("wopr_willy_assets.h")
 #  include "wopr_willy_assets.h"
 #  define WILLY_ASSETS_EMBEDDED 1
 #else
 #  define WILLY_ASSETS_EMBEDDED 0
-static const unsigned char willy_levels_z[]  = {0};
-static const size_t        willy_levels_z_len   = 0;
-static const size_t        willy_levels_raw_len  = 0;
-static const unsigned char willy_chr_z[]     = {0};
-static const size_t        willy_chr_z_len      = 0;
-static const size_t        willy_chr_raw_len     = 0;
+static const unsigned char willy_levels_z[]   = {0};
+static const size_t        willy_levels_z_len  = 0;
+static const size_t        willy_levels_raw_len = 0;
+static const unsigned char willy_chr_z[]      = {0};
+static const size_t        willy_chr_z_len     = 0;
+static const size_t        willy_chr_raw_len    = 0;
 #endif
 
 // =============================================================================
-// CHR SPRITE TABLE
-// 128 sprites x 8 bytes each.  Byte 0 = top row, bit 7 = leftmost pixel.
-// Index mapping (mirrors spriteloader.cpp):
-//   0  = WILLY_RIGHT   1  = WILLY_LEFT    2  = PRESENT
-//   3  = LADDER        4  = TACK          5  = UPSPRING
-//   6  = SIDESPRING    7  = BALL          8  = BELL
-//   51-90 = PIPE1-PIPE40    126 = BALLPIT   127 = EMPTY
+// CHR SPRITES
+// 128 sprites × 8 bytes. Bit7 of byte0 = top-left pixel.
+// Index mapping (from spriteloader.cpp):
+//   0=WILLY_RIGHT  1=WILLY_LEFT  2=PRESENT   3=LADDER
+//   4=TACK         5=UPSPRING    6=SIDESPRING 7=BALL  8=BELL
+//   51-90=PIPE1-PIPE40  126=BALLPIT  127=EMPTY
 // =============================================================================
 
 static uint8_t s_chr[128][8];
 static bool    s_chr_loaded = false;
 
-static bool ww_load_chr_from_memory(const void *data, size_t len) {
-    if (len < 128 * 8) return false;
+static bool ww_chr_load_mem(const void *data, size_t len) {
+    if (len < 128*8) return false;
     const uint8_t *p = static_cast<const uint8_t*>(data);
-    for (int sp = 0; sp < 128; sp++)
+    for (int i = 0; i < 128; i++)
         for (int r = 0; r < 8; r++)
-            s_chr[sp][r] = p[sp * 8 + r];
+            s_chr[i][r] = p[i*8+r];
     s_chr_loaded = true;
     return true;
 }
 
-static bool ww_load_chr_from_disk() {
-    const char *paths[] = {
-        "willy.chr", "data/willy.chr",
-        "/usr/games/willytheworm/data/willy.chr", nullptr
-    };
+static bool ww_chr_load_disk() {
+    const char *paths[] = {"willy.chr","data/willy.chr",
+                           "/usr/games/willytheworm/data/willy.chr",nullptr};
     for (int i = 0; paths[i]; i++) {
         std::ifstream f(paths[i], std::ios::binary);
         if (!f.good()) continue;
-        f.seekg(0, std::ios::end);
-        size_t sz = (size_t)f.tellg();
-        f.seekg(0);
-        if (sz < 128 * 8) continue;
+        f.seekg(0,std::ios::end); size_t sz=f.tellg(); f.seekg(0);
+        if (sz < 128*8) continue;
         std::vector<uint8_t> buf(sz);
         f.read(reinterpret_cast<char*>(buf.data()), sz);
-        return ww_load_chr_from_memory(buf.data(), sz);
+        return ww_chr_load_mem(buf.data(), sz);
     }
     return false;
 }
 
-static bool ww_load_chr() {
-    // Try compressed header first
+static bool ww_chr_load() {
     if (WILLY_ASSETS_EMBEDDED && willy_chr_z_len > 1) {
         std::vector<uint8_t> raw(willy_chr_raw_len);
-        mz_ulong out_len = (mz_ulong)willy_chr_raw_len;
-        if (mz_uncompress(raw.data(), &out_len,
+        mz_ulong out = (mz_ulong)willy_chr_raw_len;
+        if (mz_uncompress(raw.data(), &out,
                           willy_chr_z, (mz_ulong)willy_chr_z_len) == MZ_OK)
-            if (ww_load_chr_from_memory(raw.data(), out_len))
-                return true;
+            if (ww_chr_load_mem(raw.data(), out)) return true;
     }
-    return ww_load_chr_from_disk();
+    return ww_chr_load_disk();
 }
 
-// Sprite index for a tile name.  Returns -1 for EMPTY / unknown.
-static int ww_sprite_index(const std::string &tile) {
-    if (tile == "WILLY_RIGHT")  return 0;
-    if (tile == "WILLY_LEFT")   return 1;
-    if (tile == "PRESENT")      return 2;
-    if (tile == "LADDER")       return 3;
-    if (tile == "TACK")         return 4;
-    if (tile == "UPSPRING")     return 5;
-    if (tile == "SIDESPRING")   return 6;
-    if (tile == "BALL")         return 7;
-    if (tile == "BELL")         return 8;
-    if (tile == "BALLPIT")      return 126;
-    if (tile == "EMPTY")        return -1;
-    if (tile.size() > 4 && tile.substr(0, 4) == "PIPE") {
-        try {
-            int n = std::stoi(tile.substr(4));
-            if (n >= 1 && n <= 40) return 50 + n;
-        } catch (...) {}
+static int ww_sprite_idx(const std::string &tile) {
+    if (tile=="WILLY_RIGHT") return 0;
+    if (tile=="WILLY_LEFT")  return 1;
+    if (tile=="PRESENT")     return 2;
+    if (tile=="LADDER")      return 3;
+    if (tile=="TACK")        return 4;
+    if (tile=="UPSPRING")    return 5;
+    if (tile=="SIDESPRING")  return 6;
+    if (tile=="BALL")        return 7;
+    if (tile=="BELL")        return 8;
+    if (tile=="BALLPIT")     return 126;
+    if (tile=="EMPTY")       return -1;
+    if (tile.size()>4 && tile.substr(0,4)=="PIPE") {
+        try { int n=std::stoi(tile.substr(4)); if(n>=1&&n<=40) return 50+n; }
+        catch(...) {}
     }
     return -1;
 }
 
-// Draw one 8x8 sprite scaled to cell_w x cell_h using gl_draw_rect.
-// Each set bit → one rectangle; clear bits are transparent.
-static void ww_draw_sprite(int sprite_idx, float px, float py,
-                           float cell_w, float cell_h,
-                           float fr, float fg, float fb)
-{
-    if (!s_chr_loaded || sprite_idx < 0 || sprite_idx >= 128) return;
-    float pw = cell_w / 8.f;
-    float ph = cell_h / 8.f;
-    for (int row = 0; row < 8; row++) {
-        uint8_t byte = s_chr[sprite_idx][row];
-        if (!byte) continue;
-        for (int col = 0; col < 8; col++) {
-            if ((byte >> (7 - col)) & 1)
-                gl_draw_rect(px + col * pw, py + row * ph,
-                             pw, ph, fr, fg, fb, 1.0f);
-        }
+// Draw one 8×8 sprite scaled to cell_w×cell_h. All sprites white (palette(1)
+// textcolor(3) in the original = white on blue background).
+static void ww_draw_sprite(int idx, float px, float py,
+                           float cw, float ch) {
+    if (!s_chr_loaded || idx<0 || idx>=128) return;
+    float pw = cw/8.f, ph = ch/8.f;
+    for (int row=0; row<8; row++) {
+        uint8_t b = s_chr[idx][row];
+        if (!b) continue;
+        for (int col=0; col<8; col++)
+            if ((b>>(7-col))&1)
+                gl_draw_rect(px+col*pw, py+row*ph, pw, ph, 1.f,1.f,1.f,1.f);
     }
 }
 
-// Foreground colour per tile type (background is always the game blue).
-static void ww_tile_fg(const std::string &tile,
-                       float &fr, float &fg, float &fb)
-{
-    fr = 1.f; fg = 1.f; fb = 1.f;                              // default: white
-    if (tile == "PRESENT")    { fr=1.f;  fg=0.f;  fb=1.f;  }  // magenta
-    if (tile == "BELL")       { fr=1.f;  fg=1.f;  fb=0.f;  }  // yellow
-    if (tile == "UPSPRING")   { fr=0.f;  fg=1.f;  fb=0.f;  }  // green
-    if (tile == "SIDESPRING") { fr=0.f;  fg=1.f;  fb=1.f;  }  // cyan
-    if (tile == "TACK")       { fr=0.8f; fg=0.8f; fb=0.8f; }  // grey
-    if (tile == "BALL")       { fr=1.f;  fg=0.2f; fb=0.2f; }  // red
-    if (tile == "BALLPIT")    { fr=0.5f; fg=0.5f; fb=0.5f; }  // dark grey
+// =============================================================================
+// SOUND  (programmatic SDL square-wave, no audio files needed)
+// =============================================================================
+
+static SDL_AudioDeviceID s_aud = 0;
+static int  s_aud_rate = 22050;
+
+static const int  ABUF = 16384;
+static float      s_abuf[ABUF];
+static int        s_aread = 0, s_awrite = 0;
+
+static void ww_audio_cb(void*, uint8_t *stream, int len) {
+    int16_t *out = reinterpret_cast<int16_t*>(stream);
+    int n = len/2;
+    for (int i=0; i<n; i++) {
+        if (s_aread != s_awrite) {
+            out[i] = (int16_t)(s_abuf[s_aread]*16000.f);
+            s_aread = (s_aread+1)%ABUF;
+        } else { out[i]=0; }
+    }
 }
 
+static void ww_audio_init() {
+    if (s_aud) return;
+    SDL_AudioSpec want{}, got{};
+    want.freq=s_aud_rate; want.format=AUDIO_S16SYS;
+    want.channels=1; want.samples=512; want.callback=ww_audio_cb;
+    s_aud = SDL_OpenAudioDevice(nullptr,0,&want,&got,0);
+    if (s_aud) { s_aud_rate=got.freq; SDL_PauseAudioDevice(s_aud,0); }
+}
+
+static void ww_audio_shutdown() {
+    if (s_aud) { SDL_CloseAudioDevice(s_aud); s_aud=0; }
+}
+
+// Queue a square-wave tone: freq Hz for dur_ms milliseconds.
+static void ww_beep(float freq, float dur_ms) {
+    if (!s_aud) return;
+    int n = (int)(s_aud_rate * dur_ms / 1000.f);
+    SDL_LockAudioDevice(s_aud);
+    float ph=0.f, inc=(freq>0.f)?(2.f*(float)M_PI*freq/s_aud_rate):0.f;
+    for (int i=0; i<n; i++) {
+        float v = (freq>0.f)?(ph<(float)M_PI?0.35f:-0.35f):0.f;
+        int nx=(s_awrite+1)%ABUF;
+        if (nx!=s_aread) { s_abuf[s_awrite]=v; s_awrite=nx; }
+        ph+=inc; if(ph>2.f*(float)M_PI) ph-=2.f*(float)M_PI;
+    }
+    SDL_UnlockAudioDevice(s_aud);
+}
+
+// Sound effects matching Pascal source exactly:
+// winsound:   for m=1..5: sound(2000) delay(45) nosound delay(30)
+// losesound:  for m=1..5: sound(220) nosound delay(m)
+//             for m=12..1: sound(2000) nosound delay(m div 2)
+// addpoints:  sound(1200) delay(10) sound(1660) delay(10) nosound
+// extra life: for c=500..1500: sound(c)  nosound
+// climb:      sound((25-wy)*100) [very short, per step]
+
+static void ww_snd_win()   { for(int i=0;i<5;i++){ww_beep(2000,45);ww_beep(0,30);} }
+static void ww_snd_lose()  {
+    for(int m=1;m<=5;m++) { ww_beep(220,2); ww_beep(0,(float)m); }
+    for(int m=12;m>=1;m--){ ww_beep(2000,2); ww_beep(0,(float)(m/2)); }
+}
+static void ww_snd_pts()   { ww_beep(1200,10); ww_beep(1660,10); }
+static void ww_snd_life()  { for(int c=500;c<=1500;c+=10) ww_beep((float)c,1.f); }
+static void ww_snd_climb(int wy) { ww_beep((float)((25-wy)*100), 16.f); }
+
 // =============================================================================
-// LEVEL LOADER  (mirrors loadlevels.cpp, no GTK)
+// LEVEL LOADER
+// JSON format: { "levelN": { "ROW": { "COL": "TILE" } },
+//               "levelNPIT": { "PRIMARYBALLPIT": [row,col] } }
+// Row/col keys are plain integer strings.
 // =============================================================================
 
 static const int W_COLS    = 40;
-static const int W_ROWS    = 25;
-static const int W_MAXROWS = 26;
-static const int W_NEWLIFE = 2000;
+static const int W_ROWS    = 25;   // GAME_SCREEN_HEIGHT
+static const int W_MAXROWS = 26;   // GAME_MAX_HEIGHT
+static const int W_MAXCOLS = 40;
+static const int W_NEWLIFE = 2000; // GAME_NEWLIFEPOINTS
 
-struct WillyLevel {
-    std::string grid[W_MAXROWS][W_COLS];
-    std::string grid_orig[W_MAXROWS][W_COLS];
-    std::pair<int,int> willy_start   = {23, 7};
-    std::pair<int,int> ballpit_pos   = {0, 0};
-    bool               ballpit_found = false;
+struct WLevel {
+    std::string grid[W_MAXROWS][W_MAXCOLS];
+    std::string orig[W_MAXROWS][W_MAXCOLS];
+    std::pair<int,int> willy_start = {23,0};
+    std::pair<int,int> ballpit     = {0,0};
+    bool has_ballpit = false;
 };
 
-struct WillyLevels {
-    std::map<std::string, WillyLevel> levels;
-
-    // -------------------------------------------------------------------------
-    // The actual JSON format (from levels.json) is:
-    //
-    //   {
-    //     "levelN": {
-    //       "ROW": { "COL": "TILE", ... },
-    //       ...
-    //     },
-    //     "levelNPIT": { "PRIMARYBALLPIT": [row, col] },
-    //     ...
-    //   }
-    //
-    // Row and column keys are plain integer strings ("0", "1", ...).
-    // WILLY_LEFT / WILLY_RIGHT tiles mark the start position in the grid.
-    // We parse line-by-line tracking indent depth to know which context we're in.
-    // -------------------------------------------------------------------------
+struct WLevels {
+    std::map<std::string,WLevel> levels;
 
     static std::string trim(const std::string &s) {
-        size_t a = s.find_first_not_of(" \t\r\n");
-        if (a == std::string::npos) return "";
-        size_t b = s.find_last_not_of(" \t\r\n");
-        return s.substr(a, b - a + 1);
+        size_t a=s.find_first_not_of(" \t\r\n");
+        if(a==std::string::npos) return "";
+        size_t b=s.find_last_not_of(" \t\r\n");
+        return s.substr(a,b-a+1);
     }
-
-    // Extract the string value from  "key": "VALUE"  or  "key": VALUE
-    static std::string extract_string_value(const std::string &t, size_t after_colon) {
-        size_t vs = t.find('"', after_colon);
-        if (vs == std::string::npos) return "";
-        size_t ve = t.find('"', vs + 1);
-        if (ve == std::string::npos) return "";
-        return t.substr(vs + 1, ve - vs - 1);
-    }
-
-    // Count leading spaces to determine indent level
-    static int indent(const std::string &line) {
-        int n = 0;
-        for (char c : line) { if (c == ' ') n++; else break; }
-        return n;
-    }
-
-    static bool is_integer(const std::string &s) {
-        if (s.empty()) return false;
-        for (char c : s) if (!isdigit((unsigned char)c)) return false;
+    static bool is_uint(const std::string &s) {
+        if(s.empty()) return false;
+        for(char c:s) if(!isdigit((unsigned char)c)) return false;
         return true;
+    }
+    static std::string str_val(const std::string &t, size_t after) {
+        size_t a=t.find('"',after); if(a==std::string::npos) return "";
+        size_t b=t.find('"',a+1);  if(b==std::string::npos) return "";
+        return t.substr(a+1,b-a-1);
     }
 
     bool parse(const std::string &json) {
-        std::istringstream stream(json);
-        std::string line;
+        std::istringstream ss(json);
+        std::string line, cur_lv; bool in_pit=false; int cur_row=-1;
+        while(std::getline(ss,line)) {
+            std::string t=trim(line);
+            if(t.empty()||t[0]!='"') continue;
+            size_t col=t.find("\":"); if(col==std::string::npos) continue;
+            std::string key=t.substr(1,col-1);
+            int ind=0; for(char c:line){if(c==' ')ind++;else break;}
 
-        // Parsing state
-        std::string cur_level;      // current "levelN" key
-        bool        in_pit  = false; // inside a "levelNPIT" block
-        int         cur_row = -1;   // current row index (-1 = not in a row)
-
-        while (std::getline(stream, line)) {
-            std::string t = trim(line);
-            if (t.empty() || t[0] != '"') continue;
-
-            size_t col_pos = t.find("\":");
-            if (col_pos == std::string::npos) continue;
-            std::string key = t.substr(1, col_pos - 1);
-            int ind = indent(line);
-
-            // ── Depth 1: top-level block key ("levelN" or "levelNPIT") ──────
-            if (ind == 4) {
-                cur_row = -1;
-                if (key.find("level") == 0) {
-                    size_t pit_pos = key.find("PIT");
-                    if (pit_pos != std::string::npos) {
-                        // PIT block — extract the level name before "PIT"
-                        cur_level = key.substr(0, pit_pos);
-                        in_pit    = true;
-                    } else {
-                        cur_level = key;
-                        in_pit    = false;
-                        if (!levels.count(cur_level)) {
-                            WillyLevel lv;
-                            for (int r = 0; r < W_MAXROWS; r++)
-                                for (int c = 0; c < W_COLS; c++)
-                                    lv.grid[r][c] = "EMPTY";
-                            levels[cur_level] = lv;
+            if(ind==4) { // top-level key
+                cur_row=-1;
+                if(key.find("level")==0) {
+                    size_t p=key.find("PIT");
+                    if(p!=std::string::npos){cur_lv=key.substr(0,p);in_pit=true;}
+                    else {
+                        cur_lv=key; in_pit=false;
+                        if(!levels.count(cur_lv)) {
+                            WLevel lv;
+                            for(int r=0;r<W_MAXROWS;r++)
+                                for(int c=0;c<W_MAXCOLS;c++)
+                                    lv.grid[r][c]="EMPTY";
+                            levels[cur_lv]=lv;
                         }
                     }
                 }
-                continue;
-            }
-
-            if (cur_level.empty()) continue;
-
-            // ── Depth 2: row index key or PIT key ───────────────────────────
-            if (ind == 8) {
-                if (in_pit) {
-                    // "PRIMARYBALLPIT": [row, col]
-                    if (key == "PRIMARYBALLPIT") {
-                        size_t lb = t.find('[', col_pos);
-                        size_t cm = (lb != std::string::npos) ? t.find(',', lb) : std::string::npos;
-                        size_t rb = (cm != std::string::npos) ? t.find(']', cm) : std::string::npos;
-                        if (lb != std::string::npos && cm != std::string::npos && rb != std::string::npos) {
-                            int r = std::stoi(t.substr(lb + 1, cm - lb - 1));
-                            int c = std::stoi(t.substr(cm + 1, rb - cm - 1));
-                            auto it = levels.find(cur_level);
-                            if (it != levels.end()) {
-                                it->second.ballpit_pos   = {r, c};
-                                it->second.ballpit_found = true;
+            } else if(ind==8 && !cur_lv.empty()) {
+                if(in_pit) {
+                    if(key=="PRIMARYBALLPIT") {
+                        // Array may be multi-line: read ahead to collect [r, c]
+                        // Try same line first
+                        std::vector<int> nums;
+                        auto collect = [&](const std::string &src) {
+                            std::string tmp = src;
+                            size_t i=0;
+                            while(i<tmp.size()) {
+                                while(i<tmp.size() && !isdigit((unsigned char)tmp[i])) i++;
+                                if(i>=tmp.size()) break;
+                                size_t j=i;
+                                while(j<tmp.size() && isdigit((unsigned char)tmp[j])) j++;
+                                nums.push_back(std::stoi(tmp.substr(i,j-i)));
+                                i=j;
                             }
+                        };
+                        // Gather lines until we have 2 numbers or hit ]
+                        std::string gathered = t;
+                        collect(gathered);
+                        while(nums.size()<2) {
+                            std::string nextline;
+                            if(!std::getline(ss,nextline)) break;
+                            std::string nt=trim(nextline);
+                            if(nt.find(']')!=std::string::npos && nums.size()>=2) break;
+                            collect(nt);
+                            if(nt.find(']')!=std::string::npos) break;
+                        }
+                        if(nums.size()>=2) {
+                            int r=nums[0], c=nums[1];
+                            // Ensure the level entry exists
+                            if(!levels.count(cur_lv)) {
+                                WLevel lv;
+                                for(int rr=0;rr<W_MAXROWS;rr++)
+                                    for(int cc=0;cc<W_MAXCOLS;cc++)
+                                        lv.grid[rr][cc]="EMPTY";
+                                levels[cur_lv]=lv;
+                            }
+                            levels[cur_lv].ballpit={r,c};
+                            levels[cur_lv].has_ballpit=true;
                         }
                     }
-                } else {
-                    // Row index key — must be a plain integer string
-                    if (is_integer(key)) {
-                        cur_row = std::stoi(key);
-                    } else {
-                        cur_row = -1;
-                    }
-                }
-                continue;
-            }
-
-            // ── Depth 3: column index key → tile value ───────────────────────
-            if (ind == 12 && !in_pit && cur_row >= 0 &&
-                cur_row < W_MAXROWS && is_integer(key)) {
-                int col = std::stoi(key);
-                if (col < 0 || col >= W_COLS) continue;
-                std::string tile = extract_string_value(t, col_pos + 1);
-                if (tile.empty()) continue;
-                auto &lv = levels[cur_level];
-                if (tile == "WILLY_RIGHT" || tile == "WILLY_LEFT") {
-                    lv.willy_start    = {cur_row, col};
-                    lv.grid[cur_row][col] = "EMPTY";
-                } else {
-                    lv.grid[cur_row][col] = tile;
-                }
-                continue;
+                } else { cur_row=is_uint(key)?std::stoi(key):-1; }
+            } else if(ind==12 && !in_pit && cur_row>=0 && cur_row<W_MAXROWS && is_uint(key)) {
+                int c=std::stoi(key); if(c<0||c>=W_MAXCOLS) continue;
+                std::string tile=str_val(t,col+1); if(tile.empty()) continue;
+                auto &lv=levels[cur_lv];
+                if(tile=="WILLY_RIGHT"||tile=="WILLY_LEFT") {
+                    lv.willy_start={cur_row,c};
+                    lv.grid[cur_row][c]="EMPTY";
+                } else { lv.grid[cur_row][c]=tile; }
             }
         }
-
-        // Finalise: fill blanks, snapshot orig
-        for (auto &[name, lv] : levels)
-            for (int r = 0; r < W_MAXROWS; r++)
-                for (int c = 0; c < W_COLS; c++) {
-                    if (lv.grid[r][c].empty()) lv.grid[r][c] = "EMPTY";
-                    lv.grid_orig[r][c] = lv.grid[r][c];
-                }
-
+        for(auto &[name,lv]:levels)
+            for(int r=0;r<W_MAXROWS;r++) for(int c=0;c<W_MAXCOLS;c++) {
+                if(lv.grid[r][c].empty()) lv.grid[r][c]="EMPTY";
+                lv.orig[r][c]=lv.grid[r][c];
+            }
         return !levels.empty();
     }
 
-    bool load_from_string(const std::string &json) { return parse(json); }
-
-    bool load_from_disk(const std::string &filename) {
-        for (auto &p : { filename,
-                          std::string("data/") + filename,
-                          std::string("/usr/games/willytheworm/data/") + filename }) {
-            std::ifstream f(p);
-            if (!f.good()) continue;
-            std::stringstream buf; buf << f.rdbuf();
-            return parse(buf.str());
+    bool load_str(const std::string &s) { return parse(s); }
+    bool load_disk(const std::string &fn) {
+        for(auto &p:{fn,"data/"+fn,"/usr/games/willytheworm/data/"+fn}) {
+            std::ifstream f(p); if(!f.good()) continue;
+            std::stringstream b; b<<f.rdbuf(); return parse(b.str());
         }
         return false;
     }
+    bool exists(const std::string &n) const { return levels.count(n)>0; }
 
-    bool level_exists(const std::string &n) const { return levels.count(n) > 0; }
-
-    const std::string &get_tile(const std::string &lname, int r, int c) const {
-        static const std::string empty = "EMPTY";
-        auto it = levels.find(lname);
-        if (it == levels.end()) return empty;
-        if (r < 0 || r >= W_MAXROWS || c < 0 || c >= W_COLS) return empty;
+    const std::string &get(const std::string &lv,int r,int c) const {
+        static const std::string E="EMPTY";
+        auto it=levels.find(lv); if(it==levels.end()) return E;
+        if(r<0||r>=W_MAXROWS||c<0||c>=W_MAXCOLS) return E;
         return it->second.grid[r][c];
     }
-
-    void set_tile(const std::string &lname, int r, int c, const std::string &tile) {
-        auto it = levels.find(lname);
-        if (it == levels.end()) return;
-        if (r < 0 || r >= W_MAXROWS || c < 0 || c >= W_COLS) return;
-        it->second.grid[r][c] = tile;
+    void set(const std::string &lv,int r,int c,const std::string &t) {
+        auto it=levels.find(lv);
+        if(it==levels.end()||r<0||r>=W_MAXROWS||c<0||c>=W_MAXCOLS) return;
+        it->second.grid[r][c]=t;
     }
-
-    void reset(const std::string &lname) {
-        auto it = levels.find(lname);
-        if (it == levels.end()) return;
-        for (int r = 0; r < W_MAXROWS; r++)
-            for (int c = 0; c < W_COLS; c++)
-                it->second.grid[r][c] = it->second.grid_orig[r][c];
+    void reset(const std::string &lv) {
+        auto it=levels.find(lv); if(it==levels.end()) return;
+        for(int r=0;r<W_MAXROWS;r++) for(int c=0;c<W_MAXCOLS;c++)
+            it->second.grid[r][c]=it->second.orig[r][c];
     }
-
-    std::pair<int,int> willy_start(const std::string &lname) const {
-        auto it = levels.find(lname);
-        return (it != levels.end()) ? it->second.willy_start : std::make_pair(23, 7);
+    std::pair<int,int> willy_start(const std::string &lv) const {
+        auto it=levels.find(lv);
+        return it!=levels.end()?it->second.willy_start:std::make_pair(23,0);
     }
-
-    std::pair<int,int> ballpit(const std::string &lname) const {
-        auto it = levels.find(lname);
-        if (it == levels.end() || !it->second.ballpit_found) return {0, 0};
-        return it->second.ballpit_pos;
+    std::pair<int,int> ballpit(const std::string &lv) const {
+        auto it=levels.find(lv);
+        if(it==levels.end()||!it->second.has_ballpit) return {0,0};
+        return it->second.ballpit;
     }
 };
 
-// Load levels — decompresses from header, falls back to disk
-static bool ww_load_levels(WillyLevels &lv) {
-    if (WILLY_ASSETS_EMBEDDED && willy_levels_z_len > 1) {
+static bool ww_load_levels(WLevels &lv) {
+    if(WILLY_ASSETS_EMBEDDED && willy_levels_z_len>1) {
         std::vector<uint8_t> raw(willy_levels_raw_len);
-        mz_ulong out_len = (mz_ulong)willy_levels_raw_len;
-        if (mz_uncompress(raw.data(), &out_len,
-                          willy_levels_z, (mz_ulong)willy_levels_z_len) == MZ_OK) {
-            std::string json(raw.begin(), raw.begin() + out_len);
-            if (lv.load_from_string(json)) return true;
+        mz_ulong out=(mz_ulong)willy_levels_raw_len;
+        if(mz_uncompress(raw.data(),&out,
+                         willy_levels_z,(mz_ulong)willy_levels_z_len)==MZ_OK) {
+            if(lv.load_str(std::string(raw.begin(),raw.begin()+out))) return true;
         }
     }
-    return lv.load_from_disk("levels.json");
+    return lv.load_disk("levels.json");
 }
 
 // =============================================================================
-// BALL
+// BALL  (mirrors C++ Ball struct and update_balls logic)
 // =============================================================================
-struct WBall { int row, col; std::string dir; };
+struct WBall { int row,col; std::string dir; };
 
 // =============================================================================
-// SUB-GAME STATE
+// STATE
 // =============================================================================
-enum class WillySubState { PLAYING, DEAD_FLASH, GAME_OVER };
+enum class WSub { INTRO, PLAYING, DEAD_WHITE, WIN_PAUSE, GAME_OVER };
 
 struct WillyWoprState {
-    WillyLevels  levels;
-    std::string  cur_level;
+    WLevels     levels;
+    std::string cur_level;
+    int         level_num = 1;
 
-    int  wy = 23, wx = 7;
-    int  pwy = 23, pwx = 7;
-    std::string dir = "RIGHT";
-    int  vy = 0;
-    bool jumping = false;
+    // Willy — mirrors WillyGame fields exactly
+    int  wy=23, wx=0;
+    int  pwy=23, pwx=0;
+    std::string willy_direction = "RIGHT";
 
-    bool key_left = false, key_right = false;
-    bool key_up   = false, key_down  = false;
-    bool key_space_new = false;
+    int  willy_velocity_y = 0;
+    bool jumping          = false;
 
-    bool        moving = false;
-    std::string move_dir;
+    // Movement — mirrors moving_continuously / continuous_direction / up_pressed / down_pressed
+    bool        moving_continuously = false;
+    std::string continuous_direction;
+    bool        up_pressed   = false;
+    bool        down_pressed = false;
 
+    // Balls
     std::vector<WBall> balls;
-    int  num_balls = 6;
+    int max_balls = 6;
 
-    int score = 0, lives = 5, level = 1, bonus = 1000, life_adder = 0;
+    // Ballpit spawn pos
+    int vx=0, vy=0;
 
-    double tick_acc       = 0.0;
-    double tick_rate      = 0.1;   // 10 fps game logic
-    int    frame_count    = 0;
+    // Score / lives
+    int score=0, lives=5, bonus=1000, life_adder=0;
+    int bcount=0;
 
+    // Timing (10fps game logic, same as game_options.fps default)
+    double tick_acc  = 0.0;
+    double tick_rate = 0.1;
+
+    // Ball spawn timing
     double ball_spawn_acc   = 0.0;
     double ball_spawn_delay = 1.0;
 
-    WillySubState sub_state   = WillySubState::PLAYING;
-    double        flash_timer = 0.0;
+    WSub   sub = WSub::INTRO;
+    double sub_timer = 0.0;
+    int    flash_count = 0;
 
-    float render_x0 = 0, render_y0 = 0;
-    float cell_w = 0,    cell_h = 0;
+    // Render geometry
+    float rx0=0,ry0=0,rcw=0,rch=0;
 
     std::mt19937 rng{std::random_device{}()};
 };
 
 // =============================================================================
-// TILE / MOVEMENT HELPERS
+// HELPERS  (mirrors willy.cpp helper functions)
 // =============================================================================
 
-static const std::string &ww_get(WillyWoprState *s, int r, int c) {
-    return s->levels.get_tile(s->cur_level, r, c);
+static const std::string &wg(WillyWoprState *s,int r,int c) {
+    return s->levels.get(s->cur_level,r,c);
 }
-static void ww_set(WillyWoprState *s, int r, int c, const std::string &t) {
-    s->levels.set_tile(s->cur_level, r, c, t);
+static void ws(WillyWoprState *s,int r,int c,const std::string &t) {
+    s->levels.set(s->cur_level,r,c,t);
 }
-static bool ww_is_pipe(const std::string &t) {
-    return t.size() >= 4 && t.substr(0, 4) == "PIPE";
-}
-static bool ww_can_move(WillyWoprState *s, int r, int c) {
-    if (r < 0 || r >= W_ROWS || c < 0 || c >= W_COLS) return false;
-    const std::string &t = ww_get(s, r, c);
-    return (t == "EMPTY" || t == "LADDER" || t == "PRESENT" ||
-            t == "BELL"  || t == "UPSPRING" || t == "SIDESPRING" ||
-            t == "TACK"  || t == "BALLPIT");
-}
-static bool ww_on_solid(WillyWoprState *s) {
-    if (s->wy >= W_MAXROWS - 1) return true;
-    return (ww_get(s, s->wy, s->wx) == "LADDER") ||
-           ww_is_pipe(ww_get(s, s->wy + 1, s->wx));
-}
-static bool ww_ball_at(WillyWoprState *s, int r, int c) {
-    for (auto &b : s->balls) if (b.row == r && b.col == c) return true;
-    return false;
+static bool is_pipe(const std::string &t) {
+    return t.size()>=4 && t.substr(0,4)=="PIPE";
 }
 
-// =============================================================================
-// LEVEL LOADING
-// =============================================================================
+// willy_game_can_move_to
+static bool can_move(WillyWoprState *s,int r,int c) {
+    if(r<0||r>=W_ROWS||c<0||c>=W_COLS) return false;
+    const std::string &t=wg(s,r,c);
+    return (t=="EMPTY"||t=="LADDER"||t=="PRESENT"||t=="BELL"||
+            t=="UPSPRING"||t=="SIDESPRING"||t=="TACK"||t=="BALLPIT"||
+            t=="WILLY_RIGHT"||t=="WILLY_LEFT");
+}
 
-static void ww_load_level(WillyWoprState *s, int num) {
-    s->level     = num;
-    s->cur_level = "level" + std::to_string(num);
-    auto start   = s->levels.willy_start(s->cur_level);
-    s->wy = start.first;  s->wx = start.second;
-    s->pwy = s->wy;       s->pwx = s->wx;
-    s->vy = 0;            s->jumping = false;
-    s->balls.clear();
-    s->ball_spawn_acc   = 0.0;
-    s->ball_spawn_delay = 1.0;
-    s->bonus            = 1000;
-    s->frame_count      = 0;
-    s->moving           = false;
-    s->move_dir.clear();
+// willy_game_is_on_solid_ground
+static bool on_solid(WillyWoprState *s) {
+    if(s->wy >= W_MAXROWS-1) return true;
+    const std::string &cur  = wg(s,s->wy,s->wx);
+    const std::string &below= wg(s,s->wy+1,s->wx);
+    return (cur=="LADDER") || is_pipe(below);
+}
+
+// willy_game_jump
+// willy_game_jump — sets vertical velocity only, never touches horizontal state
+static void do_jump(WillyWoprState *s) {
+    if(s->willy_velocity_y != 0) return; // already airborne, ignore
+    const std::string &cur  = wg(s,s->wy,s->wx);
+    const std::string &below= wg(s,s->wy+1,s->wx);
+    bool can_jump = (cur=="UPSPRING") || is_pipe(below) || (s->wy==W_MAXROWS-1);
+    if(can_jump) {
+        s->jumping = true;
+        // Pascal jcount goes 1-7: 3 up steps + 1 flat + 3 down = 3 rows height
+        s->willy_velocity_y = (cur=="UPSPRING") ? -4 : -3;
+        // moving_continuously and continuous_direction are intentionally NOT touched
+        // Play jump sound: ascending tone per Pascal (25-wy)*100
+        ww_snd_climb(s->wy - 1);
+    }
 }
 
 // =============================================================================
 // DIE / COMPLETE
 // =============================================================================
-
 static void ww_die(WillyWoprState *s) {
     s->lives--;
-    s->sub_state  = WillySubState::DEAD_FLASH;
-    s->flash_timer = 0.4;
+    ww_snd_lose();
+    s->sub       = WSub::DEAD_WHITE;
+    s->sub_timer = 0.0;
+    s->flash_count = 0;
 }
 
-static void ww_complete_level(WillyWoprState *s) {
+static void ww_complete(WillyWoprState *s) {
     s->score += s->bonus;
+    ww_snd_win();
+    s->sub       = WSub::WIN_PAUSE;
+    s->sub_timer = 0.0;
+}
+
+static void ww_load_level(WillyWoprState *s, int num);
+
+static void ww_next_level(WillyWoprState *s) {
+    int saved_score  = s->score;
+    int saved_lives  = s->lives;
+    int saved_ladder = s->life_adder;
+    int saved_maxb   = s->max_balls;
+    int next = s->level_num + 1;
+    if(!s->levels.exists("level"+std::to_string(next))) {
+        next = 1;
+        saved_maxb += 2;
+        if(saved_maxb > 9) saved_maxb = 9;
+    }
+    ww_load_level(s, next);
+    s->score      = saved_score;
+    s->lives      = saved_lives;
+    s->life_adder = saved_ladder;
+    s->max_balls  = saved_maxb;
+}
+
+static void ww_load_level(WillyWoprState *s, int num) {
+    s->level_num  = num;
+    s->cur_level  = "level"+std::to_string(num);
     s->levels.reset(s->cur_level);
-    int next = s->level + 1;
-    if (s->levels.level_exists("level" + std::to_string(next)))
-        ww_load_level(s, next);
-    else { s->levels.reset("level1"); ww_load_level(s, 1); }
-    s->sub_state = WillySubState::PLAYING;
+
+    auto start = s->levels.willy_start(s->cur_level);
+    s->wy=start.first; s->wx=start.second;
+    s->pwy=s->wy; s->pwx=s->wx;
+    s->willy_direction = "RIGHT";
+
+    s->willy_velocity_y = 0;
+    s->jumping          = false;
+    s->moving_continuously = false;
+    s->continuous_direction.clear();
+    s->up_pressed = s->down_pressed = false;
+
+    auto pit = s->levels.ballpit(s->cur_level);
+    s->vy=pit.first; s->vx=pit.second;
+
+    s->balls.clear();
+    s->ball_spawn_acc   = 0.0;
+    s->ball_spawn_delay = 1.0;
+    s->bonus    = 1000;
+    s->bcount   = 0;
+    s->sub      = WSub::PLAYING;
+    s->sub_timer = 0.0;
 }
 
 // =============================================================================
-// GAME TICK  (mirrors willy.cpp exactly)
+// GAME TICK  — direct port of willy_game_update_willy_movement,
+//              willy_game_update_balls, willy_game_check_collisions
 // =============================================================================
 
 static void ww_tick(WillyWoprState *s) {
-    if (s->sub_state != WillySubState::PLAYING) return;
 
-    s->pwy = s->wy; s->pwx = s->wx;
+    // ── bonus countdown (every 15 ticks, same as C++ bcount mod 15) ──────────
+    s->bcount++;
+    if(s->bcount%15==0) {
+        s->bonus -= 10;
+        if(s->bonus < 0) s->bonus = 0;
+        if(s->bonus == 0) { ww_die(s); return; }
+    }
 
-    const std::string &cur_tile = ww_get(s, s->wy, s->wx);
-    bool on_ladder       = (cur_tile == "LADDER");
-    bool moved_on_ladder = false;
+    // ── willy_game_update_willy_movement ──────────────────────────────────────
+    s->pwy=s->wy; s->pwx=s->wx;
 
-    // Up (ladder)
-    if (s->key_up) {
-        int tr = s->wy - 1;
-        if (tr >= 0) {
-            const std::string &at = ww_get(s, tr, s->wx);
-            if ((on_ladder || at == "LADDER") && at == "LADDER" && ww_can_move(s, tr, s->wx)) {
-                if (!ww_ball_at(s, tr, s->wx)) {
-                    s->wy--; s->vy = 0; moved_on_ladder = true;
-                    s->moving = false; s->move_dir.clear();
-                } else { ww_die(s); return; }
+    // up_pressed / down_pressed: since WOPR has no keyup dispatch, we keep
+    // them set until the movement they request is no longer possible.
+    // This makes holding UP climb the full ladder continuously.
+    bool up_this_tick   = s->up_pressed;
+    bool down_this_tick = s->down_pressed;
+    // Do NOT clear them here — they stay set until ladder ends or key released.
+
+    std::string cur_tile = wg(s,s->wy,s->wx);
+    bool on_ladder  = (cur_tile=="LADDER");
+    bool moved_ladder = false;
+
+    // Up / down on ladder
+    if(up_this_tick) {
+        int tr=s->wy-1;
+        if(tr>=0) {
+            std::string above=wg(s,tr,s->wx);
+            if((on_ladder||above=="LADDER") && above=="LADDER" && can_move(s,tr,s->wx)) {
+                s->wy--; s->willy_velocity_y=0; moved_ladder=true;
+                s->moving_continuously=false; s->continuous_direction.clear();
+                ww_snd_climb(s->wy);
+            } else {
+                // Can't go further up — stop trying
+                s->up_pressed=false;
             }
+        } else {
+            s->up_pressed=false;
+        }
+    }
+    if(down_this_tick && !moved_ladder) {
+        int tr=s->wy+1;
+        if(tr<W_ROWS) {
+            std::string below=wg(s,tr,s->wx);
+            bool can_down = (on_ladder && can_move(s,tr,s->wx)) ||
+                            (below=="LADDER" && can_move(s,tr,s->wx));
+            if(can_down) {
+                s->wy++; s->willy_velocity_y=0; moved_ladder=true;
+                s->moving_continuously=false; s->continuous_direction.clear();
+                ww_snd_climb(s->wy);
+            } else {
+                s->down_pressed=false;
+            }
+        } else {
+            s->down_pressed=false;
         }
     }
 
-    // Down (ladder)
-    if (s->key_down && !moved_on_ladder) {
-        int tr = s->wy + 1;
-        if (tr < W_ROWS) {
-            const std::string &at = ww_get(s, tr, s->wx);
-            if ((on_ladder || at == "LADDER") && ww_can_move(s, tr, s->wx)) {
-                if (!ww_ball_at(s, tr, s->wx)) {
-                    s->wy++; s->vy = 0; moved_on_ladder = true;
-                    s->moving = false; s->move_dir.clear();
-                } else { ww_die(s); return; }
+    // Horizontal movement — moving_continuously persists through jumps
+    if(!moved_ladder) {
+        if(s->moving_continuously && !s->continuous_direction.empty()) {
+            bool hit = false;
+            if(s->continuous_direction=="LEFT") {
+                if(can_move(s,s->wy,s->wx-1)) s->wx--;
+                else hit=true;
+            } else if(s->continuous_direction=="RIGHT") {
+                if(can_move(s,s->wy,s->wx+1)) s->wx++;
+                else hit=true;
             }
+            if(hit) { s->moving_continuously=false; s->continuous_direction.clear(); }
         }
     }
 
-    // Horizontal
-    if (!moved_on_ladder) {
-        std::string hdir;
-        if      (s->moving && !s->move_dir.empty()) hdir = s->move_dir;
-        else if (s->key_left)  { hdir = "LEFT";  s->dir = "LEFT";  }
-        else if (s->key_right) { hdir = "RIGHT"; s->dir = "RIGHT"; }
+    // Gravity / jump (vertical velocity) — mirrors willy_game_update_willy_movement
+    cur_tile  = wg(s,s->wy,s->wx);
+    on_ladder = (cur_tile=="LADDER");
 
-        if (!hdir.empty()) {
-            int tc = (hdir == "LEFT") ? s->wx - 1 : s->wx + 1;
-            if (ww_can_move(s, s->wy, tc)) {
-                if (!ww_ball_at(s, s->wy, tc)) {
-                    s->wx = tc; s->dir = hdir;
-                } else { ww_die(s); return; }
-            } else if (s->moving) {
-                s->moving = false; s->move_dir.clear();
+    if(!on_ladder) {
+        if(s->willy_velocity_y < 0) {
+            // Moving upward (jumping) — just advance velocity toward 0, no gravity yet
+            int ny = s->wy - 1;
+            if(can_move(s,ny,s->wx)) s->wy = ny;
+            s->willy_velocity_y++;
+        } else {
+            // Not jumping upward — apply gravity
+            if(!on_solid(s)) {
+                s->willy_velocity_y += 1;
+            } else {
+                if(s->willy_velocity_y > 0) { s->willy_velocity_y=0; s->jumping=false; }
             }
-        }
-    }
-
-    // Gravity / jump
-    const std::string &ct2 = ww_get(s, s->wy, s->wx);
-    bool on_lad2 = (ct2 == "LADDER");
-
-    if (s->key_space_new && !s->jumping) {
-        const std::string &below = ww_get(s, s->wy + 1, s->wx);
-        if (ct2 == "UPSPRING" || ww_is_pipe(below) || s->wy == W_MAXROWS - 1) {
-            s->jumping = true;
-            s->vy = (ct2 == "UPSPRING") ? -6 : -5;
-        }
-    }
-    s->key_space_new = false;
-
-    if (!on_lad2) {
-        if (!ww_on_solid(s)) s->vy += 1;
-        else if (s->vy > 0)  { s->vy = 0; s->jumping = false; }
-        if (s->vy != 0) {
-            int ny = s->wy + (s->vy > 0 ? 1 : -1);
-            if (ww_can_move(s, ny, s->wx)) {
-                if (!ww_ball_at(s, ny, s->wx)) s->wy = ny;
-                else { ww_die(s); return; }
+            if(s->willy_velocity_y > 0) {
+                int ny = s->wy + 1;
+                if(can_move(s,ny,s->wx)) s->wy = ny;
             }
-            if (s->vy < 0) s->vy++;
         }
     } else {
-        s->vy = 0; s->jumping = false;
+        s->willy_velocity_y=0; s->jumping=false;
     }
 
-    // Ball movement (mirrors update_balls)
-    auto pit = s->levels.ballpit(s->cur_level);
-    for (auto &b : s->balls) {
-        if (b.row < W_MAXROWS - 1 && !ww_is_pipe(ww_get(s, b.row + 1, b.col))) {
-            b.row++; b.dir.clear(); continue;
-        }
-        if (b.dir.empty()) {
-            std::uniform_real_distribution<> dis(0.0, 1.0);
-            b.dir = (dis(s->rng) > 0.5) ? "RIGHT" : "LEFT";
-        }
-        if (b.dir == "RIGHT") {
-            if (b.col + 1 < W_COLS && !ww_is_pipe(ww_get(s, b.row, b.col + 1))) b.col++;
-            else b.dir = "LEFT";
-        } else {
-            if (b.col - 1 >= 0 && !ww_is_pipe(ww_get(s, b.row, b.col - 1))) b.col--;
-            else b.dir = "RIGHT";
-        }
-        // Return stray balls to ballpit
-        if (ww_get(s, b.row, b.col) == "BALLPIT" &&
-            (b.row != pit.first || b.col != pit.second)) {
-            b.row = pit.first; b.col = pit.second; b.dir.clear();
-        }
-    }
+    // ── willy_game_check_collisions ───────────────────────────────────────────
+    int y=s->wy, x=s->wx;
+    cur_tile = wg(s,y,x);
 
-    // Collisions (mirrors check_collisions)
-    const std::string &tile = ww_get(s, s->wy, s->wx);
-
-    // PIPE18 (destroyable) left behind
-    if ((s->pwy != s->wy || s->pwx != s->wx) && s->pwy + 1 < W_ROWS) {
-        if (ww_get(s, s->pwy + 1, s->pwx) == "PIPE18") {
-            ww_set(s, s->pwy + 1, s->pwx, "EMPTY");
+    // Destroyable pipe left behind
+    if((s->pwy!=y||s->pwx!=x) && s->pwy+1<W_ROWS) {
+        if(wg(s,s->pwy+1,s->pwx)=="PIPE18") {
+            ws(s,s->pwy+1,s->pwx,"EMPTY");
             s->score += 50;
         }
     }
 
     // Ball collision
-    for (auto &b : s->balls) {
-        if (b.row == s->wy && b.col == s->wx && tile != "BALLPIT") {
+    for(auto &b:s->balls) {
+        if(b.row==y && b.col==x && cur_tile!="BALLPIT") {
             ww_die(s); return;
         }
     }
 
-    // Tile interaction
-    if      (tile == "TACK") { ww_die(s); return; }
-    else if (tile == "BELL") { ww_complete_level(s); return; }
-    else if (tile == "PRESENT") {
+    // Tile interactions
+    if(cur_tile=="TACK") { ww_die(s); return; }
+    if(cur_tile=="BELL") { ww_complete(s); return; }
+    if(cur_tile=="PRESENT") {
         s->score += 100;
-        ww_set(s, s->wy, s->wx, "EMPTY");
-    } else if (tile == "SIDESPRING") {
-        if (s->moving) {
-            if      (s->move_dir == "RIGHT") { s->move_dir = "LEFT";  s->dir = "LEFT";  }
-            else if (s->move_dir == "LEFT")  { s->move_dir = "RIGHT"; s->dir = "RIGHT"; }
+        s->life_adder += 100;
+        if(s->life_adder >= W_NEWLIFE) { s->lives++; s->life_adder-=W_NEWLIFE; ww_snd_life(); }
+        ww_snd_pts();
+        ws(s,y,x,"EMPTY");
+    }
+    if(cur_tile=="UPSPRING")   { do_jump(s); }
+    if(cur_tile=="SIDESPRING") {
+        if(s->moving_continuously) {
+            if(s->continuous_direction=="RIGHT") { s->continuous_direction="LEFT"; s->willy_direction="LEFT"; }
+            else { s->continuous_direction="RIGHT"; s->willy_direction="RIGHT"; }
         } else {
-            s->dir = (s->dir == "RIGHT") ? "LEFT" : "RIGHT";
+            s->willy_direction = (s->willy_direction=="RIGHT")?"LEFT":"RIGHT";
         }
     }
 
-    // Bonus countdown / extra life (~1 second at 10 fps)
-    s->frame_count++;
-    if (s->frame_count >= 10) {
-        s->frame_count = 0;
-        s->bonus = std::max(0, s->bonus - 10);
-        if ((s->score / W_NEWLIFE) > s->life_adder) { s->lives++; s->life_adder++; }
-        if (s->bonus <= 0) { ww_die(s); return; }
+    // Jump-over bonus
+    if(s->jumping || s->willy_velocity_y!=0) {
+        for(int i=1;i<5;i++) {
+            int cy=y+i; if(cy>=W_ROWS) break;
+            for(auto &b:s->balls)
+                if(b.row==cy && b.col==x) { s->score+=20; ww_snd_pts(); break; }
+        }
+    }
+
+    // ── willy_game_update_balls ───────────────────────────────────────────────
+    // Gravity + horizontal roll, mirrors C++ exactly
+    auto pit = s->levels.ballpit(s->cur_level);
+    int pit_r=pit.first, pit_c=pit.second;
+
+    // Relocate any ball that fell into a secondary ballpit
+    for(auto &b:s->balls) {
+        std::string t=wg(s,b.row,b.col);
+        if(t=="BALLPIT" && (b.row!=pit_r||b.col!=pit_c)) {
+            b.row=pit_r; b.col=pit_c; b.dir.clear();
+        }
+    }
+
+    for(auto &b:s->balls) {
+        if(b.row < W_MAXROWS-1) {
+            std::string below=wg(s,b.row+1,b.col);
+            if(!is_pipe(below)) {
+                // fall
+                b.row++; b.dir.clear();
+            } else {
+                // on platform — move horizontally
+                if(b.dir.empty()) {
+                    std::uniform_real_distribution<float> d(0,1);
+                    b.dir = (d(s->rng)<0.5f)?"RIGHT":"LEFT";
+                }
+                if(b.dir=="RIGHT") {
+                    if(b.col+1<W_MAXCOLS) {
+                        std::string r=wg(s,b.row,b.col+1);
+                        if(!is_pipe(r)) b.col++;
+                        else b.dir="LEFT";
+                    } else b.dir="LEFT";
+                } else {
+                    if(b.col-1>=0) {
+                        std::string l=wg(s,b.row,b.col-1);
+                        if(!is_pipe(l)) b.col--;
+                        else b.dir="RIGHT";
+                    } else b.dir="RIGHT";
+                }
+            }
+        }
     }
 }
 
@@ -667,77 +738,162 @@ static void ww_tick(WillyWoprState *s) {
 // =============================================================================
 
 void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*/) {
-    if (!w->sub_state) return;
+    if(!w->sub_state) return;
     WillyWoprState *s = static_cast<WillyWoprState*>(w->sub_state);
 
-    // Cell size: use font cell height, keep square, clamp to grid width
-    float cell = (float)ch;
-    if (cell * W_COLS > 1280.f) cell = 1280.f / W_COLS;
-    if (cell < 4.f) cell = 4.f;
+    // Cell size: use actual window dimensions so all rows + status bar fit.
+    int ww=1280, wh=720;
+    SDL_Window *win=SDL_GL_GetCurrentWindow();
+    if(win) SDL_GetWindowSize(win,&ww,&wh);
 
-    float cw_f = cell, ch_f = cell;
-    s->render_x0 = (float)px;
-    s->render_y0 = (float)py;
-    s->cell_w    = cw_f;
-    s->cell_h    = ch_f;
+    // ── INTRO SCREEN ─────────────────────────────────────────────────────────
+    if(s->sub == WSub::INTRO) {
+        // Full blue background
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
 
-    float grid_w = cw_f * W_COLS;
-    float grid_h = ch_f * W_ROWS;
+        // Inline segment: text (sprite=-1) or sprite index
+        struct Seg { const char *txt; int spr; };
+        struct ILine { Seg s[6]; int n; };
 
-    // Blue background (original game colour)
-    gl_draw_rect((float)px, (float)py, grid_w, grid_h + ch_f * 2,
-                 0.0f, 0.0f, 0.6f, 1.0f);
+        float lh = (float)ch;   // line height = font cell height
+        float sc = lh;          // sprite size matches text height
 
-    // Dead flash: alternate white / blue
-    if (s->sub_state == WillySubState::DEAD_FLASH &&
-        ((int)(s->flash_timer * 12.0) & 1))
-        gl_draw_rect((float)px, (float)py, grid_w, grid_h,
-                     1.0f, 1.0f, 1.0f, 1.0f);
+        // Lines from draw.cpp textdata — empty n=0 means blank line
+        const ILine L[] = {
+            {{{"Willy the Worm",                                       -1}},1},
+            {{{nullptr,0}},0},
+            {{{"By Jason Hall",                                         -1}},1},
+            {{{"(original version by Alan Farmer 1985)",                -1}},1},
+            {{{nullptr,0}},0},
+            {{{"This code is Free Open Source Software (FOSS)",         -1}},1},
+            {{{"Please feel free to do with it whatever you wish.",      -1}},1},
+            {{{nullptr,0}},0},
+            {{{"If you do make changes though such as new levels,",      -1}},1},
+            {{{"please share them with the world.",                      -1}},1},
+            {{{nullptr,0}},0},
+            {{{nullptr,0}},0},
+            {{{"Meet Willy the Worm ",    -1},{nullptr,0},{". Willy is a fun-",       -1}},3},
+            {{{"loving invertebrate who likes to climb",                 -1}},1},
+            {{{"ladders ",               -1},{nullptr,3},{" bounce on springs ",      -1},{nullptr,5},{" ",-1},{nullptr,6}},6},
+            {{{"and find his presents ", -1},{nullptr,2},{".  But more",               -1}},3},
+            {{{"than anything, Willy loves to ring,",                   -1}},1},
+            {{{"bells! ",               -1},{nullptr,8}},2},
+            {{{nullptr,0}},0},
+            {{{"You can press the arrow keys \xe2\x86\x90 \xe2\x86\x91 \xe2\x86\x92 \xe2\x86\x93",-1}},1},
+            {{{"to make Willy run and climb, or the",                   -1}},1},
+            {{{"space bar to make him jump. Anything",                  -1}},1},
+            {{{"else will make Willy stop and wait",                    -1}},1},
+            {{{nullptr,0}},0},
+            {{{"Good luck, and don't let Willy step on",                -1}},1},
+            {{{"a tack ",              -1},{nullptr,4},{" or get ran over by a ball! ",-1},{nullptr,7}},4},
+            {{{nullptr,0}},0},
+            {{{"Press Enter to Continue",                               -1}},1},
+        };
+        int NL = (int)(sizeof(L)/sizeof(L[0]));
 
-    // Level grid
-    for (int r = 0; r < W_ROWS; r++) {
-        for (int c = 0; c < W_COLS; c++) {
-            const std::string &tile = ww_get(s, r, c);
-            if (tile == "EMPTY") continue;
-            float fx = (float)px + c * cw_f;
-            float fy = (float)py + r * ch_f;
-            float fr, fg, fb;
-            ww_tile_fg(tile, fr, fg, fb);
-            ww_draw_sprite(ww_sprite_index(tile), fx, fy, cw_f, ch_f, fr, fg, fb);
+        // Find the widest line to determine the center x offset
+        float max_w = 0.f;
+        for(int i=0;i<NL;i++){
+            float lw=0.f;
+            for(int j=0;j<L[i].n;j++){
+                if(L[i].s[j].txt && L[i].s[j].spr<0) lw+=gl_text_width(L[i].s[j].txt,1.f);
+                else if(L[i].s[j].spr>=0) lw+=sc;
+            }
+            if(lw>max_w) max_w=lw;
+        }
+
+        // Start y near top (~1/12 of screen), center x based on widest line
+        float start_y = (float)wh / 12.f;
+        float cx = ((float)ww - max_w) / 2.f;  // left edge of the text block
+
+        for(int i=0;i<NL;i++){
+            float y = start_y + i*lh;
+            if(L[i].n == 0) continue;  // blank line — just skip drawing
+
+            // Measure this line's width for centering within the block
+            float lw=0.f;
+            for(int j=0;j<L[i].n;j++){
+                if(L[i].s[j].txt && L[i].s[j].spr<0) lw+=gl_text_width(L[i].s[j].txt,1.f);
+                else if(L[i].s[j].spr>=0) lw+=sc;
+            }
+            float x = cx + (max_w - lw)/2.f;  // center each line within the block
+
+            for(int j=0;j<L[i].n;j++){
+                const Seg &sg=L[i].s[j];
+                if(sg.txt && sg.spr<0){
+                    gl_draw_text(sg.txt,x,y,1.f,1.f,1.f,1.f,1.f);
+                    x+=gl_text_width(sg.txt,1.f);
+                } else if(sg.spr>=0){
+                    ww_draw_sprite(sg.spr,x,y,sc,sc);
+                    x+=sc;
+                }
+            }
+        }
+
+        gl_flush_verts();
+        return;
+    }
+
+    // Shrink grid so the bottom row is fully clear of the status bar.
+    // Reserve ch*2 below the grid: ch for the gap + ch for the text line.
+    float avail_w = (float)(ww - px*2);
+    float avail_h = (float)(wh - py) - (float)ch * 2.f - 8.f;
+    float cell = std::min(avail_h/(float)W_ROWS, avail_w/(float)W_COLS);
+    if(cell<4.f) cell=4.f;
+
+    s->rx0=px; s->ry0=py; s->rcw=cell; s->rch=cell;
+
+    float gw=cell*W_COLS, gh=cell*W_ROWS;
+
+    // Fill the entire window with blue — game area + margins + status strip
+    gl_draw_rect(0.f, 0.f, (float)ww, (float)wh, 0.f, 0.f, 0.55f, 1.f);
+
+    // Death: solid white screen
+    if(s->sub==WSub::DEAD_WHITE)
+        gl_draw_rect((float)px,(float)py,gw,gh, 1.f,1.f,1.f,1.f);
+
+    // Level grid — all sprites white
+    for(int r=0;r<W_ROWS;r++) {
+        for(int c=0;c<W_COLS;c++) {
+            const std::string &tile=wg(s,r,c);
+            if(tile=="EMPTY") continue;
+            if(r==s->wy&&c==s->wx) continue; // Willy covers it
+            int idx=ww_sprite_idx(tile); if(idx<0) continue;
+            ww_draw_sprite(idx, (float)px+c*cell, (float)py+r*cell, cell,cell);
         }
     }
 
-    // Balls
-    for (auto &b : s->balls) {
-        if (b.row < 0 || b.row >= W_ROWS || b.col < 0 || b.col >= W_COLS) continue;
-        if (ww_get(s, b.row, b.col) == "BALLPIT") continue;
-        ww_draw_sprite(7 /*BALL*/,
-                       (float)px + b.col * cw_f, (float)py + b.row * ch_f,
-                       cw_f, ch_f, 1.f, 0.2f, 0.2f);
+    // Balls — white
+    for(auto &b:s->balls) {
+        if(b.row<0||b.row>=W_ROWS||b.col<0||b.col>=W_COLS) continue;
+        if(wg(s,b.row,b.col)=="BALLPIT") continue;
+        if(b.row==s->wy&&b.col==s->wx) continue;
+        ww_draw_sprite(7, (float)px+b.col*cell, (float)py+b.row*cell, cell,cell);
     }
 
-    // Willy (blink during flash)
-    bool draw_willy = !(s->sub_state == WillySubState::DEAD_FLASH &&
-                        ((int)(s->flash_timer * 12.0) & 1));
-    if (draw_willy && s->wy >= 0 && s->wy < W_ROWS && s->wx >= 0 && s->wx < W_COLS)
-        ww_draw_sprite((s->dir == "LEFT") ? 1 : 0,
-                       (float)px + s->wx * cw_f, (float)py + s->wy * ch_f,
-                       cw_f, ch_f, 1.f, 1.f, 1.f);
+    // Willy — white, blink during flash
+    bool draw_willy = (s->sub != WSub::DEAD_WHITE);
+    if(draw_willy && s->wy>=0&&s->wy<W_ROWS&&s->wx>=0&&s->wx<W_COLS) {
+        int idx = (s->willy_direction=="RIGHT")?0:1;
+        ww_draw_sprite(idx, (float)px+s->wx*cell, (float)py+s->wy*cell, cell,cell);
+    }
 
-    // Status bar
-    float sy = (float)py + grid_h + 4.f;
-    if (s->sub_state == WillySubState::GAME_OVER) {
+    // Status bar — sits below the game grid, blue background, white text
+    // Position it centered in the gap between grid bottom and window bottom
+    float gap    = (float)(wh) - ((float)py + gh);
+    float sy     = (float)py + gh + gap * 0.35f;
+    // Blue strip filling the gap area
+    gl_draw_rect(0.f, (float)py+gh, (float)ww, gap, 0.f,0.f,0.55f,1.f);
+
+    if(s->sub==WSub::GAME_OVER) {
         gl_draw_text("GAME OVER  -  PRESS ENTER TO PLAY AGAIN",
-                     (float)px, sy, 1.f, 0.2f, 0.2f, 1.f, 1.f);
-        char sc[64];
-        snprintf(sc, sizeof(sc), "FINAL SCORE: %d", s->score);
-        gl_draw_text(sc, (float)px, sy + (float)ch, 1.f, 1.f, 0.f, 1.f, 1.f);
+                     (float)px, sy, 1.f,1.f,1.f,1.f,1.f);
     } else {
-        char status[128];
-        snprintf(status, sizeof(status),
-                 "SCORE:%5d  BONUS:%4d  LVL:%2d  LIVES:%d  ESC=EXIT",
-                 s->score, s->bonus, s->level, s->lives);
-        gl_draw_text(status, (float)px, sy, 0.f, 1.f, 0.4f, 1.f, 1.f);
+        char buf[160];
+        snprintf(buf,sizeof(buf),
+                 "SCORE: %6d    BONUS: %4d    LEVEL: %2d    WILLY THE WORMS LEFT: %2d",
+                 s->score, s->bonus, s->level_num, s->lives);
+        gl_draw_text(buf,(float)px,sy, 1.f,1.f,1.f,1.f,1.f);
     }
 
     gl_flush_verts();
@@ -748,97 +904,121 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
 // =============================================================================
 
 void wopr_willy_update(WoprState *w, double dt) {
-    if (!w->sub_state) return;
-    WillyWoprState *s = static_cast<WillyWoprState*>(w->sub_state);
+    if(!w->sub_state) return;
+    WillyWoprState *s=static_cast<WillyWoprState*>(w->sub_state);
 
-    if (s->sub_state == WillySubState::DEAD_FLASH) {
-        s->flash_timer -= dt;
-        if (s->flash_timer <= 0.0) {
-            if (s->lives <= 0) {
-                s->sub_state = WillySubState::GAME_OVER;
-            } else {
-                s->levels.reset(s->cur_level);
-                auto start = s->levels.willy_start(s->cur_level);
-                s->wy = start.first; s->wx = start.second;
-                s->pwy = s->wy;     s->pwx = s->wx;
-                s->vy = 0; s->jumping = false;
-                s->balls.clear();
-                s->ball_spawn_acc = 0.0; s->ball_spawn_delay = 1.0;
-                s->bonus = 1000; s->frame_count = 0;
-                s->moving = false; s->move_dir.clear();
-                s->key_left = s->key_right = s->key_up = s->key_down = false;
-                s->sub_state = WillySubState::PLAYING;
-            }
+    if(s->sub==WSub::INTRO) return;  // nothing ticks during intro
+
+    if(s->sub==WSub::DEAD_WHITE) {
+        s->sub_timer += dt;
+        if(s->sub_timer >= 1.0) {  // hold white for 1 second
+            if(s->lives<=0) { s->sub=WSub::GAME_OVER; }
+            else            { ww_load_level(s,s->level_num); }
         }
         return;
     }
+    if(s->sub==WSub::WIN_PAUSE) {
+        s->sub_timer += dt;
+        if(s->sub_timer>0.8) ww_next_level(s);
+        return;
+    }
+    if(s->sub!=WSub::PLAYING) return;
 
-    if (s->sub_state != WillySubState::PLAYING) return;
-
-    // Ball spawning
     s->ball_spawn_acc += dt;
-    if ((int)s->balls.size() < s->num_balls && s->ball_spawn_acc >= s->ball_spawn_delay) {
-        s->ball_spawn_acc = 0.0;
-        std::uniform_real_distribution<> dd(0.5, 2.0);
-        s->ball_spawn_delay = dd(s->rng);
-        auto pit = s->levels.ballpit(s->cur_level);
-        if (pit.first != 0 || pit.second != 0)
-            s->balls.push_back({pit.first, pit.second, ""});
+    auto pit_pos = s->levels.ballpit(s->cur_level);
+    auto &cur_lv = s->levels.levels[s->cur_level];
+    if((int)s->balls.size()<s->max_balls && s->ball_spawn_acc>=s->ball_spawn_delay
+       && cur_lv.has_ballpit) {
+        s->ball_spawn_acc=0.0;
+        std::uniform_real_distribution<double> dd(0.5,2.0);
+        s->ball_spawn_delay=dd(s->rng);
+        s->balls.push_back({pit_pos.first, pit_pos.second, ""});
     }
 
-    // Fixed-rate game logic
     s->tick_acc += dt;
-    while (s->tick_acc >= s->tick_rate) {
+    while(s->tick_acc>=s->tick_rate) {
         s->tick_acc -= s->tick_rate;
         ww_tick(s);
-        if (s->sub_state != WillySubState::PLAYING) break;
+        if(s->sub!=WSub::PLAYING) break;
     }
 }
 
 // =============================================================================
-// KEYBOARD
+// KEYBOARD  — mirrors willy_game_on_key_press exactly
+// Space calls do_jump() which does NOT touch moving_continuously.
+// Any other key (not arrow/space) clears moving_continuously.
 // =============================================================================
 
 bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
-    if (!w->sub_state) return false;
-    WillyWoprState *s = static_cast<WillyWoprState*>(w->sub_state);
+    if(!w->sub_state) return false;
+    WillyWoprState *s=static_cast<WillyWoprState*>(w->sub_state);
 
-    if (s->sub_state == WillySubState::GAME_OVER) {
-        if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
-            ww_load_level(s, 1);
-            s->score = 0; s->lives = 5; s->bonus = 1000; s->life_adder = 0;
-            s->sub_state = WillySubState::PLAYING;
-        }
+    if(s->sub==WSub::INTRO) {
+        if(sym==SDLK_RETURN||sym==SDLK_KP_ENTER||sym==SDLK_SPACE)
+            s->sub=WSub::PLAYING;
         return true;
     }
 
-    switch (sym) {
-        case SDLK_LEFT:  case SDLK_a:
-            s->key_left = true; s->moving = true;
-            s->move_dir = "LEFT";  s->dir = "LEFT";  break;
+    if(s->sub==WSub::GAME_OVER) {
+        if(sym==SDLK_RETURN||sym==SDLK_KP_ENTER) {
+            int saved_maxb=s->max_balls;
+            ww_load_level(s,1);
+            s->score=0; s->lives=5; s->life_adder=0;
+            s->max_balls=saved_maxb;
+            s->sub=WSub::INTRO;  // back to intro
+        }
+        return true;
+    }
+    if(s->sub!=WSub::PLAYING) return true;
+
+    switch(sym) {
+        case SDLK_SPACE:
+            // Jump — does NOT clear continuous_direction so Willy keeps running
+            do_jump(s);
+            break;
+        case SDLK_LEFT: case SDLK_a:
+            s->continuous_direction="LEFT";
+            s->moving_continuously=true;
+            s->willy_direction="LEFT";
+            break;
         case SDLK_RIGHT: case SDLK_d:
-            s->key_right = true; s->moving = true;
-            s->move_dir = "RIGHT"; s->dir = "RIGHT"; break;
-        case SDLK_UP:   case SDLK_w: s->key_up    = true; break;
-        case SDLK_DOWN: case SDLK_s: s->key_down  = true; break;
-        case SDLK_SPACE:             s->key_space_new = true; break;
-        default: s->moving = false; s->move_dir.clear(); break;
+            s->continuous_direction="RIGHT";
+            s->moving_continuously=true;
+            s->willy_direction="RIGHT";
+            break;
+        case SDLK_UP: case SDLK_w:
+            s->up_pressed=true;
+            break;
+        case SDLK_DOWN: case SDLK_s:
+            s->down_pressed=true;
+            break;
+        default:
+            // Only stop for real unmapped keypresses, not text-input events (sym=0)
+            if(sym != 0) {
+                s->moving_continuously=false;
+                s->continuous_direction.clear();
+                s->up_pressed=false;
+                s->down_pressed=false;
+            }
+            break;
     }
     return true;
 }
 
 void wopr_willy_keyup(WoprState *w, SDL_Keycode sym) {
-    if (!w->sub_state) return;
-    WillyWoprState *s = static_cast<WillyWoprState*>(w->sub_state);
-    switch (sym) {
-        case SDLK_LEFT:  case SDLK_a:
-            s->key_left = false;
-            if (s->move_dir == "LEFT")  { s->moving = false; s->move_dir.clear(); } break;
+    if(!w->sub_state) return;
+    WillyWoprState *s=static_cast<WillyWoprState*>(w->sub_state);
+    switch(sym) {
+        case SDLK_UP:   case SDLK_w: s->up_pressed=false;   break;
+        case SDLK_DOWN: case SDLK_s: s->down_pressed=false;  break;
+        case SDLK_LEFT: case SDLK_a:
+            if(s->continuous_direction=="LEFT") {
+                s->moving_continuously=false; s->continuous_direction.clear();
+            } break;
         case SDLK_RIGHT: case SDLK_d:
-            s->key_right = false;
-            if (s->move_dir == "RIGHT") { s->moving = false; s->move_dir.clear(); } break;
-        case SDLK_UP:   case SDLK_w: s->key_up   = false; break;
-        case SDLK_DOWN: case SDLK_s: s->key_down = false; break;
+            if(s->continuous_direction=="RIGHT") {
+                s->moving_continuously=false; s->continuous_direction.clear();
+            } break;
         default: break;
     }
 }
@@ -848,34 +1028,30 @@ void wopr_willy_keyup(WoprState *w, SDL_Keycode sym) {
 // =============================================================================
 
 void wopr_willy_mousedown(WoprState *w, int mx, int my, int button) {
-    if (!w->sub_state) return;
-    WillyWoprState *s = static_cast<WillyWoprState*>(w->sub_state);
-    if (s->sub_state != WillySubState::PLAYING || s->cell_w == 0.f) return;
-
-    int dc = (int)((mx - s->render_x0) / s->cell_w) - s->wx;
-    int dr = (int)((my - s->render_y0) / s->cell_h) - s->wy;
-
-    if (button == 1) {
-        if (std::abs(dc) >= std::abs(dr)) {
-            if      (dc > 0) { s->moving = true; s->move_dir = "RIGHT"; s->dir = "RIGHT"; }
-            else if (dc < 0) { s->moving = true; s->move_dir = "LEFT";  s->dir = "LEFT";  }
+    if(!w->sub_state) return;
+    WillyWoprState *s=static_cast<WillyWoprState*>(w->sub_state);
+    if(s->sub!=WSub::PLAYING||s->rcw==0.f) return;
+    int dc=(int)((mx-s->rx0)/s->rcw)-s->wx;
+    int dr=(int)((my-s->ry0)/s->rch)-s->wy;
+    if(button==1) {
+        if(std::abs(dc)>=std::abs(dr)) {
+            s->continuous_direction=(dc>0)?"RIGHT":"LEFT";
+            s->moving_continuously=true;
+            s->willy_direction=s->continuous_direction;
         } else {
-            if      (dr < 0) s->key_up   = true;
-            else if (dr > 0) s->key_down = true;
+            if(dr<0) s->up_pressed=true;
+            else     s->down_pressed=true;
         }
-    } else if (button == 2) {
-        s->moving = false; s->move_dir.clear(); s->key_up = s->key_down = false;
-    } else if (button == 3) {
-        s->key_space_new = true;
-    }
+    } else if(button==3) { do_jump(s); }
+    else if(button==2)   { s->moving_continuously=false; s->continuous_direction.clear(); }
 }
 
-void wopr_willy_mouseup(WoprState *w, int /*mx*/, int /*my*/, int button) {
-    if (!w->sub_state) return;
-    WillyWoprState *s = static_cast<WillyWoprState*>(w->sub_state);
-    if (button == 1) {
-        s->moving = false; s->move_dir.clear();
-        s->key_up = s->key_down = false;
+void wopr_willy_mouseup(WoprState *w, int,int,int button) {
+    if(!w->sub_state) return;
+    WillyWoprState *s=static_cast<WillyWoprState*>(w->sub_state);
+    if(button==1) {
+        s->moving_continuously=false; s->continuous_direction.clear();
+        s->up_pressed=s->down_pressed=false;
     }
 }
 
@@ -884,48 +1060,38 @@ void wopr_willy_mouseup(WoprState *w, int /*mx*/, int /*my*/, int button) {
 // =============================================================================
 
 void wopr_willy_enter(WoprState *w) {
-    if (w->sub_state) {
-        delete static_cast<WillyWoprState*>(w->sub_state);
-        w->sub_state = nullptr;
-    }
+    if(w->sub_state) { delete static_cast<WillyWoprState*>(w->sub_state); w->sub_state=nullptr; }
 
-    if (!s_chr_loaded && !ww_load_chr()) {
+    if(!s_chr_loaded && !ww_chr_load()) {
         w->lines.push_back("  ERROR: willy.chr NOT FOUND.");
         w->lines.push_back("  COPY willy.chr NEXT TO THE BINARY OR RUN gen_willy_assets.py.");
-        w->lines.push_back("");
         return;
     }
 
     auto *s = new WillyWoprState();
-
-    if (!ww_load_levels(s->levels)) {
+    if(!ww_load_levels(s->levels)) {
         w->lines.push_back("  ERROR: levels.json NOT FOUND.");
         w->lines.push_back("  COPY levels.json NEXT TO THE BINARY OR RUN gen_willy_assets.py.");
-        w->lines.push_back("");
         delete s; return;
     }
-    if (!s->levels.level_exists("level1")) {
+    if(!s->levels.exists("level1")) {
         w->lines.push_back("  ERROR: levels.json HAS NO 'level1'.");
-        w->lines.push_back("");
         delete s; return;
     }
 
-    s->num_balls  = 6;
-    s->lives      = 5;
-    s->score      = 0;
-    s->life_adder = 0;
-    ww_load_level(s, 1);
-    s->sub_state = WillySubState::PLAYING;
-    w->sub_state = s;
+    ww_audio_init();
+    s->max_balls=6; s->score=0; s->lives=5; s->life_adder=0;
+    ww_load_level(s,1);
+    s->sub = WSub::INTRO;  // show intro first
+    w->sub_state=s;
 }
 
 void wopr_willy_free(WoprState *w) {
-    if (w->sub_state) {
+    if(w->sub_state) {
+        ww_audio_shutdown();
         delete static_cast<WillyWoprState*>(w->sub_state);
-        w->sub_state = nullptr;
+        w->sub_state=nullptr;
     }
 }
 
-void wopr_willy_textinput(WoprState *w, const char *text) {
-    (void)w; (void)text;
-}
+void wopr_willy_textinput(WoprState *w, const char *t) { (void)w;(void)t; }
