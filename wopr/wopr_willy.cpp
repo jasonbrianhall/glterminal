@@ -594,35 +594,42 @@ static void ww_tick(WillyWoprState *s) {
                 s->moving_continuously=false; s->continuous_direction.clear();
                 ww_snd_climb(s->wy);
             } else if(!on_ladder) {
-                // Not on a ladder yet — find nearest reachable ladder column
-                // and walk one step toward it so holding UP steers Willy there.
-                int best_col  = -1;
-                int best_dist = W_COLS;
-                for(int dc = 1; dc < W_COLS; dc++) {
-                    for(int sign : {-1, 1}) {
-                        int nc = s->wx + sign * dc;
-                        if(nc < 0 || nc >= W_COLS) continue;
-                        std::string at_nc  = wg(s, s->wy,   nc);
-                        std::string abv_nc = wg(s, s->wy-1, nc);
-                        if((at_nc=="LADDER" || abv_nc=="LADDER") && dc < best_dist) {
-                            best_dist = dc;
-                            best_col  = nc;
+                // Not on a ladder — only seek one if Willy is grounded (not mid-jump).
+                // While airborne the grab_ladder snap handles it; seeking while jumping
+                // causes Willy to reverse direction past a ladder and double-back.
+                if(s->willy_velocity_y == 0 && on_solid(s)) {
+                    // Find the nearest ladder column, but only in the direction Willy
+                    // is already moving (or either direction if standing still).
+                    int best_col  = -1;
+                    int best_dist = W_COLS;
+                    for(int dc = 1; dc < W_COLS; dc++) {
+                        for(int sign : {-1, 1}) {
+                            int nc = s->wx + sign * dc;
+                            if(nc < 0 || nc >= W_COLS) continue;
+                            // Don't seek against current movement direction
+                            if(s->moving_continuously) {
+                                if(s->continuous_direction=="LEFT"  && sign > 0) continue;
+                                if(s->continuous_direction=="RIGHT" && sign < 0) continue;
+                            }
+                            std::string at_nc  = wg(s, s->wy,   nc);
+                            std::string abv_nc = wg(s, s->wy-1, nc);
+                            if((at_nc=="LADDER" || abv_nc=="LADDER") && dc < best_dist) {
+                                best_dist = dc;
+                                best_col  = nc;
+                            }
+                        }
+                        if(best_col >= 0) break;
+                    }
+                    if(best_col >= 0) {
+                        int step = (best_col > s->wx) ? 1 : -1;
+                        int nx   = s->wx + step;
+                        if(can_move(s, s->wy, nx)) {
+                            s->wx = nx;
+                            s->willy_direction = (step > 0) ? "RIGHT" : "LEFT";
+                            moved_ladder = true;
                         }
                     }
-                    if(best_col >= 0) break; // found closest, stop searching
-                }
-                if(best_col >= 0 && on_solid(s)) {
-                    // Walk one step toward the ladder column
-                    int step = (best_col > s->wx) ? 1 : -1;
-                    int nx   = s->wx + step;
-                    if(can_move(s, s->wy, nx)) {
-                        s->wx = nx;
-                        s->willy_direction = (step > 0) ? "RIGHT" : "LEFT";
-                        moved_ladder = true; // suppress gravity/horizontal this tick
-                    }
-                } else {
-                    // Truly nowhere to climb — stop holding UP
-                    s->up_pressed = false;
+                    // If no ladder found in movement direction, just wait — don't clear up_pressed
                 }
             } else {
                 // On a ladder but can't go further up (top reached)
@@ -744,17 +751,20 @@ static void ww_tick(WillyWoprState *s) {
         }
     }
 
-    // Ball collision — check current position AND cross-through:
-    // if Willy and a ball swapped rows this tick (e.g. Willy fell from 3→4
-    // while ball rose/fell from 4→3) they never share a cell, so also test
-    // whether the ball's cell matches either Willy's old or new position.
+    // Ball collision — current position, plus vertical cross-through.
+    // Cross-through only fires when Willy moved vertically AND the ball is on
+    // the exact same column AND the ball's row lies strictly between Willy's
+    // old and new rows (i.e. they passed through each other).
     for(auto &b:s->balls) {
         std::string bt=wg(s,b.row,b.col);
         if(bt=="BALLPIT") continue;
         // Same cell now
         if(b.row==y && b.col==x) { ww_die(s); return; }
-        // Cross-through: ball was where Willy just came from
-        if(b.row==s->pwy && b.col==s->pwx && b.col==x) { ww_die(s); return; }
+        // Cross-through: only when same column and ball is between old and new row
+        if(b.col==x && s->pwy!=y) {
+            int rlo=std::min(s->pwy,y), rhi=std::max(s->pwy,y);
+            if(b.row>rlo && b.row<rhi) { ww_die(s); return; }
+        }
     }
 
     // Tile interactions
@@ -828,18 +838,16 @@ static void ww_tick(WillyWoprState *s) {
         }
     }
 
-    // Post-ball-move collision check: catch cases where a ball moved onto Willy
-    // or they crossed paths during ball movement this tick.
+    // Post-ball-move collision: ball landed on Willy after its move this tick.
+    // No cross-through here — balls only move horizontally on platforms so
+    // a vertical swap with Willy can't happen during ball movement.
     {
         int wy=s->wy, wx=s->wx;
         std::string wt=wg(s,wy,wx);
         for(auto &b:s->balls) {
             std::string bt=wg(s,b.row,b.col);
             if(bt=="BALLPIT") continue;
-            // Ball landed on Willy
             if(b.row==wy && b.col==wx && wt!="BALLPIT") { ww_die(s); return; }
-            // Cross-through: ball's new row matches Willy's old row (same col)
-            if(b.col==wx && b.row==s->pwy && wy!=s->pwy) { ww_die(s); return; }
         }
     }
 }
