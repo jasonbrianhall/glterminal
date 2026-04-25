@@ -186,6 +186,11 @@ static void ww_snd_lose()  {
 static void ww_snd_pts()   { ww_beep(1200,10); ww_beep(1660,10); }
 static void ww_snd_life()  { for(int c=500;c<=1500;c+=10) ww_beep((float)c,1.f); }
 static void ww_snd_climb(int wy) { ww_beep((float)((25-wy)*100), 16.f); }
+// Splat: rapid descending noise burst
+static void ww_snd_splat() {
+    for(int f=800; f>=80; f-=40) { ww_beep((float)f, 18.f); }
+    ww_beep(0.f, 60.f);
+}
 
 // =============================================================================
 // LEVEL LOADER
@@ -393,6 +398,7 @@ struct WillyWoprState {
     std::string continuous_direction;
     bool        up_pressed   = false;
     bool        down_pressed = false;
+    bool        grab_ladder  = false;  // one-shot: set on keypress while airborne
 
     // Balls
     std::vector<WBall> balls;
@@ -416,6 +422,7 @@ struct WillyWoprState {
     WSub   sub = WSub::INTRO;
     double sub_timer = 0.0;
     int    flash_count = 0;
+    int    death_wy = 0, death_wx = 0; // cell where Willy died (for localized flash)
 
     // Render geometry
     float rx0=0,ry0=0,rcw=0,rch=0;
@@ -454,11 +461,13 @@ static bool on_solid(WillyWoprState *s) {
     return (cur=="LADDER") || is_pipe(below);
 }
 
-// willy_game_jump
 // willy_game_jump — sets vertical velocity only, never touches horizontal state
 static void do_jump(WillyWoprState *s) {
     if(s->willy_velocity_y != 0) return; // already airborne, ignore
     const std::string &cur  = wg(s,s->wy,s->wx);
+    // On a ladder: only allow jump if standing on solid ground (pipe below),
+    // i.e. bottom rung — otherwise space does nothing.
+    if(cur=="LADDER" && !is_pipe(wg(s,s->wy+1,s->wx))) return;
     const std::string &below= wg(s,s->wy+1,s->wx);
     bool can_jump = (cur=="UPSPRING") || is_pipe(below) || (s->wy==W_MAXROWS-1);
     if(can_jump) {
@@ -476,7 +485,9 @@ static void do_jump(WillyWoprState *s) {
 // =============================================================================
 static void ww_die(WillyWoprState *s) {
     s->lives--;
-    ww_snd_lose();
+    s->death_wy  = s->wy;
+    s->death_wx  = s->wx;
+    ww_snd_splat();
     s->sub       = WSub::DEAD_WHITE;
     s->sub_timer = 0.0;
     s->flash_count = 0;
@@ -567,17 +578,55 @@ static void ww_tick(WillyWoprState *s) {
     bool moved_ladder = false;
 
     // Up / down on ladder
+    // If UP is pressed and Willy is already on a ladder, stop horizontal movement
+    // immediately — climbing takes priority over left/right drift.
+    if(up_this_tick && on_ladder) {
+        s->moving_continuously = false;
+        s->continuous_direction.clear();
+    }
     if(up_this_tick) {
         int tr=s->wy-1;
         if(tr>=0) {
             std::string above=wg(s,tr,s->wx);
             if((on_ladder||above=="LADDER") && above=="LADDER" && can_move(s,tr,s->wx)) {
+                // Already on / at base of ladder — climb up one step
                 s->wy--; s->willy_velocity_y=0; moved_ladder=true;
                 s->moving_continuously=false; s->continuous_direction.clear();
                 ww_snd_climb(s->wy);
+            } else if(!on_ladder) {
+                // Not on a ladder yet — find nearest reachable ladder column
+                // and walk one step toward it so holding UP steers Willy there.
+                int best_col  = -1;
+                int best_dist = W_COLS;
+                for(int dc = 1; dc < W_COLS; dc++) {
+                    for(int sign : {-1, 1}) {
+                        int nc = s->wx + sign * dc;
+                        if(nc < 0 || nc >= W_COLS) continue;
+                        std::string at_nc  = wg(s, s->wy,   nc);
+                        std::string abv_nc = wg(s, s->wy-1, nc);
+                        if((at_nc=="LADDER" || abv_nc=="LADDER") && dc < best_dist) {
+                            best_dist = dc;
+                            best_col  = nc;
+                        }
+                    }
+                    if(best_col >= 0) break; // found closest, stop searching
+                }
+                if(best_col >= 0 && on_solid(s)) {
+                    // Walk one step toward the ladder column
+                    int step = (best_col > s->wx) ? 1 : -1;
+                    int nx   = s->wx + step;
+                    if(can_move(s, s->wy, nx)) {
+                        s->wx = nx;
+                        s->willy_direction = (step > 0) ? "RIGHT" : "LEFT";
+                        moved_ladder = true; // suppress gravity/horizontal this tick
+                    }
+                } else {
+                    // Truly nowhere to climb — stop holding UP
+                    s->up_pressed = false;
+                }
             } else {
-                // Can't go further up — stop trying
-                s->up_pressed=false;
+                // On a ladder but can't go further up (top reached)
+                s->up_pressed = false;
             }
         } else {
             s->up_pressed=false;
@@ -590,11 +639,41 @@ static void ww_tick(WillyWoprState *s) {
             bool can_down = (on_ladder && can_move(s,tr,s->wx)) ||
                             (below=="LADDER" && can_move(s,tr,s->wx));
             if(can_down) {
+                // Already on / at top of ladder — descend one step
                 s->wy++; s->willy_velocity_y=0; moved_ladder=true;
                 s->moving_continuously=false; s->continuous_direction.clear();
                 ww_snd_climb(s->wy);
+            } else if(!on_ladder) {
+                // Not on a ladder — find nearest reachable ladder column and walk toward it
+                int best_col  = -1;
+                int best_dist = W_COLS;
+                for(int dc = 1; dc < W_COLS; dc++) {
+                    for(int sign : {-1, 1}) {
+                        int nc = s->wx + sign * dc;
+                        if(nc < 0 || nc >= W_COLS) continue;
+                        std::string at_nc  = wg(s, s->wy,   nc);
+                        std::string blw_nc = (s->wy+1 < W_ROWS) ? wg(s, s->wy+1, nc) : "EMPTY";
+                        if((at_nc=="LADDER" || blw_nc=="LADDER") && dc < best_dist) {
+                            best_dist = dc;
+                            best_col  = nc;
+                        }
+                    }
+                    if(best_col >= 0) break;
+                }
+                if(best_col >= 0 && on_solid(s)) {
+                    int step = (best_col > s->wx) ? 1 : -1;
+                    int nx   = s->wx + step;
+                    if(can_move(s, s->wy, nx)) {
+                        s->wx = nx;
+                        s->willy_direction = (step > 0) ? "RIGHT" : "LEFT";
+                        moved_ladder = true;
+                    }
+                } else {
+                    s->down_pressed = false;
+                }
             } else {
-                s->down_pressed=false;
+                // On a ladder but already at bottom
+                s->down_pressed = false;
             }
         } else {
             s->down_pressed=false;
@@ -619,6 +698,17 @@ static void ww_tick(WillyWoprState *s) {
     // Gravity / jump (vertical velocity) — mirrors willy_game_update_willy_movement
     cur_tile  = wg(s,s->wy,s->wx);
     on_ladder = (cur_tile=="LADDER");
+
+    // Mid-air ladder snap: only when Willy is airborne, hits a LADDER tile,
+    // AND a key was explicitly pressed this tick (grab_ladder). Passive flight
+    // passes through ladders freely — you must press a key to grab.
+    if(on_ladder && s->willy_velocity_y != 0 && s->grab_ladder) {
+        s->willy_velocity_y = 0;
+        s->jumping = false;
+        s->moving_continuously = false;
+        s->continuous_direction.clear();
+    }
+    s->grab_ladder = false; // consumed — clear every tick
 
     if(!on_ladder) {
         if(s->willy_velocity_y < 0) {
@@ -654,11 +744,17 @@ static void ww_tick(WillyWoprState *s) {
         }
     }
 
-    // Ball collision
+    // Ball collision — check current position AND cross-through:
+    // if Willy and a ball swapped rows this tick (e.g. Willy fell from 3→4
+    // while ball rose/fell from 4→3) they never share a cell, so also test
+    // whether the ball's cell matches either Willy's old or new position.
     for(auto &b:s->balls) {
-        if(b.row==y && b.col==x && cur_tile!="BALLPIT") {
-            ww_die(s); return;
-        }
+        std::string bt=wg(s,b.row,b.col);
+        if(bt=="BALLPIT") continue;
+        // Same cell now
+        if(b.row==y && b.col==x) { ww_die(s); return; }
+        // Cross-through: ball was where Willy just came from
+        if(b.row==s->pwy && b.col==s->pwx && b.col==x) { ww_die(s); return; }
     }
 
     // Tile interactions
@@ -729,6 +825,21 @@ static void ww_tick(WillyWoprState *s) {
                     } else b.dir="RIGHT";
                 }
             }
+        }
+    }
+
+    // Post-ball-move collision check: catch cases where a ball moved onto Willy
+    // or they crossed paths during ball movement this tick.
+    {
+        int wy=s->wy, wx=s->wx;
+        std::string wt=wg(s,wy,wx);
+        for(auto &b:s->balls) {
+            std::string bt=wg(s,b.row,b.col);
+            if(bt=="BALLPIT") continue;
+            // Ball landed on Willy
+            if(b.row==wy && b.col==wx && wt!="BALLPIT") { ww_die(s); return; }
+            // Cross-through: ball's new row matches Willy's old row (same col)
+            if(b.col==wx && b.row==s->pwy && wy!=s->pwy) { ww_die(s); return; }
         }
     }
 }
@@ -868,9 +979,22 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
     // Fill the entire window with blue — game area + margins + status strip
     gl_draw_rect(0.f, 0.f, (float)ww, (float)wh, 0.f, 0.f, 0.55f, 1.f);
 
-    // Death: solid white screen
-    if(s->sub==WSub::DEAD_WHITE)
-        gl_draw_rect((float)px,(float)py,gw,gh, 1.f,1.f,1.f,1.f);
+    // Death: expanding white burst around the death cell, fading out
+    if(s->sub==WSub::DEAD_WHITE) {
+        // sub_timer runs 0..1 s — use it to drive radius and alpha
+        float t    = (float)(s->sub_timer);          // 0..1
+        float rad  = (t * 6.f + 0.5f) * cell;        // starts tight, expands ~6 cells
+        float alpha= 1.f - t;                         // fades from opaque to transparent
+        float cx   = (float)px + (s->death_wx + 0.5f) * cell;
+        float cy   = (float)py + (s->death_wy + 0.5f) * cell;
+        // Draw a square burst (looks retro and fast to render)
+        for(int ring = 0; ring < 4; ring++) {
+            float r2 = rad * (1.f - ring * 0.22f);
+            float a2 = alpha * (1.f - ring * 0.2f);
+            if(a2 <= 0.f) break;
+            gl_draw_rect(cx - r2, cy - r2, r2*2.f, r2*2.f, 1.f,1.f,1.f, a2);
+        }
+    }
 
     // Level grid — all sprites white
     for(int r=0;r<W_ROWS;r++) {
@@ -990,6 +1114,10 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
         return true;
     }
     if(s->sub!=WSub::PLAYING) return true;
+
+    // Any keypress while airborne arms the one-shot ladder-grab.
+    if(s->willy_velocity_y != 0 || s->jumping)
+        s->grab_ladder = true;
 
     switch (sym) {
 
