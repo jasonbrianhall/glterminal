@@ -329,13 +329,30 @@ float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
                                   is_bitmap, verts);
         }
 
-        // Final fallback: use a space-width advance so layout doesn't break
+        // Final fallback: draw a replacement rectangle for unknown glyphs
         if (adv == 0.f) {
-            // Ask FreeType for the space advance — cheap, no rasterize
             FT_Set_Pixel_Sizes(base_face, 0, (FT_UInt)font_px);
             FT_UInt gi = FT_Get_Char_Index(base_face, ' ');
             if (!FT_Load_Glyph(base_face, gi, FT_LOAD_DEFAULT))
                 adv = (float)(base_face->glyph->advance.x >> 6);
+            if (adv == 0.f) adv = (float)font_px * 0.6f;
+
+            float t  = 1.f;
+            float bh = (float)font_px * 0.7f;
+            float bw = adv - 2.f;
+            float bx = cx + 1.f;
+            float by = y - bh;
+
+            // Flush pending glyph verts before switching to rect drawing
+            if (!verts.empty()) {
+                draw_glyph_verts(verts.data(), (int)verts.size());
+                verts.clear();
+            }
+            // Top, bottom, left, right border strips
+            draw_rect(bx,      by,      bw, t,  r, g, b, a);
+            draw_rect(bx,      by+bh-t, bw, t,  r, g, b, a);
+            draw_rect(bx,      by,      t,  bh, r, g, b, a);
+            draw_rect(bx+bw-t, by,      t,  bh, r, g, b, a);
         }
         cx += adv;
     }
