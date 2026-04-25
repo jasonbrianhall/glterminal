@@ -123,7 +123,8 @@ void draw_chess_pvsa_button(BeatChessVisualization *chess, cairo_t *cr, int widt
     cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
     cairo_set_font_size(cr, 12);
     
-    const char *button_text = chess->player_vs_ai ? "P vs AI" : "AI vs AI";
+    const char *button_text = chess->choosing_color ? "P vs AI?" :
+                              (chess->player_vs_ai   ? "P vs AI"  : "AI vs AI");
     
     cairo_text_extents_t extents;
     cairo_text_extents(cr, button_text, &extents);
@@ -876,6 +877,108 @@ void draw_beat_chess(void *vis_ptr, cairo_t *cr) {
     draw_chess_flip_button(chess, cr, width, height);
     draw_chess_undo_button(chess, cr, width, height);
     draw_chess_render_mode_button(chess, cr, width, height);
+
+    // ===== COLOR SELECTION OVERLAY =====
+    if (chess->choosing_color) {
+        // Semi-transparent dark backdrop
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.72);
+        cairo_rectangle(cr, 0, 0, width, height);
+        cairo_fill(cr);
+
+        // Panel
+        double pw = 340, ph = 220;
+        double px = (width - pw) / 2.0;
+        double py = (height - ph) / 2.0;
+
+        cairo_set_source_rgba(cr, 0.12, 0.12, 0.18, 0.97);
+        cairo_rectangle(cr, px, py, pw, ph);
+        cairo_fill(cr);
+        cairo_set_source_rgb(cr, 0.55, 0.55, 0.7);
+        cairo_set_line_width(cr, 2.0);
+        cairo_rectangle(cr, px, py, pw, ph);
+        cairo_stroke(cr);
+
+        // Title
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 20);
+        cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+        const char *title = "Play as...";
+        cairo_text_extents_t te;
+        cairo_text_extents(cr, title, &te);
+        cairo_move_to(cr, px + (pw - te.width) / 2.0, py + 48);
+        cairo_show_text(cr, title);
+
+        double bw = 120, bh = 56;
+        double gap = 24;
+        double btotal = bw * 2 + gap;
+        double bx_start = px + (pw - btotal) / 2.0;
+        double by = py + 90;
+
+        // --- White button ---
+        double wx = bx_start;
+        chess->choose_white_button_x = wx;
+        chess->choose_white_button_y = by;
+        chess->choose_white_button_width = bw;
+        chess->choose_white_button_height = bh;
+
+        bool wh = chess->choose_white_button_hovered;
+        // Shadow
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.3);
+        cairo_rectangle(cr, wx + 3, by + 3, bw, bh);
+        cairo_fill(cr);
+        // Fill
+        cairo_set_source_rgb(cr, wh ? 1.0 : 0.88, wh ? 1.0 : 0.88, wh ? 1.0 : 0.88);
+        cairo_rectangle(cr, wx, by, bw, bh);
+        cairo_fill(cr);
+        // Border
+        cairo_set_source_rgb(cr, wh ? 0.6 : 0.5, wh ? 0.6 : 0.5, wh ? 0.6 : 0.5);
+        cairo_set_line_width(cr, wh ? 2.5 : 1.5);
+        cairo_rectangle(cr, wx, by, bw, bh);
+        cairo_stroke(cr);
+        // Label
+        cairo_set_font_size(cr, 16);
+        cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
+        cairo_text_extents(cr, "White", &te);
+        cairo_move_to(cr, wx + (bw - te.width) / 2.0, by + bh / 2.0 + te.height / 2.0);
+        cairo_show_text(cr, "White");
+
+        // --- Black button ---
+        double bkx = bx_start + bw + gap;
+        chess->choose_black_button_x = bkx;
+        chess->choose_black_button_y = by;
+        chess->choose_black_button_width = bw;
+        chess->choose_black_button_height = bh;
+
+        bool bkh = chess->choose_black_button_hovered;
+        // Shadow
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.4);
+        cairo_rectangle(cr, bkx + 3, by + 3, bw, bh);
+        cairo_fill(cr);
+        // Fill
+        cairo_set_source_rgb(cr, bkh ? 0.28 : 0.18, bkh ? 0.28 : 0.18, bkh ? 0.28 : 0.18);
+        cairo_rectangle(cr, bkx, by, bw, bh);
+        cairo_fill(cr);
+        // Border
+        cairo_set_source_rgb(cr, bkh ? 0.8 : 0.5, bkh ? 0.8 : 0.5, bkh ? 0.8 : 0.5);
+        cairo_set_line_width(cr, bkh ? 2.5 : 1.5);
+        cairo_rectangle(cr, bkx, by, bw, bh);
+        cairo_stroke(cr);
+        // Label
+        cairo_set_font_size(cr, 16);
+        cairo_set_source_rgb(cr, 0.95, 0.95, 0.95);
+        cairo_text_extents(cr, "Black", &te);
+        cairo_move_to(cr, bkx + (bw - te.width) / 2.0, by + bh / 2.0 + te.height / 2.0);
+        cairo_show_text(cr, "Black");
+
+        // Cancel hint
+        cairo_set_font_size(cr, 11);
+        cairo_set_source_rgba(cr, 0.5, 0.5, 0.5, 0.9);
+        const char *hint = "Press Player vs AI again to cancel";
+        cairo_text_extents(cr, hint, &te);
+        cairo_move_to(cr, px + (pw - te.width) / 2.0, py + ph - 16);
+        cairo_show_text(cr, hint);
+    }
+    // ====================================
 }
 
 void draw_chess_flip_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
