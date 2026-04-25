@@ -991,6 +991,7 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
     }
     if(s->sub!=WSub::PLAYING) return true;
 
+    SDL_Log("Key Pressed\n");
     switch(sym) {
         case SDLK_SPACE:
             // Jump — does NOT clear continuous_direction so Willy keeps running
@@ -1013,14 +1014,13 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
             s->down_pressed=true;
             break;
         default:
-            if(sym != 0) {
-                s->moving_continuously=false;
-                s->continuous_direction.clear();
-                s->up_pressed=false;
-                s->down_pressed=false;
-                s->willy_velocity_y=0;
-                s->jumping=false;
-            }
+            s->moving_continuously=false;
+            s->continuous_direction.clear();
+            s->up_pressed=false;
+            s->down_pressed=false;
+            s->willy_velocity_y=0;
+            s->willy_direction="NONE";
+            s->jumping=false;
             break;
     }
     return true;
