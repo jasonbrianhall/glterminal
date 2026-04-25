@@ -748,84 +748,104 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
 
     // ── INTRO SCREEN ─────────────────────────────────────────────────────────
     if(s->sub == WSub::INTRO) {
-        // Full blue background
         gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
 
-        // Inline segment: text (sprite=-1) or sprite index
-        struct Seg { const char *txt; int spr; };
-        struct ILine { Seg s[6]; int n; };
+        // Every glyph is g_font_size × g_font_size pixels (see wopr_render.h).
+        float cs = (float)cw;
 
-        float lh = (float)ch;   // line height = font cell height
-        float sc = lh;          // sprite size matches text height
+        struct Seg   { const char *txt; int spr; };
+        struct ILine { Seg s[6]; int n; };  // n==0 → blank line (still takes vertical space)
 
-        // Lines from draw.cpp textdata — empty n=0 means blank line
         const ILine L[] = {
-            {{{"Willy the Worm",                                       -1}},1},
-            {{{nullptr,0}},0},
-            {{{"By Jason Hall",                                         -1}},1},
-            {{{"(original version by Alan Farmer 1985)",                -1}},1},
-            {{{nullptr,0}},0},
-            {{{"This code is Free Open Source Software (FOSS)",         -1}},1},
-            {{{"Please feel free to do with it whatever you wish.",      -1}},1},
-            {{{nullptr,0}},0},
-            {{{"If you do make changes though such as new levels,",      -1}},1},
-            {{{"please share them with the world.",                      -1}},1},
-            {{{nullptr,0}},0},
-            {{{nullptr,0}},0},
-            {{{"Meet Willy the Worm ",    -1},{nullptr,0},{". Willy is a fun-",       -1}},3},
-            {{{"loving invertebrate who likes to climb",                 -1}},1},
-            {{{"ladders ",               -1},{nullptr,3},{" bounce on springs ",      -1},{nullptr,5},{" ",-1},{nullptr,6}},6},
-            {{{"and find his presents ", -1},{nullptr,2},{".  But more",               -1}},3},
-            {{{"than anything, Willy loves to ring,",                   -1}},1},
-            {{{"bells! ",               -1},{nullptr,8}},2},
-            {{{nullptr,0}},0},
+            {{{"Willy the Worm",                                              -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"By Jason Hall",                                                -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"(original version by Alan Farmer 1985)",                       -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"This code is Free Open Source Software (FOSS)",                -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"Please feel free to do with it whatever you wish.",             -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"If you do make changes though such as new levels,",             -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"please share them with the world.",                             -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"Meet Willy the Worm ",  -1},{nullptr,0},{". Willy is a fun-",  -1}},3},
+            {{{"",                                                -1}},1},
+            {{{"loving invertebrate who likes to climb",                        -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"ladders ",             -1},{nullptr,3},{" bounce on springs ",  -1},{nullptr,5},{" ",-1},{nullptr,6}},6},
+            {{{"",                                                -1}},1},
+            {{{"and find his presents ",-1},{nullptr,2},{".  But more",         -1}},3},
+            {{{"",                                                -1}},1},
+            {{{"than anything, Willy loves to ring,",                           -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"bells! ",             -1},{nullptr,8}},2},
+            {{{"",                                                -1}},1},
+            {{{"",                                                -1}},1},
             {{{"You can press the arrow keys \xe2\x86\x90 \xe2\x86\x91 \xe2\x86\x92 \xe2\x86\x93",-1}},1},
-            {{{"to make Willy run and climb, or the",                   -1}},1},
-            {{{"space bar to make him jump. Anything",                  -1}},1},
-            {{{"else will make Willy stop and wait",                    -1}},1},
-            {{{nullptr,0}},0},
-            {{{"Good luck, and don't let Willy step on",                -1}},1},
-            {{{"a tack ",              -1},{nullptr,4},{" or get ran over by a ball! ",-1},{nullptr,7}},4},
-            {{{nullptr,0}},0},
-            {{{"Press Enter to Continue",                               -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"to make Willy run and climb, or the",                           -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"space bar to make him jump. Anything",                          -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"else will make Willy stop and wait",                            -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"",                                                -1}},1},
+
+            {{{"Good luck, and don't let Willy step on",                        -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"a tack ",             -1},{nullptr,4},{" or get ran over by a ball! ",-1},{nullptr,7}},4},
+            {{{"",                                                -1}},1},
+            {{{"",                                                -1}},1},
+            {{{"Press Enter to Continue",                                        -1}},1},
         };
-        int NL = (int)(sizeof(L)/sizeof(L[0]));
+        const int NL = (int)(sizeof(L)/sizeof(L[0]));
 
-        // Find the widest line to determine the center x offset
-        float max_w = 0.f;
-        for(int i=0;i<NL;i++){
-            float lw=0.f;
-            for(int j=0;j<L[i].n;j++){
-                if(L[i].s[j].txt && L[i].s[j].spr<0) lw+=gl_text_width(L[i].s[j].txt,1.f);
-                else if(L[i].s[j].spr>=0) lw+=sc;
+        // Count UTF-8 codepoints — each renders as exactly 1 character cell.
+        auto count_cols = [](const char *str) -> int {
+            int cols = 0;
+            const unsigned char *p = reinterpret_cast<const unsigned char*>(str);
+            while(*p) {
+                if     ((*p & 0x80)==0x00) p+=1;
+                else if((*p & 0xE0)==0xC0) p+=2;
+                else if((*p & 0xF0)==0xE0) p+=3;
+                else                       p+=4;
+                cols++;
             }
-            if(lw>max_w) max_w=lw;
-        }
+            return cols;
+        };
 
-        // Start y near top (~1/12 of screen), center x based on widest line
-        float start_y = (float)wh / 12.f;
-        float cx = ((float)ww - max_w) / 2.f;  // left edge of the text block
-
-        for(int i=0;i<NL;i++){
-            float y = start_y + i*lh;
-            if(L[i].n == 0) continue;  // blank line — just skip drawing
-
-            // Measure this line's width for centering within the block
-            float lw=0.f;
-            for(int j=0;j<L[i].n;j++){
-                if(L[i].s[j].txt && L[i].s[j].spr<0) lw+=gl_text_width(L[i].s[j].txt,1.f);
-                else if(L[i].s[j].spr>=0) lw+=sc;
+        auto line_cols = [&](int i) -> int {
+            int w = 0;
+            for(int j = 0; j < L[i].n; j++) {
+                if(L[i].s[j].spr < 0 && L[i].s[j].txt)
+                    w += count_cols(L[i].s[j].txt);
+                else if(L[i].s[j].spr >= 0)
+                    w += 1;
             }
-            float x = cx + (max_w - lw)/2.f;  // center each line within the block
+            return w;
+        };
 
-            for(int j=0;j<L[i].n;j++){
-                const Seg &sg=L[i].s[j];
-                if(sg.txt && sg.spr<0){
-                    gl_draw_text(sg.txt,x,y,1.f,1.f,1.f,1.f,1.f);
-                    x+=gl_text_width(sg.txt,1.f);
-                } else if(sg.spr>=0){
-                    ww_draw_sprite(sg.spr,x,y,sc,sc);
-                    x+=sc;
+        float start_y = ((float)wh - NL * cs) * 0.5f;
+        if(start_y < 0.f) start_y = 0.f;
+
+        for(int i = 0; i < NL; i++) {
+            float y = start_y + i * cs;
+            if(L[i].n == 0) continue;  // blank — y already advances via i*cs, nothing to draw
+
+            float x = ((float)ww - line_cols(i) * cs) * 0.5f;
+            for(int j = 0; j < L[i].n; j++) {
+                const Seg &sg = L[i].s[j];
+                if(sg.spr < 0 && sg.txt) {
+                    gl_draw_text(sg.txt, x, y, 1.f,1.f,1.f,1.f, 1.f);
+                    x += count_cols(sg.txt) * cs;
+                } else if(sg.spr >= 0) {
+                    ww_draw_sprite(sg.spr, x, y, cs, cs);
+                    x += cs;
                 }
             }
         }
@@ -993,12 +1013,13 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
             s->down_pressed=true;
             break;
         default:
-            // Only stop for real unmapped keypresses, not text-input events (sym=0)
             if(sym != 0) {
                 s->moving_continuously=false;
                 s->continuous_direction.clear();
                 s->up_pressed=false;
                 s->down_pressed=false;
+                s->willy_velocity_y=0;
+                s->jumping=false;
             }
             break;
     }
