@@ -536,8 +536,6 @@ void wopr_open() {
     WoprState *w = &g_wopr;
 
     // Tear down any sub-game that's still running before wiping state.
-    // Without this, re-opening the overlay (e.g. F7 while a game is active)
-    // would orphan the game thread and leak its ZorkState/basicState.
     if (w->visible) {
         switch (w->phase) {
             case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
@@ -552,6 +550,7 @@ void wopr_open() {
         }
     }
 
+    // Reset WOPR state
     *w = WoprState{};
     w->visible = true;
     w->lines.reserve(128);
@@ -561,16 +560,55 @@ void wopr_open() {
     g_wire_story_idx = 0;
     g_drip_queue.clear();
     g_drip_acc       = 0.0;
-    g_term_r = 0; g_term_g = 255; g_term_b = 69; // reset to phosphor green
+    g_term_r = 0; g_term_g = 255; g_term_b = 69; // phosphor green
 
     wopr_audio_play_screech();
 
+    // -----------------------------
+    //  MODEM DIAL-UP INTRO SEQUENCE
+    // -----------------------------
+
+    push_line(w, "INITIALIZING ACOUSTIC COUPLER...");
     push_line(w, "");
-    push_line(w, "MILNET NODE 347 -- WOPR AUTHENTICATION REQUIRED");
+
+    // Generate a safe fictional number (555 prefix)
+    int n1 = rand() % 10;
+    int n2 = rand() % 10;
+    int n3 = rand() % 10;
+
+    std::string dial =
+        "DIALING 555-0" +
+        std::to_string(n1) +
+        std::to_string(n2) +
+        std::to_string(n3) +
+        "...";
+
+    // Give the crawl its own line
     push_line(w, "");
+    begin_crawl(w, dial);
+
+    // After the crawl finishes, your drip/crawl system will naturally
+    // allow these lines to appear in order.
+    push_line(w, dial);
+    push_line(w, "");
+    push_line(w, "CONNECTING...");
+    push_line(w, "CARRIER DETECTED 1200 BAUD");
+    push_line(w, "");
+
+    int node = 100 + (rand() % 900);
+    std::string node_line =
+        "MILNET NODE " + std::to_string(node) +
+        " -- WOPR AUTHENTICATION REQUIRED";
+
+    push_line(w, node_line);
+    push_line(w, "");
+
     set_phase(w, WoprPhase::LOGIN_PROMPT);
     begin_crawl(w, "USERNAME: ");
 }
+
+
+
 
 void wopr_close() {
     WoprState *w = &g_wopr;
