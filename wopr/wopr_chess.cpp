@@ -15,12 +15,14 @@
 
 // ─── State ────────────────────────────────────────────────────────────────
 
-enum ChessScreen { SCREEN_LOBBY, SCREEN_GAME };
+enum ChessScreen { SCREEN_LOBBY, SCREEN_COLOR, SCREEN_GAME };
 
 struct WoprChessState {
     ChessScreen     screen;
     int             num_players;   // 0 or 1
     int             lobby_sel;     // 0 = "0 PLAYERS", 1 = "1 PLAYER"
+    ChessColor      player_color;  // WHITE or BLACK (1-player only)
+    int             color_sel;     // 0 = WHITE, 1 = BLACK
 
     ChessGameState  game;
     ChessGameStatus status;
@@ -105,6 +107,10 @@ static void start_game(WoprChessState *s) {
     if (s->num_players == 0) {
         strcpy(s->message, "WOPR VS WOPR.  WHITE CALCULATING...");
         start_ai(s);
+    } else if (s->player_color == BLACK) {
+        // Player is Black — AI (White) moves first
+        strcpy(s->message, "WOPR CALCULATING...");
+        start_ai(s);
     } else {
         strcpy(s->message, "YOUR MOVE.  WHITE TO PLAY.");
     }
@@ -116,6 +122,8 @@ void wopr_chess_enter(WoprState *w) {
     WoprChessState *s = new WoprChessState{};
     s->screen       = SCREEN_LOBBY;
     s->lobby_sel    = 1;
+    s->color_sel    = 0;
+    s->player_color = WHITE;
     s->min_think_ms = 1500.0;
     s->board_bx = s->board_by = s->board_cell_w = s->board_cell_h = 0.f;
     s->hover_r = s->hover_c = -1;
@@ -151,11 +159,18 @@ void wopr_chess_update(WoprState *w, double dt) {
             chess_make_move(&s->game, mv);
             s->status = chess_check_game_status(&s->game);
 
-            if (s->status == CHESS_CHECKMATE_WHITE) {
+            ChessColor ai_color    = (s->player_color == WHITE) ? BLACK : WHITE;
+            ChessColor plr_color   = s->player_color;
+            bool plr_wins = (s->status == CHESS_CHECKMATE_WHITE && plr_color == BLACK) ||
+                            (s->status == CHESS_CHECKMATE_BLACK && plr_color == WHITE);
+            bool ai_wins  = (s->status == CHESS_CHECKMATE_WHITE && plr_color == WHITE) ||
+                            (s->status == CHESS_CHECKMATE_BLACK && plr_color == BLACK);
+
+            if (ai_wins) {
                 if (s->num_players == 0) { start_game(s); return; }
                 strcpy(s->message, "CHECKMATE.  WOPR WINS.");
                 s->game_over = true;
-            } else if (s->status == CHESS_CHECKMATE_BLACK) {
+            } else if (plr_wins) {
                 if (s->num_players == 0) { start_game(s); return; }
                 strcpy(s->message, "CHECKMATE!  YOU WIN.");
                 s->game_over = true;
@@ -175,7 +190,7 @@ void wopr_chess_update(WoprState *w, double dt) {
                         snprintf(s->message, sizeof(s->message), "%s CALCULATING...", side);
                     start_ai(s);
                 } else {
-                    if (chess_is_in_check(&s->game, WHITE))
+                    if (chess_is_in_check(&s->game, plr_color))
                         strcpy(s->message, "CHECK!  YOUR MOVE.");
                     else
                         strcpy(s->message, "YOUR MOVE.");
@@ -208,6 +223,28 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     float x0 = (float)ox, y0 = (float)oy;
     float fch = (float)ch, fcw = (float)cw;
 
+    // ── Color selection ────────────────────────────────────────────────────
+    if (s->screen == SCREEN_COLOR) {
+        gl_draw_text("CHESS  --  WOPR GAMES DIVISION",
+                     x0, y0, 0.f, 1.f, 0.6f, 1.f, scale);
+        y0 += fch * 3.f;
+        gl_draw_text("CHOOSE YOUR COLOR:",
+                     x0, y0, 0.f, 1.f, 0.5f, 1.f, scale);
+        y0 += fch * 3.f;
+
+        const char *opts[2] = { "WHITE  --  YOU MOVE FIRST", "BLACK  --  WOPR MOVES FIRST" };
+        for (int i = 0; i < 2; i++) {
+            bool sel = (s->color_sel == i);
+            float lg = sel ? 1.0f : 0.4f, lb = sel ? 0.4f : 0.1f;
+            if (sel) gl_draw_text(">", x0, y0 + i * fch * 2.5f, 0.f, 1.f, 0.4f, 1.f, scale);
+            gl_draw_text(opts[i], x0 + fcw * 3, y0 + i * fch * 2.5f, 0.f, lg, lb, 1.f, scale);
+        }
+        y0 += fch * 7.f;
+        gl_draw_text("UP/DOWN=SELECT  ENTER/CLICK=CONFIRM  ESC=BACK",
+                     x0, y0, 0.f, 0.3f, 0.1f, 1.f, scale);
+        return;
+    }
+
     // ── Lobby ──────────────────────────────────────────────────────────────
     if (s->screen == SCREEN_LOBBY) {
         gl_draw_text("CHESS  --  WOPR GAMES DIVISION",
@@ -237,9 +274,13 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
             SDL_GetWindowSize(g_sdl_window, &s->win_w, &s->win_h);
     }
 
-    const char *title = (s->num_players == 0)
-        ? "CHESS  --  WOPR VS WOPR"
-        : "CHESS  --  YOU (WHITE) vs WOPR (BLACK)";
+    const char *title;
+    if (s->num_players == 0)
+        title = "CHESS  --  WOPR VS WOPR";
+    else if (s->player_color == WHITE)
+        title = "CHESS  --  YOU (WHITE) vs WOPR (BLACK)";
+    else
+        title = "CHESS  --  WOPR (WHITE) vs YOU (BLACK)";
     gl_draw_text(title, x0, y0, 0.f, 1.f, 0.6f, 1.f, scale);
     y0 += fch * 1.5f;
 
@@ -259,37 +300,41 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     s->board_cell_w = cell_sz;
     s->board_cell_h = cell_sz;
 
+    // When player is Black, flip the board so Black is at the bottom
+    bool flipped = (s->num_players == 1 && s->player_color == BLACK);
+    auto vrow = [&](int r) { return flipped ? 7 - r : r; };
+    auto vcol = [&](int c) { return flipped ? 7 - c : c; };
+
     // ── Pass 1: colored squares ────────────────────────────────────────────
     for (int row = 0; row < 8; row++) {
         // Rank label
-        char rl[3]; snprintf(rl, sizeof(rl), "%d", 8 - row);
+        int display_rank = flipped ? (row + 1) : (8 - row);
+        char rl[3]; snprintf(rl, sizeof(rl), "%d", display_rank);
         gl_draw_text(rl, bx - label_pad, by + row * cell_sz + cell_sz * 0.28f,
                      0.6f, 0.8f, 0.6f, 1.f, scale);
 
         for (int col = 0; col < 8; col++) {
+            int logical_row = vrow(row);
+            int logical_col = vcol(col);
             float cx = bx + col * cell_sz;
             float cy = by + row * cell_sz;
 
-            bool light   = ((row + col) % 2 == 0);
-            bool is_from = (s->has_from && s->from_r == row && s->from_c == col);
-            bool is_cur  = (s->num_players == 1 && s->sel_r == row && s->sel_c == col);
+            bool light   = ((logical_row + logical_col) % 2 == 0);
+            bool is_from = (s->has_from && s->from_r == logical_row && s->from_c == logical_col);
+            bool is_cur  = (s->num_players == 1 && s->sel_r == logical_row && s->sel_c == logical_col);
             bool is_hov  = (s->num_players == 1 && !s->ai_thinking &&
-                            s->hover_r == row && s->hover_c == col &&
+                            s->hover_r == logical_row && s->hover_c == logical_col &&
                             !is_from && !is_cur);
             bool is_lt   = (s->has_last_move &&
-                            ((s->last_to_r   == row && s->last_to_c   == col) ||
-                             (s->last_from_r == row && s->last_from_c == col)));
+                            ((s->last_to_r   == logical_row && s->last_to_c   == logical_col) ||
+                             (s->last_from_r == logical_row && s->last_from_c == logical_col)));
 
             float sr, sg, sb;
             sq_base_color(light, &sr, &sg, &sb);
 
-            // Last-move: gold tint
             if (is_lt)   { sr = sr*0.45f+0.55f; sg = sg*0.45f+0.48f; sb = sb*0.45f+0.08f; }
-            // Hover: cyan wash
             if (is_hov)  { sr = sr*0.3f+0.15f;  sg = sg*0.3f+0.55f;  sb = sb*0.3f+0.50f; }
-            // Selected origin: bright yellow
             if (is_from) { sr = 0.92f; sg = 0.82f; sb = 0.12f; }
-            // Keyboard cursor: bright green
             if (is_cur && !is_from) { sr = 0.12f; sg = 0.82f; sb = 0.32f; }
 
             gl_draw_rect(cx, cy, cell_sz, cell_sz, sr, sg, sb, 1.0f);
@@ -298,7 +343,7 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
 
     // File labels
     for (int col = 0; col < 8; col++) {
-        char fl[2] = { (char)('a' + col), 0 };
+        char fl[2] = { (char)(flipped ? ('h' - col) : ('a' + col)), 0 };
         gl_draw_text(fl, bx + col * cell_sz + cell_sz * 0.38f,
                      by + 8 * cell_sz + fch * 0.25f,
                      0.6f, 0.8f, 0.6f, 1.f, scale);
@@ -320,14 +365,15 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
 
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
-            const ChessPiece &p = s->game.board[row][col];
+            int logical_row = vrow(row);
+            int logical_col = vcol(col);
+            const ChessPiece &p = s->game.board[logical_row][logical_col];
             if (p.type == EMPTY) continue;
 
             float px = bx + col * cell_sz + pad;
             float py = by + row * cell_sz + pad;
 
-            // Dim selected piece so the yellow square shows through
-            float alpha = (s->has_from && s->from_r == row && s->from_c == col)
+            float alpha = (s->has_from && s->from_r == logical_row && s->from_c == logical_col)
                           ? 0.60f : 1.0f;
 
             draw_chess_piece(p.type, p.color, px, py, psz,
@@ -362,20 +408,20 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
 // ─── Shared move logic (keyboard + mouse both call this) ──────────────────
 
 static void attempt_move(WoprChessState *s, int r, int c) {
+    ChessColor plr = s->player_color;
     s->sel_r = r; s->sel_c = c;
 
     if (!s->has_from) {
         const ChessPiece &p = s->game.board[r][c];
-        if (p.type != EMPTY && p.color == WHITE) {
+        if (p.type != EMPTY && p.color == plr) {
             s->has_from = true;
             s->from_r = r; s->from_c = c;
             strcpy(s->message, "PIECE SELECTED.  CHOOSE DESTINATION.");
         }
     } else {
         if (r == s->from_r && c == s->from_c) {
-            // Same square — deselect
             s->has_from = false;
-            strcpy(s->message, "YOUR MOVE.  WHITE TO PLAY.");
+            strcpy(s->message, "YOUR MOVE.");
             return;
         }
         if (chess_is_valid_move(&s->game, s->from_r, s->from_c, r, c)) {
@@ -386,7 +432,9 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             chess_make_move(&s->game, mv);
             s->has_from = false;
             s->status = chess_check_game_status(&s->game);
-            if (s->status == CHESS_CHECKMATE_BLACK) {
+            bool plr_wins = (plr == WHITE && s->status == CHESS_CHECKMATE_BLACK) ||
+                            (plr == BLACK && s->status == CHESS_CHECKMATE_WHITE);
+            if (plr_wins) {
                 strcpy(s->message, "CHECKMATE!  YOU WIN.");
                 s->game_over = true;
             } else if (s->status == CHESS_STALEMATE) {
@@ -398,7 +446,7 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             }
         } else {
             const ChessPiece &p = s->game.board[r][c];
-            if (p.type != EMPTY && p.color == WHITE) {
+            if (p.type != EMPTY && p.color == plr) {
                 s->from_r = r; s->from_c = c;
                 strcpy(s->message, "PIECE SELECTED.  CHOOSE DESTINATION.");
             } else {
@@ -418,7 +466,10 @@ static bool pixel_to_board(WoprChessState *s, int px, int py, int *out_r, int *o
     int col = (int)(rel_x / s->board_cell_w);
     int row = (int)(rel_y / s->board_cell_h);
     if (col < 0 || col > 7 || row < 0 || row > 7) return false;
-    *out_r = row; *out_c = col;
+    // Apply board flip for Black player
+    bool flipped = (s->num_players == 1 && s->player_color == BLACK);
+    *out_r = flipped ? 7 - row : row;
+    *out_c = flipped ? 7 - col : col;
     return true;
 }
 
@@ -434,16 +485,17 @@ void wopr_chess_mousemove(WoprState *w, int x, int y) {
     if (pixel_to_board(s, x, y, &r, &c)) { s->hover_r = r; s->hover_c = c; }
     else                                  { s->hover_r = s->hover_c = -1; }
 
+    ChessColor plr = s->player_color;
     SDL_SystemCursor cursor_id = SDL_SYSTEM_CURSOR_ARROW;
     if (!s->ai_thinking && !s->game_over && s->status == CHESS_PLAYING
-            && s->game.turn == WHITE && s->hover_r >= 0) {
+            && s->game.turn == plr && s->hover_r >= 0) {
         if (!s->has_from) {
             const ChessPiece &p = s->game.board[s->hover_r][s->hover_c];
-            if (p.type != EMPTY && p.color == WHITE)
+            if (p.type != EMPTY && p.color == plr)
                 cursor_id = SDL_SYSTEM_CURSOR_HAND;
         } else {
             const ChessPiece &p = s->game.board[s->hover_r][s->hover_c];
-            bool is_own  = (p.type != EMPTY && p.color == WHITE);
+            bool is_own  = (p.type != EMPTY && p.color == plr);
             bool is_dest = chess_is_valid_move(&s->game, s->from_r, s->from_c,
                                                s->hover_r, s->hover_c);
             if (is_own || is_dest)
@@ -458,14 +510,30 @@ void wopr_chess_mousedown(WoprState *w, int x, int y, int button) {
     if (!s) return;
 
     if (s->screen == SCREEN_LOBBY) {
-        if (button == SDL_BUTTON_LEFT) { s->num_players = s->lobby_sel; start_game(s); }
+        if (button == SDL_BUTTON_LEFT) {
+            if (s->lobby_sel == 0) {
+                s->num_players = 0;
+                start_game(s);
+            } else {
+                s->num_players = 1;
+                s->screen = SCREEN_COLOR;
+            }
+        }
+        return;
+    }
+
+    if (s->screen == SCREEN_COLOR) {
+        if (button == SDL_BUTTON_LEFT) {
+            s->player_color = (s->color_sel == 0) ? WHITE : BLACK;
+            start_game(s);
+        }
         return;
     }
 
     if (button != SDL_BUTTON_LEFT) return;
     if (s->ai_thinking || s->game_over || s->status != CHESS_PLAYING) return;
     if (s->num_players == 0) return;
-    if (s->game.turn != WHITE) return;
+    if (s->game.turn != s->player_color) return;
 
     int r, c;
     if (!pixel_to_board(s, x, y, &r, &c)) return;
@@ -485,8 +553,31 @@ bool wopr_chess_keydown(WoprState *w, SDL_Keycode sym) {
             case SDLK_0:    s->lobby_sel = 0; break;
             case SDLK_1:    s->lobby_sel = 1; break;
             case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
-                s->num_players = s->lobby_sel;
+                if (s->lobby_sel == 0) {
+                    s->num_players = 0;
+                    start_game(s);
+                } else {
+                    s->num_players = 1;
+                    s->screen = SCREEN_COLOR;
+                }
+                break;
+            default: break;
+        }
+        return true;
+    }
+
+    if (s->screen == SCREEN_COLOR) {
+        switch (sym) {
+            case SDLK_UP:   s->color_sel = 0; break;
+            case SDLK_DOWN: s->color_sel = 1; break;
+            case SDLK_w:    s->color_sel = 0; break;
+            case SDLK_b:    s->color_sel = 1; break;
+            case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
+                s->player_color = (s->color_sel == 0) ? WHITE : BLACK;
                 start_game(s);
+                break;
+            case SDLK_ESCAPE:
+                s->screen = SCREEN_LOBBY;
                 break;
             default: break;
         }
@@ -497,7 +588,7 @@ bool wopr_chess_keydown(WoprState *w, SDL_Keycode sym) {
     if (sym == SDLK_r) { s->screen = SCREEN_LOBBY; s->min_think_ms = 1500.0; return true; }
     if (s->game_over || s->status != CHESS_PLAYING) return true;
     if (s->num_players == 0) return true;
-    if (s->game.turn != WHITE) return true;
+    if (s->game.turn != s->player_color) return true;
 
     switch (sym) {
         case SDLK_UP:    s->sel_r = std::max(0, s->sel_r - 1); break;

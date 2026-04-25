@@ -1708,6 +1708,13 @@ void init_beat_chess_system(Visualizer *vis) {
     chess->pvsa_button_glow = 0;
     chess->pvsa_button_was_pressed = false;
     chess->player_vs_ai = false;  // Start with AI vs AI
+    chess->choosing_color = false;
+
+    // Color-selection overlay buttons (positions set at draw time)
+    chess->choose_white_button_hovered = false;
+    chess->choose_white_button_was_pressed = false;
+    chess->choose_black_button_hovered = false;
+    chess->choose_black_button_was_pressed = false;
     
     // Undo button
     chess->undo_button_hovered = false;
@@ -1886,40 +1893,120 @@ void update_beat_chess(void *vis_ptr, double dt) {
     
     // Handle the click if it happened
     if (pvsa_clicked) {
-        // Toggle between Player vs AI and AI vs AI
-        chess->player_vs_ai = !chess->player_vs_ai;
-        
-        // Reset game when toggling
-        chess_init_board(&chess->game);
-        chess->status = CHESS_PLAYING;
-        chess->beats_since_game_over = 0;
-        chess->waiting_for_restart = false;
-        chess->move_count = 0;
-        chess->eval_bar_position = 0;
-        chess->eval_bar_target = 0;
-        chess->time_thinking = 0;
-        chess->last_move_glow = 0;
-        chess->animation_progress = 0;
-        chess->is_animating = false;
-        chess->last_from_row = -1;
-        
         if (chess->player_vs_ai) {
-            snprintf(chess->status_text, sizeof(chess->status_text), "Player vs AI - White (player) to move");
-            chess->status_flash_color[0] = 0.2;
-            chess->status_flash_color[1] = 0.8;
-            chess->status_flash_color[2] = 1.0;
-        } else {
+            // Already in Player vs AI — switch back to AI vs AI
+            chess->player_vs_ai = false;
+            chess->choosing_color = false;
+
+            chess_init_board(&chess->game);
+            chess->status = CHESS_PLAYING;
+            chess->beats_since_game_over = 0;
+            chess->waiting_for_restart = false;
+            chess->move_count = 0;
+            chess->eval_bar_position = 0;
+            chess->eval_bar_target = 0;
+            chess->time_thinking = 0;
+            chess->last_move_glow = 0;
+            chess->animation_progress = 0;
+            chess->is_animating = false;
+            chess->last_from_row = -1;
+
             snprintf(chess->status_text, sizeof(chess->status_text), "AI vs AI - Game started!");
             chess->status_flash_color[0] = 1.0;
             chess->status_flash_color[1] = 0.65;
             chess->status_flash_color[2] = 0.0;
+            chess->status_flash_timer = 2.0;
+            chess->pvsa_button_glow = 1.0;
+
+            chess_start_thinking(&chess->thinking_state, &chess->game);
+        } else {
+            // Enter color-selection overlay
+            chess->choosing_color = true;
+            chess->pvsa_button_glow = 1.0;
         }
-        chess->status_flash_timer = 2.0;
-        chess->pvsa_button_glow = 1.0;
-        
-        // Start thinking for new game
-        chess_start_thinking(&chess->thinking_state, &chess->game);
     }
+
+    // ===== COLOR SELECTION OVERLAY =====
+    if (chess->choosing_color) {
+        // White button
+        bool is_over_white = (vis->mouse_x >= chess->choose_white_button_x &&
+                              vis->mouse_x <= chess->choose_white_button_x + chess->choose_white_button_width &&
+                              vis->mouse_y >= chess->choose_white_button_y &&
+                              vis->mouse_y <= chess->choose_white_button_y + chess->choose_white_button_height);
+        chess->choose_white_button_hovered = is_over_white;
+        bool white_was = chess->choose_white_button_was_pressed;
+        bool white_now = vis->mouse_left_pressed;
+        bool white_clicked = (white_was && !white_now && is_over_white);
+        chess->choose_white_button_was_pressed = white_now;
+
+        // Black button
+        bool is_over_black = (vis->mouse_x >= chess->choose_black_button_x &&
+                              vis->mouse_x <= chess->choose_black_button_x + chess->choose_black_button_width &&
+                              vis->mouse_y >= chess->choose_black_button_y &&
+                              vis->mouse_y <= chess->choose_black_button_y + chess->choose_black_button_height);
+        chess->choose_black_button_hovered = is_over_black;
+        bool black_was = chess->choose_black_button_was_pressed;
+        bool black_now = vis->mouse_left_pressed;
+        bool black_clicked = (black_was && !black_now && is_over_black);
+        chess->choose_black_button_was_pressed = black_now;
+
+        auto start_pvsa = [&](bool play_as_black) {
+            chess->choosing_color = false;
+            chess->player_vs_ai = true;
+            chess->board_flipped = play_as_black;
+
+            chess_init_board(&chess->game);
+            chess->status = CHESS_PLAYING;
+            chess->beats_since_game_over = 0;
+            chess->waiting_for_restart = false;
+            chess->move_count = 0;
+            chess->eval_bar_position = 0;
+            chess->eval_bar_target = 0;
+            chess->time_thinking = 0;
+            chess->last_move_glow = 0;
+            chess->animation_progress = 0;
+            chess->is_animating = false;
+            chess->last_from_row = -1;
+            chess->last_from_col = -1;
+            chess->last_to_row = -1;
+            chess->last_to_col = -1;
+            chess->white_total_time = 0.0;
+            chess->black_total_time = 0.0;
+            chess->current_move_start_time = 0.0;
+            chess->last_move_end_time = 0.0;
+            chess->time_since_last_move = 0.0;
+            chess->move_history_count = 0;
+            chess->has_selected_piece = false;
+            chess->selected_piece_row = -1;
+            chess->selected_piece_col = -1;
+            chess->is_in_check = false;
+            chess->check_display_timer = 0;
+            chess->is_checkmate = false;
+            chess->is_stalemate = false;
+
+            if (play_as_black) {
+                snprintf(chess->status_text, sizeof(chess->status_text), "Playing as BLACK - AI plays WHITE");
+                chess->status_flash_color[0] = 0.9;
+                chess->status_flash_color[1] = 0.9;
+                chess->status_flash_color[2] = 0.2;
+            } else {
+                snprintf(chess->status_text, sizeof(chess->status_text), "Playing as WHITE - AI plays BLACK");
+                chess->status_flash_color[0] = 0.2;
+                chess->status_flash_color[1] = 0.8;
+                chess->status_flash_color[2] = 1.0;
+            }
+            chess->status_flash_timer = 2.0;
+
+            chess_start_thinking(&chess->thinking_state, &chess->game);
+        };
+
+        if (white_clicked) start_pvsa(false);
+        if (black_clicked) start_pvsa(true);
+
+        // While choosing color, skip the rest of the update
+        return;
+    }
+    // ===================================
     // ===============================================
     
     // ===== CHECK UNDO BUTTON INTERACTION =====
