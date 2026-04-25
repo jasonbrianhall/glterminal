@@ -392,6 +392,7 @@ struct WillyWoprState {
 
     int  willy_velocity_y = 0;
     bool jumping          = false;
+    int  fall_speed       = 0;   // consecutive falling ticks, resets on landing
 
     // Movement — mirrors moving_continuously / continuous_direction / up_pressed / down_pressed
     bool        moving_continuously = false;
@@ -532,6 +533,7 @@ static void ww_load_level(WillyWoprState *s, int num) {
 
     s->willy_velocity_y = 0;
     s->jumping          = false;
+    s->fall_speed       = 0;
     s->moving_continuously = false;
     s->continuous_direction.clear();
     s->up_pressed = s->down_pressed = false;
@@ -723,19 +725,30 @@ static void ww_tick(WillyWoprState *s) {
             int ny = s->wy - 1;
             if(can_move(s,ny,s->wx)) s->wy = ny;
             s->willy_velocity_y++;
+            s->fall_speed = 0;  // airborne going up, reset fall counter
         } else {
             // Not jumping upward — apply gravity
             if(!on_solid(s)) {
                 s->willy_velocity_y += 1;
             } else {
-                if(s->willy_velocity_y > 0) { s->willy_velocity_y=0; s->jumping=false; }
+                if(s->willy_velocity_y > 0) {
+                    // Just landed — play thud scaled to fall distance
+                    if(s->fall_speed > 1) ww_snd_climb(s->wy);
+                    s->fall_speed = 0;
+                    s->willy_velocity_y=0; s->jumping=false;
+                }
             }
             if(s->willy_velocity_y > 0) {
                 int ny = s->wy + 1;
-                if(can_move(s,ny,s->wx)) s->wy = ny;
+                if(can_move(s,ny,s->wx)) {
+                    s->wy = ny;
+                    s->fall_speed++;
+                }
             }
         }
     } else {
+        if(s->fall_speed > 1) ww_snd_climb(s->wy);
+        s->fall_speed = 0;
         s->willy_velocity_y=0; s->jumping=false;
     }
 
@@ -876,52 +889,59 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
         struct ILine { Seg s[6]; int n; };  // n==0 → blank line (still takes vertical space)
 
         const ILine L[] = {
-            {{{"Willy the Worm",                                              -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"By Jason Hall",                                                -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"(original version by Alan Farmer 1985)",                       -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"This code is Free Open Source Software (FOSS)",                -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"Please feel free to do with it whatever you wish.",             -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"If you do make changes though such as new levels,",             -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"please share them with the world.",                             -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"Meet Willy the Worm ",  -1},{nullptr,0},{". Willy is a fun-",  -1}},3},
-            {{{"",                                                -1}},1},
-            {{{"loving invertebrate who likes to climb",                        -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"ladders ",             -1},{nullptr,3},{" bounce on springs ",  -1},{nullptr,5},{" ",-1},{nullptr,6}},6},
-            {{{"",                                                -1}},1},
-            {{{"and find his presents ",-1},{nullptr,2},{".  But more",         -1}},3},
-            {{{"",                                                -1}},1},
-            {{{"than anything, Willy loves to ring,",                           -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"bells! ",             -1},{nullptr,8}},2},
-            {{{"",                                                -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"You can press the arrow keys \xe2\x86\x90 \xe2\x86\x91 \xe2\x86\x92 \xe2\x86\x93",-1}},1},
-            {{{"",                                                -1}},1},
-            {{{"to make Willy run and climb, or the",                           -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"space bar to make him jump. Anything",                          -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"else will make Willy stop and wait",                            -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"",                                                -1}},1},
 
-            {{{"Good luck, and don't let Willy step on",                        -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"a tack ",             -1},{nullptr,4},{" or get ran over by a ball! ",-1},{nullptr,7}},4},
-            {{{"",                                                -1}},1},
-            {{{"",                                                -1}},1},
-            {{{"Press Enter to Continue",                                        -1}},1},
+            {{{"Willy the Worm (WOPR Port)", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"By Jason Hall", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"https://github.com/jasonbrianhall/willytheworm", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"(original version by Alan Farmer 1985)", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"", -1}}, 1},
+
+            {{{"This code is Free Open Source Software (FOSS)", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"Please feel free to do with it whatever you wish.", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"If you do make changes though such as new levels,", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"please share them with the world.", -1}}, 1},
+            {{{"", -1}}, 1},
+
+            {{{"Meet Willy the Worm. Willy is a fun-loving invertebrate who likes to climb", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"ladders, bounce on springs, and find his presents.", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"But more than anything, Willy loves to ring bells!", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"", -1}}, 1},
+
+            {{{"You can press the arrow keys \xe2\x86\x90 \xe2\x86\x91 \xe2\x86\x92 \xe2\x86\x93", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"to make Willy run and climb, or the", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"space bar to make him jump. Anything", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"else will make Willy stop and wait", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"", -1}}, 1},
+
+            {{{"Good luck, and don't let Willy step on", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"a tack or get ran over by a ball!", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"", -1}}, 1},
+
+            {{{"Cheat keys: Ctrl+L adds a life,  Ctrl+N skips to next level.", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"", -1}}, 1},
+
+            {{{"Press Enter to Continue", -1}}, 1},
         };
+
         const int NL = (int)(sizeof(L)/sizeof(L[0]));
 
         // Count UTF-8 codepoints — each renders as exactly 1 character cell.
@@ -1152,6 +1172,19 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
         case SDLK_DOWN:
         case SDLK_s:
             s->down_pressed = true;
+            break;
+
+        case SDLK_l:
+            if(SDL_GetModState() & KMOD_CTRL) {
+                s->lives++;
+                ww_snd_life();
+            }
+            break;
+
+        case SDLK_n:
+            if(SDL_GetModState() & KMOD_CTRL) {
+                ww_next_level(s);
+            }
             break;
 
         default:
