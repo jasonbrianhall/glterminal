@@ -36,8 +36,9 @@ static const GameEntry GAMES[] = {
     { "ZORK",                     "ZORK",        WoprGame::ZORK       },
     /*{ "BASIC",                    "BASIC",       WoprGame::BASIC      }, */
     { "WIZARD'S CASTLE",          "WIZARD",      WoprGame::WIZARD     },
+    { "WILLY THE WORM",           "WILLY",       WoprGame::WILLY_WORM },
 };
-static const int GAME_COUNT = 7;
+static const int GAME_COUNT = 8;
 
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
@@ -225,6 +226,14 @@ static void launch_game(WoprState *w, WoprGame game) {
             push_line(w, "");
             set_phase(w, WoprPhase::PLAYING_BASIC);
             wopr_wizard_enter(w);
+            break;
+        case WoprGame::WILLY_WORM:
+            push_line(w, "INITIATING: WILLY THE WORM");
+            push_line(w, "");
+            push_line(w, "  LOADING INVERTEBRATE SIMULATION...");
+            push_line(w, "");
+            set_phase(w, WoprPhase::PLAYING_WILLY);
+            wopr_willy_enter(w);
             break;
 
         default: break;
@@ -538,6 +547,7 @@ void wopr_open() {
             case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
             case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
             case WoprPhase::PLAYING_BASIC: wopr_basic_free(w); break;
+            case WoprPhase::PLAYING_WILLY: wopr_willy_free(w); break;
             default: break;
         }
     }
@@ -571,7 +581,8 @@ void wopr_close() {
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
         case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
-        case WoprPhase::PLAYING_BASIC:  wopr_basic_free(w);  break;
+        case WoprPhase::PLAYING_BASIC: wopr_basic_free(w); break;
+        case WoprPhase::PLAYING_WILLY: wopr_willy_free(w); break;
         default: break;
     }
     wopr_audio_stop();
@@ -661,7 +672,8 @@ void wopr_update(double dt) {
     case WoprPhase::PLAYING_MAZE:  wopr_maze_update(w, dt);  break;
     case WoprPhase::PLAYING_WAR:   wopr_war_update(w, dt);   break;
     case WoprPhase::PLAYING_ZORK:  wopr_zork_update(w, dt);  break;
-    case WoprPhase::PLAYING_BASIC:  wopr_basic_update(w, dt);  break;
+    case WoprPhase::PLAYING_BASIC: wopr_basic_update(w, dt); break;
+    case WoprPhase::PLAYING_WILLY: wopr_willy_update(w, dt); break;
 
     case WoprPhase::FAREWELL:
         if (crawl_done(w) && w->phase_timer > 2.5)
@@ -713,6 +725,9 @@ void wopr_render(int win_w, int win_h) {
             in_subgame = true; break;
         case WoprPhase::PLAYING_WAR:
             wopr_war_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
+            in_subgame = true; break;
+        case WoprPhase::PLAYING_WILLY:
+            wopr_willy_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
             in_subgame = true; break;
         default: break;
     }
@@ -876,6 +891,7 @@ static bool sub_back(WoprState *w) {
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
         case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
         case WoprPhase::PLAYING_BASIC: wopr_basic_free(w); break;
+        case WoprPhase::PLAYING_WILLY: wopr_willy_free(w); break;
         default: return false;
     }
     push_line(w, "");
@@ -921,6 +937,9 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
             if (text && *text)
                 wopr_basic_text(w, text);
             return wopr_basic_keydown(w, sym);
+        case WoprPhase::PLAYING_WILLY:
+            if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
+            return wopr_willy_keydown(w, sym);
         default: break;
     }
 
@@ -1075,6 +1094,7 @@ bool wopr_mousedown(int x, int y, int button) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_mousedown(w, x, y, button);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_mousedown(w, x, y, button); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousedown(w, x, y, button); break;
+        case WoprPhase::PLAYING_WILLY: wopr_willy_mousedown(w, x, y, button); break;
         default: break;
     }
     return true;
@@ -1095,7 +1115,10 @@ bool wopr_mousemove(int x, int y) {
 bool wopr_mouseup(int x, int y, int button) {
     WoprState *w = &g_wopr;
     if (!w->visible) return false;
-    (void)x; (void)y; (void)button;
+    switch (w->phase) {
+        case WoprPhase::PLAYING_WILLY: wopr_willy_mouseup(w, x, y, button); break;
+        default: break;
+    }
     return true;
 }
 
@@ -1111,6 +1134,7 @@ bool wopr_mousewheel(int delta) {
         case WoprPhase::PLAYING_MINES:
         case WoprPhase::PLAYING_MAZE:
         case WoprPhase::PLAYING_WAR:
+        case WoprPhase::PLAYING_WILLY:
             return true;   // consume without scrolling
         default: break;
     }

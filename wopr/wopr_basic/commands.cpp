@@ -17,7 +17,15 @@ bool gfx_sdl_pump(void);
 void gfx_sdl_render(void);
 #endif
 
+/* gfx_screen_ex lives in global scope (like all gfx_* functions). */
+#ifdef USE_SDL_WINDOW
+void gfx_screen_ex(int mode, int colorswitch, int apage, int vpage);
+#endif
+
 BASIC_NS_BEGIN
+
+/* Current Graphics Position — updated by PSET, PRESET, LINE endpoint */
+static double g_gfx_x = 0.0, g_gfx_y = 0.0;
 
 /* Resolve a color value from _RGB() encoding (0x01RRGGBB) to a raw 0x00RRGGBB
  * int that gfx_* functions accept. In truecolor mode gfx_* uses the full value;
@@ -169,12 +177,28 @@ static void felix_drawf(char *fmt, ...) {
  * For simplicity we map the 16 standard EGA display colours (0-15) and
  * treat any value ≥ 16 as a 6-bit EGA palette entry. */
 static void ega_to_rgb(int ega6, int *r, int *g, int *b) {
-    /* IBM EGA DAC encoding: bit5=R-high, bit4=G-high, bit3=B-high,
-     *                        bit2=R-low,  bit1=G-low,  bit0=B-low
-     * Each channel: high*0xAA + low*0x55  (matches DOSBox/real hardware) */
-    *r = ((ega6>>5)&1)*0xAA + ((ega6>>2)&1)*0x55;
-    *g = ((ega6>>4)&1)*0xAA + ((ega6>>1)&1)*0x55;
-    *b = ((ega6>>3)&1)*0xAA + ((ega6>>0)&1)*0x55;
+    /* QB SCREEN 9 PALETTE color-number to RGB.
+     * Colors 0-15: standard CGA 16-color table (hardcoded, includes brown/gray).
+     * Colors 16-63: EGA extended palette.
+     *   Primary bits  (2,1,0) contribute 0xAA (2/3 intensity) to R,G,B.
+     *   Secondary bits (5,4,3) contribute 0x55 (1/3 intensity) to R,G,B.
+     * Formula: r_bits = (bit2<<1)|bit5, then r = r_bits*85.
+     * Gives EGA 46 -> #FFAA55 (orange) as expected for gorilla.bas. */
+    static const int cga16[16][3] = {
+        {0,0,0},{0,0,0xAA},{0,0xAA,0},{0,0xAA,0xAA},
+        {0xAA,0,0},{0xAA,0,0xAA},{0xAA,0x55,0},{0xAA,0xAA,0xAA},
+        {0x55,0x55,0x55},{0x55,0x55,0xFF},{0x55,0xFF,0x55},{0x55,0xFF,0xFF},
+        {0xFF,0x55,0x55},{0xFF,0x55,0xFF},{0xFF,0xFF,0x55},{0xFF,0xFF,0xFF}
+    };
+    if (ega6 >= 0 && ega6 < 16) {
+        *r = cga16[ega6][0]; *g = cga16[ega6][1]; *b = cga16[ega6][2];
+        return;
+    }
+    /* Extended colors 16-63: primary bits at 2,1,0 (high); secondary at 5,4,3 (low) */
+    int rb = (((ega6>>2)&1)<<1) | ((ega6>>5)&1);
+    int gb = (((ega6>>1)&1)<<1) | ((ega6>>4)&1);
+    int bb = (((ega6>>0)&1)<<1) | ((ega6>>3)&1);
+    *r = rb * 85; *g = gb * 85; *b = bb * 85;
 }
 
 /* Screen mode → (width, height) */
@@ -331,33 +355,55 @@ static int cmd_delay(Interp *ip, char *args) {
 /* ================================================================
  * SCREEN mode
  * ================================================================ */
+
+
 static int cmd_screen(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
     if (!*p || *p == ':') return 0;
+
+    /* Parse up to 4 args: mode [, colorswitch [, apage [, vpage]]] */
+    auto next_arg = [&](long def) -> long {
+        if (*p == ',') {
+            p = sk(p + 1);
+            if (*p == ',' || *p == ':' || *p == ' ') return def;
+            mpf_t n; mpf_init2(n, g_prec);
+            p = sk(eval_expr(p, n));
+            long v = mpf_get_si(n); mpf_clear(n);
+            return v;
+        }
+        return def;
+    };
+
     mpf_t n; mpf_init2(n, g_prec);
-    eval_expr(p, n);
+    p = sk(eval_expr(p, n));
     long encoded = mpf_get_si(n);
     mpf_clear(n);
+
+    long colorswitch = next_arg(0);
+    long apage       = next_arg(-1);   /* -1 = unchanged */
+    long vpage       = next_arg(-1);   /* -1 = unchanged */
+
     if (encoded < 0) {
         /* Truecolor sentinel from _NEWIMAGE(w,h,32): encoded = -(w*100000+h) */
         long val = -encoded;
         int tw = (int)(val / 100000L);
         int th = (int)(val % 100000L);
-        g_screen_mode = -1;  /* truecolor pseudo-mode */
+        g_screen_mode = -1;
         g_screen_width  = tw;
         g_screen_height = th;
 #ifdef USE_SDL_WINDOW
         gfx_screen_tc(tw, th);
 #else
-        felix_sendf("screen;12");  /* best fallback */
+        felix_sendf("screen;12");
 #endif
     } else {
         int mode = (int)encoded;
         g_screen_mode = mode;
         screen_dims(mode, &g_screen_width, &g_screen_height);
 #ifdef USE_SDL_WINDOW
-        gfx_screen(mode);
+        ::gfx_screen_ex(mode, (int)colorswitch, (int)apage, (int)vpage);
+        g_gfx_x = 0.0; g_gfx_y = 0.0;  /* reset Current Graphics Position */
 #else
         if (mode == 0) felix_draw("cls;0");
         else           felix_sendf("screen;%d", mode);
@@ -556,21 +602,15 @@ static int cmd_cls(Interp *ip, char *args) {
         arg = (int)mpf_get_si(n);
         mpf_clear(n);
     }
-        int c;
-        if (arg >= 0) {
-            c = arg;
-        } else {
-#ifdef USE_SDL_WINDOW
-            /* In graphics mode, CLS with no arg always clears to color 0
-             * (the background pixel color).  BackColor is a text attribute
-             * used for COLOR statements, not for pixel-buffer clearing. */
-            c = gfx_active() ? 0 : g_back_color;
-#else
-            c = g_back_color;
-            Var *v = var_find("BACKCOLOR");
-            if (v && v->kind == VAR_NUM) c = (int)mpf_get_si(v->num);
-#endif
-        }
+        /* QB CLS semantics:
+         *   CLS 1 = clear graphics viewport only
+         *   CLS 2 = clear text viewport only (no-op in pixel-buffer mode)
+         *   CLS (no arg) = clear both
+         * The arg is NOT a color index. Always clear to background (index 0). */
+        if (arg == 2) return 0;  /* text-only clear: no-op in graphics mode */
+        /* arg==1 or no arg: clear graphics to background color */
+        int c = 0;  /* always clear pixel buffer to color index 0 (background) */
+        (void)arg;
 #ifdef USE_SDL_WINDOW
         gfx_cls(c);
         /* display_cls() intentionally NOT called here — gfx_cls() already
@@ -1297,8 +1337,13 @@ static int cmd_poke(Interp *ip, char *args) {
  * END IF is similar.
  * ================================================================ */
 static int cmd_end_sub(Interp *ip, char *args) {
-    /* Treat as RETURN — end of an inline sub body */
-    return cmd_return(ip, args);
+    /* Only act as RETURN if we are inside a GOSUB/CALL frame.
+     * During linear execution (falling through a SUB/FUNCTION body
+     * that was never called) there is no frame -- skip silently. */
+    for (int fi = g_ctrl_top - 1; fi >= 0; fi--)
+        if (strcmp(g_ctrl[fi].varname, "\x01" "GOSUB") == 0)
+            return cmd_return(ip, args);
+    return 0;
 }
 
 /* ================================================================
@@ -2087,9 +2132,10 @@ static int cmd_circle(Interp *ip, char *args) {
 static int cmd_line_gfx(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
-    double x1 = 0, y1 = 0, x2, y2;
+    /* Default start point is the Current Graphics Position */
+    double x1 = g_gfx_x, y1 = g_gfx_y, x2, y2;
 
-    /* optional start point */
+    /* optional explicit start point */
     if (*p == '(') {
         p = sk(parse_xy(p, &x1, &y1));
     }
@@ -2111,6 +2157,9 @@ static int cmd_line_gfx(Interp *ip, char *args) {
         if (kw_match(p, "BF")) suffix = ";BF";
         else if (*p == 'B' || *p == 'b') suffix = ";B";
     }
+
+    /* Update Current Graphics Position to endpoint */
+    g_gfx_x = x2; g_gfx_y = y2;
 
 #ifdef USE_SDL_WINDOW
     if      (strcmp(suffix, ";BF") == 0) gfx_boxfill((int)x1,(int)y1,(int)x2,(int)y2, color);
@@ -2171,6 +2220,31 @@ static int cmd_pset(Interp *ip, char *args) {
         eval_expr(p, mc);
         color = (int)mpf_get_si(mc); mpf_clear(mc);
     }
+    g_gfx_x = x; g_gfx_y = y;  /* update Current Graphics Position */
+#ifdef USE_SDL_WINDOW
+    gfx_pset((int)x, (int)y, color);
+#else
+    felix_drawf("pset;%d;%d;%d", (int)x, (int)y, color);
+#endif
+    return 0;
+}
+
+/* ================================================================
+ * PRESET (x, y) [, color]   — like PSET but default color is 0 (background)
+ * ================================================================ */
+static int cmd_preset(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+    double x, y;
+    p = sk(parse_xy(p, &x, &y));
+    int color = 0;
+    if (*p == ',') {
+        p = sk(p + 1);
+        mpf_t mc; mpf_init2(mc, g_prec);
+        eval_expr(p, mc);
+        color = (int)mpf_get_si(mc); mpf_clear(mc);
+    }
+    g_gfx_x = x; g_gfx_y = y;  /* update Current Graphics Position */
 #ifdef USE_SDL_WINDOW
     gfx_pset((int)x, (int)y, color);
 #else
@@ -2733,6 +2807,7 @@ const Command commands[] = {
     { "PUT",        cmd_put_graphics },
     { "DRAW",       cmd_draw       },
     { "CIRCLE",     cmd_circle     },
+    { "PRESET",     cmd_preset     },
     { "PSET",       cmd_pset       },
     { "PAINT",      cmd_paint      },
     { "END SELECT", cmd_end_select },

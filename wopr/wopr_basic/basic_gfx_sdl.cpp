@@ -101,6 +101,15 @@ static bool                 s_gfx_active = false;
 static bool                 s_truecolor  = false;  // true when SCREEN _NEWIMAGE(...,32)
 
 // ============================================================================
+// Page support (SCREEN mode, colorswitch, apage, vpage)
+// Up to 4 pages; apage = active draw page, vpage = visible display page.
+// ============================================================================
+static const int GFX_MAX_PAGES = 4;
+static std::vector<Uint32> s_pages[GFX_MAX_PAGES];  // per-page pixel buffers
+static int s_apage = 0;   // active (draw) page
+static int s_vpage = 0;   // visible (display) page
+
+// ============================================================================
 // Sprite store
 // ============================================================================
 struct Sprite { int w, h; std::vector<Uint32> px; int bg_color = 0; };
@@ -406,7 +415,7 @@ bool gfx_sdl_pump() {
                 // F11 — toggle fullscreen
                 BASIC_NS::gfx_sdl_toggle_fullscreen();
             } else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
-                key_push('\n');
+                key_push('\r');
             } else if (sym == SDLK_BACKSPACE) {
                 key_push(8);
             } else if (sym == SDLK_TAB) {
@@ -553,12 +562,14 @@ void gfx_sdl_render() {
         SDL_RenderSetViewport(s_renderer, nullptr);
         // Palette mode: alpha byte holds palette index — replace with 0xFF for rendering.
         // Truecolor mode: pixels already have 0xFF alpha, OR is a no-op.
-        std::vector<Uint32> tex_pixels(s_pixels.size());
-        for (size_t i = 0; i < s_pixels.size(); i++)
-            tex_pixels[i] = s_pixels[i] | 0xFF000000u;
+        // Render from the visible page (vpage), not necessarily the draw page
+        const std::vector<Uint32> &vpx = (s_vpage < GFX_MAX_PAGES && !s_pages[s_vpage].empty())
+                                          ? s_pages[s_vpage] : s_pages[0];
+        std::vector<Uint32> tex_pixels(vpx.size());
+        for (size_t i = 0; i < vpx.size(); i++)
+            tex_pixels[i] = vpx[i] | 0xFF000000u;
         SDL_UpdateTexture(s_gfx_tex, nullptr, tex_pixels.data(), s_gfx_w * 4);
-        // Window was sized to an exact integer multiple of the pixel buffer,
-        // so stretch to fill — this gives pixel-perfect integer scaling.
+        // Stretch to window — window height already accounts for pixel aspect ratio
         SDL_Rect dst = { 0, 0, s_win_w, s_win_h };
         SDL_RenderCopy(s_renderer, s_gfx_tex, nullptr, &dst);
     }
@@ -622,12 +633,12 @@ static inline Uint32 color_to_pixel(int color) {
 
 static inline void px_set(int x, int y, int color) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return;
-    s_pixels[(size_t)(y * s_gfx_w + x)] = color_to_pixel(color);
+    s_pages[s_apage][(size_t)(y * s_gfx_w + x)] = color_to_pixel(color);
 }
 
 static inline Uint32 px_get(int x, int y) {
     if (x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return 0;
-    return s_pixels[(size_t)(y * s_gfx_w + x)];
+    return s_pages[s_apage][(size_t)(y * s_gfx_w + x)];
 }
 
 // Extract the stored palette index from a pixel value (palette mode only)
@@ -714,7 +725,7 @@ void gfx_screen_tc(int w, int h) {
         s_win_w = w * scale; s_win_h = h * scale;
         if (s_window) SDL_SetWindowSize(s_window, s_win_w, s_win_h);
     }
-    s_pixels.assign((size_t)(w * h), 0xFF000000u);
+    for (int i = 0; i < GFX_MAX_PAGES; i++) s_pages[i].assign((size_t)(w * h), 0xFF000000u);
     if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
     s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                   SDL_TEXTUREACCESS_STREAMING, w, h);
@@ -726,50 +737,71 @@ void gfx_screen_tc(int w, int h) {
 }
 
 void gfx_screen(int mode) {
+    gfx_screen_ex(mode, 0, -1, -1);
+}
+
+void gfx_screen_ex(int mode, int /*colorswitch*/, int apage, int vpage) {
     s_truecolor = false;
     gfx_palette_reset();   // SCREEN always resets palette to CGA defaults
     if (mode == 0) {
         s_gfx_active = false;
         if (s_gfx_tex) { SDL_DestroyTexture(s_gfx_tex); s_gfx_tex = nullptr; }
-        s_pixels.clear(); s_gfx_w = s_gfx_h = 0;
-        ft_set_size_for_window();  // recompute cols/rows for text mode
+        for (int i = 0; i < GFX_MAX_PAGES; i++) s_pages[i].clear();
+        s_gfx_w = s_gfx_h = 0;
+        s_apage = s_vpage = 0;
+        ft_set_size_for_window();
         s_needs_render = true;
         return;
     }
     int gw, gh;
     screen_mode_dims(mode, &gw, &gh);
+
+    // Only reallocate pages if the mode dimensions changed
+    bool dims_changed = (s_gfx_w != gw || s_gfx_h != gh);
     s_gfx_w = gw; s_gfx_h = gh;
 
-    // Resize the window to show this mode at the best integer scale that
-    // fits the current display, with a minimum of 1×.
-    {
+    // CGA/EGA 200-line modes had non-square pixels (~2.4:1 aspect).
+    // Display them at the correct height so the image is not squished.
+    // 200-line: multiply display height by 12/5 (×2.4)
+    // 350-line: multiply display height by ~1.37 (close enough to square)
+    // 480-line and others: square pixels, no correction needed
+    int display_h;
+    if (gh == 200)      display_h = gw * 3 / 4;   // 640×200 → display as 640×480
+    else if (gh == 350) display_h = gw * 3 / 4;   // 640×350 → display as 640×480
+    else                display_h = gh;
+
+    if (dims_changed) {
+        // Resize window to best integer scale that fits the display
         SDL_DisplayMode dm;
         int disp = s_window ? SDL_GetWindowDisplayIndex(s_window) : 0;
-        if (SDL_GetCurrentDisplayMode(disp, &dm) != 0) {
-            dm.w = 1920; dm.h = 1080;
-        }
-        // Leave some headroom for the OS taskbar
+        if (SDL_GetCurrentDisplayMode(disp, &dm) != 0) { dm.w = 1920; dm.h = 1080; }
         int max_w = (int)(dm.w * 0.92f);
         int max_h = (int)(dm.h * 0.92f);
         int scale = 1;
-        while ((gw * (scale + 1)) <= max_w && (gh * (scale + 1)) <= max_h)
+        while ((gw * (scale + 1)) <= max_w && (display_h * (scale + 1)) <= max_h)
             scale++;
-        int win_w = gw * scale;
-        int win_h = gh * scale;
-        if (s_window) SDL_SetWindowSize(s_window, win_w, win_h);
-        s_win_w = win_w;
-        s_win_h = win_h;
+        s_win_w = gw * scale;
+        s_win_h = display_h * scale;
+        if (s_window) SDL_SetWindowSize(s_window, s_win_w, s_win_h);
+
+        // Allocate all pages
+        for (int i = 0; i < GFX_MAX_PAGES; i++)
+            s_pages[i].assign((size_t)(gw * gh), color_to_pixel(0));
+
+        if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
+        s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
+                                      SDL_TEXTUREACCESS_STREAMING, gw, gh);
+        SDL_SetTextureBlendMode(s_gfx_tex, SDL_BLENDMODE_BLEND);
     }
 
-    s_pixels.assign((size_t)(gw * gh), color_to_pixel(0));
-    if (s_gfx_tex) SDL_DestroyTexture(s_gfx_tex);
-    s_gfx_tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
-                                  SDL_TEXTUREACCESS_STREAMING, gw, gh);
-    SDL_SetTextureBlendMode(s_gfx_tex, SDL_BLENDMODE_BLEND);
+    // Update active/visible pages (only if explicitly specified)
+    if (apage >= 0 && apage < GFX_MAX_PAGES) s_apage = apage;
+    if (vpage >= 0 && vpage < GFX_MAX_PAGES) s_vpage = vpage;
+
     s_gfx_active = true;
-    s_text_cols = TEXT_COLS_DEF;   // graphics mode: lock to 80×25
+    s_text_cols = TEXT_COLS_DEF;
     s_text_rows = TEXT_ROWS_DEF;
-    ft_set_size_for_window();      // recompute cell size for graphics viewport
+    ft_set_size_for_window();
     s_needs_render = true;
 }
 
@@ -783,7 +815,7 @@ void gfx_palette(int idx, int r, int g, int b) {
     // Update RGB of any pixel in the buffer already using this index
     Uint32 new_rgb = s_pal[idx] & 0x00FFFFFFu;
     Uint32 tag     = (Uint32)idx << 24;
-    for (auto &px : s_pixels) {
+    for (int _pi = 0; _pi < GFX_MAX_PAGES; _pi++) for (auto &px : s_pages[_pi]) {
         if ((px >> 24) == (Uint32)idx)
             px = tag | new_rgb;
     }
@@ -799,7 +831,7 @@ void gfx_cls(int color) {
     if (s_gfx_active) {
         int ci = color & 15;
         Uint32 fill = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
-        std::fill(s_pixels.begin(), s_pixels.end(), fill);
+        std::fill(s_pages[s_apage].begin(), s_pages[s_apage].end(), fill);
     }
 
     // 2. Clear text grid to the same background colour
@@ -825,7 +857,7 @@ void gfx_pset(int x, int y, int color) {
 
 int gfx_point(int x, int y) {
     if (!s_gfx_active || x < 0 || y < 0 || x >= s_gfx_w || y >= s_gfx_h) return -1;
-    return px_index(s_pixels[(size_t)(y * s_gfx_w + x)]);
+    return px_index(s_pages[s_apage][(size_t)(y * s_gfx_w + x)]);
 }
 
 void gfx_line(int x0, int y0, int x1, int y1, int color) {
@@ -860,7 +892,7 @@ void gfx_boxfill(int x1, int y1, int x2, int y2, int color) {
     int ci = color & 15;
     Uint32 col = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
     for (int y = y1; y <= y2; y++) {
-        Uint32 *row = s_pixels.data() + (size_t)(y * s_gfx_w);
+        Uint32 *row = s_pages[s_apage].data() + (size_t)(y * s_gfx_w);
         std::fill(row + x1, row + x2 + 1, col);
     }
     s_needs_render = true;
@@ -941,7 +973,7 @@ void gfx_paint(int x, int y, int fill_color, int border_color) {
 
         /* Fill the span */
         for (int i = nx0; i <= nx1; i++)
-            s_pixels[(size_t)(sy * s_gfx_w + i)] = fill;
+            s_pages[s_apage][(size_t)(sy * s_gfx_w + i)] = fill;
 
         /* Push child spans in forward direction */
         int ny = sy + dy;
@@ -999,11 +1031,11 @@ void gfx_put(int id, int x, int y, int xor_mode) {
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
             int ci = px_index(src);
             if (xor_mode) {
-                int new_ci = (px_index(s_pixels[pidx]) ^ ci) & 15;
-                s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
+                int new_ci = (px_index(s_pages[s_apage][pidx]) ^ ci) & 15;
+                s_pages[s_apage][pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
                 if (ci == sp.bg_color) continue;  // background colour at GET time = transparent
-                s_pixels[pidx] = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
+                s_pages[s_apage][pidx] = ((Uint32)ci << 24) | (s_pal[ci] & 0x00FFFFFFu);
             }
         }
     }
@@ -1054,10 +1086,10 @@ void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) 
             if (dx < 0 || dy < 0 || dx >= s_gfx_w || dy >= s_gfx_h) continue;
             size_t pidx = (size_t)(dy * s_gfx_w + dx);
             if (xor_mode) {
-                int new_ci = (px_index(s_pixels[pidx]) ^ pal_idx) & 15;
-                s_pixels[pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
+                int new_ci = (px_index(s_pages[s_apage][pidx]) ^ pal_idx) & 15;
+                s_pages[s_apage][pidx] = ((Uint32)new_ci << 24) | (s_pal[new_ci] & 0x00FFFFFFu);
             } else {
-                s_pixels[pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
+                s_pages[s_apage][pidx] = ((Uint32)pal_idx << 24) | (s_pal[pal_idx] & 0x00FFFFFFu);
             }
         }
     }

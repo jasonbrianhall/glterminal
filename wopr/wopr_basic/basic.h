@@ -34,10 +34,10 @@ BASIC_NS_BEGIN
 #define DEFAULT_PREC     128
 #define DEFAULT_BUFFER  4096
 #define PRINT_DIGITS      60
-#define MAX_VARS         512
+#define MAX_VARS        16384
 #define MAX_VARNAME       64
 #define MAX_LINES       8192
-#define MAX_LINE_LEN     512
+#define MAX_LINE_LEN    16384
 #define CTRL_STACK_MAX    16384
 #define MAX_ARRAY_DIMS     2
 #define MAX_ARRAY_SIZE  4096

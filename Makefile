@@ -203,7 +203,8 @@ SRCS_WOPR = wopr/wopr.cpp                \
             wopr/wopr_basic/main.cpp         \
             wopr/wopr_basic/program.cpp      \
             wopr/wopr_basic/sound_sdl.cpp    \
-            wopr/wopr_basic/vars.cpp
+            wopr/wopr_basic/vars.cpp         \
+            wopr/wopr_willy.cpp
                    
 
 
