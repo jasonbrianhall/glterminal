@@ -991,37 +991,44 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
     }
     if(s->sub!=WSub::PLAYING) return true;
 
-    SDL_Log("Key Pressed\n");
-    switch(sym) {
+    switch (sym) {
+
         case SDLK_SPACE:
-            // Jump — does NOT clear continuous_direction so Willy keeps running
             do_jump(s);
             break;
-        case SDLK_LEFT: case SDLK_a:
-            s->continuous_direction="LEFT";
-            s->moving_continuously=true;
-            s->willy_direction="LEFT";
+        case SDLK_LEFT:
+        case SDLK_a:
+            s->continuous_direction = "LEFT";
+            s->moving_continuously = true;
+            s->willy_direction = "LEFT";
             break;
-        case SDLK_RIGHT: case SDLK_d:
-            s->continuous_direction="RIGHT";
-            s->moving_continuously=true;
-            s->willy_direction="RIGHT";
+        case SDLK_RIGHT:
+        case SDLK_d:
+            s->continuous_direction = "RIGHT";
+            s->moving_continuously = true;
+            s->willy_direction = "RIGHT";
             break;
-        case SDLK_UP: case SDLK_w:
-            s->up_pressed=true;
+
+        case SDLK_UP:
+        case SDLK_w:
+            s->up_pressed = true;
             break;
-        case SDLK_DOWN: case SDLK_s:
-            s->down_pressed=true;
+        case SDLK_DOWN:
+        case SDLK_s:
+            s->down_pressed = true;
             break;
+
         default:
-            s->moving_continuously=false;
-            s->continuous_direction.clear();
-            s->up_pressed=false;
-            s->down_pressed=false;
-            s->willy_velocity_y=0;
-            s->willy_direction="NONE";
-            s->jumping=false;
-            break;
+            // Any other key stops Willy
+            if (sym>0) {
+                s->moving_continuously = false;
+                s->continuous_direction.clear();
+                s->up_pressed = false;
+                s->down_pressed = false;
+                s->willy_velocity_y = 0;
+                s->jumping = false;
+                break;
+            }
     }
     return true;
 }
