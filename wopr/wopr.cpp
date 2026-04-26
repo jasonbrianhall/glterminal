@@ -1243,6 +1243,7 @@ bool wopr_mousedown(int x, int y, int button) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_mousedown(w, x, y, button);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_mousedown(w, x, y, button); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousedown(w, x, y, button); break;
+        case WoprPhase::PLAYING_WAR:   wopr_war_mousedown(w, x, y, button);   break;
         case WoprPhase::PLAYING_WILLY: wopr_willy_mousedown(w, x, y, button); break;
         default: break;
     }
@@ -1256,6 +1257,7 @@ bool wopr_mousemove(int x, int y) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_mousemove(w, x, y);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousemove(w, x, y); break;
+        case WoprPhase::PLAYING_WAR:   wopr_war_mousemove(w, x, y);   break;
         default: break;
     }
     return true;
