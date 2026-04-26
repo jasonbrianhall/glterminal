@@ -186,13 +186,14 @@ SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
 SRCS_WOPR = wopr/wopr.cpp                \
             wopr/wopr_audio.cpp          \
             wopr/wopr_tictactoe.cpp      \
+            wopr/wopr_checkers.cpp       \
             wopr/wopr_chess.cpp          \
+            wopr/beatchess.cpp           \
             wopr/wopr_mines.cpp          \
             wopr/wopr_maze.cpp           \
             wopr/wopr_war.cpp            \
             wopr/wopr_zork.cpp           \
             wopr/wopr_basic.cpp          \
-            wopr/beatchess.cpp           \
             wopr/chess_ai_move.cpp       \
             wopr/minesweeper_game.cpp    \
             wopr/highscores.cpp          \
