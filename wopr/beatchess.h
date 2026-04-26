@@ -195,6 +195,17 @@ typedef struct {
 
     bool player_vs_ai;
     bool board_flipped;
+    bool choosing_color;  // true when showing the "play as White or Black?" overlay
+
+    double choose_white_button_x, choose_white_button_y;
+    double choose_white_button_width, choose_white_button_height;
+    bool   choose_white_button_hovered;
+    bool   choose_white_button_was_pressed;
+
+    double choose_black_button_x, choose_black_button_y;
+    double choose_black_button_width, choose_black_button_height;
+    bool   choose_black_button_hovered;
+    bool   choose_black_button_was_pressed;
 
     int selected_piece_row, selected_piece_col;
     bool has_selected_piece;
