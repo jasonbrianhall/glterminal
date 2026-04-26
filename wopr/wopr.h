@@ -24,6 +24,7 @@ enum class WoprPhase {
     GAME_MENU,        // Main WOPR game list / command shell
     PLAYING_TTT,
     PLAYING_CHESS,
+    PLAYING_CHECKERS,
     PLAYING_MINES,
     PLAYING_MAZE,
     PLAYING_WAR,
@@ -36,6 +37,7 @@ enum class WoprPhase {
 enum class WoprGame {
     NONE = 0,
     CHESS,
+    CHECKERS,
     FALKEN_MAZE,
     GLOBAL_WAR,
     TIC_TAC_TOE,
@@ -144,6 +146,15 @@ bool wopr_chess_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_chess_free(WoprState *w);
 void wopr_chess_mousedown(WoprState *w, int x, int y, int button);
 void wopr_chess_mousemove(WoprState *w, int x, int y);
+
+// Checkers
+void wopr_checkers_enter(WoprState *w);
+void wopr_checkers_update(WoprState *w, double dt);
+void wopr_checkers_render(WoprState *w, int x, int y, int cw, int ch, int cols);
+bool wopr_checkers_keydown(WoprState *w, SDL_Keycode sym);
+void wopr_checkers_free(WoprState *w);
+void wopr_checkers_mousedown(WoprState *w, int x, int y, int button);
+void wopr_checkers_mousemove(WoprState *w, int x, int y);
 
 // Minesweeper
 void wopr_mines_enter(WoprState *w);

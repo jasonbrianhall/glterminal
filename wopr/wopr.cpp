@@ -86,6 +86,7 @@ struct GameEntry {
 
 static const GameEntry GAMES[] = {
     { "CHESS",                    "CHESS",       WoprGame::CHESS      },
+    { "CHECKERS",                 "CHECKERS",    WoprGame::CHECKERS   },
     { "FALKEN'S MAZE",            "MAZE",        WoprGame::FALKEN_MAZE},
     { "GLOBAL THERMONUCLEAR WAR", "WAR",         WoprGame::GLOBAL_WAR },
     { "TIC-TAC-TOE",              "TIC",         WoprGame::TIC_TAC_TOE},
@@ -95,7 +96,7 @@ static const GameEntry GAMES[] = {
     { "WIZARD'S CASTLE",          "WIZARD",      WoprGame::WIZARD     },
     { "WILLY THE WORM",           "WILLY",       WoprGame::WILLY_WORM },
 };
-static const int GAME_COUNT = 8;
+static const int GAME_COUNT = 9;
 
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
@@ -240,6 +241,11 @@ static void launch_game(WoprState *w, WoprGame game) {
             push_line(w, "INITIATING: CHESS");
             set_phase(w, WoprPhase::PLAYING_CHESS);
             wopr_chess_enter(w);
+            break;
+        case WoprGame::CHECKERS:
+            push_line(w, "INITIATING: CHECKERS");
+            set_phase(w, WoprPhase::PLAYING_CHECKERS);
+            wopr_checkers_enter(w);
             break;
         case WoprGame::MINESWEEPER:
             push_line(w, "INITIATING: MINESWEEPER");
@@ -597,6 +603,7 @@ void wopr_open() {
         switch (w->phase) {
             case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
             case WoprPhase::PLAYING_CHESS: wopr_chess_free(w); break;
+            case WoprPhase::PLAYING_CHECKERS: wopr_checkers_free(w); break;
             case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
             case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
             case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
@@ -674,6 +681,7 @@ void wopr_close() {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_free(w); break;
+        case WoprPhase::PLAYING_CHECKERS: wopr_checkers_free(w); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
@@ -817,6 +825,7 @@ void wopr_update(double dt) {
 
     case WoprPhase::PLAYING_TTT:   wopr_ttt_update(w, dt);   break;
     case WoprPhase::PLAYING_CHESS: wopr_chess_update(w, dt); break;
+    case WoprPhase::PLAYING_CHECKERS: wopr_checkers_update(w, dt); break;
     case WoprPhase::PLAYING_MINES: wopr_mines_update(w, dt); break;
     case WoprPhase::PLAYING_MAZE:  wopr_maze_update(w, dt);  break;
     case WoprPhase::PLAYING_WAR:   wopr_war_update(w, dt);   break;
@@ -865,6 +874,9 @@ void wopr_render(int win_w, int win_h) {
             in_subgame = true; break;
         case WoprPhase::PLAYING_CHESS:
             wopr_chess_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
+            in_subgame = true; break;
+        case WoprPhase::PLAYING_CHECKERS:
+            wopr_checkers_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
             in_subgame = true; break;
         case WoprPhase::PLAYING_MINES:
             wopr_mines_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
@@ -1035,6 +1047,7 @@ static bool sub_back(WoprState *w) {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_free(w); break;
+        case WoprPhase::PLAYING_CHECKERS: wopr_checkers_free(w); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
@@ -1067,6 +1080,9 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
         case WoprPhase::PLAYING_CHESS:
             if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
             return wopr_chess_keydown(w, sym);
+        case WoprPhase::PLAYING_CHECKERS:
+            if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
+            return wopr_checkers_keydown(w, sym);
         case WoprPhase::PLAYING_MINES:
             if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
             return wopr_mines_keydown(w, sym);
@@ -1242,6 +1258,7 @@ bool wopr_mousedown(int x, int y, int button) {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_mousedown(w, x, y, button);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_mousedown(w, x, y, button); break;
+        case WoprPhase::PLAYING_CHECKERS: wopr_checkers_mousedown(w, x, y, button); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousedown(w, x, y, button); break;
         case WoprPhase::PLAYING_WAR:   wopr_war_mousedown(w, x, y, button);   break;
         case WoprPhase::PLAYING_WILLY: wopr_willy_mousedown(w, x, y, button); break;
@@ -1256,6 +1273,7 @@ bool wopr_mousemove(int x, int y) {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_mousemove(w, x, y);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_mousemove(w, x, y); break;
+        case WoprPhase::PLAYING_CHECKERS: wopr_checkers_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_WAR:   wopr_war_mousemove(w, x, y);   break;
         default: break;
@@ -1282,6 +1300,7 @@ bool wopr_mousewheel(int delta) {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:
         case WoprPhase::PLAYING_CHESS:
+        case WoprPhase::PLAYING_CHECKERS:
         case WoprPhase::PLAYING_MINES:
         case WoprPhase::PLAYING_MAZE:
         case WoprPhase::PLAYING_WAR:
