@@ -83,6 +83,12 @@ struct WoprState {
     // Scroll offset for the terminal log (lines from bottom; 0 = pinned to bottom)
     int          scroll_offset = 0;
 
+    // Auto-login: types FALKEN / JOSHUA automatically with keystroke sounds
+    bool         auto_login       = true;   // enabled by default
+    double       auto_type_acc    = 0.0;    // accumulated time towards next keystroke
+    double       auto_type_delay  = 0.0;    // randomised interval to next char (seconds)
+    double       auto_submit_wait = 0.0;    // countdown after last char before Enter
+
     // Sub-game state — opaque blobs owned by sub-modules
     void        *sub_state = nullptr;
 };
@@ -117,6 +123,7 @@ bool  wopr_audio_init();
 void  wopr_audio_shutdown();
 void  wopr_audio_play_screech();
 void  wopr_audio_stop();
+void  wopr_audio_play_keystroke();   // short click for auto-login typing
 
 // ─── Sub-game interfaces (implemented in wopr_*.cpp) ──────────────────────
 
