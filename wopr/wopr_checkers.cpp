@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <vector>
 #include <pthread.h>
+#include <math.h>
 #include "wopr_render.h"
 
 // ─── Board constants ───────────────────────────────────────────────────────
