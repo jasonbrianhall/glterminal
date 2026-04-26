@@ -18,6 +18,63 @@ WoprState g_wopr;
 uint8_t g_term_r = 0, g_term_g = 255, g_term_b = 69;
 
 // ============================================================================
+// KEYSTROKE AUDIO
+// ============================================================================
+
+// A dedicated one-shot SDL audio device for short keystroke clicks.
+// Keeps it decoupled from the modem-screech audio pipeline.
+static SDL_AudioDeviceID s_key_audio_dev = 0;
+
+static void key_audio_ensure_open() {
+    if (s_key_audio_dev != 0) return;
+    SDL_AudioSpec want{};
+    want.freq     = 22050;
+    want.format   = AUDIO_S16SYS;
+    want.channels = 1;
+    want.samples  = 512;
+    want.callback = nullptr;
+    s_key_audio_dev = SDL_OpenAudioDevice(nullptr, 0, &want, nullptr, 0);
+    if (s_key_audio_dev != 0)
+        SDL_PauseAudioDevice(s_key_audio_dev, 0);
+}
+
+void wopr_audio_play_keystroke() {
+    key_audio_ensure_open();
+    if (s_key_audio_dev == 0) return;
+
+    // Keyboard thump: short noise burst (attack transient) + low-freq body decay.
+    // Two-layer approach:
+    //   1. Noise transient: ~4ms of white noise for the click attack
+    //   2. Body: low sine ~120-180 Hz that decays fast, gives the "thock" weight
+    const int   RATE = 22050;
+    const int   N    = (int)(RATE * 0.040);  // 40ms total — enough for body to decay
+    const float BODY_FREQ = 130.f + (rand() % 60);  // 130-190 Hz thump
+    const float VOL  = 18000.f;
+
+    static Sint16 buf[2048];
+    int n = std::min(N, 2048);
+
+    for (int i = 0; i < n; i++) {
+        float t   = (float)i / RATE;
+
+        // Noise transient: loud at start, dies in ~4ms
+        float noise_env = expf(-t * 800.f);
+        float noise     = ((rand() & 0xFFFF) / 32768.f - 1.f) * noise_env;
+
+        // Low thump body: dies in ~25ms
+        float body_env  = expf(-t * 120.f);
+        float body      = sinf(2.f * 3.14159f * BODY_FREQ * t) * body_env;
+
+        float sample = VOL * (noise * 0.4f + body * 0.7f);
+        // Soft clip
+        if (sample >  32000.f) sample =  32000.f;
+        if (sample < -32000.f) sample = -32000.f;
+        buf[i] = (Sint16)sample;
+    }
+    SDL_QueueAudio(s_key_audio_dev, buf, (Uint32)(n * sizeof(Sint16)));
+}
+
+// ============================================================================
 // CONSTANTS
 // ============================================================================
 
@@ -29,6 +86,7 @@ struct GameEntry {
 
 static const GameEntry GAMES[] = {
     { "CHESS",                    "CHESS",       WoprGame::CHESS      },
+    { "CHECKERS",                 "CHECKERS",    WoprGame::CHECKERS   },
     { "FALKEN'S MAZE",            "MAZE",        WoprGame::FALKEN_MAZE},
     { "GLOBAL THERMONUCLEAR WAR", "WAR",         WoprGame::GLOBAL_WAR },
     { "TIC-TAC-TOE",              "TIC",         WoprGame::TIC_TAC_TOE},
@@ -38,7 +96,7 @@ static const GameEntry GAMES[] = {
     { "WIZARD'S CASTLE",          "WIZARD",      WoprGame::WIZARD     },
     { "WILLY THE WORM",           "WILLY",       WoprGame::WILLY_WORM },
 };
-static const int GAME_COUNT = 8;
+static const int GAME_COUNT = 9;
 
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
@@ -183,6 +241,11 @@ static void launch_game(WoprState *w, WoprGame game) {
             push_line(w, "INITIATING: CHESS");
             set_phase(w, WoprPhase::PLAYING_CHESS);
             wopr_chess_enter(w);
+            break;
+        case WoprGame::CHECKERS:
+            push_line(w, "INITIATING: CHECKERS");
+            set_phase(w, WoprPhase::PLAYING_CHECKERS);
+            wopr_checkers_enter(w);
             break;
         case WoprGame::MINESWEEPER:
             push_line(w, "INITIATING: MINESWEEPER");
@@ -540,6 +603,7 @@ void wopr_open() {
         switch (w->phase) {
             case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
             case WoprPhase::PLAYING_CHESS: wopr_chess_free(w); break;
+            case WoprPhase::PLAYING_CHECKERS: wopr_checkers_free(w); break;
             case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
             case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
             case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
@@ -605,6 +669,8 @@ void wopr_open() {
 
     set_phase(w, WoprPhase::LOGIN_PROMPT);
     begin_crawl(w, "USERNAME: ");
+    // Seed first keystroke delay so typing starts ~0.3s after prompt appears
+    w->auto_type_delay = 0.30;
 }
 
 
@@ -615,6 +681,7 @@ void wopr_close() {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_free(w); break;
+        case WoprPhase::PLAYING_CHECKERS: wopr_checkers_free(w); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
@@ -655,10 +722,62 @@ void wopr_update(double dt) {
         if (crawl_done(w)) {
             set_phase(w, WoprPhase::LOGIN_INPUT);
             w->input_buf.clear();
+            // Brief pause before auto-typing begins in the new field
+            if (w->auto_login) {
+                w->auto_type_acc   = 0.0;
+                w->auto_type_delay = w->username_done ? 0.25 : 0.30;
+                w->auto_submit_wait = 0.0;
+            }
         }
         break;
 
     case WoprPhase::LOGIN_INPUT:
+        if (w->auto_login) {
+            // Determine which credential we're typing right now
+            const char *target = w->username_done ? "JOSHUA" : "FALKEN";
+            int typed = (int)w->input_buf.size();
+
+            if (typed < (int)strlen(target)) {
+                // Still have characters to type
+                w->auto_type_acc += dt;
+                if (w->auto_type_acc >= w->auto_type_delay) {
+                    w->auto_type_acc = 0.0;
+                    // Pick next inter-key delay: 70-160 ms, human-ish rhythm
+                    w->auto_type_delay = 0.07 + (rand() % 90) * 0.001;
+
+                    char ch_typed = target[typed];
+                    w->input_buf += (char)toupper((unsigned char)ch_typed);
+                    wopr_audio_play_keystroke();
+                }
+            } else {
+                // All chars typed — wait a beat then "press Enter"
+                w->auto_submit_wait += dt;
+                double enter_delay = w->username_done ? 0.35 : 0.45; // slight pause before Enter
+                if (w->auto_submit_wait >= enter_delay) {
+                    w->auto_submit_wait = 0.0;
+                    w->auto_type_acc    = 0.0;
+                    w->auto_type_delay  = 0.0;
+                    wopr_audio_play_keystroke();
+
+                    if (!w->username_done) {
+                        w->username_entered = to_upper(w->input_buf);
+                        push_line(w, "USERNAME: " + w->username_entered);
+                        w->username_done = true;
+                        w->input_buf.clear();
+                        begin_crawl(w, "PASSWORD: ");
+                        set_phase(w, WoprPhase::LOGIN_PROMPT);
+                    } else {
+                        w->password_entered = to_upper(w->input_buf);
+                        push_line(w, "PASSWORD: " + std::string(w->input_buf.size(), '*'));
+                        w->input_buf.clear();
+                        push_line(w, "");
+                        set_phase(w, WoprPhase::CONNECTING);
+                        begin_crawl(w, "LOGON ACCEPTED -- CONNECTING TO WOPR MAINFRAME...");
+                        w->auto_login = false; // done — hand control back to user
+                    }
+                }
+            }
+        }
         break;
 
     case WoprPhase::LOGIN_REJECTED:
@@ -706,6 +825,7 @@ void wopr_update(double dt) {
 
     case WoprPhase::PLAYING_TTT:   wopr_ttt_update(w, dt);   break;
     case WoprPhase::PLAYING_CHESS: wopr_chess_update(w, dt); break;
+    case WoprPhase::PLAYING_CHECKERS: wopr_checkers_update(w, dt); break;
     case WoprPhase::PLAYING_MINES: wopr_mines_update(w, dt); break;
     case WoprPhase::PLAYING_MAZE:  wopr_maze_update(w, dt);  break;
     case WoprPhase::PLAYING_WAR:   wopr_war_update(w, dt);   break;
@@ -754,6 +874,9 @@ void wopr_render(int win_w, int win_h) {
             in_subgame = true; break;
         case WoprPhase::PLAYING_CHESS:
             wopr_chess_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
+            in_subgame = true; break;
+        case WoprPhase::PLAYING_CHECKERS:
+            wopr_checkers_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
             in_subgame = true; break;
         case WoprPhase::PLAYING_MINES:
             wopr_mines_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
@@ -924,6 +1047,7 @@ static bool sub_back(WoprState *w) {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_free(w);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_free(w); break;
+        case WoprPhase::PLAYING_CHECKERS: wopr_checkers_free(w); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_free(w); break;
         case WoprPhase::PLAYING_MAZE:  wopr_maze_free(w);  break;
         case WoprPhase::PLAYING_WAR:   wopr_war_free(w);   break;
@@ -956,6 +1080,9 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
         case WoprPhase::PLAYING_CHESS:
             if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
             return wopr_chess_keydown(w, sym);
+        case WoprPhase::PLAYING_CHECKERS:
+            if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
+            return wopr_checkers_keydown(w, sym);
         case WoprPhase::PLAYING_MINES:
             if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
             return wopr_mines_keydown(w, sym);
@@ -1131,7 +1258,9 @@ bool wopr_mousedown(int x, int y, int button) {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_mousedown(w, x, y, button);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_mousedown(w, x, y, button); break;
+        case WoprPhase::PLAYING_CHECKERS: wopr_checkers_mousedown(w, x, y, button); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousedown(w, x, y, button); break;
+        case WoprPhase::PLAYING_WAR:   wopr_war_mousedown(w, x, y, button);   break;
         case WoprPhase::PLAYING_WILLY: wopr_willy_mousedown(w, x, y, button); break;
         default: break;
     }
@@ -1144,7 +1273,9 @@ bool wopr_mousemove(int x, int y) {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:   wopr_ttt_mousemove(w, x, y);   break;
         case WoprPhase::PLAYING_CHESS: wopr_chess_mousemove(w, x, y); break;
+        case WoprPhase::PLAYING_CHECKERS: wopr_checkers_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousemove(w, x, y); break;
+        case WoprPhase::PLAYING_WAR:   wopr_war_mousemove(w, x, y);   break;
         default: break;
     }
     return true;
@@ -1169,6 +1300,7 @@ bool wopr_mousewheel(int delta) {
     switch (w->phase) {
         case WoprPhase::PLAYING_TTT:
         case WoprPhase::PLAYING_CHESS:
+        case WoprPhase::PLAYING_CHECKERS:
         case WoprPhase::PLAYING_MINES:
         case WoprPhase::PLAYING_MAZE:
         case WoprPhase::PLAYING_WAR:

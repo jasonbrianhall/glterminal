@@ -24,6 +24,7 @@ enum class WoprPhase {
     GAME_MENU,        // Main WOPR game list / command shell
     PLAYING_TTT,
     PLAYING_CHESS,
+    PLAYING_CHECKERS,
     PLAYING_MINES,
     PLAYING_MAZE,
     PLAYING_WAR,
@@ -36,6 +37,7 @@ enum class WoprPhase {
 enum class WoprGame {
     NONE = 0,
     CHESS,
+    CHECKERS,
     FALKEN_MAZE,
     GLOBAL_WAR,
     TIC_TAC_TOE,
@@ -83,6 +85,12 @@ struct WoprState {
     // Scroll offset for the terminal log (lines from bottom; 0 = pinned to bottom)
     int          scroll_offset = 0;
 
+    // Auto-login: types FALKEN / JOSHUA automatically with keystroke sounds
+    bool         auto_login       = true;   // enabled by default
+    double       auto_type_acc    = 0.0;    // accumulated time towards next keystroke
+    double       auto_type_delay  = 0.0;    // randomised interval to next char (seconds)
+    double       auto_submit_wait = 0.0;    // countdown after last char before Enter
+
     // Sub-game state — opaque blobs owned by sub-modules
     void        *sub_state = nullptr;
 };
@@ -117,6 +125,7 @@ bool  wopr_audio_init();
 void  wopr_audio_shutdown();
 void  wopr_audio_play_screech();
 void  wopr_audio_stop();
+void  wopr_audio_play_keystroke();   // short click for auto-login typing
 
 // ─── Sub-game interfaces (implemented in wopr_*.cpp) ──────────────────────
 
@@ -137,6 +146,15 @@ bool wopr_chess_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_chess_free(WoprState *w);
 void wopr_chess_mousedown(WoprState *w, int x, int y, int button);
 void wopr_chess_mousemove(WoprState *w, int x, int y);
+
+// Checkers
+void wopr_checkers_enter(WoprState *w);
+void wopr_checkers_update(WoprState *w, double dt);
+void wopr_checkers_render(WoprState *w, int x, int y, int cw, int ch, int cols);
+bool wopr_checkers_keydown(WoprState *w, SDL_Keycode sym);
+void wopr_checkers_free(WoprState *w);
+void wopr_checkers_mousedown(WoprState *w, int x, int y, int button);
+void wopr_checkers_mousemove(WoprState *w, int x, int y);
 
 // Minesweeper
 void wopr_mines_enter(WoprState *w);
@@ -160,6 +178,8 @@ void wopr_war_update(WoprState *w, double dt);
 void wopr_war_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_war_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_war_free(WoprState *w);
+void wopr_war_mousedown(WoprState *w, int x, int y, int button);
+void wopr_war_mousemove(WoprState *w, int x, int y);
 
 // Zork / Dungeon
 void wopr_zork_enter(WoprState *w);
