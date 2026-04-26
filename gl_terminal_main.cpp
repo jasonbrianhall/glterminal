@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
             if (pf_parse_spec(argv[++i], &lp, &rh, &rp))
                 pf_locals_pending.push_back({lp, rh, rp});
             else
-                fprintf(stderr, "Bad -L spec (expected local_port:remote_host:remote_port): %s\n", argv[i]);
+                SDL_Log("Bad -L spec (expected local_port:remote_host:remote_port): %s\n", argv[i]);
             continue;
         }
         if ((strcmp(arg, "-R") == 0 || strcmp(arg, "--forward-remote") == 0) && i + 1 < argc) {
@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
             if (pf_parse_spec(argv[++i], &lp, &rh, &rp))
                 pf_remotes_pending.push_back({lp, rh, rp});
             else
-                fprintf(stderr, "Bad -R spec (expected remote_port:local_host:local_port): %s\n", argv[i]);
+                SDL_Log("Bad -R spec (expected remote_port:local_host:local_port): %s\n", argv[i]);
             continue;
         }
         if ((strcmp(arg, "-D") == 0 || strcmp(arg, "--dynamic") == 0) && i + 1 < argc) {
@@ -165,7 +165,7 @@ int main(int argc, char **argv) {
             if (port > 0 && port <= 65535)
                 pf_socks_pending.push_back(port);
             else
-                fprintf(stderr, "Bad -D port (expected 1-65535): %s\n", argv[i]);
+                SDL_Log("Bad -D port (expected 1-65535): %s\n", argv[i]);
             continue;
         }
 #endif // USESSH
@@ -183,42 +183,42 @@ int main(int argc, char **argv) {
 
         // --help / -h
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-            printf("Usage: flt [shell]\n");
-            printf("       flt [options]\n\n");
-            printf("Options:\n");
-            printf("  [shell]                     Command to run instead of default shell\n");
-            printf("  --sdl                       Force SDL renderer (for testing fallback path)\n");
+            SDL_Log("Usage: flt [shell]\n");
+            SDL_Log("       flt [options]\n\n");
+            SDL_Log("Options:\n");
+            SDL_Log("  [shell]                     Command to run instead of default shell\n");
+            SDL_Log("  --sdl                       Force SDL renderer (for testing fallback path)\n");
 #ifdef USESSH
-            printf("\nSSH options:\n");
-            printf("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
-            printf("  -i <path>                   Private key file (alias: --ssh-key)\n");
-            printf("  --ssh-key <path>            Private key file for public key auth\n");
-            printf("  --ssh-key-pub <path>        Public key file (derived from key path if omitted)\n");
-            printf("  --ssh-password <pass>       Password auth (prefer agent or key)\n");
-            printf("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
-            printf("  -L local_port:remote_host:remote_port   Local port forward\n");
-            printf("  -R remote_port:local_host:local_port    Remote port forward\n");
-            printf("  -D local_port                           SOCKS5 dynamic port forward\n");
+            SDL_Log("\nSSH options:\n");
+            SDL_Log("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
+            SDL_Log("  -i <path>                   Private key file (alias: --ssh-key)\n");
+            SDL_Log("  --ssh-key <path>            Private key file for public key auth\n");
+            SDL_Log("  --ssh-key-pub <path>        Public key file (derived from key path if omitted)\n");
+            SDL_Log("  --ssh-password <pass>       Password auth (prefer agent or key)\n");
+            SDL_Log("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
+            SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
+            SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
+            SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
 #endif
-            printf("\nKeyboard shortcuts:\n");
-            printf("  F2                          SFTP upload browser (SSH sessions only)\n");
-            printf("  F3                          SFTP download browser (SSH sessions only)\n");
-            printf("  F4                          SFTP interactive console (SSH sessions only)\n");
-            printf("  F5                          Eye of Felix — image viewer / audio player\n");
-            printf("  F6                          Port forward manager (SSH sessions only)\n");
-            printf("  F11                         Toggle full screen\n");
-            printf("  Ctrl+Scroll                 Resize font\n");
-            printf("  Shift+PageUp/Down           Scroll scrollback buffer\n");
-            printf("  Ctrl+Click                  Open URL in browser\n");
-            printf("\nTroubleshooting:\n");
-            printf("  If the terminal fails to start due to missing OpenGL 3.3 support\n");
-            printf("  (common on Raspberry Pi with Mesa/VC4), try:\n");
-            printf("    MESA_GL_VERSION_OVERRIDE=3.3 MESA_GLSL_VERSION_OVERRIDE=330 flt\n");
-            printf("  Or add these to your ~/.profile to make it permanent:\n");
-            printf("    export MESA_GL_VERSION_OVERRIDE=3.3\n");
-            printf("    export MESA_GLSL_VERSION_OVERRIDE=330\n");
-            printf("  Without the override, flt falls back to an SDL software renderer\n");
-            printf("  which supports all features except GPU-accelerated visual effects.\n");
+            SDL_Log("\nKeyboard shortcuts:\n");
+            SDL_Log("  F2                          SFTP upload browser (SSH sessions only)\n");
+            SDL_Log("  F3                          SFTP download browser (SSH sessions only)\n");
+            SDL_Log("  F4                          SFTP interactive console (SSH sessions only)\n");
+            SDL_Log("  F5                          Eye of Felix — image viewer / audio player\n");
+            SDL_Log("  F6                          Port forward manager (SSH sessions only)\n");
+            SDL_Log("  F11                         Toggle full screen\n");
+            SDL_Log("  Ctrl+Scroll                 Resize font\n");
+            SDL_Log("  Shift+PageUp/Down           Scroll scrollback buffer\n");
+            SDL_Log("  Ctrl+Click                  Open URL in browser\n");
+            SDL_Log("\nTroubleshooting:\n");
+            SDL_Log("  If the terminal fails to start due to missing OpenGL 3.3 support\n");
+            SDL_Log("  (common on Raspberry Pi with Mesa/VC4), try:\n");
+            SDL_Log("    MESA_GL_VERSION_OVERRIDE=3.3 MESA_GLSL_VERSION_OVERRIDE=330 flt\n");
+            SDL_Log("  Or add these to your ~/.profile to make it permanent:\n");
+            SDL_Log("    export MESA_GL_VERSION_OVERRIDE=3.3\n");
+            SDL_Log("    export MESA_GLSL_VERSION_OVERRIDE=330\n");
+            SDL_Log("  Without the override, flt falls back to an SDL software renderer\n");
+            SDL_Log("  which supports all features except GPU-accelerated visual effects.\n");
             return 0;
         }
     }
