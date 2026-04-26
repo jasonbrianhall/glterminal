@@ -333,9 +333,22 @@ int display_getline(char *buf, int bufsz)
 {
     /* Raw-mode line editor with up/down history */
     #define HIST_MAX 64
-    static char  s_hist[HIST_MAX][512];
+
+    static char (*s_hist)[512] = nullptr;
     static int   s_hist_count = 0;
-    static int   s_hist_head  = 0;   /* circular index of next slot to write */
+    static int   s_hist_head  = 0;
+
+    struct HistInit {
+        HistInit() {
+            s_hist = new char[HIST_MAX][512];
+        }
+        ~HistInit() {
+            delete[] s_hist;
+        }
+    };
+
+    static HistInit _hist_init;
+
 
     enter_raw();   /* make sure we're in raw/nonblocking → switch to blocking raw */
     {
