@@ -654,8 +654,20 @@ void gl_resize_fbo(int w, int h) {
 // VERTEX ACCUMULATOR — one draw call per frame
 // ============================================================================
 
-static Vertex s_accum[MAX_VERTS];
-static int    s_accum_n = 0;
+static Vertex* s_accum;
+static int     s_accum_n = 0;
+
+struct AccumInit {
+    AccumInit() {
+        s_accum = new Vertex[MAX_VERTS];
+    }
+    ~AccumInit() {
+        delete[] s_accum;
+    }
+};
+
+static AccumInit _accum_init;
+
 
 void gl_flush_verts(void) {
     if (g_use_sdl_renderer) { sdl_flush_verts(); return; }
