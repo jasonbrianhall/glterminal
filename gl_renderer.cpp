@@ -727,8 +727,20 @@ void draw_rect(float x, float y, float w, float h, float r, float g, float b, fl
 // GLYPH VERTEX ACCUMULATOR
 // ============================================================================
 
-static GlyphVertex s_glyph_accum[MAX_GLYPH_VERTS];
-static int         s_glyph_n = 0;
+static GlyphVertex* s_glyph_accum;
+static int          s_glyph_n = 0;
+
+struct GlyphAccumInit {
+    GlyphAccumInit() {
+        s_glyph_accum = new GlyphVertex[MAX_GLYPH_VERTS];
+    }
+    ~GlyphAccumInit() {
+        delete[] s_glyph_accum;
+    }
+};
+
+static GlyphAccumInit _glyph_accum_init;
+
 
 void gl_flush_glyphs(void) {
     if (g_use_sdl_renderer) { sdl_flush_glyphs(); return; }
