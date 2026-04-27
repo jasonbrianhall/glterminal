@@ -1058,8 +1058,9 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
     gl_draw_rect(0.f, (float)py+gh, (float)ww, gap, 0.f,0.f,0.55f,1.f);
 
     if(s->sub==WSub::GAME_OVER) {
-        gl_draw_text("GAME OVER  -  PRESS ENTER TO PLAY AGAIN",
-                     (float)px, sy, 1.f,1.f,1.f,1.f,1.f);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "GAME OVER  -  FINAL SCORE: %6d  -  PRESS ENTER TO PLAY AGAIN", s->score);
+        gl_draw_text(buf, (float)px, sy, 1.f,1.f,1.f,1.f,1.f);
     } else {
         char buf[160];
         snprintf(buf,sizeof(buf),
@@ -1084,7 +1085,7 @@ void wopr_willy_update(WoprState *w, double dt) {
     if(s->sub==WSub::DEAD_WHITE) {
         s->sub_timer += dt;
         if(s->sub_timer >= 1.0) {  // hold white for 1 second
-            if(s->lives<0) { s->sub=WSub::GAME_OVER; }
+            if(s->lives<=0) { s->sub=WSub::GAME_OVER; }
             else            { ww_load_level(s,s->level_num); }
         }
         return;
