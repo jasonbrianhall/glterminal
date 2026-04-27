@@ -112,7 +112,7 @@ typedef struct {
     char text[MAX_LINE_LEN];
 } Line;
 
-extern Line g_lines[MAX_LINES];
+extern Line* g_lines;
 extern int  g_nlines;
 
 int  line_cmp(const void *a, const void *b);

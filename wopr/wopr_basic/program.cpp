@@ -12,7 +12,15 @@ BASIC_NS_BEGIN
 /* ================================================================
  * Global state
  * ================================================================ */
-Line g_lines[MAX_LINES];
+Line* g_lines;
+
+struct LinesInit {
+    LinesInit() { g_lines = new Line[MAX_LINES]; }
+    ~LinesInit() { delete[] g_lines; }
+};
+
+static LinesInit _lines_init;
+
 int  g_nlines = 0;
 
 char *g_data[MAX_DATA_ITEMS];
