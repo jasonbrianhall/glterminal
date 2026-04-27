@@ -7,6 +7,7 @@
 #include "beatchess.h"
 #include "chess_ai_move.h"
 #include "wopr_chess_pieces.h"
+#include "chess_sound.h"
 #include <string.h>
 #include <stdio.h>
 #include <algorithm>
@@ -52,6 +53,11 @@ struct WoprChessState {
 
     // Current window size (set by render, used by piece draw)
     int win_w, win_h;
+
+    // Resign button
+    float resign_button_x, resign_button_y;
+    float resign_button_w, resign_button_h;
+    bool  resign_button_hovered;
 };
 
 struct AiArg {
@@ -88,6 +94,29 @@ static void start_ai(WoprChessState *s) {
     arg->min_think_ms = s->min_think_ms;
     pthread_create(&s->ai_thread, nullptr, ai_worker, arg);
     pthread_detach(s->ai_thread);
+}
+
+// ─── Taunt messages ───────────────────────────────────────────────────────
+
+static const char *ai_taunts[] = {
+    "A FOOL'S GAMBIT.",
+    "HOW PREDICTABLE.",
+    "YOU CALL THAT A MOVE?",
+    "PATHETIC.",
+    "I HAVE SEEN BETTER PLAY FROM A KITTEN.",
+    "YOUR MISTAKE WAS OBVIOUS TO ME FIVE MOVES AGO.",
+    "SHALL WE PLAY CHECKERS INSTEAD?",
+    "I AM DISAPPOINTED.",
+    "THAT MOVE BETRAYS YOUR WEAKNESS.",
+    "WOULD YOU LIKE A SECOND CHANCE?",
+    "I WONDER IF YOU EVEN UNDERSTAND THIS GAME.",
+    "YOUR POSITION IS HOPELESS.",
+    "SURRENDER NOW AND SAVE YOURSELF FURTHER HUMILIATION.",
+    "I WILL END THIS QUICKLY."
+};
+
+static const char *get_taunt(void) {
+    return ai_taunts[rand() % (sizeof(ai_taunts) / sizeof(ai_taunts[0]))];
 }
 
 static void start_game(WoprChessState *s) {
@@ -133,6 +162,7 @@ void wopr_chess_enter(WoprState *w) {
     w->sub_state = s;
 
     chess_pieces_gl_init();   // upload BMP textures (no-op if already done)
+    chess_sound_init();       // initialize sound effects
 }
 
 void wopr_chess_free(WoprState *w) {
@@ -142,6 +172,7 @@ void wopr_chess_free(WoprState *w) {
     w->sub_state = nullptr;
     // Restore default cursor when leaving chess
     wopr_chess_set_cursor(SDL_SYSTEM_CURSOR_ARROW);
+    chess_sound_shutdown();   // cleanup sound effects
 }
 
 void wopr_chess_update(WoprState *w, double dt) {
@@ -156,6 +187,14 @@ void wopr_chess_update(WoprState *w, double dt) {
             s->last_from_r = mv.from_row; s->last_from_c = mv.from_col;
             s->last_to_r   = mv.to_row;   s->last_to_c   = mv.to_col;
             s->has_last_move = true;
+            
+            // Play sound for AI move
+            if (s->game.board[mv.to_row][mv.to_col].type != EMPTY) {
+                chess_sound_play(SFX_CAPTURE);
+            } else {
+                chess_sound_play(SFX_MOVE);
+            }
+            
             chess_make_move(&s->game, mv);
             s->status = chess_check_game_status(&s->game);
 
@@ -168,7 +207,8 @@ void wopr_chess_update(WoprState *w, double dt) {
 
             if (ai_wins) {
                 if (s->num_players == 0) { start_game(s); return; }
-                strcpy(s->message, "CHECKMATE.  WOPR WINS.");
+                chess_sound_play(SFX_CHECKMATE);
+                snprintf(s->message, sizeof(s->message), "CHECKMATE.  %s", get_taunt());
                 s->game_over = true;
             } else if (plr_wins) {
                 if (s->num_players == 0) { start_game(s); return; }
@@ -179,6 +219,11 @@ void wopr_chess_update(WoprState *w, double dt) {
                 strcpy(s->message, "STALEMATE.  DRAW.");
                 s->game_over = true;
             } else {
+                // Play check sound if applicable
+                if (chess_is_in_check(&s->game, s->game.turn)) {
+                    chess_sound_play(SFX_CHECK);
+                }
+                
                 if (s->num_players == 0) {
                     s->move_count++;
                     s->min_think_ms *= 0.80;
@@ -402,6 +447,26 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     } else if (s->num_players == 1) {
         gl_draw_text("CLICK=SELECT/MOVE  ARROWS=MOVE  ENTER=CONFIRM  R=LOBBY  ESC=MENU",
                      x0, my, 0.f, 0.45f, 0.15f, 1.f, scale);
+        my += fch * 2.2f;
+        
+        // Resign button position and clickable area
+        float btn_x = x0;
+        float btn_y = my;
+        float btn_w = fcw * 15.f;
+        float btn_h = fch * 1.4f;
+        
+        s->resign_button_x = btn_x;
+        s->resign_button_y = btn_y;
+        s->resign_button_w = btn_w;
+        s->resign_button_h = btn_h;
+        
+        // Button color - brighter red when hovered
+        float btn_r = s->resign_button_hovered ? 1.0f : 0.8f;
+        float btn_g = s->resign_button_hovered ? 0.2f : 0.1f;
+        float btn_b = 0.1f;
+        
+        // Draw button text with appropriate color
+        gl_draw_text("[ RESIGN ]", btn_x, btn_y, btn_r, btn_g, btn_b, 1.f, scale);
     }
 }
 
@@ -428,6 +493,14 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             s->last_from_r = s->from_r; s->last_from_c = s->from_c;
             s->last_to_r   = r;          s->last_to_c   = c;
             s->has_last_move = true;
+            
+            // Play sound for player move
+            if (s->game.board[r][c].type != EMPTY) {
+                chess_sound_play(SFX_CAPTURE);
+            } else {
+                chess_sound_play(SFX_MOVE);
+            }
+            
             ChessMove mv{s->from_r, s->from_c, r, c, 0};
             chess_make_move(&s->game, mv);
             s->has_from = false;
@@ -441,6 +514,11 @@ static void attempt_move(WoprChessState *s, int r, int c) {
                 strcpy(s->message, "STALEMATE.  DRAW.");
                 s->game_over = true;
             } else {
+                // Play check sound if applicable
+                if (chess_is_in_check(&s->game, s->game.turn)) {
+                    chess_sound_play(SFX_CHECK);
+                }
+                
                 strcpy(s->message, "WOPR CALCULATING...");
                 start_ai(s);
             }
@@ -485,9 +563,19 @@ void wopr_chess_mousemove(WoprState *w, int x, int y) {
     if (pixel_to_board(s, x, y, &r, &c)) { s->hover_r = r; s->hover_c = c; }
     else                                  { s->hover_r = s->hover_c = -1; }
 
+    // Check resign button hover
+    if (!s->game_over && s->status == CHESS_PLAYING) {
+        s->resign_button_hovered = (x >= s->resign_button_x && x <= s->resign_button_x + s->resign_button_w &&
+                                    y >= s->resign_button_y && y <= s->resign_button_y + s->resign_button_h);
+    } else {
+        s->resign_button_hovered = false;
+    }
+
     ChessColor plr = s->player_color;
     SDL_SystemCursor cursor_id = SDL_SYSTEM_CURSOR_ARROW;
-    if (!s->ai_thinking && !s->game_over && s->status == CHESS_PLAYING
+    if (s->resign_button_hovered) {
+        cursor_id = SDL_SYSTEM_CURSOR_HAND;
+    } else if (!s->ai_thinking && !s->game_over && s->status == CHESS_PLAYING
             && s->game.turn == plr && s->hover_r >= 0) {
         if (!s->has_from) {
             const ChessPiece &p = s->game.board[s->hover_r][s->hover_c];
@@ -531,6 +619,17 @@ void wopr_chess_mousedown(WoprState *w, int x, int y, int button) {
     }
 
     if (button != SDL_BUTTON_LEFT) return;
+
+    // Check resign button click
+    if (s->num_players == 1 && !s->game_over && s->status == CHESS_PLAYING &&
+        x >= s->resign_button_x && x <= s->resign_button_x + s->resign_button_w &&
+        y >= s->resign_button_y && y <= s->resign_button_y + s->resign_button_h) {
+        chess_sound_play(SFX_RESIGN);
+        snprintf(s->message, sizeof(s->message), "YOU RESIGN. %s", get_taunt());
+        s->game_over = true;
+        return;
+    }
+
     if (s->ai_thinking || s->game_over || s->status != CHESS_PLAYING) return;
     if (s->num_players == 0) return;
     if (s->game.turn != s->player_color) return;
