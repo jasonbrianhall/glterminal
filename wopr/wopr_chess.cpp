@@ -58,6 +58,13 @@ struct WoprChessState {
     float resign_button_x, resign_button_y;
     float resign_button_w, resign_button_h;
     bool  resign_button_hovered;
+
+    // Piece animation
+    bool  is_animating;
+    float animation_progress;      // 0.0 to 1.0
+    int   anim_from_r, anim_from_c;
+    int   anim_to_r, anim_to_c;
+    ChessPiece anim_piece;         // piece being animated
 };
 
 struct AiArg {
@@ -161,6 +168,9 @@ void wopr_chess_enter(WoprState *w) {
     s->win_w = 800; s->win_h = 600;
     w->sub_state = s;
 
+    s->is_animating = false;
+    s->animation_progress = 0.0f;
+
     chess_pieces_gl_init();   // upload BMP textures (no-op if already done)
     chess_sound_init();       // initialize sound effects
 }
@@ -177,8 +187,18 @@ void wopr_chess_free(WoprState *w) {
 
 void wopr_chess_update(WoprState *w, double dt) {
     WoprChessState *s = cs(w);
-    if (!s || s->screen != SCREEN_GAME || s->game_over) return;
-    (void)dt;
+    if (!s || s->screen != SCREEN_GAME) return;
+
+    // Update piece animation
+    if (s->is_animating) {
+        s->animation_progress += (float)dt * 3.0f;  // 3.0 = speed (completes in ~0.33 seconds)
+        if (s->animation_progress >= 1.0f) {
+            s->is_animating = false;
+            s->animation_progress = 1.0f;
+        }
+    }
+
+    if (s->game_over) return;
 
     if (s->ai_thinking && s->ai_done) {
         s->ai_thinking = false;
@@ -187,6 +207,15 @@ void wopr_chess_update(WoprState *w, double dt) {
             s->last_from_r = mv.from_row; s->last_from_c = mv.from_col;
             s->last_to_r   = mv.to_row;   s->last_to_c   = mv.to_col;
             s->has_last_move = true;
+            
+            // Start animation
+            s->is_animating = true;
+            s->animation_progress = 0.0f;
+            s->anim_from_r = mv.from_row;
+            s->anim_from_c = mv.from_col;
+            s->anim_to_r = mv.to_row;
+            s->anim_to_c = mv.to_col;
+            s->anim_piece = s->game.board[mv.from_row][mv.from_col];
             
             // Play sound for AI move
             if (s->game.board[mv.to_row][mv.to_col].type != EMPTY) {
@@ -426,6 +455,30 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
         }
     }
 
+    // Draw animating piece on top
+    if (s->is_animating && s->anim_piece.type != EMPTY) {
+        // Calculate interpolated position
+        int from_display_r = vrow(s->anim_from_r);
+        int from_display_c = vcol(s->anim_from_c);
+        int to_display_r   = vrow(s->anim_to_r);
+        int to_display_c   = vcol(s->anim_to_c);
+        
+        float start_px = bx + from_display_c * cell_sz + pad;
+        float start_py = by + from_display_r * cell_sz + pad;
+        float end_px   = bx + to_display_c * cell_sz + pad;
+        float end_py   = by + to_display_r * cell_sz + pad;
+        
+        // Ease-in-out: 3t^2 - 2t^3
+        float t = s->animation_progress;
+        float ease = t * t * (3.0f - 2.0f * t);
+        
+        float anim_px = start_px + (end_px - start_px) * ease;
+        float anim_py = start_py + (end_py - start_py) * ease;
+        
+        draw_chess_piece(s->anim_piece.type, s->anim_piece.color, anim_px, anim_py, psz,
+                         s->win_w, s->win_h, 1.0f);
+    }
+
     // ── Status text ────────────────────────────────────────────────────────
     float my = by + 8 * cell_sz + fch * 2.0f;
 
@@ -490,9 +543,29 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             return;
         }
         if (chess_is_valid_move(&s->game, s->from_r, s->from_c, r, c)) {
+            // Additional check: make sure move doesn't leave king in check
+            ChessGameState temp_game = s->game;
+            ChessMove test_move{s->from_r, s->from_c, r, c, 0};
+            chess_make_move(&temp_game, test_move);
+            if (chess_is_in_check(&temp_game, plr)) {
+                // Move is illegal - leaves king in check
+                s->has_from = false;
+                strcpy(s->message, "ILLEGAL MOVE.  KING IN CHECK!");
+                return;
+            }
+            
             s->last_from_r = s->from_r; s->last_from_c = s->from_c;
             s->last_to_r   = r;          s->last_to_c   = c;
             s->has_last_move = true;
+            
+            // Start animation
+            s->is_animating = true;
+            s->animation_progress = 0.0f;
+            s->anim_from_r = s->from_r;
+            s->anim_from_c = s->from_c;
+            s->anim_to_r = r;
+            s->anim_to_c = c;
+            s->anim_piece = s->game.board[s->from_r][s->from_c];
             
             // Play sound for player move
             if (s->game.board[r][c].type != EMPTY) {
