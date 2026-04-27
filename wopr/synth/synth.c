@@ -40,6 +40,16 @@
 #define MAX_PHONEMES  1024
 #define MAX_WORD      64
 
+typedef struct DictNode {
+    char *word;
+    char *phones;
+    struct DictNode *next;
+} DictNode;
+
+#define DICT_BUCKETS 4096
+static DictNode *cmu_dict[DICT_BUCKETS];
+
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * Biquad filter
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -122,57 +132,67 @@ typedef struct {
 
 /* Formant data loosely based on Peterson & Barney (1952) + Klatt (1980) */
 static const PhonDef PHDEF[PH_COUNT] = {
-/* name    class                  dur   F1    F2    F3    F4    BW1  BW2  BW3  BW4  nfreq  namp  amp */
-/*──── VOWELS ────────────────────────────────────────────────────────────────────────────────────*/
-[PH_AA]={"AA",CL_VOWEL|CL_VOICED, 180, {800,1200,2600,3400},{80,100,120,200}, 0,   0.0,  1.0},
-[PH_AE]={"AE",CL_VOWEL|CL_VOICED, 200, {660,1720,2410,3300},{80,100,120,200}, 0,   0.0,  1.0},
-[PH_AH]={"AH",CL_VOWEL|CL_VOICED, 130, {700,1220,2600,3400},{80,100,120,200}, 0,   0.0,  0.9},
-[PH_AO]={"AO",CL_VOWEL|CL_VOICED, 200, {570, 840,2410,3300},{70, 80,100,200}, 0,   0.0,  1.0},
-[PH_AW]={"AW",CL_VOWEL|CL_VOICED, 240, {720, 980,2500,3400},{80,100,120,200}, 0,   0.0,  1.0},
-[PH_AY]={"AY",CL_VOWEL|CL_VOICED, 240, {700,1800,2600,3400},{80,100,120,200}, 0,   0.0,  1.0},
-[PH_EH]={"EH",CL_VOWEL|CL_VOICED, 160, {580,1800,2600,3400},{80,100,120,200}, 0,   0.0,  1.0},
-[PH_ER]={"ER",CL_VOWEL|CL_VOICED, 180, {490,1350,1690,3400},{70, 90,100,200}, 0,   0.0,  0.9},
-[PH_EY]={"EY",CL_VOWEL|CL_VOICED, 200, {400,2000,2800,3400},{70,100,120,200}, 0,   0.0,  1.0},
-[PH_IH]={"IH",CL_VOWEL|CL_VOICED, 130, {400,1920,2560,3400},{70, 90,120,200}, 0,   0.0,  0.9},
-[PH_IY]={"IY",CL_VOWEL|CL_VOICED, 160, {270,2300,3000,3600},{60, 90,150,200}, 0,   0.0,  1.0},
-[PH_OW]={"OW",CL_VOWEL|CL_VOICED, 200, {450, 760,2400,3400},{70, 80,100,200}, 0,   0.0,  1.0},
-[PH_OY]={"OY",CL_VOWEL|CL_VOICED, 240, {450,1000,2400,3400},{70, 90,120,200}, 0,   0.0,  1.0},
-[PH_UH]={"UH",CL_VOWEL|CL_VOICED, 130, {450, 870,2250,3400},{70, 80,130,200}, 0,   0.0,  0.9},
-[PH_UW]={"UW",CL_VOWEL|CL_VOICED, 160, {300, 870,2240,3400},{70, 80,130,200}, 0,   0.0,  1.0},
-/*──── NASALS ────────────────────────────────────────────────────────────────────────────────────*/
-[PH_M] ={"M", CL_NASAL|CL_VOICED,  80, {300, 900,2200,3400},{60, 80,120,200}, 0,   0.0,  0.5},
-[PH_N] ={"N", CL_NASAL|CL_VOICED,  70, {280,1700,2600,3400},{60, 80,120,200}, 0,   0.0,  0.5},
-[PH_NG]={"NG",CL_NASAL|CL_VOICED,  80, {280, 900,2300,3400},{60, 80,120,200}, 0,   0.0,  0.4},
-/*──── VOICED STOPS (burst + voicing) ────────────────────────────────────────────────────────────*/
-[PH_B] ={"B", CL_STOP|CL_VOICED,   80, {200, 900,2200,3400},{80,100,130,200},1000, 0.05, 0.3},
-[PH_D] ={"D", CL_STOP|CL_VOICED,   70, {200,1700,2600,3400},{80,100,130,200},1500, 0.05, 0.3},
-[PH_G] ={"G", CL_STOP|CL_VOICED,   80, {200, 900,2300,3400},{80,100,130,200},1500, 0.05, 0.3},
-/*──── VOICELESS STOPS ────────────────────────────────────────────────────────────────────────────*/
-[PH_P] ={"P", CL_STOP,             80, {200, 800,2200,3400},{80,100,130,200},2000, 0.6,  0.3},
-[PH_T] ={"T", CL_STOP,             70, {200,1700,2600,3400},{80,100,130,200},4000, 0.6,  0.3},
-[PH_K] ={"K", CL_STOP,             80, {200, 900,2300,3400},{80,100,130,200},3000, 0.6,  0.3},
-/*──── VOICED FRICATIVES ──────────────────────────────────────────────────────────────────────────*/
-[PH_V] ={"V", CL_FRIC|CL_VOICED,  100, {300, 900,2200,3400},{80,100,130,200},4000, 0.6,  0.5},
-[PH_DH]={"DH",CL_FRIC|CL_VOICED,   90, {300,1700,2600,3400},{80,100,130,200},3000, 0.5,  0.4},
-[PH_Z] ={"Z", CL_FRIC|CL_VOICED,  100, {300,1700,2600,3400},{80,100,130,200},5000, 0.7,  0.5},
-[PH_ZH]={"ZH",CL_FRIC|CL_VOICED,  100, {300,1700,2600,3400},{80,100,130,200},4000, 0.7,  0.5},
-/*──── VOICELESS FRICATIVES ───────────────────────────────────────────────────────────────────────*/
-[PH_F] ={"F", CL_FRIC,            100, {300, 900,2200,3400},{80,100,130,200},4000, 0.95, 0.4},
-[PH_TH]={"TH",CL_FRIC,            100, {300,1700,2600,3400},{80,100,130,200},3500, 0.95, 0.3},
-[PH_S] ={"S", CL_FRIC,            100, {300,1700,2600,3400},{80,100,130,200},6000, 0.97, 0.5},
-[PH_SH]={"SH",CL_FRIC,            100, {300,1700,2500,3400},{80,100,130,200},4500, 0.97, 0.5},
-[PH_HH]={"HH",CL_FRIC|CL_VOICED,  80, {500,1400,2500,3400},{80,120,150,200},3000, 0.5,  0.4},
-/*──── AFFRICATES ─────────────────────────────────────────────────────────────────────────────────*/
-[PH_CH]={"CH",CL_AFFRIC,          120, {300,1700,2500,3400},{80,100,130,200},4500, 0.8,  0.4},
-[PH_JH]={"JH",CL_AFFRIC|CL_VOICED,120, {300,1700,2500,3400},{80,100,130,200},4000, 0.7,  0.4},
-/*──── APPROXIMANTS ───────────────────────────────────────────────────────────────────────────────*/
-[PH_L] ={"L", CL_APPROX|CL_VOICED, 80, {380,1000,2750,3400},{80,100,130,200}, 0,   0.0,  0.7},
-[PH_R] ={"R", CL_APPROX|CL_VOICED, 80, {490,1000,1600,3400},{80, 90,120,200}, 0,   0.0,  0.7},
-[PH_W] ={"W", CL_APPROX|CL_VOICED, 80, {300, 610,2200,3400},{80, 90,120,200}, 0,   0.0,  0.7},
-[PH_Y] ={"Y", CL_APPROX|CL_VOICED, 60, {270,2100,2900,3400},{70,100,130,200}, 0,   0.0,  0.7},
-/*──── SILENCE ────────────────────────────────────────────────────────────────────────────────────*/
-[PH_SIL]={"SIL",CL_SIL,           80,  {0,0,0,0},{0,0,0,0}, 0,   0.0,  0.0},
+/* name class dur   F1   F2   F3   F4     BW1 BW2 BW3 BW4   nfreq namp amp */
+
+/* ─── VOWELS (DECtalk‑style) ───────────────────────────────────────────── */
+[PH_AA]={"AA",CL_VOWEL|CL_VOICED,160,{750,1100,2500,3300},{60,80,110,180},0,0.0,1.0},
+[PH_AE]={"AE",CL_VOWEL|CL_VOICED,180,{650,1700,2400,3300},{60,80,110,180},0,0.0,1.0},
+[PH_AH]={"AH",CL_VOWEL|CL_VOICED,140,{600,1100,2400,3300},{60,80,110,180},0,0.0,0.9},
+[PH_AO]={"AO",CL_VOWEL|CL_VOICED,180,{500,900,2400,3300},{60,80,110,180},0,0.0,1.0},
+[PH_AW]={"AW",CL_VOWEL|CL_VOICED,200,{650,1000,2500,3300},{60,80,110,180},0,0.0,1.0},
+[PH_AY]={"AY",CL_VOWEL|CL_VOICED,200,{600,1800,2600,3300},{60,80,110,180},0,0.0,1.0},
+[PH_EH]={"EH",CL_VOWEL|CL_VOICED,160,{550,1800,2500,3300},{60,80,110,180},0,0.0,1.0},
+[PH_ER]={"ER",CL_VOWEL|CL_VOICED,180,{450,1350,1700,3300},{60,80,110,180},0,0.0,0.9},
+[PH_EY]={"EY",CL_VOWEL|CL_VOICED,180,{400,2000,2800,3300},{60,80,110,180},0,0.0,1.0},
+[PH_IH]={"IH",CL_VOWEL|CL_VOICED,130,{350,1900,2500,3300},{60,80,110,180},0,0.0,0.9},
+[PH_IY]={"IY",CL_VOWEL|CL_VOICED,160,{250,2300,3000,3600},{50,70,100,150},0,0.0,1.0},
+[PH_OW]={"OW",CL_VOWEL|CL_VOICED,180,{450,800,2400,3300},{60,80,110,180},0,0.0,1.0},
+[PH_OY]={"OY",CL_VOWEL|CL_VOICED,200,{450,1000,2400,3300},{60,80,110,180},0,0.0,1.0},
+[PH_UH]={"UH",CL_VOWEL|CL_VOICED,130,{400,900,2300,3300},{60,80,110,180},0,0.0,0.9},
+[PH_UW]={"UW",CL_VOWEL|CL_VOICED,160,{300,900,2200,3300},{60,80,110,180},0,0.0,1.0},
+
+/* ─── NASALS ───────────────────────────────────────────────────────────── */
+[PH_M] ={"M", CL_NASAL|CL_VOICED,80,{300,900,2200,3300},{50,70,100,150},0,0.0,0.5},
+[PH_N] ={"N", CL_NASAL|CL_VOICED,70,{280,1700,2600,3300},{50,70,100,150},0,0.0,0.5},
+[PH_NG]={"NG",CL_NASAL|CL_VOICED,80,{280,900,2300,3300},{50,70,100,150},0,0.0,0.4},
+
+/* ─── VOICED STOPS ─────────────────────────────────────────────────────── */
+[PH_B] ={"B",CL_STOP|CL_VOICED,70,{200,900,2200,3300},{80,100,130,200},1000,0.05,0.3},
+[PH_D] ={"D",CL_STOP|CL_VOICED,60,{200,1700,2600,3300},{80,100,130,200},1500,0.05,0.3},
+[PH_G] ={"G",CL_STOP|CL_VOICED,70,{200,900,2300,3300},{80,100,130,200},1500,0.05,0.3},
+
+/* ─── VOICELESS STOPS ─────────────────────────────────────────────────── */
+[PH_P] ={"P",CL_STOP,70,{200,800,2200,3300},{80,100,130,200},2000,0.6,0.3},
+[PH_T] ={"T",CL_STOP,60,{200,1700,2600,3300},{80,100,130,200},4000,0.6,0.3},
+[PH_K] ={"K",CL_STOP,70,{200,900,2300,3300},{80,100,130,200},3000,0.6,0.3},
+
+/* ─── VOICED FRICATIVES ───────────────────────────────────────────────── */
+[PH_V] ={"V",CL_FRIC|CL_VOICED,90,{300,900,2200,3300},{80,100,130,200},4000,0.4,0.5},
+[PH_DH]={"DH",CL_FRIC|CL_VOICED,80,{300,1700,2600,3300},{80,100,130,200},3000,0.4,0.4},
+[PH_Z] ={"Z",CL_FRIC|CL_VOICED,90,{300,1700,2600,3300},{80,100,130,200},5000,0.5,0.5},
+[PH_ZH]={"ZH",CL_FRIC|CL_VOICED,90,{300,1700,2600,3300},{80,100,130,200},4000,0.5,0.5},
+
+/* ─── VOICELESS FRICATIVES ───────────────────────────────────────────── */
+[PH_F] ={"F",CL_FRIC,90,{300,900,2200,3300},{80,100,130,200},4000,0.9,0.4},
+[PH_TH]={"TH",CL_FRIC,90,{300,1700,2600,3300},{80,100,130,200},3500,0.9,0.3},
+[PH_S] ={"S",CL_FRIC,90,{300,1700,2600,3300},{80,100,130,200},6000,0.95,0.5},
+[PH_SH]={"SH",CL_FRIC,90,{300,1700,2500,3300},{80,100,130,200},4500,0.95,0.5},
+[PH_HH]={"HH",CL_FRIC|CL_VOICED,70,{500,1400,2500,3300},{80,120,150,200},3000,0.4,0.4},
+
+/* ─── AFFRICATES ───────────────────────────────────────────────────────── */
+[PH_CH]={"CH",CL_AFFRIC,110,{300,1700,2500,3300},{80,100,130,200},4500,0.8,0.4},
+[PH_JH]={"JH",CL_AFFRIC|CL_VOICED,110,{300,1700,2500,3300},{80,100,130,200},4000,0.7,0.4},
+
+/* ─── APPROXIMANTS ───────────────────────────────────────────────────── */
+[PH_L] ={"L",CL_APPROX|CL_VOICED,70,{380,1000,2750,3300},{70,90,120,180},0,0.0,0.7},
+[PH_R] ={"R",CL_APPROX|CL_VOICED,70,{450,1100,1600,3300},{70,90,120,180},0,0.0,0.7},
+[PH_W] ={"W",CL_APPROX|CL_VOICED,70,{300,600,2200,3300},{70,90,120,180},0,0.0,0.7},
+[PH_Y] ={"Y",CL_APPROX|CL_VOICED,60,{270,2100,2900,3300},{60,80,110,180},0,0.0,0.7},
+
+/* ─── SILENCE ─────────────────────────────────────────────────────────── */
+[PH_SIL]={"SIL",CL_SIL,80,{0,0,0,0},{0,0,0,0},0,0.0,0.0},
 };
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * G2P: Grapheme-to-Phoneme
@@ -433,12 +453,93 @@ static const DictEntry DICT[] = {
     {NULL,      NULL}
 };
 
+static unsigned hash_word(const char *s) {
+    unsigned h = 5381;
+    while (*s) h = ((h << 5) + h) ^ tolower(*s++);
+    return h % DICT_BUCKETS;
+}
+
+static void dict_insert(const char *word, const char *phones) {
+    unsigned h = hash_word(word);
+    DictNode *n = malloc(sizeof(DictNode));
+    n->word = strdup(word);
+    n->phones = strdup(phones);
+    n->next = cmu_dict[h];
+    cmu_dict[h] = n;
+}
+
+static void strip_stress(char *p) {
+    for (char *s = p; *s; s++)
+        if (s[1] == '0' || s[1] == '1' || s[1] == '2')
+            s[1] = '\0';
+}
+
 /* ── Look up a lowercase word in the dictionary ─────────────────────── */
 static const char *dict_lookup(const char *word) {
-    for (int i = 0; DICT[i].word; i++)
-        if (strcmp(DICT[i].word, word) == 0) return DICT[i].phones;
+    unsigned h = hash_word(word);
+    for (DictNode *n = cmu_dict[h]; n; n = n->next)
+        if (strcmp(n->word, word) == 0)
+            return n->phones;
     return NULL;
 }
+
+static void load_cmudict(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        fprintf(stderr, "Could not open CMUdict file: %s\n", path);
+        return;
+    }
+
+    char line[512];
+
+    while (fgets(line, sizeof(line), f)) {
+        /* Skip comments */
+        if (line[0] == ';')
+            continue;
+
+        /* Extract word */
+        char *word = strtok(line, " \t\r\n");
+        if (!word)
+            continue;
+
+        /* Extract phoneme string */
+        char *phones = strtok(NULL, "\r\n");
+        if (!phones)
+            continue;
+
+        /* Strip alternate pronunciation markers: WORD(1) → WORD */
+        char *paren = strchr(word, '(');
+        if (paren)
+            *paren = '\0';
+
+        /* Lowercase the word */
+        for (char *s = word; *s; s++)
+            *s = tolower((unsigned char)*s);
+
+        /* Build cleaned phoneme string */
+        char buf[512];
+        buf[0] = '\0';
+
+        char *tok = strtok(phones, " ");
+        while (tok) {
+            /* Strip stress digits: AH0 → AH */
+            strip_stress(tok);
+
+            /* Append to buffer */
+            strcat(buf, tok);
+            strcat(buf, " ");
+
+            tok = strtok(NULL, " ");
+        }
+
+        /* Insert into dictionary */
+        dict_insert(word, buf);
+    }
+
+    fclose(f);
+}
+
+
 
 /* ── Map phoneme name → enum ────────────────────────────────────────── */
 static Phoneme name_to_ph(const char *s) {
@@ -474,19 +575,28 @@ static int g2p_word(const char *word, Phoneme *out, int maxout) {
     return n;
 }
 
-/* ── Tokenise text and convert to phoneme sequence ──────────────────── */
+/* ── Tokenize text and convert to phoneme sequence ──────────────────── */
 static int text_to_phonemes(const char *text, Phoneme *out, int maxout) {
     int n = 0;
     char word[MAX_WORD];
-    const char *p = text;
 
-    /* Add leading silence */
+    /* Make a lowercase copy of the input */
+    char lower[1024];
+    int i = 0;
+    while (text[i] && i < (int)sizeof(lower)-1) {
+        lower[i] = tolower((unsigned char)text[i]);
+        i++;
+    }
+    lower[i] = '\0';
+
+    const char *p = lower;
+
+    /* Leading silence */
     if (n < maxout) out[n++] = PH_SIL;
 
     while (*p) {
-        /* Skip non-alpha */
+        /* Skip non-alpha characters */
         while (*p && !isalpha((unsigned char)*p)) {
-            /* Punctuation → short silence */
             if (*p == ',' || *p == ';' || *p == ':') {
                 if (n < maxout) out[n++] = PH_SIL;
             } else if (*p == '.' || *p == '!' || *p == '?') {
@@ -497,34 +607,51 @@ static int text_to_phonemes(const char *text, Phoneme *out, int maxout) {
         }
         if (!*p) break;
 
-        /* Collect word */
+        /* Collect a word */
         int wl = 0;
         while (*p && isalpha((unsigned char)*p) && wl < MAX_WORD-1)
-            word[wl++] = tolower((unsigned char)*p++);
-        word[wl] = 0;
+            word[wl++] = *p++;
+        word[wl] = '\0';
+
         if (!wl) continue;
 
-        /* Dictionary first */
+        /* Try CMUdict first */
         const char *dict = dict_lookup(word);
         if (dict) {
-            char buf[256]; strncpy(buf, dict, 255); buf[255]=0;
+            printf("[DICT]  %-20s → %s\n", word, dict);
+
+            char buf[256];
+            strncpy(buf, dict, 255);
+            buf[255] = 0;
+
             char *tok = strtok(buf, " ");
             while (tok && n < maxout-2) {
                 out[n++] = name_to_ph(tok);
                 tok = strtok(NULL, " ");
             }
         } else {
-            n += g2p_word(word, out+n, maxout-n);
+            /* Fallback to G2P rules */
+            int before = n;
+            int added = g2p_word(word, out+n, maxout-n);
+
+            if (added > 0) {
+                printf("[G2P ]  %-20s → %d phonemes\n", word, added);
+                n += added;
+            } else {
+                printf("[MISS] %-20s → (no match)\n", word);
+            }
         }
 
-        /* Word boundary micro-silence */
+        /* Word boundary silence */
         if (n < maxout) out[n++] = PH_SIL;
     }
 
     /* Trailing silence */
     if (n < maxout) out[n++] = PH_SIL;
+
     return n;
 }
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Synthesizer engine
@@ -585,18 +712,28 @@ static void next_segment(Synth *s) {
         s->speaking   = 0;
         return;
     }
+
     Phoneme ph = s->seq[s->seq_pos++];
     const PhonDef *def = &PHDEF[ph];
 
-    s->seg.ph           = ph;
-    s->seg.total_samples = (int)(def->dur_ms * 0.001 * SAMPLE_RATE);
-    if (s->seg.total_samples < 1) s->seg.total_samples = 1;
+    s->seg.ph = ph;
+
+    /* Hawking vowels are slightly elongated */
+    double dur = def->dur_ms;
+    if (def->cls & CL_VOWEL)
+        dur *= 1.15;
+
+    s->seg.total_samples = (int)(dur * 0.001 * SAMPLE_RATE);
+    if (s->seg.total_samples < 1)
+        s->seg.total_samples = 1;
+
     s->seg.samples_done = 0;
 
     for (int f = 0; f < NUM_FORMANTS; f++) {
         s->seg.tgt_f[f]  = def->f[f];
-        s->seg.tgt_bw[f] = def->bw[f];
+        s->seg.tgt_bw[f] = def->bw[f] * 0.55;  /* DECtalk narrow bandwidths */
     }
+
     s->seg_active = 1;
 }
 
@@ -620,91 +757,99 @@ static void audio_callback(void *userdata, Uint8 *stream, int len) {
     for (int i = 0; i < samples; i++) {
         double sample = 0.0;
 
-        if (!s->seg_active && s->speaking) next_segment(s);
+        if (!s->seg_active && s->speaking)
+            next_segment(s);
 
         if (s->seg_active) {
             const PhonDef *def = &PHDEF[s->seg.ph];
             double t = (double)s->seg.samples_done / s->seg.total_samples;
 
-            /* ── Amplitude envelope (trapezoid) ── */
+            /* Hawking amplitude envelope: very flat */
             double env;
-            if      (t < 0.1) env = t / 0.1;
-            else if (t > 0.9) env = (1.0 - t) / 0.1;
+            if      (t < 0.05) env = t / 0.05;
+            else if (t > 0.95) env = (1.0 - t) / 0.05;
             else               env = 1.0;
             env *= def->amp;
 
-            /* ── Smoothly glide formants ── */
-            double smooth = 0.001;
+            /* DECtalk-style fast formant transitions */
+            double smooth = 0.004;
+
             for (int f = 0; f < NUM_FORMANTS; f++) {
                 s->cur_f[f]  += smooth * (s->seg.tgt_f[f]  - s->cur_f[f]);
                 s->cur_bw[f] += smooth * (s->seg.tgt_bw[f] - s->cur_bw[f]);
-                /* Recompute biquad every 32 samples */
+
+                /* Narrow bandwidths = metallic Hawking timbre */
+                double bw = s->cur_bw[f] * 0.55;
+
                 if ((i & 31) == 0 && s->cur_f[f] > 1.0)
-                    biquad_bp(&s->filt[f], s->cur_f[f], s->cur_bw[f]);
+                    biquad_bp(&s->filt[f], s->cur_f[f], bw);
             }
 
-            /* ── Sources ── */
-            double noise_amp  = def->noise_amp;
-            double voiced_amp = 1.0 - noise_amp * 0.5;
+            /* Hawking pitch: flat, monotone */
+            s->pitch_hz = 87.0;
 
-            /* Glottal buzz */
+            /* DECtalk glottal source (clipped saw) */
             s->phase += s->pitch_hz / SAMPLE_RATE;
             if (s->phase >= 1.0) s->phase -= 1.0;
-            double buzz = (2.0 * s->phase - 1.0) * voiced_amp;
 
-            /* Noise (shaped) */
+            double x = 2.0 * s->phase - 1.0;
+            double buzz = x - 0.3 * x * x * x;
+
+            /* Very little noise in Hawking vowels */
+            double noise_amp = def->noise_amp * 0.25;
+            double voiced_amp = 1.0;
+
             double noise = white_noise(s);
             if (def->noise_freq > 0 && (i & 15) == 0)
                 biquad_lp(&s->noise_filt, def->noise_freq);
             noise = bq(&s->noise_filt, noise) * noise_amp;
 
-            /* Stop: silence during closure, burst at release */
             double src;
+
             if (def->cls & CL_STOP) {
                 double burst_start = 0.7;
-                if (t < burst_start) {
-                    /* Closure: voiced stops have weak voicing, voiceless silent */
+                if (t < burst_start)
                     src = (def->cls & CL_VOICED) ? buzz * 0.05 : 0.0;
-                } else {
-                    /* Burst: broadband noise */
+                else
                     src = noise * 3.0 + ((def->cls & CL_VOICED) ? buzz * 0.3 : 0.0);
-                }
             } else if (def->cls & CL_SIL) {
                 src = 0.0;
             } else {
-                src = buzz + noise;
+                src = buzz * voiced_amp + noise;
             }
 
-            /* ── Run formant filters ── */
             double filtered = 0.0;
-            for (int f = 0; f < NUM_FORMANTS; f++) {
+            for (int f = 0; f < NUM_FORMANTS; f++)
                 if (s->cur_f[f] > 1.0)
                     filtered += bq(&s->filt[f], src);
-            }
 
-            /* Soft-clip and scale */
+            /* Metallic resonance boost */
+            filtered *= 1.15;
+
             sample = tanh(filtered * 1.2) * env;
 
             s->seg.samples_done++;
             if (s->seg.samples_done >= s->seg.total_samples) {
                 s->seg_active = 0;
-                if (s->seq_pos < s->seq_len) next_segment(s);
-                else s->speaking = 0;
+                if (s->seq_pos < s->seq_len)
+                    next_segment(s);
+                else
+                    s->speaking = 0;
             }
         }
 
-        /* Master amplitude ramp */
+        /* Master amplitude */
         if (s->speaking)
             s->master_amp += (1.0 - s->master_amp) * 0.001;
         else
             s->master_amp += (0.0 - s->master_amp) * 0.002;
 
-        Sint16 s16 = (Sint16)(sample * s->master_amp * 26000.0);
-        *out++ = s16;
+        *out++ = (Sint16)(sample * s->master_amp * 26000.0);
     }
 
     SDL_UnlockMutex(g_mutex);
 }
+
 
 /* ── Initialise synthesizer ─────────────────────────────────────────── */
 static void synth_init(Synth *s) {
@@ -739,6 +884,11 @@ int main(int argc, char *argv[]) {
     want.channels = 1;
     want.samples  = BUFFER_SIZE;
     want.callback = audio_callback;
+
+    printf("Loading Dictionary\n");
+    load_cmudict("cmudict-0.7b");
+    printf("End Loading Dictionary\n");
+
 
     if (SDL_OpenAudio(&want, &got) < 0) {
         fprintf(stderr, "SDL_OpenAudio: %s\n", SDL_GetError());
