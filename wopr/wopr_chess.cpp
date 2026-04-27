@@ -534,25 +534,51 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     float cap_piece_size = cell_sz * 0.35f;
     float cap_spacing = cap_piece_size * 1.1f;  // Space between pieces vertically
     
-    // Left side: pieces the player captured (WHITE player captures BLACK pieces)
-    int player_cap_row = 0;
-    for (int type = 1; type <= 6; type++) {
-        for (int i = 0; i < s->black_captured[type]; i++) {
-            draw_chess_piece((PieceType)type, BLACK,  // Draw BLACK pieces (what WHITE captured)
-                            cap_x_left, cap_y + player_cap_row * cap_spacing, cap_piece_size,
-                            s->win_w, s->win_h, 0.7f);
-            player_cap_row++;
-        }
-    }
+    // Determine what to show based on player color
+    // Left side: pieces the player captured
+    // Right side: pieces the opponent captured
     
-    // Right side: pieces the AI captured (BLACK player captures WHITE pieces)
-    int ai_cap_row = 0;
-    for (int type = 1; type <= 6; type++) {
-        for (int i = 0; i < s->white_captured[type]; i++) {
-            draw_chess_piece((PieceType)type, WHITE,  // Draw WHITE pieces (what BLACK captured)
-                            cap_x_right, cap_y + ai_cap_row * cap_spacing, cap_piece_size,
-                            s->win_w, s->win_h, 0.7f);
-            ai_cap_row++;
+    if (s->player_color == WHITE) {
+        // White player: left = black pieces captured, right = white pieces captured
+        int player_cap_row = 0;
+        for (int type = 1; type <= 6; type++) {
+            for (int i = 0; i < s->black_captured[type]; i++) {
+                draw_chess_piece((PieceType)type, BLACK,
+                                cap_x_left, cap_y + player_cap_row * cap_spacing, cap_piece_size,
+                                s->win_w, s->win_h, 0.7f);
+                player_cap_row++;
+            }
+        }
+        
+        int ai_cap_row = 0;
+        for (int type = 1; type <= 6; type++) {
+            for (int i = 0; i < s->white_captured[type]; i++) {
+                draw_chess_piece((PieceType)type, WHITE,
+                                cap_x_right, cap_y + ai_cap_row * cap_spacing, cap_piece_size,
+                                s->win_w, s->win_h, 0.7f);
+                ai_cap_row++;
+            }
+        }
+    } else {
+        // Black player: left = white pieces captured, right = black pieces captured
+        int player_cap_row = 0;
+        for (int type = 1; type <= 6; type++) {
+            for (int i = 0; i < s->white_captured[type]; i++) {
+                draw_chess_piece((PieceType)type, WHITE,
+                                cap_x_left, cap_y + player_cap_row * cap_spacing, cap_piece_size,
+                                s->win_w, s->win_h, 0.7f);
+                player_cap_row++;
+            }
+        }
+        
+        int ai_cap_row = 0;
+        for (int type = 1; type <= 6; type++) {
+            for (int i = 0; i < s->black_captured[type]; i++) {
+                draw_chess_piece((PieceType)type, BLACK,
+                                cap_x_right, cap_y + ai_cap_row * cap_spacing, cap_piece_size,
+                                s->win_w, s->win_h, 0.7f);
+                ai_cap_row++;
+            }
         }
     }
 
