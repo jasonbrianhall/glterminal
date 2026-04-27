@@ -1058,8 +1058,9 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
     gl_draw_rect(0.f, (float)py+gh, (float)ww, gap, 0.f,0.f,0.55f,1.f);
 
     if(s->sub==WSub::GAME_OVER) {
-        gl_draw_text("GAME OVER  -  PRESS ENTER TO PLAY AGAIN",
-                     (float)px, sy, 1.f,1.f,1.f,1.f,1.f);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "GAME OVER  -  FINAL SCORE: %6d  -  PRESS ENTER TO PLAY AGAIN", s->score);
+        gl_draw_text(buf, (float)px, sy, 1.f,1.f,1.f,1.f,1.f);
     } else {
         char buf[160];
         snprintf(buf,sizeof(buf),

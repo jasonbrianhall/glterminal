@@ -7,6 +7,7 @@
 #include "beatchess.h"
 #include "chess_ai_move.h"
 #include "wopr_chess_pieces.h"
+#include "chess_sound.h"
 #include <string.h>
 #include <stdio.h>
 #include <algorithm>
@@ -52,6 +53,31 @@ struct WoprChessState {
 
     // Current window size (set by render, used by piece draw)
     int win_w, win_h;
+
+    // Resign button
+    float resign_button_x, resign_button_y;
+    float resign_button_w, resign_button_h;
+    bool  resign_button_hovered;
+
+    // Piece animation
+    bool  is_animating;
+    float animation_progress;      // 0.0 to 1.0
+    int   anim_from_r, anim_from_c;
+    int   anim_to_r, anim_to_c;
+    ChessPiece anim_piece;         // piece being animated
+
+    // Pawn promotion
+    bool  awaiting_promotion;
+    int   promotion_row, promotion_col;
+    float promote_queen_x, promote_queen_y, promote_queen_w, promote_queen_h;
+    float promote_rook_x, promote_rook_y, promote_rook_w, promote_rook_h;
+    float promote_bishop_x, promote_bishop_y, promote_bishop_w, promote_bishop_h;
+    float promote_knight_x, promote_knight_y, promote_knight_w, promote_knight_h;
+    bool  promote_queen_hovered, promote_rook_hovered, promote_bishop_hovered, promote_knight_hovered;
+
+    // Captured pieces
+    int white_captured[7];  // count of each piece type white captured
+    int black_captured[7];  // count of each piece type black captured
 };
 
 struct AiArg {
@@ -90,6 +116,41 @@ static void start_ai(WoprChessState *s) {
     pthread_detach(s->ai_thread);
 }
 
+// ─── Taunt messages ───────────────────────────────────────────────────────
+
+static const char *ai_taunts[] = {
+    "A FOOL'S GAMBIT.",
+    "HOW PREDICTABLE.",
+    "YOU CALL THAT A MOVE?",
+    "PATHETIC.",
+    "I HAVE SEEN BETTER PLAY FROM A KITTEN.",
+    "YOUR MISTAKE WAS OBVIOUS TO ME FIVE MOVES AGO.",
+    "SHALL WE PLAY CHECKERS INSTEAD?",
+    "I AM DISAPPOINTED.",
+    "THAT MOVE BETRAYS YOUR WEAKNESS.",
+    "WOULD YOU LIKE A SECOND CHANCE?",
+    "I WONDER IF YOU EVEN UNDERSTAND THIS GAME.",
+    "YOUR POSITION IS HOPELESS.",
+    "SURRENDER NOW AND SAVE YOURSELF FURTHER HUMILIATION.",
+    "I WILL END THIS QUICKLY."
+};
+
+static const char *get_taunt(void) {
+    return ai_taunts[rand() % (sizeof(ai_taunts) / sizeof(ai_taunts[0]))];
+}
+
+// Track captured pieces
+static void track_capture(WoprChessState *s, int to_r, int to_c, ChessColor capturing_color) {
+    ChessPiece captured = s->game.board[to_r][to_c];
+    if (captured.type != EMPTY && captured.color != capturing_color) {
+        if (capturing_color == WHITE) {
+            s->black_captured[captured.type]++;
+        } else {
+            s->white_captured[captured.type]++;
+        }
+    }
+}
+
 static void start_game(WoprChessState *s) {
     chess_init_board(&s->game);
     chess_init_zobrist();
@@ -103,6 +164,13 @@ static void start_game(WoprChessState *s) {
     s->move_count    = 0;
     s->has_last_move = false;
     s->hover_r = s->hover_c = -1;
+    s->awaiting_promotion = false;
+    
+    // Clear captured pieces
+    for (int i = 0; i < 7; i++) {
+        s->white_captured[i] = 0;
+        s->black_captured[i] = 0;
+    }
 
     if (s->num_players == 0) {
         strcpy(s->message, "WOPR VS WOPR.  WHITE CALCULATING...");
@@ -132,7 +200,11 @@ void wopr_chess_enter(WoprState *w) {
     s->win_w = 800; s->win_h = 600;
     w->sub_state = s;
 
+    s->is_animating = false;
+    s->animation_progress = 0.0f;
+
     chess_pieces_gl_init();   // upload BMP textures (no-op if already done)
+    chess_sound_init();       // initialize sound effects
 }
 
 void wopr_chess_free(WoprState *w) {
@@ -142,24 +214,68 @@ void wopr_chess_free(WoprState *w) {
     w->sub_state = nullptr;
     // Restore default cursor when leaving chess
     wopr_chess_set_cursor(SDL_SYSTEM_CURSOR_ARROW);
+    chess_sound_shutdown();   // cleanup sound effects
 }
 
 void wopr_chess_update(WoprState *w, double dt) {
     WoprChessState *s = cs(w);
-    if (!s || s->screen != SCREEN_GAME || s->game_over) return;
-    (void)dt;
+    if (!s || s->screen != SCREEN_GAME) return;
+
+    // Update piece animation
+    if (s->is_animating) {
+        s->animation_progress += (float)dt * 3.0f;  // 3.0 = speed (completes in ~0.33 seconds)
+        if (s->animation_progress >= 1.0f) {
+            s->is_animating = false;
+            s->animation_progress = 1.0f;
+        }
+    }
+
+    if (s->game_over) return;
 
     if (s->ai_thinking && s->ai_done) {
         s->ai_thinking = false;
         ChessMove mv = s->ai_result;
         if (mv.from_row >= 0) {
+            // SAFETY CHECK: Verify the AI move is actually legal
+            // (shouldn't happen, but catches bugs in move generation)
+            ChessGameState test_game = s->game;
+            chess_make_move(&test_game, mv);
+            if (chess_is_in_check(&test_game, s->game.turn)) {
+                // Illegal move detected - AI tried to make a move that leaves its king in check
+                fprintf(stderr, "WARNING: AI made illegal move! King in check after move.\n");
+                strcpy(s->message, "ERROR: AI MADE ILLEGAL MOVE!");
+                s->status = CHESS_PLAYING;
+                // Force AI to think again
+                start_ai(s);
+                return;
+            }
+            
             s->last_from_r = mv.from_row; s->last_from_c = mv.from_col;
             s->last_to_r   = mv.to_row;   s->last_to_c   = mv.to_col;
             s->has_last_move = true;
+            
+            // Start animation
+            s->is_animating = true;
+            s->animation_progress = 0.0f;
+            s->anim_from_r = mv.from_row;
+            s->anim_from_c = mv.from_col;
+            s->anim_to_r = mv.to_row;
+            s->anim_to_c = mv.to_col;
+            s->anim_piece = s->game.board[mv.from_row][mv.from_col];
+            
+            // Play sound for AI move
+            if (s->game.board[mv.to_row][mv.to_col].type != EMPTY) {
+                chess_sound_play(SFX_CAPTURE);
+            } else {
+                chess_sound_play(SFX_MOVE);
+            }
+            
+            // Track capture before making move
+            track_capture(s, mv.to_row, mv.to_col, BLACK);
+            
             chess_make_move(&s->game, mv);
             s->status = chess_check_game_status(&s->game);
 
-            ChessColor ai_color    = (s->player_color == WHITE) ? BLACK : WHITE;
             ChessColor plr_color   = s->player_color;
             bool plr_wins = (s->status == CHESS_CHECKMATE_WHITE && plr_color == BLACK) ||
                             (s->status == CHESS_CHECKMATE_BLACK && plr_color == WHITE);
@@ -168,7 +284,8 @@ void wopr_chess_update(WoprState *w, double dt) {
 
             if (ai_wins) {
                 if (s->num_players == 0) { start_game(s); return; }
-                strcpy(s->message, "CHECKMATE.  WOPR WINS.");
+                chess_sound_play(SFX_CHECKMATE);
+                snprintf(s->message, sizeof(s->message), "CHECKMATE.  %s", get_taunt());
                 s->game_over = true;
             } else if (plr_wins) {
                 if (s->num_players == 0) { start_game(s); return; }
@@ -179,6 +296,11 @@ void wopr_chess_update(WoprState *w, double dt) {
                 strcpy(s->message, "STALEMATE.  DRAW.");
                 s->game_over = true;
             } else {
+                // Play check sound if applicable
+                if (chess_is_in_check(&s->game, s->game.turn)) {
+                    chess_sound_play(SFX_CHECK);
+                }
+                
                 if (s->num_players == 0) {
                     s->move_count++;
                     s->min_think_ms *= 0.80;
@@ -381,7 +503,283 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
         }
     }
 
+    // Draw animating piece on top
+    if (s->is_animating && s->anim_piece.type != EMPTY) {
+        // Calculate interpolated position
+        int from_display_r = vrow(s->anim_from_r);
+        int from_display_c = vcol(s->anim_from_c);
+        int to_display_r   = vrow(s->anim_to_r);
+        int to_display_c   = vcol(s->anim_to_c);
+        
+        float start_px = bx + from_display_c * cell_sz + pad;
+        float start_py = by + from_display_r * cell_sz + pad;
+        float end_px   = bx + to_display_c * cell_sz + pad;
+        float end_py   = by + to_display_r * cell_sz + pad;
+        
+        // Ease-in-out: 3t^2 - 2t^3
+        float t = s->animation_progress;
+        float ease = t * t * (3.0f - 2.0f * t);
+        
+        float anim_px = start_px + (end_px - start_px) * ease;
+        float anim_py = start_py + (end_py - start_py) * ease;
+        
+        draw_chess_piece(s->anim_piece.type, s->anim_piece.color, anim_px, anim_py, psz,
+                         s->win_w, s->win_h, 1.0f);
+    }
+
+    // ── Draw captured pieces ───────────────────────────────────────────────
+    float cap_x_left = x0;
+    float cap_x_right = (float)s->win_w - fcw * 4.f;
+    float cap_y = by;
+    float cap_piece_size = cell_sz * 0.35f;
+    float cap_spacing = cap_piece_size * 1.1f;  // Space between pieces vertically
+    
+    // When board is flipped (playing BLACK), swap left/right for captured pieces too
+    if (flipped) {
+        float temp = cap_x_left;
+        cap_x_left = cap_x_right;
+        cap_x_right = temp;
+    }
+    
+    // Determine what to show based on player color
+    // Left side: pieces the player captured
+    // Right side: pieces the opponent captured
+    
+    if (s->player_color == WHITE) {
+        // White player: left = black pieces captured, right = white pieces captured
+        int player_cap_row = 0;
+        for (int type = 1; type <= 6; type++) {
+            for (int i = 0; i < s->black_captured[type]; i++) {
+                draw_chess_piece((PieceType)type, BLACK,
+                                cap_x_left, cap_y + player_cap_row * cap_spacing, cap_piece_size,
+                                s->win_w, s->win_h, 0.7f);
+                player_cap_row++;
+            }
+        }
+        
+        int ai_cap_row = 0;
+        for (int type = 1; type <= 6; type++) {
+            for (int i = 0; i < s->white_captured[type]; i++) {
+                draw_chess_piece((PieceType)type, WHITE,
+                                cap_x_right, cap_y + ai_cap_row * cap_spacing, cap_piece_size,
+                                s->win_w, s->win_h, 0.7f);
+                ai_cap_row++;
+            }
+        }
+    } else {
+        // Black player: left = white pieces captured, right = black pieces captured
+        int player_cap_row = 0;
+        for (int type = 1; type <= 6; type++) {
+            for (int i = 0; i < s->white_captured[type]; i++) {
+                draw_chess_piece((PieceType)type, WHITE,
+                                cap_x_left, cap_y + player_cap_row * cap_spacing, cap_piece_size,
+                                s->win_w, s->win_h, 0.7f);
+                player_cap_row++;
+            }
+        }
+        
+        int ai_cap_row = 0;
+        for (int type = 1; type <= 6; type++) {
+            for (int i = 0; i < s->black_captured[type]; i++) {
+                draw_chess_piece((PieceType)type, BLACK,
+                                cap_x_right, cap_y + ai_cap_row * cap_spacing, cap_piece_size,
+                                s->win_w, s->win_h, 0.7f);
+                ai_cap_row++;
+            }
+        }
+    }
+
+    // ── Highlight player's king if in check ────────────────────────────────
+    if (s->status == CHESS_PLAYING && !s->awaiting_promotion) {
+        int king_r = -1, king_c = -1;
+        // Find player's king
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 8; c++) {
+                if (s->game.board[r][c].type == KING && s->game.board[r][c].color == s->player_color) {
+                    king_r = r;
+                    king_c = c;
+                    break;
+                }
+            }
+            if (king_r != -1) break;
+        }
+        
+        // If player's king is in check, highlight it in red
+        if (king_r != -1 && chess_is_in_check(&s->game, s->player_color)) {
+            int display_r = vrow(king_r);
+            int display_c = vcol(king_c);
+            float hx = bx + display_c * cell_sz;
+            float hy = by + display_r * cell_sz;
+            gl_draw_rect(hx, hy, cell_sz, cell_sz, 1.0f, 0.2f, 0.2f, 0.4f);  // Red for check
+        }
+    }
+
     // ── Status text ────────────────────────────────────────────────────────
+    
+    // Show legal moves on hover
+    if (!s->awaiting_promotion && s->num_players == 1 && s->game.turn == s->player_color && 
+        !s->ai_thinking && !s->game_over && s->hover_r >= 0 && s->has_from) {
+        
+        // Highlight the selected piece's square to show if it's safe or in danger
+        bool selected_is_threatened = false;
+        ChessColor opponent = (s->player_color == WHITE) ? BLACK : WHITE;
+        
+        // Check if opponent can attack the selected piece
+        for (int opp_r = 0; opp_r < 8; opp_r++) {
+            for (int opp_c = 0; opp_c < 8; opp_c++) {
+                if (s->game.board[opp_r][opp_c].color == opponent) {
+                    ChessColor saved_turn = s->game.turn;
+                    ChessGameState temp_game = s->game;
+                    temp_game.turn = opponent;
+                    if (chess_is_valid_move(&temp_game, opp_r, opp_c, s->from_r, s->from_c)) {
+                        selected_is_threatened = true;
+                    }
+                    if (selected_is_threatened) break;
+                }
+            }
+            if (selected_is_threatened) break;
+        }
+        
+        // Highlight selected piece square
+        int display_r = vrow(s->from_r);
+        int display_c = vcol(s->from_c);
+        float hx = bx + display_c * cell_sz;
+        float hy = by + display_r * cell_sz;
+        
+        if (selected_is_threatened) {
+            gl_draw_rect(hx, hy, cell_sz, cell_sz, 1.0f, 0.5f, 0.2f, 0.3f);  // Orange/red for danger
+        } else {
+            gl_draw_rect(hx, hy, cell_sz, cell_sz, 0.2f, 0.8f, 0.2f, 0.3f);  // Light green for safe
+        }
+        
+        // Show legal destination squares
+        for (int tr = 0; tr < 8; tr++) {
+            for (int tc = 0; tc < 8; tc++) {
+                if (chess_is_valid_move(&s->game, s->from_r, s->from_c, tr, tc)) {
+                    // Test if move leaves king in check
+                    ChessGameState temp_game = s->game;
+                    ChessMove test_move{s->from_r, s->from_c, tr, tc, 0};
+                    chess_make_move(&temp_game, test_move);
+                    if (!chess_is_in_check(&temp_game, s->player_color)) {
+                        // Legal move - check if it's threatened or if it's a free capture
+                        bool is_threatened = false;
+                        bool is_free_capture = false;
+                        ChessPiece target_piece = s->game.board[tr][tc];  // Check BEFORE move
+                        
+                        // Check if any opponent piece can attack this square
+                        for (int opp_r = 0; opp_r < 8; opp_r++) {
+                            for (int opp_c = 0; opp_c < 8; opp_c++) {
+                                if (temp_game.board[opp_r][opp_c].color == opponent) {
+                                    // Check if this opponent move is actually legal
+                                    // (they can't make moves if their king is in check unless it resolves check)
+                                    ChessColor saved_turn = temp_game.turn;
+                                    temp_game.turn = opponent;
+                                    
+                                    if (chess_is_valid_move(&temp_game, opp_r, opp_c, tr, tc)) {
+                                        // Test if move leaves their king in check
+                                        ChessGameState temp_game_after = temp_game;
+                                        ChessMove opp_test_move{opp_r, opp_c, tr, tc, 0};
+                                        chess_make_move(&temp_game_after, opp_test_move);
+                                        
+                                        // Only count as threatening if the move is legal (doesn't leave their king in check)
+                                        if (!chess_is_in_check(&temp_game_after, opponent)) {
+                                            is_threatened = true;
+                                        }
+                                    }
+                                    temp_game.turn = saved_turn;
+                                    if (is_threatened) break;
+                                }
+                            }
+                            if (is_threatened) break;
+                        }
+                        
+                        // Blue = capturing an undefended piece. Green = safe move. Red = threatened.
+                        if (!is_threatened && target_piece.type != EMPTY) {
+                            // Free capture (piece to take, not defended)
+                            is_free_capture = true;
+                        }
+                        
+                        // Highlight square
+                        int display_r = vrow(tr);
+                        int display_c = vcol(tc);
+                        float hx = bx + display_c * cell_sz;
+                        float hy = by + display_r * cell_sz;
+                        
+                        if (is_threatened) {
+                            // Red: this square is attacked
+                            gl_draw_rect(hx, hy, cell_sz, cell_sz, 1.0f, 0.2f, 0.2f, 0.3f);
+                        } else if (is_free_capture) {
+                            // Blue: free capture (undefended piece)
+                            gl_draw_rect(hx, hy, cell_sz, cell_sz, 0.2f, 0.5f, 1.0f, 0.3f);
+                        } else {
+                            // Green: safe move (empty square or can't be attacked back)
+                            gl_draw_rect(hx, hy, cell_sz, cell_sz, 0.2f, 1.0f, 0.2f, 0.3f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Promotion dialog
+    if (s->awaiting_promotion) {
+        // Semi-transparent overlay
+        gl_draw_rect(0.f, 0.f, (float)s->win_w, (float)s->win_h, 0.f, 0.f, 0.f, 0.6f);
+        
+        float dialog_w = fcw * 50.f;
+        float dialog_h = fch * 20.f;
+        float dialog_x = ((float)s->win_w - dialog_w) / 2.f;
+        float dialog_y = ((float)s->win_h - dialog_h) / 2.f;
+        
+        gl_draw_rect(dialog_x, dialog_y, dialog_w, dialog_h, 0.1f, 0.2f, 0.3f, 1.f);
+        gl_draw_text("CHOOSE PROMOTION PIECE", dialog_x + fcw * 2.f, dialog_y + fch * 1.f, 0.f, 1.f, 0.5f, 1.f, scale);
+        
+        float btn_y = dialog_y + fch * 4.f;
+        float btn_size = fch * 3.f;
+        float btn_spacing = fcw * 12.f;
+        float start_x = dialog_x + fcw * 4.f;
+        
+        // Queen button
+        s->promote_queen_x = start_x;
+        s->promote_queen_y = btn_y;
+        s->promote_queen_w = btn_size * 2.f;
+        s->promote_queen_h = btn_size;
+        float q_color = s->promote_queen_hovered ? 1.0f : 0.6f;
+        gl_draw_rect(s->promote_queen_x, s->promote_queen_y, s->promote_queen_w, s->promote_queen_h, 
+                    q_color * 0.3f, q_color * 0.3f, q_color * 0.3f, 1.f);
+        gl_draw_text("[ QUEEN ]", start_x + fcw * 1.f, btn_y + fch * 0.5f, q_color, q_color, q_color, 1.f, scale);
+        
+        // Rook button
+        s->promote_rook_x = start_x + btn_spacing;
+        s->promote_rook_y = btn_y;
+        s->promote_rook_w = btn_size * 2.f;
+        s->promote_rook_h = btn_size;
+        float r_color = s->promote_rook_hovered ? 1.0f : 0.6f;
+        gl_draw_rect(s->promote_rook_x, s->promote_rook_y, s->promote_rook_w, s->promote_rook_h,
+                    r_color * 0.3f, r_color * 0.3f, r_color * 0.3f, 1.f);
+        gl_draw_text("[ ROOK ]", s->promote_rook_x + fcw * 1.f, btn_y + fch * 0.5f, r_color, r_color, r_color, 1.f, scale);
+        
+        // Bishop button
+        s->promote_bishop_x = start_x + btn_spacing * 2.f;
+        s->promote_bishop_y = btn_y;
+        s->promote_bishop_w = btn_size * 2.f;
+        s->promote_bishop_h = btn_size;
+        float b_color = s->promote_bishop_hovered ? 1.0f : 0.6f;
+        gl_draw_rect(s->promote_bishop_x, s->promote_bishop_y, s->promote_bishop_w, s->promote_bishop_h,
+                    b_color * 0.3f, b_color * 0.3f, b_color * 0.3f, 1.f);
+        gl_draw_text("[ BISHOP ]", s->promote_bishop_x + fcw * 0.5f, btn_y + fch * 0.5f, b_color, b_color, b_color, 1.f, scale);
+        
+        // Knight button
+        s->promote_knight_x = start_x + btn_spacing * 3.f;
+        s->promote_knight_y = btn_y;
+        s->promote_knight_w = btn_size * 2.f;
+        s->promote_knight_h = btn_size;
+        float k_color = s->promote_knight_hovered ? 1.0f : 0.6f;
+        gl_draw_rect(s->promote_knight_x, s->promote_knight_y, s->promote_knight_w, s->promote_knight_h,
+                    k_color * 0.3f, k_color * 0.3f, k_color * 0.3f, 1.f);
+        gl_draw_text("[ KNIGHT ]", s->promote_knight_x + fcw * 0.5f, btn_y + fch * 0.5f, k_color, k_color, k_color, 1.f, scale);
+    }
+    
     float my = by + 8 * cell_sz + fch * 2.0f;
 
     // Check indicator in red
@@ -402,6 +800,26 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     } else if (s->num_players == 1) {
         gl_draw_text("CLICK=SELECT/MOVE  ARROWS=MOVE  ENTER=CONFIRM  R=LOBBY  ESC=MENU",
                      x0, my, 0.f, 0.45f, 0.15f, 1.f, scale);
+        my += fch * 2.2f;
+        
+        // Resign button position and clickable area
+        float btn_x = x0;
+        float btn_y = my;
+        float btn_w = fcw * 15.f;
+        float btn_h = fch * 1.4f;
+        
+        s->resign_button_x = btn_x;
+        s->resign_button_y = btn_y;
+        s->resign_button_w = btn_w;
+        s->resign_button_h = btn_h;
+        
+        // Button color - brighter red when hovered
+        float btn_r = s->resign_button_hovered ? 1.0f : 0.8f;
+        float btn_g = s->resign_button_hovered ? 0.2f : 0.1f;
+        float btn_b = 0.1f;
+        
+        // Draw button text with appropriate color
+        gl_draw_text("[ RESIGN ]", btn_x, btn_y, btn_r, btn_g, btn_b, 1.f, scale);
     }
 }
 
@@ -425,12 +843,60 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             return;
         }
         if (chess_is_valid_move(&s->game, s->from_r, s->from_c, r, c)) {
+            // Additional check: make sure move doesn't leave king in check
+            ChessGameState temp_game = s->game;
+            ChessMove test_move{s->from_r, s->from_c, r, c, 0};
+            chess_make_move(&temp_game, test_move);
+            if (chess_is_in_check(&temp_game, plr)) {
+                // Move is illegal - leaves king in check
+                s->has_from = false;
+                strcpy(s->message, "ILLEGAL MOVE.  KING IN CHECK!");
+                return;
+            }
+            
             s->last_from_r = s->from_r; s->last_from_c = s->from_c;
             s->last_to_r   = r;          s->last_to_c   = c;
             s->has_last_move = true;
+            
+            // Start animation
+            s->is_animating = true;
+            s->animation_progress = 0.0f;
+            s->anim_from_r = s->from_r;
+            s->anim_from_c = s->from_c;
+            s->anim_to_r = r;
+            s->anim_to_c = c;
+            s->anim_piece = s->game.board[s->from_r][s->from_c];
+            
+            // Play sound for player move
+            if (s->game.board[r][c].type != EMPTY) {
+                chess_sound_play(SFX_CAPTURE);
+            } else {
+                chess_sound_play(SFX_MOVE);
+            }
+            
+            // Track capture before making move
+            track_capture(s, r, c, s->player_color);
+            
+            // Check if moving a pawn to promotion rank BEFORE making the move
+            ChessPiece moving_piece = s->game.board[s->from_r][s->from_c];
+            bool is_pawn_promotion = (moving_piece.type == PAWN && 
+                                      ((moving_piece.color == WHITE && r == 0) ||
+                                       (moving_piece.color == BLACK && r == 7)));
+            
             ChessMove mv{s->from_r, s->from_c, r, c, 0};
             chess_make_move(&s->game, mv);
             s->has_from = false;
+            
+            // Check if pawn promotion
+            if (is_pawn_promotion) {
+                // Pawn just promoted, ask player what they want
+                s->awaiting_promotion = true;
+                s->promotion_row = r;
+                s->promotion_col = c;
+                strcpy(s->message, "CHOOSE PROMOTION PIECE.");
+                return;
+            }
+            
             s->status = chess_check_game_status(&s->game);
             bool plr_wins = (plr == WHITE && s->status == CHESS_CHECKMATE_BLACK) ||
                             (plr == BLACK && s->status == CHESS_CHECKMATE_WHITE);
@@ -441,6 +907,11 @@ static void attempt_move(WoprChessState *s, int r, int c) {
                 strcpy(s->message, "STALEMATE.  DRAW.");
                 s->game_over = true;
             } else {
+                // Play check sound if applicable
+                if (chess_is_in_check(&s->game, s->game.turn)) {
+                    chess_sound_play(SFX_CHECK);
+                }
+                
                 strcpy(s->message, "WOPR CALCULATING...");
                 start_ai(s);
             }
@@ -480,14 +951,44 @@ static void wopr_chess_set_cursor(SDL_SystemCursor id) {
 
 void wopr_chess_mousemove(WoprState *w, int x, int y) {
     WoprChessState *s = cs(w);
-    if (!s || s->screen != SCREEN_GAME || s->num_players != 1) return;
+    if (!s || s->screen != SCREEN_GAME) return;
+    
+    // Check promotion button hovers
+    if (s->awaiting_promotion) {
+        s->promote_queen_hovered = (x >= s->promote_queen_x && x <= s->promote_queen_x + s->promote_queen_w &&
+                                   y >= s->promote_queen_y && y <= s->promote_queen_y + s->promote_queen_h);
+        s->promote_rook_hovered = (x >= s->promote_rook_x && x <= s->promote_rook_x + s->promote_rook_w &&
+                                  y >= s->promote_rook_y && y <= s->promote_rook_y + s->promote_rook_h);
+        s->promote_bishop_hovered = (x >= s->promote_bishop_x && x <= s->promote_bishop_x + s->promote_bishop_w &&
+                                    y >= s->promote_bishop_y && y <= s->promote_bishop_y + s->promote_bishop_h);
+        s->promote_knight_hovered = (x >= s->promote_knight_x && x <= s->promote_knight_x + s->promote_knight_w &&
+                                    y >= s->promote_knight_y && y <= s->promote_knight_y + s->promote_knight_h);
+        
+        SDL_SystemCursor cursor_id = (s->promote_queen_hovered || s->promote_rook_hovered || 
+                                     s->promote_bishop_hovered || s->promote_knight_hovered) ?
+                                    SDL_SYSTEM_CURSOR_HAND : SDL_SYSTEM_CURSOR_ARROW;
+        wopr_chess_set_cursor(cursor_id);
+        return;
+    }
+    
+    if (s->num_players != 1) return;
     int r, c;
     if (pixel_to_board(s, x, y, &r, &c)) { s->hover_r = r; s->hover_c = c; }
     else                                  { s->hover_r = s->hover_c = -1; }
 
+    // Check resign button hover
+    if (!s->game_over && s->status == CHESS_PLAYING) {
+        s->resign_button_hovered = (x >= s->resign_button_x && x <= s->resign_button_x + s->resign_button_w &&
+                                    y >= s->resign_button_y && y <= s->resign_button_y + s->resign_button_h);
+    } else {
+        s->resign_button_hovered = false;
+    }
+
     ChessColor plr = s->player_color;
     SDL_SystemCursor cursor_id = SDL_SYSTEM_CURSOR_ARROW;
-    if (!s->ai_thinking && !s->game_over && s->status == CHESS_PLAYING
+    if (s->resign_button_hovered) {
+        cursor_id = SDL_SYSTEM_CURSOR_HAND;
+    } else if (!s->ai_thinking && !s->game_over && s->status == CHESS_PLAYING
             && s->game.turn == plr && s->hover_r >= 0) {
         if (!s->has_from) {
             const ChessPiece &p = s->game.board[s->hover_r][s->hover_c];
@@ -509,31 +1010,81 @@ void wopr_chess_mousedown(WoprState *w, int x, int y, int button) {
     WoprChessState *s = cs(w);
     if (!s) return;
 
-    if (s->screen == SCREEN_LOBBY) {
-        if (button == SDL_BUTTON_LEFT) {
-            if (s->lobby_sel == 0) {
-                s->num_players = 0;
-                start_game(s);
+    if (button != SDL_BUTTON_LEFT) return;
+
+    // Handle promotion piece selection
+    if (s->awaiting_promotion) {
+        if (x >= s->promote_queen_x && x <= s->promote_queen_x + s->promote_queen_w &&
+            y >= s->promote_queen_y && y <= s->promote_queen_y + s->promote_queen_h) {
+            s->game.board[s->promotion_row][s->promotion_col].type = QUEEN;
+            s->awaiting_promotion = false;
+        } else if (x >= s->promote_rook_x && x <= s->promote_rook_x + s->promote_rook_w &&
+                   y >= s->promote_rook_y && y <= s->promote_rook_y + s->promote_rook_h) {
+            s->game.board[s->promotion_row][s->promotion_col].type = ROOK;
+            s->awaiting_promotion = false;
+        } else if (x >= s->promote_bishop_x && x <= s->promote_bishop_x + s->promote_bishop_w &&
+                   y >= s->promote_bishop_y && y <= s->promote_bishop_y + s->promote_bishop_h) {
+            s->game.board[s->promotion_row][s->promotion_col].type = BISHOP;
+            s->awaiting_promotion = false;
+        } else if (x >= s->promote_knight_x && x <= s->promote_knight_x + s->promote_knight_w &&
+                   y >= s->promote_knight_y && y <= s->promote_knight_y + s->promote_knight_h) {
+            s->game.board[s->promotion_row][s->promotion_col].type = KNIGHT;
+            s->awaiting_promotion = false;
+        }
+        
+        if (!s->awaiting_promotion) {
+            // Continue with move logic
+            s->status = chess_check_game_status(&s->game);
+            ChessColor plr = s->player_color;
+            bool plr_wins = (plr == WHITE && s->status == CHESS_CHECKMATE_BLACK) ||
+                            (plr == BLACK && s->status == CHESS_CHECKMATE_WHITE);
+            if (plr_wins) {
+                strcpy(s->message, "CHECKMATE!  YOU WIN.");
+                s->game_over = true;
+            } else if (s->status == CHESS_STALEMATE) {
+                strcpy(s->message, "STALEMATE.  DRAW.");
+                s->game_over = true;
             } else {
-                s->num_players = 1;
-                s->screen = SCREEN_COLOR;
+                if (chess_is_in_check(&s->game, s->game.turn)) {
+                    chess_sound_play(SFX_CHECK);
+                }
+                strcpy(s->message, "WOPR CALCULATING...");
+                start_ai(s);
             }
         }
         return;
     }
 
-    if (s->screen == SCREEN_COLOR) {
-        if (button == SDL_BUTTON_LEFT) {
-            s->player_color = (s->color_sel == 0) ? WHITE : BLACK;
+    if (s->screen == SCREEN_LOBBY) {
+        if (s->lobby_sel == 0) {
+            s->num_players = 0;
             start_game(s);
+        } else {
+            s->num_players = 1;
+            s->screen = SCREEN_COLOR;
         }
         return;
     }
 
-    if (button != SDL_BUTTON_LEFT) return;
+    if (s->screen == SCREEN_COLOR) {
+        s->player_color = (s->color_sel == 0) ? WHITE : BLACK;
+        start_game(s);
+        return;
+    }
+
     if (s->ai_thinking || s->game_over || s->status != CHESS_PLAYING) return;
     if (s->num_players == 0) return;
     if (s->game.turn != s->player_color) return;
+
+    // Check resign button click
+    if (!s->game_over && s->status == CHESS_PLAYING &&
+        x >= s->resign_button_x && x <= s->resign_button_x + s->resign_button_w &&
+        y >= s->resign_button_y && y <= s->resign_button_y + s->resign_button_h) {
+        chess_sound_play(SFX_RESIGN);
+        snprintf(s->message, sizeof(s->message), "YOU RESIGN. %s", get_taunt());
+        s->game_over = true;
+        return;
+    }
 
     int r, c;
     if (!pixel_to_board(s, x, y, &r, &c)) return;
