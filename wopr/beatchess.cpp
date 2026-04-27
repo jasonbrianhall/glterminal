@@ -453,7 +453,28 @@ bool chess_is_valid_move(ChessGameState *game, int fr, int fc, int tr, int tc) {
         case KING: {
             // Normal king move
             if (abs(dr) <= 1 && abs(dc) <= 1 && (dr != 0 || dc != 0)) {
-                ok = true;
+                // Check if destination square is adjacent to opponent's king
+                ChessColor opponent = (piece.color == WHITE) ? BLACK : WHITE;
+                int opp_king_r = -1, opp_king_c = -1;
+                
+                // Find opponent's king
+                for (int r = 0; r < BOARD_SIZE; r++) {
+                    for (int c = 0; c < BOARD_SIZE; c++) {
+                        if (game->board[r][c].type == KING && game->board[r][c].color == opponent) {
+                            opp_king_r = r;
+                            opp_king_c = c;
+                            break;
+                        }
+                    }
+                    if (opp_king_r != -1) break;
+                }
+                
+                // If opponent's king exists and is adjacent to destination, move is illegal
+                if (opp_king_r != -1 && abs(tr - opp_king_r) <= 1 && abs(tc - opp_king_c) <= 1) {
+                    ok = false;
+                } else {
+                    ok = true;
+                }
             } else if (dr == 0 && abs(dc) == 2) {
                 bool castle_ok = true;
 
