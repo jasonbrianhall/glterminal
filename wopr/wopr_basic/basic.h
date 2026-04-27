@@ -94,7 +94,7 @@ typedef struct {
     char  **arr_str;
 } Var;
 
-extern Var  g_vars[MAX_VARS];
+extern Var* g_vars;
 extern int  g_nvar;
 
 int     var_is_str_name(char *name);
@@ -128,7 +128,11 @@ void clear_program(void);
  * DATA / READ / RESTORE
  * ================================================================ */
 extern char *g_data[MAX_DATA_ITEMS];
-extern int   g_data_line[MAX_DATA_ITEMS];  /* program line index of each DATA item */
+
+
+//extern int   g_data_line[MAX_DATA_ITEMS];  /* program line index of each DATA item */
+extern int* g_data_line;
+
 extern int   g_data_count;
 extern int   g_data_pos;
 
@@ -143,7 +147,7 @@ typedef struct {
     int   line_idx;              /* FOR: loop start; GOSUB: return address */
 } CtrlFrame;
 
-extern CtrlFrame g_ctrl[CTRL_STACK_MAX];
+extern CtrlFrame* g_ctrl;
 extern int       g_ctrl_top;
 
 /* ================================================================
@@ -173,7 +177,7 @@ typedef struct {
     int       nfields;
 } TypeDef;
 
-extern TypeDef g_typedefs[MAX_TYPE_DEFS];
+extern TypeDef* g_typedefs;
 extern int     g_ntypedefs;
 
 TypeDef *typedef_find(char *name);

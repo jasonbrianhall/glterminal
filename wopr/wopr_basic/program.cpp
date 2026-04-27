@@ -24,11 +24,38 @@ static LinesInit _lines_init;
 int  g_nlines = 0;
 
 char *g_data[MAX_DATA_ITEMS];
-int   g_data_line[MAX_DATA_ITEMS];
+
+
+int* g_data_line = nullptr;
+
+struct DataLineInit {
+    DataLineInit() {
+        g_data_line = new int[MAX_DATA_ITEMS];
+    }
+    ~DataLineInit() {
+        delete[] g_data_line;
+    }
+};
+
+static DataLineInit _data_line_init;
+
+
+
 int   g_data_count = 0;
 int   g_data_pos   = 0;
 
-CtrlFrame g_ctrl[CTRL_STACK_MAX];
+CtrlFrame* g_ctrl = nullptr;
+
+struct CtrlInit {
+    CtrlInit() {
+        g_ctrl = new CtrlFrame[CTRL_STACK_MAX];
+    }
+    ~CtrlInit() {
+        delete[] g_ctrl;
+    }
+};
+
+static CtrlInit _ctrl_init;
 int       g_ctrl_top = 0;
 
 /* ================================================================
