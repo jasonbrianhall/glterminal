@@ -1031,7 +1031,7 @@ int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves
     }
     
     if (in_check && count == 0) {
-        fprintf(stderr, "WARNING: No legal moves found while in check! (Checkmate or Stalemate)\n");
+        //fprintf(stderr, "WARNING: No legal moves found while in check! (Checkmate or Stalemate)\n");
     }
     
     return count;
