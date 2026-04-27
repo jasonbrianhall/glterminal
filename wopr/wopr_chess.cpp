@@ -529,10 +529,17 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
 
     // ── Draw captured pieces ───────────────────────────────────────────────
     float cap_x_left = x0;
-    float cap_x_right = (float)s->win_w - fcw * 3.f;
+    float cap_x_right = (float)s->win_w - fcw * 4.f;
     float cap_y = by;
     float cap_piece_size = cell_sz * 0.35f;
     float cap_spacing = cap_piece_size * 1.1f;  // Space between pieces vertically
+    
+    // When board is flipped (playing BLACK), swap left/right for captured pieces too
+    if (flipped) {
+        float temp = cap_x_left;
+        cap_x_left = cap_x_right;
+        cap_x_right = temp;
+    }
     
     // Determine what to show based on player color
     // Left side: pieces the player captured
@@ -868,7 +875,7 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             }
             
             // Track capture before making move
-            track_capture(s, r, c, WHITE);
+            track_capture(s, r, c, s->player_color);
             
             // Check if moving a pawn to promotion rank BEFORE making the move
             ChessPiece moving_piece = s->game.board[s->from_r][s->from_c];
