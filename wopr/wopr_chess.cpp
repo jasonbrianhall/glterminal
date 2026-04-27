@@ -534,25 +534,25 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
     float cap_piece_size = cell_sz * 0.35f;
     float cap_spacing = cap_piece_size * 1.1f;  // Space between pieces vertically
     
-    // White captured pieces (left side, from black's captures)
-    int white_cap_row = 0;
+    // Left side: pieces the player captured (WHITE player captures BLACK pieces)
+    int player_cap_row = 0;
     for (int type = 1; type <= 6; type++) {
         for (int i = 0; i < s->black_captured[type]; i++) {
-            draw_chess_piece((PieceType)type, WHITE, 
-                            cap_x_left, cap_y + white_cap_row * cap_spacing, cap_piece_size,
+            draw_chess_piece((PieceType)type, BLACK,  // Draw BLACK pieces (what WHITE captured)
+                            cap_x_left, cap_y + player_cap_row * cap_spacing, cap_piece_size,
                             s->win_w, s->win_h, 0.7f);
-            white_cap_row++;
+            player_cap_row++;
         }
     }
     
-    // Black captured pieces (right side, from white's captures)
-    int black_cap_row = 0;
+    // Right side: pieces the AI captured (BLACK player captures WHITE pieces)
+    int ai_cap_row = 0;
     for (int type = 1; type <= 6; type++) {
         for (int i = 0; i < s->white_captured[type]; i++) {
-            draw_chess_piece((PieceType)type, BLACK,
-                            cap_x_right, cap_y + black_cap_row * cap_spacing, cap_piece_size,
+            draw_chess_piece((PieceType)type, WHITE,  // Draw WHITE pieces (what BLACK captured)
+                            cap_x_right, cap_y + ai_cap_row * cap_spacing, cap_piece_size,
                             s->win_w, s->win_h, 0.7f);
-            black_cap_row++;
+            ai_cap_row++;
         }
     }
 
@@ -633,15 +633,25 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
                         bool is_free_capture = false;
                         ChessPiece target_piece = s->game.board[tr][tc];  // Check BEFORE move
                         
-                    // Check if any opponent piece can attack this square
+                        // Check if any opponent piece can attack this square
                         for (int opp_r = 0; opp_r < 8; opp_r++) {
                             for (int opp_c = 0; opp_c < 8; opp_c++) {
                                 if (temp_game.board[opp_r][opp_c].color == opponent) {
-                                    // Temporarily swap turn to check opponent's moves
+                                    // Check if this opponent move is actually legal
+                                    // (they can't make moves if their king is in check unless it resolves check)
                                     ChessColor saved_turn = temp_game.turn;
                                     temp_game.turn = opponent;
+                                    
                                     if (chess_is_valid_move(&temp_game, opp_r, opp_c, tr, tc)) {
-                                        is_threatened = true;
+                                        // Test if move leaves their king in check
+                                        ChessGameState temp_game_after = temp_game;
+                                        ChessMove opp_test_move{opp_r, opp_c, tr, tc, 0};
+                                        chess_make_move(&temp_game_after, opp_test_move);
+                                        
+                                        // Only count as threatening if the move is legal (doesn't leave their king in check)
+                                        if (!chess_is_in_check(&temp_game_after, opponent)) {
+                                            is_threatened = true;
+                                        }
                                     }
                                     temp_game.turn = saved_turn;
                                     if (is_threatened) break;
