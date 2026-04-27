@@ -453,28 +453,7 @@ bool chess_is_valid_move(ChessGameState *game, int fr, int fc, int tr, int tc) {
         case KING: {
             // Normal king move
             if (abs(dr) <= 1 && abs(dc) <= 1 && (dr != 0 || dc != 0)) {
-                // Check if destination square is adjacent to opponent's king
-                ChessColor opponent = (piece.color == WHITE) ? BLACK : WHITE;
-                int opp_king_r = -1, opp_king_c = -1;
-                
-                // Find opponent's king
-                for (int r = 0; r < BOARD_SIZE; r++) {
-                    for (int c = 0; c < BOARD_SIZE; c++) {
-                        if (game->board[r][c].type == KING && game->board[r][c].color == opponent) {
-                            opp_king_r = r;
-                            opp_king_c = c;
-                            break;
-                        }
-                    }
-                    if (opp_king_r != -1) break;
-                }
-                
-                // If opponent's king exists and is adjacent to destination, move is illegal
-                if (opp_king_r != -1 && abs(tr - opp_king_r) <= 1 && abs(tc - opp_king_c) <= 1) {
-                    ok = false;
-                } else {
-                    ok = true;
-                }
+                ok = true;
             } else if (dr == 0 && abs(dc) == 2) {
                 bool castle_ok = true;
 
@@ -596,16 +575,56 @@ bool chess_is_in_check(ChessGameState *game, ChessColor color) {
     ChessColor opponent = (color == WHITE) ? BLACK : WHITE;
     
     // Check each opponent piece to see if it can attack the king
+    // Use direct piece movement logic instead of chess_is_valid_move to avoid circular calls
     for (int r = 0; r < BOARD_SIZE; r++) {
         for (int c = 0; c < BOARD_SIZE; c++) {
             ChessPiece piece = game->board[r][c];
             if (piece.color != opponent) continue;
             
-            // Temporarily set turn to opponent to check if move is valid
-            ChessColor saved_turn = game->turn;
-            game->turn = opponent;
-            bool can_attack = chess_is_valid_move(game, r, c, king_r, king_c);
-            game->turn = saved_turn;
+            int dr = king_r - r;
+            int dc = king_c - c;
+            
+            // Check if piece can attack the king based on piece type
+            bool can_attack = false;
+            
+            switch(piece.type) {
+                case PAWN: {
+                    int direction = (piece.color == WHITE) ? -1 : 1;
+                    if (dr == direction && abs(dc) == 1) can_attack = true;
+                    break;
+                }
+                case KNIGHT: {
+                    if ((abs(dr) == 2 && abs(dc) == 1) || (abs(dr) == 1 && abs(dc) == 2)) {
+                        can_attack = true;
+                    }
+                    break;
+                }
+                case BISHOP: {
+                    if (abs(dr) == abs(dc) && abs(dr) > 0) {
+                        can_attack = chess_is_path_clear(game, r, c, king_r, king_c);
+                    }
+                    break;
+                }
+                case ROOK: {
+                    if ((dr == 0 || dc == 0) && (dr != 0 || dc != 0)) {
+                        can_attack = chess_is_path_clear(game, r, c, king_r, king_c);
+                    }
+                    break;
+                }
+                case QUEEN: {
+                    if (((dr == 0 || dc == 0) || (abs(dr) == abs(dc))) && (dr != 0 || dc != 0)) {
+                        can_attack = chess_is_path_clear(game, r, c, king_r, king_c);
+                    }
+                    break;
+                }
+                case KING: {
+                    if (abs(dr) <= 1 && abs(dc) <= 1 && (dr != 0 || dc != 0)) {
+                        can_attack = true;
+                    }
+                    break;
+                }
+                default: break;
+            }
             
             if (can_attack) {
                 return true;
@@ -981,6 +1000,10 @@ int chess_evaluate_position(ChessGameState *game) {
 
 int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves) {
     int count = 0;
+    int illegal_count = 0;
+    
+    // Check if we're currently in check
+    bool in_check = chess_is_in_check(game, color);
     
     for (int fr = 0; fr < BOARD_SIZE; fr++) {
         for (int fc = 0; fc < BOARD_SIZE; fc++) {
@@ -992,7 +1015,12 @@ int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves
                             ChessMove m = {fr, fc, tr, tc, 0};
                             chess_make_move(&temp, m);
                             
-                            if (!chess_is_in_check(&temp, color)) {
+                            // Check if move leaves our king in check
+                            if (chess_is_in_check(&temp, color)) {
+                                illegal_count++;
+                                // If in check before, and this move doesn't resolve it, skip
+                                // If not in check before, and this move puts us in check, skip
+                            } else {
                                 moves[count++] = m;
                             }
                         }
@@ -1000,6 +1028,10 @@ int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves
                 }
             }
         }
+    }
+    
+    if (in_check && count == 0) {
+        fprintf(stderr, "WARNING: No legal moves found while in check! (Checkmate or Stalemate)\n");
     }
     
     return count;
