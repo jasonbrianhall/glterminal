@@ -58,8 +58,20 @@ static inline SDL_Vertex to_sv(const Vertex &v) {
     return sv;
 }
 
-static SDL_Vertex s_accum[MAX_VERTS];
-static int        s_accum_n = 0;
+static SDL_Vertex* s_accum;
+static int         s_accum_n = 0;
+
+struct SDLAccumInit {
+    SDLAccumInit() {
+        s_accum = new SDL_Vertex[MAX_VERTS];
+    }
+    ~SDLAccumInit() {
+        delete[] s_accum;
+    }
+};
+
+static SDLAccumInit _sdl_accum_init;
+
 
 // ============================================================================
 // PUBLIC SDL-PATH ENTRY POINTS  (called by dispatch stubs in gl_renderer.cpp)

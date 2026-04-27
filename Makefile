@@ -114,11 +114,10 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
                -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
                $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
 
-# -mwindows: no console window behind the GL window
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
-               -lopengl32 -lpng -lz -lwinmm -mwindows -lSDL2_mixer -lshlwapi -lgmp \
+               -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer -lshlwapi -lgmp \
                -s -Wl,--gc-sections -flto
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \

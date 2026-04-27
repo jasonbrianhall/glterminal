@@ -12,10 +12,38 @@ BASIC_NS_BEGIN
 /* ================================================================
  * Global state
  * ================================================================ */
-Var  g_vars[MAX_VARS];
+Var* g_vars = nullptr;
+
+struct VarsInit {
+    VarsInit() {
+        g_vars = new Var[MAX_VARS];
+    }
+    ~VarsInit() {
+        delete[] g_vars;
+    }
+};
+
+static VarsInit _vars_init;
+
+
+
+
+
 int  g_nvar = 0;
 
-TypeDef g_typedefs[MAX_TYPE_DEFS];
+TypeDef* g_typedefs = nullptr;
+
+struct TypeDefsInit {
+    TypeDefsInit() {
+        g_typedefs = new TypeDef[MAX_TYPE_DEFS];
+    }
+    ~TypeDefsInit() {
+        delete[] g_typedefs;
+    }
+};
+
+static TypeDefsInit _typedefs_init;
+
 int     g_ntypedefs = 0;
 
 TypeDef *typedef_find(char *name) {
