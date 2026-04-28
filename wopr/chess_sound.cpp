@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <cstdio>
 
 #define SAMPLE_RATE 44100
 #define MAX_SOUND_LENGTH (SAMPLE_RATE * 2)  // 2 seconds max

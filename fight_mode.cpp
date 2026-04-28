@@ -71,6 +71,7 @@ static const Pose P_HDKN_PUSH   = { 0.25f,4,  0.0f,-0.1f, 0.0f,-0.1f, 0.25f,-0.3
 enum AttackType { ATK_JAB, ATK_CROSS, ATK_HOOK, ATK_UPPERCUT, ATK_KICK, ATK_SWEEP, ATK_HADOUKEN };
 enum FState     { FS_IDLE, FS_WALK, FS_ATTACK, FS_BLOCK, FS_HURT, FS_STAGGER,
                   FS_JUMP, FS_DODGE, FS_TAUNT, FS_KNOCKDOWN, FS_GETUP, FS_DEAD };
+enum OpponentType { OPP_HUMAN, OPP_CHICKEN, OPP_LION };
 
 struct FightFighter {
     float  x, y, vx, vy, hp;
@@ -87,6 +88,7 @@ struct FightFighter {
     float  cr, cg, cb;
     float  body_scale_y;
     int    rounds_won;
+    OpponentType opp_type;
 };
 
 // ── rounds ────────────────────────────────────────────────────────────────────
@@ -95,6 +97,7 @@ static bool  s_intermission = false;
 static int   s_inter_timer  = 0;
 static const int ROUNDS_MAX          = 3;
 static const int INTERMISSION_TICKS  = 180;
+static OpponentType s_opponent_type  = OPP_HUMAN;  // Keep same opponent throughout match
 
 // ── global state ─────────────────────────────────────────────────────────────
 static FightFighter s_ff[2];
@@ -158,11 +161,37 @@ static void fight_init_round(float ww, float wh) {
     s_ff[0] = {}; s_ff[0].x=ww*.25f; s_ff[0].y=fy; s_ff[0].hp=1.f;
     s_ff[0].facing_right=true;  s_ff[0].cr=1.f;   s_ff[0].cg=0.25f; s_ff[0].cb=0.25f;
     s_ff[0].cur_pose=P_GUARD; s_ff[0].pose_target=P_GUARD; s_ff[0].body_scale_y=1.f;
-    s_ff[0].rounds_won=r0;
+    s_ff[0].rounds_won=r0; s_ff[0].opp_type=OPP_HUMAN;
     s_ff[1] = {}; s_ff[1].x=ww*.75f; s_ff[1].y=fy; s_ff[1].hp=1.f;
     s_ff[1].facing_right=false; s_ff[1].cr=0.25f; s_ff[1].cg=0.5f;  s_ff[1].cb=1.f;
     s_ff[1].cur_pose=P_GUARD; s_ff[1].pose_target=P_GUARD; s_ff[1].body_scale_y=1.f;
-    s_ff[1].rounds_won=r1;
+    s_ff[1].rounds_won=r1; 
+    
+    // On first round, pick opponent type for entire match
+    if (s_ff[0].rounds_won == 0 && s_ff[1].rounds_won == 0) {
+        float mystery = frand();
+        if (mystery < 0.25f) {
+            s_opponent_type = OPP_CHICKEN;
+        } else if (mystery < 0.50f) {
+            s_opponent_type = OPP_LION;
+        } else {
+            s_opponent_type = OPP_HUMAN;
+        }
+    }
+    
+    // Apply the chosen opponent type
+    s_ff[1].opp_type = s_opponent_type;
+    
+    if (s_opponent_type == OPP_CHICKEN) {
+        s_ff[1].cr = 1.f;   s_ff[1].cg = 0.8f;  s_ff[1].cb = 0.2f;
+        s_ff[1].body_scale_y = 0.7f;
+        s_ff[1].hp = 0.7f;
+    } else if (s_opponent_type == OPP_LION) {
+        s_ff[1].cr = 1.f;   s_ff[1].cg = 0.6f;  s_ff[1].cb = 0.2f;
+        s_ff[1].body_scale_y = 1.3f;
+        s_ff[1].hp = 1.4f;
+    }
+    
     s_blood.clear(); s_sparks.clear(); s_sweat.clear(); s_hadoukens.clear();
     s_fight_ticks=0; s_screen_shake=0.f; s_fight_inited=true;
 }
@@ -219,7 +248,115 @@ static void fight_draw_fighter(const FightFighter &f, float alpha) {
     if (f.state==FS_STAGGER) { cr*=0.7f; cg*=0.7f; cb*=0.7f; }
     float dcr=cr*.65f, dcg=cg*.65f, dcb=cb*.65f;
 
+    // Lions fight on all fours, not upright
+    if (f.opp_type == OPP_LION) {
+        float lion_body_y = base_y - 15.f;  // body lower to ground
+        float lion_head_x = x + flip * 25.f;
+        float lion_head_y = lion_body_y - 8.f;
+        
+        // Body line (horizontal spine)
+        fight_line(x - flip*20.f, lion_body_y, x + flip*20.f, lion_body_y - 5.f, cr, cg, cb, alpha, 5.f);
+        
+        // Head on front
+        float head_r = 13.f;
+        fight_circle(lion_head_x, lion_head_y, head_r, cr, cg, cb, alpha);
+        
+        // Fierce glowing eyes
+        float eye_r = 2.5f;
+        fight_circle(lion_head_x + flip*4.5f, lion_head_y - 2.f, eye_r, 1, 1, 0, alpha*0.6f);
+        fight_circle(lion_head_x + flip*9.f, lion_head_y - 2.f, eye_r, 1, 1, 0, alpha*0.6f);
+        
+        // Massive mane radiating from head
+        fight_circle(lion_head_x, lion_head_y, 28.f, 1.0f, 0.6f, 0.2f, alpha*0.25f);
+        for (int i = 0; i < 20; i++) {
+            float angle = (float)i / 20.f * 6.28318f;
+            if (!f.facing_right) angle = 3.14159f - angle;
+            float dist = 22.f + sinf(s_fight_ticks*0.15f + i)*4.f;
+            float mx = lion_head_x + cosf(angle)*dist;
+            float my = lion_head_y + sinf(angle)*dist;
+            float mx2 = lion_head_x + cosf(angle)*(dist+7.f);
+            float my2 = lion_head_y + sinf(angle)*(dist+7.f);
+            fight_line(mx, my, mx2, my2, cr*1.1f, cg*0.9f, cb*0.3f, alpha*0.8f, 4.f);
+        }
+        
+        // Attacking state: front paws swipe side-to-side
+        float swipe_amount = 0.f;
+        if (f.state == FS_ATTACK) {
+            float progress = 1.f - (f.state_timer / (float)(f.state_dur > 0 ? f.state_dur : 1));
+            if (progress > 0.2f && progress < 0.8f) {
+                swipe_amount = sinf((progress - 0.2f) / 0.6f * 3.14159f);
+            }
+        }
+        
+        // Four legs
+        float leg_upper = 20.f, leg_lower = 18.f;
+        
+        // Front left leg (swipes to the left)
+        {
+            float ul = p.lul * flip * 0.8f + swipe_amount * flip * -0.8f;
+            float ll = p.lll * flip * 0.8f;
+            float ex, ey;
+            float leg_x_offset = x + flip*15.f - swipe_amount * flip * 10.f;
+            fight_2joint(leg_x_offset, lion_body_y, ul, ll, leg_upper, leg_lower, 
+                        dcr, dcg, dcb, alpha*.75f, 3.5f, &ex, &ey);
+            fight_line(ex, ey, ex, base_y, dcr, dcg, dcb, alpha*.75f, 3.f);
+            // Draw paw claws when swiping
+            if (swipe_amount > 0.2f) {
+                for (int i = 0; i < 4; i++) {
+                    float claw_angle = (i - 1.5f) * 0.25f + swipe_amount * -0.4f;
+                    float cx = ex + cosf(claw_angle) * 6.f;
+                    float cy = ey + sinf(claw_angle) * 4.f;
+                    fight_line(ex, ey, cx, cy, cr, cg, cb, alpha * swipe_amount, 2.2f);
+                }
+            }
+        }
+        
+        // Front right leg (swipes to the right)
+        {
+            float ul = p.rul * flip * 0.8f + swipe_amount * flip * 0.8f;
+            float ll = p.rll * flip * 0.8f;
+            float ex, ey;
+            float leg_x_offset = x + flip*18.f + swipe_amount * flip * 10.f;
+            fight_2joint(leg_x_offset, lion_body_y, ul, ll, leg_upper, leg_lower, 
+                        cr, cg, cb, alpha, 3.5f, &ex, &ey);
+            fight_line(ex, ey, ex, base_y, cr, cg, cb, alpha, 3.f);
+            // Draw paw claws when swiping
+            if (swipe_amount > 0.2f) {
+                for (int i = 0; i < 4; i++) {
+                    float claw_angle = (i - 1.5f) * 0.25f + swipe_amount * 0.4f;
+                    float cx = ex + cosf(claw_angle) * 6.f;
+                    float cy = ey + sinf(claw_angle) * 4.f;
+                    fight_line(ex, ey, cx, cy, cr, cg, cb, alpha * swipe_amount, 2.2f);
+                }
+            }
+        }
+        
+        // Back left leg
+        {
+            float ul = (p.lul - 0.3f) * flip * 0.7f;
+            float ex, ey;
+            fight_2joint(x - flip*12.f, lion_body_y + 3.f, ul, p.lll*flip*0.7f, leg_upper*0.9f, leg_lower*0.9f, 
+                        dcr, dcg, dcb, alpha*.75f, 3.5f, &ex, &ey);
+            fight_line(ex, ey, ex, base_y, dcr, dcg, dcb, alpha*.75f, 3.f);
+        }
+        // Back right leg
+        {
+            float ul = (p.rul - 0.3f) * flip * 0.7f;
+            float ex, ey;
+            fight_2joint(x - flip*9.f, lion_body_y + 3.f, ul, p.rll*flip*0.7f, leg_upper*0.9f, leg_lower*0.9f, 
+                        cr, cg, cb, alpha, 3.5f, &ex, &ey);
+            fight_line(ex, ey, ex, base_y, cr, cg, cb, alpha, 3.f);
+        }
+        
+        return;
+    }
+
+    // Regular human fighter
     float head_r=11.f, torso_h=34.f*sy;
+    if (f.opp_type == OPP_CHICKEN) {
+        head_r = 8.f;  // smaller chicken head
+    }
+    
     float uarm_l=21.f, larm_l=18.f, uleg_l=25.f, lleg_l=23.f;
 
     float hip_y     = base_y-4.f;
@@ -233,9 +370,17 @@ static void fight_draw_fighter(const FightFighter &f, float alpha) {
     float head_x = shoulder_x + sinf(p.head)*head_r*flip;
     float hcy    = head_cy - p.crouch*0.3f*sy;
     fight_circle(head_x, hcy, head_r, cr,cg,cb, alpha);
+    
+    // Different eye behavior for animals
     float eye_r = (f.state==FS_STAGGER||f.state==FS_HURT) ? 2.8f : 2.f;
-    fight_circle(head_x+flip*3.5f, hcy-2.f, eye_r, 0,0,0, alpha);
-    fight_circle(head_x+flip*7.5f, hcy-2.f, eye_r, 0,0,0, alpha);
+    if (f.opp_type == OPP_CHICKEN) {
+        eye_r *= 0.7f;  // tiny chicken eyes
+        fight_circle(head_x+flip*4.f, hcy-0.5f, eye_r, 0,0,0, alpha);
+        fight_circle(head_x+flip*6.5f, hcy-0.5f, eye_r, 0,0,0, alpha);
+    } else {
+        fight_circle(head_x+flip*3.5f, hcy-2.f, eye_r, 0,0,0, alpha);
+        fight_circle(head_x+flip*7.5f, hcy-2.f, eye_r, 0,0,0, alpha);
+    }
 
     { float ua=(p.lua+p.lean)*flip, ex,ey;
       fight_2joint(shoulder_x,shoulder_y, ua, p.lla*flip, uarm_l,larm_l, dcr,dcg,dcb,alpha*.75f,2.5f,&ex,&ey);
@@ -249,6 +394,11 @@ static void fight_draw_fighter(const FightFighter &f, float alpha) {
     { float ua=(p.rua+p.lean)*flip, ex,ey;
       fight_2joint(shoulder_x,shoulder_y, ua, p.rla*flip, uarm_l,larm_l, cr,cg,cb,alpha,3.f,&ex,&ey);
       fight_circle(ex,ey,4.f,cr,cg,cb,alpha); }
+    
+    // Add aura/glow for chicken
+    if (f.opp_type == OPP_CHICKEN) {
+        fight_circle(x, hcy, 18.f, 1.0f, 0.8f, 0.2f, alpha*0.15f);  // yellow glow
+    }
 }
 
 // ── attack logic ──────────────────────────────────────────────────────────────
@@ -501,6 +651,14 @@ static void fight_update_ai(FightFighter &me, FightFighter &enemy) {
     float dir        = (enemy.x>me.x)?1.f:-1.f;
     me.facing_right  = (dir>0.f);
     float aggression = 0.45f+(1.f-me.hp)*0.55f;
+    
+    // Animals are more aggressive!
+    if (me.opp_type == OPP_CHICKEN) {
+        aggression = fmaxf(aggression, 0.6f);  // at least 60% aggression
+    } else if (me.opp_type == OPP_LION) {
+        aggression = fmaxf(aggression, 0.85f);  // at least 85% aggression for lions
+    }
+    
     bool  retreating = (me.hp<0.30f);
     float r = frand();
 
