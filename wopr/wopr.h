@@ -11,7 +11,8 @@
 //   - 300-baud simulated login sequence (FALKEN / JOSHUA)
 //   - WOPR game menu
 //   - Playable: Tic-Tac-Toe, Chess, Minesweeper, Falken's Maze,
-//               Global Thermonuclear War, Zork, Willy the Worm
+//               Global Thermonuclear War, Zork, Willy the Worm,
+//               Strategic Defense Initiative
 // ============================================================================
 
 enum class WoprPhase {
@@ -31,6 +32,7 @@ enum class WoprPhase {
     PLAYING_ZORK,
     PLAYING_BASIC,
     PLAYING_WILLY,    // Willy the Worm
+    PLAYING_SDI,      // Strategic Defense Initiative
     FAREWELL,         // "A STRANGE GAME..." on exit
 };
 
@@ -46,6 +48,7 @@ enum class WoprGame {
     BASIC,
     WIZARD,
     WILLY_WORM,
+    SDI,
     // Sentinel
     COUNT
 };
@@ -214,3 +217,12 @@ void wopr_willy_free(WoprState *w);
 void wopr_willy_mousedown(WoprState *w, int x, int y, int button);
 void wopr_willy_mouseup(WoprState *w, int x, int y, int button);
 void wopr_willy_textinput(WoprState *w, const char *text);
+
+// Strategic Defense Initiative (Missile Command)
+void wopr_sdi_enter(WoprState *w);
+void wopr_sdi_update(WoprState *w, double dt);
+void wopr_sdi_render(WoprState *w, int x, int y, int cw, int ch, int cols);
+bool wopr_sdi_keydown(WoprState *w, SDL_Keycode sym);
+void wopr_sdi_free(WoprState *w);
+void wopr_sdi_mousedown(WoprState *w, int x, int y, int button);
+void wopr_sdi_mousemove(WoprState *w, int x, int y);

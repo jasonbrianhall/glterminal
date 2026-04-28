@@ -95,8 +95,9 @@ static const GameEntry GAMES[] = {
     /*{ "BASIC",                    "BASIC",       WoprGame::BASIC      }, */
     { "WIZARD'S CASTLE",          "WIZARD",      WoprGame::WIZARD     },
     { "WILLY THE WORM",           "WILLY",       WoprGame::WILLY_WORM },
+    { "STRATEGIC DEFENSE INIT",   "SDI",         WoprGame::SDI        },
 };
-static const int GAME_COUNT = 9;
+static const int GAME_COUNT = 10;
 
 static const char *VALID_USER = "FALKEN";
 static const char *VALID_PASS = "JOSHUA";
@@ -297,6 +298,17 @@ static void launch_game(WoprState *w, WoprGame game) {
             push_line(w, "");
             set_phase(w, WoprPhase::PLAYING_WILLY);
             wopr_willy_enter(w);
+            break;
+
+        case WoprGame::SDI:
+            push_line(w, "INITIATING: STRATEGIC DEFENSE INITIATIVE");
+            push_line(w, "");
+            push_line(w, "  MISSILE DEFENSE NETWORK ONLINE...");
+            push_line(w, "  RADAR SYSTEMS ACTIVATED");
+            push_line(w, "  DEFENSIVE PLATFORMS ARMED");
+            push_line(w, "");
+            set_phase(w, WoprPhase::PLAYING_SDI);
+            wopr_sdi_enter(w);
             break;
 
         default: break;
@@ -832,6 +844,7 @@ void wopr_update(double dt) {
     case WoprPhase::PLAYING_ZORK:  wopr_zork_update(w, dt);  break;
     case WoprPhase::PLAYING_BASIC: wopr_basic_update(w, dt); break;
     case WoprPhase::PLAYING_WILLY: wopr_willy_update(w, dt); break;
+    case WoprPhase::PLAYING_SDI:   wopr_sdi_update(w, dt);   break;
 
     case WoprPhase::FAREWELL:
         if (crawl_done(w) && w->phase_timer > 2.5)
@@ -890,7 +903,9 @@ void wopr_render(int win_w, int win_h) {
         case WoprPhase::PLAYING_WILLY:
             wopr_willy_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
             in_subgame = true; break;
-        default: break;
+        case WoprPhase::PLAYING_SDI:
+            wopr_sdi_render(w, (int)x0, (int)y0, (int)cw, (int)ch, (int)(area_w/cw));
+            in_subgame = true; break;
     }
     if (in_subgame) { gl_flush_verts(); return; }
 
@@ -1054,6 +1069,7 @@ static bool sub_back(WoprState *w) {
         case WoprPhase::PLAYING_ZORK:  wopr_zork_free(w);  break;
         case WoprPhase::PLAYING_BASIC: wopr_basic_free(w); break;
         case WoprPhase::PLAYING_WILLY: wopr_willy_free(w); break;
+        case WoprPhase::PLAYING_SDI:   wopr_sdi_free(w);   break;
         default: return false;
     }
     push_line(w, "");
@@ -1105,6 +1121,9 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
         case WoprPhase::PLAYING_WILLY:
             if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
             return wopr_willy_keydown(w, sym);
+        case WoprPhase::PLAYING_SDI:
+            if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
+            return wopr_sdi_keydown(w, sym);
         default: break;
     }
 
@@ -1262,6 +1281,7 @@ bool wopr_mousedown(int x, int y, int button) {
         case WoprPhase::PLAYING_MINES: wopr_mines_mousedown(w, x, y, button); break;
         case WoprPhase::PLAYING_WAR:   wopr_war_mousedown(w, x, y, button);   break;
         case WoprPhase::PLAYING_WILLY: wopr_willy_mousedown(w, x, y, button); break;
+        case WoprPhase::PLAYING_SDI:   wopr_sdi_mousedown(w, x, y, button);   break;
         default: break;
     }
     return true;
@@ -1276,6 +1296,7 @@ bool wopr_mousemove(int x, int y) {
         case WoprPhase::PLAYING_CHECKERS: wopr_checkers_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_WAR:   wopr_war_mousemove(w, x, y);   break;
+        case WoprPhase::PLAYING_SDI:   wopr_sdi_mousemove(w, x, y);   break;
         default: break;
     }
     return true;
@@ -1305,6 +1326,7 @@ bool wopr_mousewheel(int delta) {
         case WoprPhase::PLAYING_MAZE:
         case WoprPhase::PLAYING_WAR:
         case WoprPhase::PLAYING_WILLY:
+        case WoprPhase::PLAYING_SDI:
             return true;   // consume without scrolling
         default: break;
     }
