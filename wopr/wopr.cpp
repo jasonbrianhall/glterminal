@@ -194,7 +194,7 @@ static void enter_shell(WoprState *w) {
     set_phase(w, WoprPhase::GAME_MENU);
 }
 
-static std::string normalise(const std::string &s) {
+static std::string normalize(const std::string &s) {
     std::string r;
     bool sp = true;
     for (char c : s) {
@@ -316,7 +316,7 @@ static void launch_game(WoprState *w, WoprGame game) {
 }
 
 static void do_command(WoprState *w, const std::string &raw) {
-    std::string cmd = normalise(raw);
+    std::string cmd = normalize(raw);
     if (cmd.empty()) { push_line(w, ""); return; }
 
     // Echo with prompt
