@@ -1,5 +1,12 @@
 # Felix Terminal
 
+<a href="https://get.microsoft.com/installer/download/9ns1cjk9vt7q?referrer=appbadge" target="_self" >
+	<img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200"/>
+</a>
+
+[![Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://get.microsoft.com/installer/download/9ns1cjk9vt7q?referrer=appbadge)
+
+
 ![Felix the Lovebird](icon.png)
 
 *Felix — the chaos birdie himself*
