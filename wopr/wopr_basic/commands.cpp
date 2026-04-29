@@ -1,5 +1,5 @@
 /*
- * commands.c — All BASIC command handlers, command registration table,
+ * commands.c All BASIC command handlers, command registration table,
  *              statement splitter, and dispatcher.
  */
 #include "basic.h"
@@ -12,7 +12,7 @@
 #endif
 
 #ifdef USE_SDL_WINDOW
-/* Forward declarations — defined at global scope in basic_gfx_sdl.cpp. */
+/* Forward declarations  defined at global scope in basic_gfx_sdl.cpp. */
 bool gfx_sdl_pump(void);
 void gfx_sdl_render(void);
 #endif
@@ -24,7 +24,7 @@ void gfx_screen_ex(int mode, int colorswitch, int apage, int vpage);
 
 BASIC_NS_BEGIN
 
-/* Current Graphics Position — updated by PSET, PRESET, LINE endpoint */
+/* Current Graphics Position  updated by PSET, PRESET, LINE endpoint */
 static double g_gfx_x = 0.0, g_gfx_y = 0.0;
 
 /* Resolve a color value from _RGB() encoding (0x01RRGGBB) to a raw 0x00RRGGBB
@@ -32,7 +32,7 @@ static double g_gfx_x = 0.0, g_gfx_y = 0.0;
  * in palette mode gfx_* takes only the low 4 bits (palette index). */
 static int color_resolve(long packed) {
     if ((packed & 0xFF000000L) == 0x01000000L)
-        return (int)(packed & 0x00FFFFFFu);  /* strip our flag byte → 0x00RRGGBB */
+        return (int)(packed & 0x00FFFFFFu);  /* strip our flag byte  0x00RRGGBB */
     return (int)(packed & 0x00FFFFFFu);      /* already a plain value */
 }
 
@@ -50,7 +50,7 @@ static void tilde_expand(char *buf, int bufsz) {
 }
 
 /* ================================================================
- * Stack trace helper — prints current line and GOSUB call chain,
+ * Stack trace helper  prints current line and GOSUB call chain,
  * then exits.  Called from stack overflow and other fatal errors.
  * ================================================================ */
 static void basic_stacktrace(const char *reason) {
@@ -114,20 +114,20 @@ static void print_using(char *fmt, double val) {
 }
 
 /* ================================================================
- * Graphics backend — two compile paths:
+ * Graphics backend  two compile paths:
  *
- *   USE_SDL_WINDOW  → call basic_gfx.h functions directly (SDL pixel buffer)
- *   (default)       → emit OSC 666 escape sequences to stdout (Felix terminal)
+ *   USE_SDL_WINDOW   call basic_gfx.h functions directly (SDL pixel buffer)
+ *   (default)        emit OSC 666 escape sequences to stdout (Felix terminal)
  * ================================================================ */
 
-/* Current screen state — updated by SCREEN, read by graphics cmds */
+/* Current screen state  updated by SCREEN, read by graphics cmds */
 int g_screen_mode   = 0;
 int g_screen_width  = 640;
 int g_screen_height = 350;
 int g_back_color    = 0;   /* palette index used by CLS */
 
 #ifdef USE_SDL_WINDOW
-/* ── SDL direct path ────────────────────────────────────────────────────── */
+/*  SDL direct path  */
 #include "basic_gfx.h"
 #include "basic_gfx_sdl.h"
 
@@ -138,7 +138,7 @@ static void felix_draw(char *)  {}
 static void felix_drawf(char *, ...) {}
 
 #else
-/* ── OSC 666 escape-code path (original Felix terminal protocol) ─────────── */
+/*  OSC 666 escape-code path (original Felix terminal protocol)  */
 #include <unistd.h>
 
 static void felix_send(char *cmd) {
@@ -171,11 +171,7 @@ static void felix_drawf(char *fmt, ...) {
     felix_draw(buf);
 }
 #endif /* USE_SDL_WINDOW */
-/* EGA 64-colour palette: index → (r,g,b) in 0-255 range.
- * Gorilla uses PALETTE idx, ega_color where ega_color is a 6-bit EGA value
- * (bits 5-4-3 = RGB high, bits 2-1-0 = rgb low).
- * For simplicity we map the 16 standard EGA display colours (0-15) and
- * treat any value ≥ 16 as a 6-bit EGA palette entry. */
+ 
 static void ega_to_rgb(int ega6, int *r, int *g, int *b) {
     /* QB SCREEN 9 PALETTE color-number to RGB.
      * Colors 0-15: standard CGA 16-color table (hardcoded, includes brown/gray).
@@ -201,7 +197,7 @@ static void ega_to_rgb(int ega6, int *r, int *g, int *b) {
     *r = rb * 85; *g = gb * 85; *b = bb * 85;
 }
 
-/* Screen mode → (width, height) */
+/* Screen mode  (width, height) */
 static void screen_dims(int mode, int *w, int *h) {
     static const struct { int m, w, h; } modes[] = {
         {1,320,200},{2,640,200},{3,720,348},{4,640,400},{5,160,100},
@@ -217,7 +213,7 @@ static void screen_dims(int mode, int *w, int *h) {
     *w = 640; *h = 350;
 }
 
-/* Sprite ID registry: maps array variable pointer → sprite ID */
+/* Sprite ID registry: maps array variable pointer  sprite ID */
 #define MAX_SPRITES 64
 static struct { Var *var; int id; } g_sprites[MAX_SPRITES];
 static int g_nsprites = 0;
@@ -260,7 +256,7 @@ static int cmd_defseg(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
 static int cmd_defdbl(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
 static int cmd_key(Interp *ip, char *args)    { (void)ip;(void)args; return 0; }
 /* ----------------------------------------------------------------
- * cmd_run — RUN [linenum | "filename"]
+ * cmd_run  RUN [linenum | "filename"]
  *
  *   RUN              reset vars/stack/data, run from the first line
  *   RUN 500          reset, run from line 500
@@ -271,7 +267,7 @@ static int cmd_run(Interp *ip, char *args) {
     char *p = sk(args);
 
     if (*p == '"' || *p == '\'') {
-        /* RUN "filename" — load file then run it */
+        /* RUN "filename"  load file then run it */
         char name[DEFAULT_BUFFER];
         char q = *p++;
         int ni = 0;
@@ -318,7 +314,7 @@ static int cmd_fullscreen(Interp *ip, char *args) {
 #ifdef USE_SDL_WINDOW
     char *p = sk(args);
     if (*p == '\0' || *p == ':') {
-        // No argument — always enter fullscreen
+        // No argument  always enter fullscreen
         gfx_sdl_set_fullscreen(true);
     } else {
         // Argument: 0 = windowed, non-zero = fullscreen
@@ -334,7 +330,7 @@ static int cmd_fullscreen(Interp *ip, char *args) {
     return 0;
 }
 
-/* DELAY t# / SLEEP t# — pause for t# seconds (QB64 built-ins) */
+/* DELAY t# / SLEEP t#  pause for t# seconds (QB64 built-ins) */
 static int cmd_delay(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
@@ -366,7 +362,7 @@ static int cmd_screen(Interp *ip, char *args) {
     auto next_arg = [&](long def) -> long {
         if (*p == ',') {
             p = sk(p + 1);
-            if (*p == ',' || *p == ':' || *p == ' ') return def;
+            if (*p == ',' || *p == ':' || *p == '\00') return def;
             mpf_t n; mpf_init2(n, g_prec);
             p = sk(eval_expr(p, n));
             long v = mpf_get_si(n); mpf_clear(n);
@@ -417,7 +413,7 @@ static int cmd_beep(Interp *ip, char *args) {
     return 0;
 }
 
-/* SOUND freq, duration  — freq in Hz, duration in 18.2-tick clock units */
+/* SOUND freq, duration   freq in Hz, duration in 18.2-tick clock units */
 static int cmd_sound(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
@@ -430,7 +426,7 @@ static int cmd_sound(Interp *ip, char *args) {
     return 0;
 }
 
-/* PLAY "mml-string" — GW-BASIC Music Macro Language */
+/* PLAY "mml-string"  GW-BASIC Music Macro Language */
 static int cmd_play(Interp *ip, char *args) {
     (void)ip;
     char mml[1024];
@@ -613,7 +609,7 @@ static int cmd_cls(Interp *ip, char *args) {
         (void)arg;
 #ifdef USE_SDL_WINDOW
         gfx_cls(c);
-        /* display_cls() intentionally NOT called here — gfx_cls() already
+        /* display_cls() intentionally NOT called here  gfx_cls() already
          * clears both the pixel buffer and the text grid, and display_cls()
          * would overwrite with s_cur_bg (color 0), losing the CLS argument. */
 #else
@@ -647,7 +643,7 @@ static int cmd_color(Interp *ip, char *args) {
     char *p = sk(args);
     mpf_t fg, bg; mpf_init2(fg, g_prec); mpf_init2(bg, g_prec);
     mpf_set_ui(fg, 7); mpf_set_ui(bg, 0);
-    if (!*p) { mpf_clears(fg, bg, NULL); return 0; } /* bare COLOR — no-op */
+    if (!*p) { mpf_clears(fg, bg, NULL); return 0; } /* bare COLOR  no-op */
     if (*p != ',') p = eval_expr(p, fg);
     p = sk(p);
     if (*p == ',') { p = sk(p + 1); if (*p) p = eval_expr(p, bg); }
@@ -723,9 +719,9 @@ static int eval_bool_expr(char **pp) {
     return result;
 }
 
-/* DO [WHILE|UNTIL cond] — push a loop frame pointing at the DO statement */
+/* DO [WHILE|UNTIL cond]  push a loop frame pointing at the DO statement */
 static int cmd_do(Interp *ip, char *args) {
-    /* When LOOP sends us back here, the frame already exists — don't push again.
+    /* When LOOP sends us back here, the frame already exists  don't push again.
      * But we must still re-check any DO WHILE / DO UNTIL condition. */
     if (g_ctrl_top > 0 &&
         strcmp(g_ctrl[g_ctrl_top - 1].varname, "\x02" "DO") == 0 &&
@@ -873,13 +869,13 @@ static int cmd_while(Interp *ip, char *args) {
     }
 }
 
-/* WEND — jump back to the matching WHILE; WHILE will pop if condition fails */
+/* WEND  jump back to the matching WHILE; WHILE will pop if condition fails */
 static int cmd_wend(Interp *ip, char *args) {
     (void)args;
     int fi = g_ctrl_top - 1;
     while (fi >= 0 && strcmp(g_ctrl[fi].varname, "\x03" "WHILE") != 0) fi--;
     if (fi < 0) { basic_stderr("WEND without WHILE\n"); return -1; }
-    ip->pc = g_ctrl[fi].line_idx;   /* jump to WHILE line — it re-evaluates & pops if done */
+    ip->pc = g_ctrl[fi].line_idx;   /* jump to WHILE line  it re-evaluates & pops if done */
     return 1;
 }
 
@@ -911,7 +907,7 @@ static int cmd_select(Interp *ip, char *args) {
     /* skip optional CASE keyword after SELECT */
     if (kw_match(p, "CASE")) p = sk(p + 4);
 
-    /* Evaluate the selector — could be string or numeric */
+    /* Evaluate the selector  could be string or numeric */
     char sel_s[1024] = ""; double sel_n = 0; int sel_is_str = 0;
     if (is_str_token(p)) {
         eval_str_expr(p, sel_s, sizeof sel_s);
@@ -929,7 +925,7 @@ static int cmd_select(Interp *ip, char *args) {
         char *t = sk(g_lines[pc].text);
 
         if (kw_match(t, "END") && kw_match(sk(t + 3), "SELECT")) {
-            ip->pc = pc + 1; return 1;    /* no match — skip to END SELECT */
+            ip->pc = pc + 1; return 1;    /* no match  skip to END SELECT */
         }
 
         if (!kw_match(t, "CASE")) { pc++; continue; }
@@ -999,7 +995,7 @@ static int cmd_select(Interp *ip, char *args) {
 
 static int cmd_case(Interp *ip, char *args) {
     (void)args;
-    /* Reached a CASE line during normal execution — a prior CASE body just
+    /* Reached a CASE line during normal execution  a prior CASE body just
      * finished.  Jump forward to END SELECT at the same nesting depth. */
     int depth = 0, pc = ip->pc + 1;
     while (pc < g_nlines) {
@@ -1075,14 +1071,14 @@ static int cmd_exit(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * REDIM — same as DIM for our purposes (we don't track initialisation)
+ * REDIM  same as DIM for our purposes (we don't track initialisation)
  * ================================================================ */
 static int cmd_redim(Interp *ip, char *args) {
     return cmd_dim(ip, args);
 }
 
 /* ================================================================
- * ON ERROR GOTO / RESUME — stub implementations
+ * ON ERROR GOTO / RESUME  stub implementations
  * We don't support full error trapping, but we need these to not crash.
  * ON ERROR GOTO 0 disables any pending handler (no-op for us).
  * RESUME NEXT advances past the erroring line (no-op in stub).
@@ -1092,11 +1088,11 @@ static int cmd_on_error(Interp *ip, char *args) {
     if (kw_match(p, "GOTO")) {
         p = sk(p + 4);
         if (*p == '0' && !isalnum((unsigned char)p[1])) {
-            /* ON ERROR GOTO 0 — disable handler */
+            /* ON ERROR GOTO 0  disable handler */
             g_error_handler[0] = '\0';
             return 0;
         }
-        /* Register handler label/line — do NOT jump now */
+        /* Register handler label/line  do NOT jump now */
         int i = 0;
         while (*p && !isspace((unsigned char)*p) && i < MAX_VARNAME - 1)
             g_error_handler[i++] = *p++;
@@ -1116,10 +1112,10 @@ static int cmd_resume(Interp *ip, char *args) {
         }
         return 0;
     }
-    /* RESUME [line] — retry the line that caused the error, or jump to line */
+    /* RESUME [line]  retry the line that caused the error, or jump to line */
     p = sk(p);
     if (isdigit((unsigned char)*p) || isalpha((unsigned char)*p)) {
-        /* RESUME line_number — jump there */
+        /* RESUME line_number  jump there */
         char target[MAX_VARNAME]; int i = 0;
         while ((*p && !isspace((unsigned char)*p)) && i < MAX_VARNAME-1)
             target[i++] = *p++;
@@ -1136,12 +1132,12 @@ static int cmd_resume(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * WRITE — like PRINT but comma-separated with strings quoted
+ * WRITE  like PRINT but comma-separated with strings quoted
  * ================================================================ */
 static int cmd_write(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
-    /* WRITE #n — file output */
+    /* WRITE #n  file output */
     if (*p == '#') {
         p = sk(p + 1);
         mpf_t n; mpf_init2(n, g_prec);
@@ -1206,7 +1202,7 @@ static int cmd_write(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * TRON / TROFF — trace mode
+ * TRON / TROFF  trace mode
  * ================================================================ */
 static int cmd_tron(Interp *ip, char *args) {
     (void)ip; (void)args;
@@ -1220,7 +1216,7 @@ static int cmd_troff(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * ERROR n — raise a BASIC error (triggers ON ERROR handler)
+ * ERROR n  raise a BASIC error (triggers ON ERROR handler)
  * ================================================================ */
 static int cmd_error(Interp *ip, char *args) {
     mpf_t n; mpf_init2(n, g_prec);
@@ -1239,7 +1235,7 @@ static int cmd_error(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * LPRINT / LLIST — printer stubs (redirect to stdout)
+ * LPRINT / LLIST  printer stubs (redirect to stdout)
  * ================================================================ */
 static int cmd_print(Interp *ip, char *args);  /* forward */
 static int cmd_lprint(Interp *ip, char *args) {
@@ -1248,12 +1244,12 @@ static int cmd_lprint(Interp *ip, char *args) {
 }
 static int cmd_llist(Interp *ip, char *args) {
     (void)ip; (void)args;
-    /* Silently ignore — no printer */
+    /* Silently ignore  no printer */
     return 0;
 }
 
 /* ================================================================
- * OUT port, val / WAIT port, mask — hardware stubs
+ * OUT port, val / WAIT port, mask  hardware stubs
  * ================================================================ */
 static int cmd_out(Interp *ip, char *args) {
     (void)ip;
@@ -1273,7 +1269,7 @@ static int cmd_motor(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * VIEW PRINT [top TO bottom] — set text viewport (stub: just clear)
+ * VIEW PRINT [top TO bottom]  set text viewport (stub: just clear)
  * ================================================================ */
 static int cmd_view_print(Interp *ip, char *args) {
     (void)ip; (void)args;
@@ -1282,7 +1278,7 @@ static int cmd_view_print(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * PALETTE idx, ega_color — maps EGA palette slot to display colour.
+ * PALETTE idx, ega_color  maps EGA palette slot to display colour.
  * gorilla.bas uses PALETTE 4, 0 style (EGA 6-bit color number).
  * ================================================================ */
 static int cmd_palette(Interp *ip, char *args) {
@@ -1325,14 +1321,14 @@ static int cmd_palette(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * POKE addr, val — stub
+ * POKE addr, val  stub
  * ================================================================ */
 static int cmd_poke(Interp *ip, char *args) {
     (void)ip; (void)args; return 0;
 }
 
 /* ================================================================
- * END SUB / END FUNCTION / END SELECT — handled by their parent,
+ * END SUB / END FUNCTION / END SELECT  handled by their parent,
  * but we need them registered so they don't print "unknown".
  * END IF is similar.
  * ================================================================ */
@@ -1347,7 +1343,7 @@ static int cmd_end_sub(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * CALL subname [args] — for now, treat as GOSUB to label
+ * CALL subname [args]  for now, treat as GOSUB to label
  * ================================================================ */
 static int cmd_call(Interp *ip, char *args) {
     char *p = sk(args);
@@ -1356,7 +1352,7 @@ static int cmd_call(Interp *ip, char *args) {
         name[i++] = *p++;
     name[i] = '\0';
 
-    /* p now points past the name — skip optional parens/spaces to call-site args */
+    /* p now points past the name  skip optional parens/spaces to call-site args */
     p = sk(p);
     if (*p == '(') p = sk(p + 1);
 
@@ -1403,7 +1399,7 @@ static int cmd_call(Interp *ip, char *args) {
             cs = sk(cs);
             if (!*cs || *cs == ')') break;
 
-            /* Array passed by reference: "ArrName()" — skip it, all vars are global */
+            /* Array passed by reference: "ArrName()"  skip it, all vars are global */
             {
                 char *look = cs;
                 while (isalnum((unsigned char)*look) || *look == '_') look++;
@@ -1411,7 +1407,7 @@ static int cmd_call(Interp *ip, char *args) {
                 if (*look == '(') {
                     char *inner = sk(look + 1);
                     if (*inner == ')') {
-                        /* bare "()" — array ref, skip the whole token */
+                        /* bare "()"  array ref, skip the whole token */
                         cs = sk(inner + 1);
                         if (*cs == ',') cs = sk(cs + 1);
                         if (*ps == ',') ps = sk(ps + 1);
@@ -1445,7 +1441,7 @@ static int cmd_call(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * STATIC — variable declaration inside a SUB, treat like DIM
+ * STATIC  variable declaration inside a SUB, treat like DIM
  * ================================================================ */
 static int cmd_static(Interp *ip, char *args) {
     return cmd_dim(ip, args);
@@ -1469,7 +1465,7 @@ static int cmd_const(Interp *ip, char *args) {
             val[i] = '\0';
             const_set(name, val, 1);
         } else {
-            /* numeric — store the raw expression text for lazy eval */
+            /* numeric  store the raw expression text for lazy eval */
             char *start = p;
             /* consume until comma or end (skipping parens) */
             int depth = 0;
@@ -1495,12 +1491,12 @@ static int cmd_const(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * DIM — strip optional AS typename suffix before processing
+ * DIM  strip optional AS typename suffix before processing
  * ================================================================ */
 static int cmd_dim(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
-    /* SHARED keyword — skip it, all our vars are already global */
+    /* SHARED keyword  skip it, all our vars are already global */
     if (kw_match(p, "SHARED")) p = sk(p + 6);
     while (*p && *p != '\'') {
         char name[MAX_VARNAME];
@@ -1551,7 +1547,7 @@ static int cmd_dim(Interp *ip, char *args) {
             }
         }
         p = sk(p);
-        /* skip optional AS typename — e.g. "AS INTEGER", "AS PlayerData" */
+        /* skip optional AS typename  e.g. "AS INTEGER", "AS PlayerData" */
         if (kw_match(p, "AS")) {
             p = sk(p + 2);
             /* read the type name */
@@ -1630,7 +1626,7 @@ static int cmd_let(Interp *ip, char *args) {
                 if (is_str_token(after)) {
                     char sbuf[1024];
                     eval_str_expr(after, sbuf, sizeof sbuf);
-                    /* store as string — append $ sigil if not present */
+                    /* store as string  append $ sigil if not present */
                     char sname[MAX_VARNAME];
                     snprintf(sname, sizeof sname, "%s$", flatname);
                     Var *v = var_get(sname);
@@ -1979,7 +1975,7 @@ static int cmd_line_input_file(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * GET/PUT graphics — Felix sprite capture/blit.
+ * GET/PUT graphics  Felix sprite capture/blit.
  * GET (x1,y1)-(x2,y2), array_var
  * PUT (x,y), array_var [, PSET|XOR]
  * ================================================================ */
@@ -2069,7 +2065,7 @@ static int cmd_put_graphics(Interp *ip, char *args) {
 }
 
 static int cmd_draw(Interp *ip, char *args) {
-    (void)ip; (void)args; return 0;  /* DRAW string mini-language — not needed for gorilla */
+    (void)ip; (void)args; return 0;  /* DRAW string mini-language  not needed for gorilla */
 }
 
 /* ================================================================
@@ -2087,7 +2083,7 @@ static int cmd_circle(Interp *ip, char *args) {
     long color_raw = 15;
     if (*p == ',') {
         p = sk(p + 1);
-        if (*p != ',' && *p != ' ' && *p != ':') {
+        if (*p != ',' && *p != '\00' && *p != ':') {
             mpf_t mc; mpf_init2(mc, g_prec);
             p = sk(eval_expr(p, mc));
             color_raw = mpf_get_si(mc); mpf_clear(mc);
@@ -2107,7 +2103,7 @@ static int cmd_circle(Interp *ip, char *args) {
         double val = mpf_get_d(tmp); mpf_clear(tmp);
         if (arg_n == 0)      { start_angle = val; has_arc = 1; }
         else if (arg_n == 1) { end_angle   = val; has_arc = 1; }
-        /* arg_n==2 is aspect ratio — ignored */
+        /* arg_n==2 is aspect ratio  ignored */
         arg_n++;
     }
 #ifdef USE_SDL_WINDOW
@@ -2230,7 +2226,7 @@ static int cmd_pset(Interp *ip, char *args) {
 }
 
 /* ================================================================
- * PRESET (x, y) [, color]   — like PSET but default color is 0 (background)
+ * PRESET (x, y) [, color]    like PSET but default color is 0 (background)
  * ================================================================ */
 static int cmd_preset(Interp *ip, char *args) {
     (void)ip;
@@ -2255,8 +2251,8 @@ static int cmd_preset(Interp *ip, char *args) {
 
 /* ================================================================
  * Utility: build a flat variable name for struct field access.
- * "PDat(2).PNam" → "PDAT.2.PNAM"
- * "Settings.UseSound" → "SETTINGS.USESOUND"
+ * "PDat(2).PNam"  "PDAT.2.PNAM"
+ * "Settings.UseSound"  "SETTINGS.USESOUND"
  * Result written into out (must be MAX_VARNAME bytes).
  * Returns pointer past the parsed text, or NULL on failure.
  * ================================================================ */
@@ -2576,7 +2572,7 @@ static int cmd_if(Interp *ip, char *args) {
     p = sk(p);
     if (kw_match(p, "THEN")) p = sk(p + 4);
 
-    /* ── Single-line IF: something follows THEN on the same line ── */
+    /*  Single-line IF: something follows THEN on the same line  */
     if (*p && *p != '\'' && *p != '\0') {
         char *else_p = find_else(p);
         if (result) {
@@ -2601,9 +2597,9 @@ static int cmd_if(Interp *ip, char *args) {
         }
     }
 
-    /* ── Block IF: nothing (or comment) after THEN ── */
+    /*  Block IF: nothing (or comment) after THEN  */
     if (result) {
-        /* Execute the body — run loop will hit ELSEIF/ELSE/END IF naturally.
+        /* Execute the body  run loop will hit ELSEIF/ELSE/END IF naturally.
          * We just advance into the body; the ELSEIF/ELSE/END IF handlers
          * will skip the remaining branches. */
         ip->pc++;
@@ -2623,18 +2619,18 @@ static int cmd_if(Interp *ip, char *args) {
             ip->pc = branch + 1;
             return 1;
         } else {
-            /* END IF — step past it */
+            /* END IF  step past it */
             ip->pc = branch + 1;
             return 1;
         }
     }
 }
 
-/* ELSEIF / ELSE / END IF — only reached when we're executing a taken branch
+/* ELSEIF / ELSE / END IF  only reached when we're executing a taken branch
  * and need to skip to END IF */
 static int cmd_elseif(Interp *ip, char *args) {
     (void)args;
-    /* We're inside a taken IF/ELSEIF branch and have hit the next ELSEIF —
+    /* We're inside a taken IF/ELSEIF branch and have hit the next ELSEIF 
      * skip forward to END IF */
     int end = find_block_branch(ip->pc + 1);
     /* find_block_branch stops at ELSEIF/ELSE/END IF; keep skipping until END IF */
@@ -2649,7 +2645,7 @@ static int cmd_elseif(Interp *ip, char *args) {
 
 static int cmd_else(Interp *ip, char *args) {
     (void)args;
-    /* Reached ELSE while executing a taken IF branch — skip to END IF */
+    /* Reached ELSE while executing a taken IF branch  skip to END IF */
     int depth = 0;
     int pc = ip->pc + 1;
     while (pc < g_nlines) {
@@ -2682,7 +2678,7 @@ static int cmd_restore(Interp *ip, char *args) {
         g_data_pos = 0;
         return 0;
     }
-    /* RESTORE label or RESTORE linenum — seek to first DATA item at or after that line */
+    /* RESTORE label or RESTORE linenum  seek to first DATA item at or after that line */
     int target_idx = -1;
     if (isdigit((unsigned char)*p)) {
         int linenum = atoi(p);
@@ -2699,7 +2695,7 @@ static int cmd_restore(Interp *ip, char *args) {
     for (int i = 0; i < g_data_count; i++) {
         if (g_data_line[i] >= target_idx) { g_data_pos = i; return 0; }
     }
-    g_data_pos = g_data_count;  /* past end — no data found after label */
+    g_data_pos = g_data_count;  /* past end  no data found after label */
     return 0;
 }
 
@@ -2850,7 +2846,7 @@ const Command commands[] = {
     { "WHILE",      cmd_while      },
     { "WEND",       cmd_wend       },
     { "SELECT",     cmd_select     },
-    { "CASE",       cmd_case       },  /* reached after a case body completes — jump to END SELECT */
+    { "CASE",       cmd_case       },  /* reached after a case body completes  jump to END SELECT */
     { "GOTO",       cmd_goto       },
     { "GOSUB",      cmd_gosub      },
     { "RETURN",     cmd_return     },
@@ -2893,7 +2889,7 @@ const Command commands[] = {
 };
 
 /* ================================================================
- * Statement splitter — splits a line on unquoted colons
+ * Statement splitter  splits a line on unquoted colons
  * ================================================================ */
 static int split_statements(char *line, char *segs[], char **buf_out) {
     char *buf = str_dup(line);
@@ -2941,7 +2937,7 @@ static void print_mpf(mpf_t val) {
     int exp = ep ? atoi(ep + 1) : 0;
 
     if (exp >= -6 && exp <= 15) {
-        /* Plain decimal — figure out decimal places needed */
+        /* Plain decimal  figure out decimal places needed */
         int dp = PRINT_DIGITS - exp;
         if (dp < 0) dp = 0;
         if (dp > PRINT_DIGITS) dp = PRINT_DIGITS;
@@ -2953,7 +2949,7 @@ static void print_mpf(mpf_t val) {
             if (*end == '.') *end = '\0';
         }
     } else {
-        /* Scientific notation — trim trailing zeros in significand */
+        /* Scientific notation  trim trailing zeros in significand */
         gmp_snprintf(buf, bufsz, "%.*Fe", PRINT_DIGITS, val);
         char *e = strchr(buf, 'e');
         if (e) {
@@ -3001,7 +2997,7 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
         if (*after == '=') return cmd_let(ip, p);
         /* struct field: name.field = ... */
         if (*after == '.') return cmd_let(ip, p);
-        /* name(...) — peek past the argument list to decide: assignment or bare expression */
+        /* name(...)  peek past the argument list to decide: assignment or bare expression */
         if (*after == '(') {
             char *peek = after + 1;
             int depth = 1;
@@ -3015,7 +3011,7 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
             if (*peek == '.') return cmd_let(ip, p);
             /* array assignment: arr(i) = ... */
             if (*peek == '=') return cmd_let(ip, p);
-            /* No '=' — treat as a bare numeric expression and print the result.
+            /* No '='  treat as a bare numeric expression and print the result.
              * Handles: tan(5), sin(3.14), sqr(2), (3+4)*2, etc. */
             {
                 mpf_t result; mpf_init2(result, g_prec);
