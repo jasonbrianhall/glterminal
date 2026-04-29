@@ -473,14 +473,13 @@ void load(char *filename) {
             char *np = strncasecmp(p, "SUB ", 4) == 0 ? p + 4 : p + 9;
             while (isspace((unsigned char)*np)) np++;
             char subname[MAX_VARNAME]; int si = 0;
+            /* Read base name (alphanumeric + underscore) */
             while ((isalnum((unsigned char)*np) || *np == '_') && si < MAX_VARNAME - 1)
                 subname[si++] = (char)toupper((unsigned char)*np++);
-            /* strip type sigil (e.g. CalcDelay!) */
-            if (si > 0 && (subname[si-1] == '!' || subname[si-1] == '#' ||
-                           subname[si-1] == '%' || subname[si-1] == '&'))
-                subname[si-1] = '\0';
-            else
-                subname[si] = '\0';
+            /* Include type sigil if present (e.g. GetNum#, CalcDelay!) */
+            if ((*np == '#' || *np == '!' || *np == '%' || *np == '&') && si < MAX_VARNAME - 1)
+                subname[si++] = *np++;
+            subname[si] = '\0';
             if (subname[0]) {
                 /* point at the next pseudo line (the SUB line itself) */
                 if (pending_count < 8) {
