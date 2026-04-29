@@ -981,15 +981,9 @@ void gfx_screen_ex(int mode, int /*colorswitch*/, int apage, int vpage) {
     bool dims_changed = (s_gfx_w != gw || s_gfx_h != gh);
     s_gfx_w = gw; s_gfx_h = gh;
 
-    // CGA/EGA 200-line modes had non-square pixels (~2.4:1 aspect).
-    // Display them at the correct height so the image is not squished.
-    // 200-line: multiply display height by 12/5 (×2.4)
-    // 350-line: multiply display height by ~1.37 (close enough to square)
-    // 480-line and others: square pixels, no correction needed
-    int display_h;
-    if (gh == 200)      display_h = gw * 3 / 4;   // 640×200 → display as 640×480
-    else if (gh == 350) display_h = gw * 3 / 4;   // 640×350 → display as 640×480
-    else                display_h = gh;
+    // All CGA/EGA modes should display with 4:3 aspect ratio (like real monitors)
+    // Calculate display height to maintain 4:3 ratio
+    int display_h = (gw * 3) / 4;   // 4:3 aspect ratio
 
     if (dims_changed) {
         // Resize window to best integer scale that fits the display
