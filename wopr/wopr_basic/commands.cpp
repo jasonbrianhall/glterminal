@@ -1238,6 +1238,7 @@ static int cmd_error(Interp *ip, char *args) {
  * LPRINT / LLIST  printer stubs (redirect to stdout)
  * ================================================================ */
 static int cmd_print(Interp *ip, char *args);  /* forward */
+static int cmd_debug(Interp *ip, char *args);  /* forward */
 static int cmd_lprint(Interp *ip, char *args) {
     /* Treat exactly like PRINT */
     return cmd_print(ip, args);
@@ -1754,6 +1755,62 @@ static int cmd_print(Interp *ip, char *args) {
         else break;
     }
     if (!trailing_sep) display_newline();
+    return 0;
+}
+
+/* ================================================================
+ * DEBUG — like PRINT but outputs to SDL_Log instead of display
+ * ================================================================ */
+static int cmd_debug(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+
+    int trailing_sep = 0;
+    while (*p) {
+        trailing_sep = 0;
+        if (is_str_token(p)) {
+            if (kw_match(p, "SPC")) {
+                p = sk(p + 3); if (*p == '(') p++;
+                mpf_t n; mpf_init2(n, g_prec); p = eval_expr(sk(p), n);
+                int spaces = (int)mpf_get_si(n); mpf_clear(n);
+                p = sk(p); if (*p == ')') p = sk(p + 1);
+                for (int i = 0; i < spaces; i++) SDL_Log(" ");
+            } else if (kw_match(p, "TAB")) {
+                p = sk(p + 3); if (*p == '(') p++;
+                mpf_t n; mpf_init2(n, g_prec); p = eval_expr(sk(p), n);
+                p = sk(p); if (*p == ')') p = sk(p + 1);
+                mpf_clear(n);
+            } else {
+                char sbuf[1024];
+                p = eval_str_expr(p, sbuf, sizeof sbuf);
+                SDL_Log("%s", sbuf);
+            }
+        } else {
+            mpf_t val; mpf_init2(val, g_prec);
+            p = eval_expr(p, val);
+            double d = mpf_get_d(val);
+            if (d == floor(d) && fabs(d) < 1e15) {
+                if (d >= 0) SDL_Log(" %.0f ", d);
+                else        SDL_Log("%.0f ", d);
+            } else {
+                char buf[64];
+                snprintf(buf, sizeof buf, "%.7G", d);
+                if (strchr(buf, '.') && !strchr(buf, 'E')) {
+                    char *end = buf + strlen(buf) - 1;
+                    while (*end == '0') *end-- = '\0';
+                    if (*end == '.') *end = '\0';
+                }
+                if (d >= 0) SDL_Log(" %s ", buf);
+                else        SDL_Log("%s ", buf);
+            }
+            mpf_clear(val);
+        }
+        p = sk(p);
+        if (*p == ';') { trailing_sep = 1; p = sk(p + 1); }
+        else if (*p == ',') { SDL_Log("\t"); trailing_sep = 1; p = sk(p + 1); }
+        else break;
+    }
+    if (!trailing_sep) SDL_Log("\n");
     return 0;
 }
 
@@ -2823,6 +2880,7 @@ const Command commands[] = {
     { "CONST",      cmd_const      },
     { "LET",        cmd_let        },
     { "PRINT",      cmd_print      },
+    { "DEBUG",      cmd_debug      },
     { "CLS",        cmd_cls        },
     { "BEEP",       cmd_beep       },
     { "SOUND",      cmd_sound      },
