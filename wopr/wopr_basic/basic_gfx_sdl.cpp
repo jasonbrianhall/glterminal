@@ -98,6 +98,8 @@ static SDL_Texture         *s_gfx_tex = nullptr;
 static std::vector<Uint32>  s_pixels;          // ARGB, gfx_w × gfx_h
 static int                  s_gfx_w = 0, s_gfx_h = 0;
 static bool                 s_gfx_active = false;
+static int                  s_init_win_w = 800;  // Remember initial window size
+static int                  s_init_win_h = 600;
 static bool                 s_truecolor  = false;  // true when SCREEN _NEWIMAGE(...,32)
 
 // ============================================================================
@@ -325,6 +327,8 @@ static int  key_pop()  {
 // ============================================================================
 bool gfx_sdl_init(const char *title, int w, int h) {
     s_win_w = w; s_win_h = h;
+    s_init_win_w = w;  // Save initial dimensions
+    s_init_win_h = h;
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return false;
     }
@@ -749,6 +753,10 @@ void gfx_screen_ex(int mode, int /*colorswitch*/, int apage, int vpage) {
         for (int i = 0; i < GFX_MAX_PAGES; i++) s_pages[i].clear();
         s_gfx_w = s_gfx_h = 0;
         s_apage = s_vpage = 0;
+        // Restore window to initial size
+        if (s_window) SDL_SetWindowSize(s_window, s_init_win_w, s_init_win_h);
+        s_win_w = s_init_win_w;
+        s_win_h = s_init_win_h;
         ft_set_size_for_window();
         s_needs_render = true;
         return;
