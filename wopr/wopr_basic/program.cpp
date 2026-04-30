@@ -374,28 +374,8 @@ void load(char *filename) {
         char *p = buf;
         while (isspace((unsigned char)*p)) p++;
 
-        /* Preserve blank lines and comments as statements (for round-trip fidelity) */
+        /* Skip blank and comment-only lines (they can't be GOTO targets) */
         if (!*p || *p == '\'') {
-            /* Blank or comment line — store as-is */
-            #define STORE_FREE(sp) do { \
-                if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
-                pseudo++; \
-                for (int _li = 0; _li < pending_count; _li++) \
-                    label_add(pending_buf + _li * MAX_VARNAME, pseudo); \
-                pending_count = 0; \
-                g_lines[g_nlines].linenum = pseudo; \
-                char *_sp = (sp); \
-                while (isspace((unsigned char)*_sp)) _sp++; \
-                if (*_sp == '?') { \
-                    snprintf(g_lines[g_nlines].text, MAX_LINE_LEN, "PRINT %s", _sp + 1); \
-                } else { \
-                    strncpy(g_lines[g_nlines].text, _sp, MAX_LINE_LEN - 1); \
-                    g_lines[g_nlines].text[MAX_LINE_LEN - 1] = '\0'; \
-                } \
-                g_nlines++; \
-            } while(0)
-            STORE_FREE(buf);
-            #undef STORE_FREE
             continue;
         }
 
@@ -643,9 +623,12 @@ void save_program(char *filename) {
     FILE *f = fopen(path, "w");
     if (!f) { perror(path); return; }
     
-    /* Write in free-form (unnumbered) style */
+    /* Write preserving line numbers if they exist */
     for (int i = 0; i < g_nlines; i++) {
-        fprintf(f, "%s\n", g_lines[i].text);
+        if (g_lines[i].linenum > 0)
+            fprintf(f, "%d %s\n", g_lines[i].linenum, g_lines[i].text);
+        else
+            fprintf(f, "%s\n", g_lines[i].text);
     }
     fclose(f);
     printf("Saved %s\n", path);
