@@ -2047,13 +2047,26 @@ static int cmd_get_graphics(Interp *ip, char *args) {
     char vname[MAX_VARNAME];
     read_varname(sk(p), vname);
     Var *v = var_get(vname);
+    
+    /* Get unique sprite ID for this array variable */
     int id = sprite_id_for(v);
+    
+    basic_stderr("GET: var='%s' id=%d coords=(%d,%d)-(%d,%d)\n", 
+                 vname, id, (int)x1, (int)y1, (int)x2, (int)y2);
+    
 #ifdef USE_SDL_WINDOW
+    /* CRITICAL: Flush any pending SDL render so pixel buffer is current */
+    ::gfx_sdl_render();
+    
+    /* Now capture sprite into the registry under this ID */
     gfx_get(id, (int)x1, (int)y1, (int)x2, (int)y2);
+    basic_stderr("  -> gfx_get() called for sprite id=%d\n", id);
 #else
+    /* OSC 666 path */
     felix_drawf("get;%d;%d;%d;%d;%d", id,
                 (int)x1, (int)y1, (int)x2, (int)y2);
 #endif
+    
     return 0;
 }
 
@@ -2072,52 +2085,18 @@ static int cmd_put_graphics(Interp *ip, char *args) {
     if (kw_match(p, "XOR"))  mode = "xor";
     int xor_mode = (strcmp(mode, "xor") == 0) ? 1 : 0;
 
+    /* Get the unique sprite ID assigned to this array variable */
+    int id = sprite_id_for(v);
 
 #ifdef USE_SDL_WINDOW
-    /* Screen-captured sprite (registered via GET) takes priority */
-    bool is_captured = false;
-    for (int i = 0; i < g_nsprites; i++)
-        if (g_sprites[i].var == v) { is_captured = true; break; }
-
-    if (!is_captured && v->kind == VAR_ARRAY_NUM && v->arr_num) {
-        /* DATA-loaded sprite array: decode as GW-BASIC EGA planar format */
-        int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
-        int *raw = (int *)malloc((size_t)total * 4);
-        if (raw) {
-            for (int i = 0; i < total; i++)
-                raw[i] = (int)mpf_get_si(v->arr_num[i]);
-            gfx_put_array(raw, total, (int)x, (int)y, xor_mode);
-            free(raw);
-        }
-        return 0;
-    }
-    int id = sprite_id_for(v);
     gfx_put(id, (int)x, (int)y, xor_mode);
+    basic_stderr("PUT: %s (id=%d) at (%d,%d), xor=%d\n", 
+                 vname, id, (int)x, (int)y, xor_mode);
 #else
-    /* OSC path: if it's a numeric array (DATA-loaded), encode and send inline */
-    if (v->kind == VAR_ARRAY_NUM && v->arr_num) {
-        int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
-        /* Build a hex string of the raw int32 bytes */
-        char *hexbuf = (char *)malloc((size_t)total * 8 + 64);
-        if (hexbuf) {
-            int off = snprintf(hexbuf, 64, "putarr;%d;%d;%s;", (int)x, (int)y, mode);
-            for (int i = 0; i < total; i++) {
-                int val = (int)mpf_get_si(v->arr_num[i]);
-                unsigned char b[4];
-                b[0] = (unsigned char)(val & 0xFF);
-                b[1] = (unsigned char)((val >> 8) & 0xFF);
-                b[2] = (unsigned char)((val >> 16) & 0xFF);
-                b[3] = (unsigned char)((val >> 24) & 0xFF);
-                off += snprintf(hexbuf + off, 9, "%02x%02x%02x%02x", b[0], b[1], b[2], b[3]);
-            }
-            felix_draw(hexbuf);
-            free(hexbuf);
-        }
-    } else {
-        int id = sprite_id_for(v);
-        felix_drawf("put;%d;%d;%d;%s", id, (int)x, (int)y, mode);
-    }
+    /* OSC path */
+    felix_drawf("put;%d;%d;%d;%s", id, (int)x, (int)y, mode);
 #endif
+    
     return 0;
 }
 
