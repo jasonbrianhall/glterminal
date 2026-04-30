@@ -1420,12 +1420,14 @@ static int cmd_call(Interp *ip, char *args) {
             if (var_is_str_name(pname)) {
                 char sbuf[DEFAULT_BUFFER];
                 cs = sk(eval_str_expr(cs, sbuf, sizeof sbuf));
+                cs = sk(cs);  /* Skip whitespace after expression */
                 Var *v = var_get(pname);
                 free(v->str);
                 v->str = str_dup(sbuf);
             } else {
                 mpf_t val; mpf_init2(val, g_prec);
                 cs = sk(eval_expr(cs, val));
+                cs = sk(cs);  /* Skip whitespace after expression */
                 Var *v = var_get(pname);
                 mpf_set(v->num, val);
                 mpf_clear(val);
@@ -2133,9 +2135,10 @@ static int cmd_circle(Interp *ip, char *args) {
     while (*p == ',') {
         p = sk(p + 1);
         if (*p == 'F' || *p == 'f') { filled = 1; p++; continue; }
-        if (*p == ',' || *p == '\0' || *p == ':') { arg_n++; continue; }
+        if (*p == ',' || *p == '\0' || *p == ':') continue;  /* skip empty args */
         mpf_t tmp; mpf_init2(tmp, g_prec);
         p = sk(eval_expr(p, tmp));
+        p = sk(p);  /* Skip whitespace after the expression */
         double val = mpf_get_d(tmp); mpf_clear(tmp);
         if (arg_n == 0)      { start_angle = val; has_arc = 1; }
         else if (arg_n == 1) { end_angle   = val; has_arc = 1; }
