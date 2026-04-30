@@ -374,12 +374,32 @@ void load(char *filename) {
         char *p = buf;
         while (isspace((unsigned char)*p)) p++;
 
-        /* skip blank lines and full-line comments */
-        if (!*p || *p == '\'') continue;
+        /* Preserve blank lines and comments as statements (for round-trip fidelity) */
+        if (!*p || *p == '\'') {
+            /* Blank or comment line — store as-is */
+            #define STORE_FREE(sp) do { \
+                if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
+                pseudo++; \
+                for (int _li = 0; _li < pending_count; _li++) \
+                    label_add(pending_buf + _li * MAX_VARNAME, pseudo); \
+                pending_count = 0; \
+                g_lines[g_nlines].linenum = pseudo; \
+                char *_sp = (sp); \
+                while (isspace((unsigned char)*_sp)) _sp++; \
+                if (*_sp == '?') { \
+                    snprintf(g_lines[g_nlines].text, MAX_LINE_LEN, "PRINT %s", _sp + 1); \
+                } else { \
+                    strncpy(g_lines[g_nlines].text, _sp, MAX_LINE_LEN - 1); \
+                    g_lines[g_nlines].text[MAX_LINE_LEN - 1] = '\0'; \
+                } \
+                g_nlines++; \
+            } while(0)
+            STORE_FREE(buf);
+            #undef STORE_FREE
+            continue;
+        }
 
-        /* skip QBasic meta-lines: '$DYNAMIC, '$STATIC, DECLARE … */
-        if (*p == '\'') continue;   /* already caught above */
-        if (*p == '$')  continue;
+        /* skip QBasic meta-lines: DECLARE … (but preserve $ directives like $NoPrefix) */
         if (strncasecmp(p, "DECLARE ", 8) == 0) continue;
 
         /* TYPE...END TYPE blocks: record field definitions, don't store as lines */
@@ -608,7 +628,10 @@ void clear_program(void) {
 }
 
 /* ================================================================
- * save_program — write g_lines[] back out as a numbered .bas file
+ * save_program — write g_lines[] back out as a free-form .bas file
+ *
+ * Saves in unnumbered (free-form) style to preserve structure.
+ * Comments, directives, and blank lines are stored as regular statements.
  * ================================================================ */
 void save_program(char *filename) {
     char path[DEFAULT_BUFFER];
@@ -619,17 +642,11 @@ void save_program(char *filename) {
 
     FILE *f = fopen(path, "w");
     if (!f) { perror(path); return; }
-    int prev = -1;
+    
+    /* Write in free-form (unnumbered) style */
     for (int i = 0; i < g_nlines; i++) {
-        if (g_lines[i].linenum != prev) {
-            if (i > 0) fprintf(f, "\n");
-            fprintf(f, "%d %s", g_lines[i].linenum, g_lines[i].text);
-            prev = g_lines[i].linenum;
-        } else {
-            fprintf(f, ": %s", g_lines[i].text);
-        }
+        fprintf(f, "%s\n", g_lines[i].text);
     }
-    if (g_nlines > 0) fprintf(f, "\n");
     fclose(f);
     printf("Saved %s\n", path);
 }
