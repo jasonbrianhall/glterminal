@@ -280,6 +280,23 @@ void load(char *filename) {
                                   !isalnum((unsigned char)trimmed[2]) &&
                                   trimmed[2] != '_');
 
+            /* Register SUB/FUNCTION names as labels so calls can find them */
+            if ((strncasecmp(p, "SUB ", 4) == 0 || strncasecmp(p, "FUNCTION ", 9) == 0)) {
+                char *np = strncasecmp(p, "SUB ", 4) == 0 ? p + 4 : p + 9;
+                while (isspace((unsigned char)*np)) np++;
+                char subname[MAX_VARNAME]; int si = 0;
+                /* Read base name (alphanumeric + underscore) */
+                while ((isalnum((unsigned char)*np) || *np == '_') && si < MAX_VARNAME - 1)
+                    subname[si++] = (char)toupper((unsigned char)*np++);
+                /* Include type sigil if present (e.g. GetNum#, CalcDelay!) */
+                if ((*np == '#' || *np == '!' || *np == '%' || *np == '&') && si < MAX_VARNAME - 1)
+                    subname[si++] = *np++;
+                subname[si] = '\0';
+                if (subname[0]) {
+                    label_add(subname, num);
+                }
+            }
+
             #define STORE_SEG(lnum, sp) do { \
                 if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
                 g_lines[g_nlines].linenum = (lnum); \
