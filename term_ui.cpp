@@ -28,6 +28,59 @@
 #include "font_manager.h"
 
 // ============================================================================
+// TERMINAL DETECTION & LAUNCHING
+// ============================================================================
+
+#include <vector>
+
+std::vector<TerminalOption> g_available_terminals;
+
+// State for custom shell input dialog
+std::string g_custom_shell_input;
+bool g_custom_shell_dialog_open = false;
+
+void detect_available_terminals() {
+    g_available_terminals.clear();
+    g_available_terminals.push_back({"Local Terminal", "", true});
+    g_available_terminals.push_back({"SSH Session", "--ssh", true});
+    g_available_terminals.push_back({"Custom Shell...", "", false});
+}
+
+static void launch_terminal_with_shell(const char *shell) {
+#ifdef _WIN32
+    char self[512] = {};
+    if (!GetModuleFileNameA(nullptr, self, sizeof(self)-1)) return;
+    char cmd[640];
+    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\"", self, shell);
+    STARTUPINFOA si = {}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    CreateProcessA(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si, &pi);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+#else
+    char self[512] = {};
+    ssize_t n = readlink("/proc/self/exe", self, sizeof(self)-1);
+    if (n <= 0) return;
+    self[n] = '\0';
+    pid_t pid = fork();
+    if (pid == 0) { setsid(); execl(self, self, shell, nullptr); _exit(1); }
+#endif
+}
+
+void action_new_terminal_custom(int idx) {
+    if (idx < 0 || idx >= (int)g_available_terminals.size()) return;
+    const TerminalOption &opt = g_available_terminals[idx];
+    if (opt.is_builtin) {
+        if (opt.name == "Local Terminal") action_new_terminal();
+        else if (opt.name == "SSH Session") action_new_ssh_session();
+    } else {
+        // Custom Shell - open input dialog
+        g_custom_shell_input.clear();
+        g_custom_shell_dialog_open = true;
+        SDL_StartTextInput();
+    }
+}
+
+// ============================================================================
 // URL DETECTION
 // ============================================================================
 
@@ -868,7 +921,7 @@ int submenu_hit(ContextMenu *m, int px, int py) {
     int count = (m->sub_open == MENU_ID_THEMES)        ? THEME_COUNT :
                 (m->sub_open == MENU_ID_RENDER_MODE)    ? RENDER_MODE_COUNT :
                 (m->sub_open == MENU_ID_ENTERTAINMENT)  ? ENT_COUNT :
-                (m->sub_open == MENU_ID_NEW_TERMINAL)   ? NEW_TERM_COUNT :
+                (m->sub_open == MENU_ID_NEW_TERMINAL)   ? (int)g_available_terminals.size() :
                 (m->sub_open == MENU_ID_FONTS)          ? (int)g_font_list.size() :
                                                           OPACITY_COUNT;
     int idx = (py - m->sub_y) / m->item_h;
@@ -914,7 +967,7 @@ void menu_render(ContextMenu *m) {
         int count = (m->sub_open == MENU_ID_THEMES)       ? THEME_COUNT :
                     (m->sub_open == MENU_ID_RENDER_MODE)   ? RENDER_MODE_COUNT :
                     (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_COUNT :
-                    (m->sub_open == MENU_ID_NEW_TERMINAL)  ? NEW_TERM_COUNT :
+                    (m->sub_open == MENU_ID_NEW_TERMINAL)  ? (int)g_available_terminals.size() :
                     (m->sub_open == MENU_ID_FONTS)         ? (int)g_font_list.size() :
                                                              OPACITY_COUNT;
         float sw = (float)(m->width + (int)(MENU_FONT_SIZE * 2));
@@ -924,15 +977,22 @@ void menu_render(ContextMenu *m) {
         draw_menu_panel(sx, sy, sw, sh);
 
         static const char *ENT_NAMES[]      = { "Fight Mode", "Bouncing Circle", "Sound" };
-        static const char *NEW_TERM_NAMES[] = { "Local Terminal", "SSH Session" };
 
         for (int j = 0; j < count; j++) {
-            const char *lbl = (m->sub_open == MENU_ID_THEMES)        ? THEMES[j].name :
-                              (m->sub_open == MENU_ID_RENDER_MODE)    ? RENDER_MODE_NAMES[j] :
-                              (m->sub_open == MENU_ID_ENTERTAINMENT)  ? ENT_NAMES[j] :
-                              (m->sub_open == MENU_ID_NEW_TERMINAL)   ? NEW_TERM_NAMES[j] :
-                              (m->sub_open == MENU_ID_FONTS)          ? g_font_list[j].display_name.c_str() :
-                                                                        OPACITY_NAMES[j];
+            const char *lbl = nullptr;
+            if (m->sub_open == MENU_ID_THEMES) {
+                lbl = THEMES[j].name;
+            } else if (m->sub_open == MENU_ID_RENDER_MODE) {
+                lbl = RENDER_MODE_NAMES[j];
+            } else if (m->sub_open == MENU_ID_ENTERTAINMENT) {
+                lbl = ENT_NAMES[j];
+            } else if (m->sub_open == MENU_ID_NEW_TERMINAL) {
+                lbl = g_available_terminals[j].name.c_str();
+            } else if (m->sub_open == MENU_ID_FONTS) {
+                lbl = g_font_list[j].display_name.c_str();
+            } else {
+                lbl = OPACITY_NAMES[j];
+            }
             float iy = sy + 4 + j * m->item_h, ih = (float)m->item_h;
             bool hov = (j == m->sub_hovered);
 
@@ -1208,4 +1268,95 @@ bool help_mousemotion(int x, int y) {
         }
     }
     return s_help_hovered_link != prev;
+}
+
+// ============================================================================
+// CUSTOM SHELL DIALOG
+// ============================================================================
+
+void custom_shell_dialog_render(int win_w, int win_h) {
+    if (!g_custom_shell_dialog_open) return;
+    
+    // Draw semi-transparent overlay
+    draw_rect(0, 0, (float)win_w, (float)win_h, 0, 0, 0, 0.5f);
+    
+    // Draw dialog box
+    float dialog_w = 400, dialog_h = 100;
+    float dialog_x = (win_w - dialog_w) / 2;
+    float dialog_y = (win_h - dialog_h) / 2;
+    
+    draw_menu_panel(dialog_x, dialog_y, dialog_w, dialog_h);
+    
+    // Draw prompt text
+    draw_text_menu("Enter command:", 
+                   dialog_x + 15, dialog_y + 15, 0.9f, 0.9f, 0.9f, 1.f);
+    
+    // Draw input field
+    float input_y = dialog_y + 32;
+    float input_h = 25;
+    draw_rect(dialog_x + 10, input_y, dialog_w - 20, input_h, 0.2f, 0.2f, 0.2f, 0.8f);
+    draw_rect(dialog_x + 10, input_y, dialog_w - 20, input_h, 0.5f, 0.5f, 0.5f, 0.3f);
+    
+    // Draw input text (vertically centered in field: baseline at center)
+    draw_text_menu(g_custom_shell_input.c_str(), dialog_x + 15, input_y + input_h * 0.6f, 
+                   0.9f, 0.9f, 0.9f, 1.f);
+    
+    // Draw instructions
+    draw_text_menu("(Enter to launch, Esc to cancel)", 
+                   dialog_x + 15, dialog_y + 75, 0.6f, 0.6f, 0.6f, 1.f);
+}
+
+bool custom_shell_dialog_keydown(SDL_Keycode sym, const char *text) {
+    if (!g_custom_shell_dialog_open) return false;
+    
+    if (sym == SDLK_ESCAPE) {
+        g_custom_shell_dialog_open = false;
+        g_custom_shell_input.clear();
+        SDL_StopTextInput();
+        return true;
+    }
+    
+    if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
+        if (!g_custom_shell_input.empty()) {
+            // Check if command exists
+#ifdef _WIN32
+            std::string check_cmd = "where " + g_custom_shell_input + " >nul 2>&1";
+#else
+            std::string check_cmd = "which " + g_custom_shell_input + " >/dev/null 2>&1";
+#endif
+            int cmd_exists = system(check_cmd.c_str());
+            
+            if (cmd_exists == 0) {
+                // Command found, launch it
+                launch_terminal_with_shell(g_custom_shell_input.c_str());
+                g_custom_shell_dialog_open = false;
+                g_custom_shell_input.clear();
+                SDL_StopTextInput();
+            } else {
+                // Command not found - show error by clearing input and prepending error text
+                g_custom_shell_input = "Command not found!";
+                // Will be cleared on next key press
+            }
+        }
+        return true;
+    }
+    
+    if (sym == SDLK_BACKSPACE) {
+        if (!g_custom_shell_input.empty()) {
+            g_custom_shell_input.pop_back();
+        }
+        return true;
+    }
+    
+    // Handle regular text input
+    if (text && text[0]) {
+        // Clear error message on first keystroke
+        if (g_custom_shell_input == "Command not found!") {
+            g_custom_shell_input.clear();
+        }
+        g_custom_shell_input += text;
+        return true;
+    }
+    
+    return false;
 }

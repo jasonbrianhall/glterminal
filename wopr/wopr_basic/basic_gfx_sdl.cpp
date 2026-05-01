@@ -98,6 +98,8 @@ static SDL_Texture         *s_gfx_tex = nullptr;
 static std::vector<Uint32>  s_pixels;          // ARGB, gfx_w × gfx_h
 static int                  s_gfx_w = 0, s_gfx_h = 0;
 static bool                 s_gfx_active = false;
+static int                  s_init_win_w = 800;  // Remember initial window size
+static int                  s_init_win_h = 600;
 static bool                 s_truecolor  = false;  // true when SCREEN _NEWIMAGE(...,32)
 
 // ============================================================================
@@ -124,6 +126,7 @@ void gfx_sprites_clear(void) { s_sprites.clear(); }
 #define TEXT_COLS_MAX  220
 #define TEXT_ROWS_DEF  25    // default (graphics mode / initial)
 #define TEXT_COLS_DEF  80
+#define SCROLLBACK_LINES 5000
 
 struct Cell { char ch; Uint8 fg, bg; };
 static Cell s_grid[TEXT_ROWS_MAX][TEXT_COLS_MAX];
@@ -132,6 +135,127 @@ static int  s_text_rows  = TEXT_ROWS_DEF;
 static int  s_cur_row    = 0, s_cur_col = 0;
 static int  s_cur_fg     = 7, s_cur_bg  = 0;
 static bool s_cursor_vis = false;
+
+// ============================================================================
+// Scrollback history buffer
+// ============================================================================
+static std::vector<std::vector<Cell>> s_scrollback;  // circular buffer of history lines
+static int  s_scrollback_head = 0;                   // write position (next line to overwrite)
+static int  s_scrollback_count = 0;                  // total lines written (monotonic)
+static int  s_display_offset = 0;                    // view offset from bottom (0 = show latest)
+
+// ============================================================================
+// Text selection for copy/paste
+// ============================================================================
+static bool s_selecting  = false;      // mouse drag in progress
+static int  s_sel_start_row = 0, s_sel_start_col = 0;  // selection anchor
+static int  s_sel_end_row = 0, s_sel_end_col = 0;      // selection end
+static std::string s_selection_text = "";              // cached selection buffer
+static bool s_drag_occurred = false;   // track if mouse actually moved
+
+// Update selection text from grid
+static void update_selection_text() {
+    s_selection_text.clear();
+    int r1 = std::min(s_sel_start_row, s_sel_end_row);
+    int r2 = std::max(s_sel_start_row, s_sel_end_row);
+    int c1 = (s_sel_start_row == s_sel_end_row) ? std::min(s_sel_start_col, s_sel_end_col) : (s_sel_start_row < s_sel_end_row ? s_sel_start_col : s_sel_end_col);
+    int c2 = (s_sel_start_row == s_sel_end_row) ? std::max(s_sel_start_col, s_sel_end_col) : (s_sel_start_row < s_sel_end_row ? s_sel_end_col : s_sel_start_col);
+    
+    for (int r = r1; r <= r2; r++) {
+        int col_start = (r == r1) ? c1 : 0;
+        int col_end = (r == r2) ? c2 : s_text_cols - 1;
+        for (int c = col_start; c <= col_end && c < s_text_cols; c++) {
+            s_selection_text += s_grid[r][c].ch;
+        }
+        if (r < r2) s_selection_text += '\n';
+    }
+}
+
+// Check if a cell is within selection
+static bool is_cell_selected(int row, int col) {
+    if (!s_selecting) return false;
+    int r1 = std::min(s_sel_start_row, s_sel_end_row);
+    int r2 = std::max(s_sel_start_row, s_sel_end_row);
+    if (row < r1 || row > r2) return false;
+    if (row == r1 && row == r2) 
+        return col >= std::min(s_sel_start_col, s_sel_end_col) && col <= std::max(s_sel_start_col, s_sel_end_col);
+    if (row == r1) return col >= (s_sel_start_row < s_sel_end_row ? s_sel_start_col : s_sel_end_col);
+    if (row == r2) return col <= (s_sel_start_row < s_sel_end_row ? s_sel_end_col : s_sel_start_col);
+    return true;
+}
+
+// ============================================================================
+// Scrollback history helpers
+// ============================================================================
+static void scrollback_init() {
+    s_scrollback.clear();
+    s_scrollback.resize(SCROLLBACK_LINES);
+    for (int i = 0; i < SCROLLBACK_LINES; i++) {
+        s_scrollback[i].resize(TEXT_COLS_MAX);
+        for (int j = 0; j < TEXT_COLS_MAX; j++) {
+            s_scrollback[i][j] = {' ', 7, 0};
+        }
+    }
+    s_scrollback_head = 0;
+    s_scrollback_count = 0;
+    s_display_offset = 0;
+}
+
+// Push current s_grid[0] to scrollback, shift grid up
+static void scrollback_push_line() {
+    if (s_scrollback.empty()) scrollback_init();
+    
+    // Copy current top line to scrollback
+    for (int col = 0; col < s_text_cols; col++) {
+        s_scrollback[s_scrollback_head][col] = s_grid[0][col];
+    }
+    
+    s_scrollback_head = (s_scrollback_head + 1) % SCROLLBACK_LINES;
+    s_scrollback_count++;
+    
+    // Shift grid up
+    for (int row = 0; row < s_text_rows - 1; row++) {
+        for (int col = 0; col < s_text_cols; col++) {
+            s_grid[row][col] = s_grid[row + 1][col];
+        }
+    }
+    
+    // Clear bottom line
+    for (int col = 0; col < s_text_cols; col++) {
+        s_grid[s_text_rows - 1][col] = {' ', s_cur_fg, s_cur_bg};
+    }
+}
+
+// Get a cell from scrollback or current grid
+static Cell scrollback_get_cell(int display_row, int col) {
+    if (col >= s_text_cols) return {' ', 0, 0};
+    
+    int lines_in_scrollback = std::min(s_scrollback_count, SCROLLBACK_LINES);
+    
+    if (s_display_offset == 0) {
+        // Showing current grid (latest lines, bottom of view)
+        return s_grid[display_row][col];
+    }
+    
+    // When scrolled, calculate which line to show
+    // offset=0 shows lines [lines_in_scrollback - s_text_rows ... lines_in_scrollback - 1] (current grid)
+    // offset=s_text_rows shows lines [lines_in_scrollback - 2*s_text_rows ... lines_in_scrollback - s_text_rows - 1]
+    
+    // The "bottom" of current view when scrolled
+    int view_bottom_abs_line = lines_in_scrollback - s_display_offset - 1;
+    int absolute_line = view_bottom_abs_line - (s_text_rows - 1 - display_row);
+    
+    // Handle bounds
+    if (absolute_line < 0 || absolute_line >= lines_in_scrollback) {
+        return {' ', 0, 0};  // Blank line
+    }
+    
+    // Map absolute line to circular buffer index
+    int oldest_idx = s_scrollback_count >= SCROLLBACK_LINES ? s_scrollback_head : 0;
+    int sb_idx = (oldest_idx + absolute_line) % SCROLLBACK_LINES;
+    
+    return s_scrollback[sb_idx][col];
+}
 
 // ============================================================================
 // FreeType / glyph cache
@@ -325,6 +449,8 @@ static int  key_pop()  {
 // ============================================================================
 bool gfx_sdl_init(const char *title, int w, int h) {
     s_win_w = w; s_win_h = h;
+    s_init_win_w = w;  // Save initial dimensions
+    s_init_win_h = h;
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return false;
     }
@@ -408,9 +534,26 @@ bool gfx_sdl_pump() {
         case SDL_KEYDOWN: {
             SDL_Keycode sym = e.key.keysym.sym;
             if (sym == SDLK_c && (e.key.keysym.mod & KMOD_CTRL)) {
-                // Ctrl+C — break like SIGINT
-                BASIC_NS::g_break = 1;
-                key_push(3);
+                // Ctrl+C — copy selection to clipboard (or break if no selection)
+                if (s_selecting && !s_selection_text.empty()) {
+                    SDL_SetClipboardText(s_selection_text.c_str());
+                    s_selecting = false;  // Clear selection after copy
+                    s_needs_render = true;
+                } else {
+                    // No selection: send SIGINT break
+                    BASIC_NS::g_break = 1;
+                    key_push(3);
+                }
+            } else if (sym == SDLK_v && (e.key.keysym.mod & KMOD_CTRL)) {
+                // Ctrl+V — paste from clipboard
+                if (SDL_HasClipboardText()) {
+                    char *clipboard = SDL_GetClipboardText();
+                    if (clipboard) {
+                        for (const char *p = clipboard; *p; p++)
+                            key_push((unsigned char)*p);
+                        SDL_free(clipboard);
+                    }
+                }
             } else if (sym == SDLK_F11) {
                 // F11 — toggle fullscreen
                 BASIC_NS::gfx_sdl_toggle_fullscreen();
@@ -426,6 +569,17 @@ bool gfx_sdl_pump() {
             else if (sym == SDLK_DOWN)    { key_push(0x1001); }
             else if (sym == SDLK_LEFT)    { key_push(0x1002); }
             else if (sym == SDLK_RIGHT)   { key_push(0x1003); }
+            else if (sym == SDLK_PAGEUP && (e.key.keysym.mod & KMOD_SHIFT)) {
+                // Shift+PageUp: scroll up in history
+                int lines_in_scrollback = std::min(s_scrollback_count, SCROLLBACK_LINES);
+                s_display_offset = std::min(s_display_offset + s_text_rows, lines_in_scrollback - s_text_rows);
+                s_needs_render = true;
+            }
+            else if (sym == SDLK_PAGEDOWN && (e.key.keysym.mod & KMOD_SHIFT)) {
+                // Shift+PageDown: scroll down in history (toward bottom)
+                s_display_offset = std::max(0, s_display_offset - s_text_rows);
+                s_needs_render = true;
+            }
             break;
         }
         case SDL_TEXTINPUT:
@@ -443,6 +597,58 @@ bool gfx_sdl_pump() {
                 s_needs_render = true;
             }
             break;
+        case SDL_MOUSEBUTTONDOWN:
+            if (!s_gfx_active && e.button.button == SDL_BUTTON_LEFT) {
+                int col = (e.button.x - TEXT_PAD) / s_cell_w;
+                int row = (e.button.y - TEXT_PAD) / s_cell_h;
+                col = std::max(0, std::min(col, s_text_cols - 1));
+                row = std::max(0, std::min(row, s_text_rows - 1));
+                
+                // If already have a selection, toggle it off
+                if (s_selecting) {
+                    s_selecting = false;
+                    s_drag_occurred = false;
+                    s_needs_render = true;
+                } else {
+                    // Start new selection
+                    s_selecting = true;
+                    s_drag_occurred = false;
+                    s_sel_start_row = s_sel_end_row = row;
+                    s_sel_start_col = s_sel_end_col = col;
+                    update_selection_text();
+                    s_needs_render = true;
+                }
+            }
+            break;
+        case SDL_MOUSEMOTION:
+            if (!s_gfx_active && s_selecting) {
+                // Update selection end point
+                int col = (e.motion.x - TEXT_PAD) / s_cell_w;
+                int row = (e.motion.y - TEXT_PAD) / s_cell_h;
+                col = std::max(0, std::min(col, s_text_cols - 1));
+                row = std::max(0, std::min(row, s_text_rows - 1));
+                
+                // Check if we actually moved
+                if (row != s_sel_start_row || col != s_sel_start_col) {
+                    s_drag_occurred = true;
+                    s_sel_end_row = row;
+                    s_sel_end_col = col;
+                    update_selection_text();
+                    s_needs_render = true;
+                }
+            }
+            break;
+        case SDL_MOUSEBUTTONUP:
+            if (!s_gfx_active && e.button.button == SDL_BUTTON_LEFT) {
+                // If no drag occurred, clear selection
+                if (!s_drag_occurred) {
+                    s_selecting = false;
+                    s_needs_render = true;
+                }
+                // If drag occurred, keep selection visible
+                s_drag_occurred = false;
+            }
+            break;
         default: break;
         }
     }
@@ -453,18 +659,21 @@ bool gfx_sdl_pump() {
 // Rendering
 // ============================================================================
 static void render_text_cell(int row, int col) {
-    const Cell &cell = s_grid[row][col];
+    const Cell cell = scrollback_get_cell(row, col);
     unsigned char ch = (unsigned char)cell.ch;
 
     int cx = col * s_cell_w;
     int cy = row * s_cell_h;
+
+    // Determine if this cell is selected
+    bool selected = is_cell_selected(row, col);
+    Uint32 bg = s_pal[cell.bg & 15];
 
     // In text mode, always draw the cell background (even spaces) so colored
     // backgrounds show and old glyphs are properly erased.
     // In graphics mode, only draw bg for cells with actual content so the
     // graphics pixel buffer shows through empty cells.
     if (!s_gfx_active || (ch >= 0x20 && ch != ' ')) {
-        Uint32 bg = s_pal[cell.bg & 15];
         SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_NONE);
         SDL_SetRenderDrawColor(s_renderer,
             (bg>>16)&0xFF, (bg>>8)&0xFF, bg&0xFF, 255);
@@ -472,77 +681,86 @@ static void render_text_cell(int row, int col) {
         SDL_RenderFillRect(s_renderer, &bgr);
     }
 
-    if (ch < 0x20 || ch == ' ')
-        return;
+    // Draw the character if it's printable
+    if (ch >= 0x20 && ch != ' ') {
+        const Glyph &g = glyph_get(ch);
+        if (!g.bm.empty()) {
+            // Cache keyed by (codepoint, font generation, palette generation, fg color)
+            struct Key {
+                int cp;
+                int gen;
+                int pal_gen;
+                int fg;
+                bool operator==(const Key &o) const {
+                    return cp == o.cp && gen == o.gen && pal_gen == o.pal_gen && fg == o.fg;
+                }
+            };
 
-    const Glyph &g = glyph_get(ch);
-    if (g.bm.empty())
-        return;
+            struct KeyHash {
+                size_t operator()(const Key &k) const {
+                    return (size_t)k.cp ^ ((size_t)k.gen << 16) ^ ((size_t)k.pal_gen << 20) ^ ((size_t)k.fg << 24);
+                }
+            };
 
-    // Cache keyed by (codepoint, font generation, palette generation, fg color)
-    struct Key {
-        int cp;
-        int gen;
-        int pal_gen;
-        int fg;
-        bool operator==(const Key &o) const {
-            return cp == o.cp && gen == o.gen && pal_gen == o.pal_gen && fg == o.fg;
+            static std::unordered_map<Key, SDL_Texture*, KeyHash> tex_cache;
+
+            Key key{ ch, s_font_gen, s_pal_gen, cell.fg & 15 };
+            SDL_Texture *tex = nullptr;
+
+            auto it = tex_cache.find(key);
+            if (it != tex_cache.end()) {
+                tex = it->second;
+            } else {
+                tex = SDL_CreateTexture(
+                    s_renderer,
+                    SDL_PIXELFORMAT_ARGB8888,
+                    SDL_TEXTUREACCESS_STATIC,
+                    g.bm_w,
+                    g.bm_h
+                );
+                if (tex) {
+                    std::vector<Uint32> argb((size_t)(g.bm_w * g.bm_h));
+
+                    Uint32 fgcol = s_pal[cell.fg & 15]; // ARGB from palette
+
+                    for (int i = 0; i < g.bm_w * g.bm_h; i++) {
+                        Uint8 a = g.bm[i];
+                        // Use full alpha for text rendering — antialiased gray values
+                        // look invisible against dark backgrounds at small font sizes.
+                        // Threshold at 64: anything above renders fully opaque.
+                        Uint8 out_a = (a >= 64) ? 255 : 0;
+                        argb[i] = (fgcol & 0x00FFFFFFu) | ((Uint32)out_a << 24);
+                    }
+
+                    SDL_UpdateTexture(tex, nullptr, argb.data(), g.bm_w * 4);
+                    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+
+                    tex_cache[key] = tex;
+                }
+            }
+
+            if (tex) {
+                // Baseline alignment
+                int ascender = s_ft_face
+                    ? (int)(s_ft_face->size->metrics.ascender >> 6)
+                    : s_cell_h - 2;
+
+                int gx = cx + g.bearing_x;
+                int gy = cy + ascender - g.bearing_y;
+
+                SDL_Rect dst = { gx, gy, g.bm_w, g.bm_h };
+                SDL_RenderCopy(s_renderer, tex, nullptr, &dst);
+            }
         }
-    };
-
-    struct KeyHash {
-        size_t operator()(const Key &k) const {
-            return (size_t)k.cp ^ ((size_t)k.gen << 16) ^ ((size_t)k.pal_gen << 20) ^ ((size_t)k.fg << 24);
-        }
-    };
-
-    static std::unordered_map<Key, SDL_Texture*, KeyHash> tex_cache;
-
-    Key key{ ch, s_font_gen, s_pal_gen, cell.fg & 15 };
-    SDL_Texture *tex = nullptr;
-
-    auto it = tex_cache.find(key);
-    if (it != tex_cache.end()) {
-        tex = it->second;
-    } else {
-        tex = SDL_CreateTexture(
-            s_renderer,
-            SDL_PIXELFORMAT_ARGB8888,
-            SDL_TEXTUREACCESS_STATIC,
-            g.bm_w,
-            g.bm_h
-        );
-        if (!tex) return;
-
-        std::vector<Uint32> argb((size_t)(g.bm_w * g.bm_h));
-
-        Uint32 fgcol = s_pal[cell.fg & 15]; // ARGB from palette
-
-        for (int i = 0; i < g.bm_w * g.bm_h; i++) {
-            Uint8 a = g.bm[i];
-            // Use full alpha for text rendering — antialiased gray values
-            // look invisible against dark backgrounds at small font sizes.
-            // Threshold at 64: anything above renders fully opaque.
-            Uint8 out_a = (a >= 64) ? 255 : 0;
-            argb[i] = (fgcol & 0x00FFFFFFu) | ((Uint32)out_a << 24);
-        }
-
-        SDL_UpdateTexture(tex, nullptr, argb.data(), g.bm_w * 4);
-        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-
-        tex_cache[key] = tex;
     }
 
-    // Baseline alignment
-    int ascender = s_ft_face
-        ? (int)(s_ft_face->size->metrics.ascender >> 6)
-        : s_cell_h - 2;
-
-    int gx = cx + g.bearing_x;
-    int gy = cy + ascender - g.bearing_y;
-
-    SDL_Rect dst = { gx, gy, g.bm_w, g.bm_h };
-    SDL_RenderCopy(s_renderer, tex, nullptr, &dst);
+    // Draw semi-transparent selection highlight on top
+    if (selected) {
+        SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(s_renderer, 100, 150, 255, 100);  // Light blue, semi-transparent
+        SDL_Rect sel = { cx, cy, s_cell_w, s_cell_h };
+        SDL_RenderFillRect(s_renderer, &sel);
+    }
 }
 
 
@@ -650,9 +868,8 @@ static inline int px_index(Uint32 pixel) {
 // Text grid helpers
 // ============================================================================
 static void text_scroll_up() {
-    for (int r = 0; r < s_text_rows - 1; r++)
-        memcpy(s_grid[r], s_grid[r + 1], sizeof(s_grid[0]));
-    for (auto &c : s_grid[s_text_rows - 1]) c = {' ', (Uint8)s_cur_fg, (Uint8)s_cur_bg};
+    scrollback_push_line();
+    s_display_offset = 0;  // Auto-scroll to bottom when new content appears
     s_needs_render = true;
 }
 
@@ -749,6 +966,10 @@ void gfx_screen_ex(int mode, int /*colorswitch*/, int apage, int vpage) {
         for (int i = 0; i < GFX_MAX_PAGES; i++) s_pages[i].clear();
         s_gfx_w = s_gfx_h = 0;
         s_apage = s_vpage = 0;
+        // Restore window to initial size
+        if (s_window) SDL_SetWindowSize(s_window, s_init_win_w, s_init_win_h);
+        s_win_w = s_init_win_w;
+        s_win_h = s_init_win_h;
         ft_set_size_for_window();
         s_needs_render = true;
         return;
@@ -760,15 +981,9 @@ void gfx_screen_ex(int mode, int /*colorswitch*/, int apage, int vpage) {
     bool dims_changed = (s_gfx_w != gw || s_gfx_h != gh);
     s_gfx_w = gw; s_gfx_h = gh;
 
-    // CGA/EGA 200-line modes had non-square pixels (~2.4:1 aspect).
-    // Display them at the correct height so the image is not squished.
-    // 200-line: multiply display height by 12/5 (×2.4)
-    // 350-line: multiply display height by ~1.37 (close enough to square)
-    // 480-line and others: square pixels, no correction needed
-    int display_h;
-    if (gh == 200)      display_h = gw * 3 / 4;   // 640×200 → display as 640×480
-    else if (gh == 350) display_h = gw * 3 / 4;   // 640×350 → display as 640×480
-    else                display_h = gh;
+    // All CGA/EGA modes should display with 4:3 aspect ratio (like real monitors)
+    // Calculate display height to maintain 4:3 ratio
+    int display_h = (gw * 3) / 4;   // 4:3 aspect ratio
 
     if (dims_changed) {
         // Resize window to best integer scale that fits the display
@@ -1109,6 +1324,7 @@ BASIC_NS_BEGIN
 
 void display_init(void) {
     gfx_sdl_init("Felix BASIC", 800, 600);
+    scrollback_init();
 }
 
 void display_shutdown(void) {
@@ -1116,6 +1332,7 @@ void display_shutdown(void) {
 }
 
 void display_cls(void) {
+    scrollback_init();
     gfx_cls(s_cur_bg);
 }
 

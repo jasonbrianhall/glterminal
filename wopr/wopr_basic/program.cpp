@@ -280,6 +280,23 @@ void load(char *filename) {
                                   !isalnum((unsigned char)trimmed[2]) &&
                                   trimmed[2] != '_');
 
+            /* Register SUB/FUNCTION names as labels so calls can find them */
+            if ((strncasecmp(p, "SUB ", 4) == 0 || strncasecmp(p, "FUNCTION ", 9) == 0)) {
+                char *np = strncasecmp(p, "SUB ", 4) == 0 ? p + 4 : p + 9;
+                while (isspace((unsigned char)*np)) np++;
+                char subname[MAX_VARNAME]; int si = 0;
+                /* Read base name (alphanumeric + underscore) */
+                while ((isalnum((unsigned char)*np) || *np == '_') && si < MAX_VARNAME - 1)
+                    subname[si++] = (char)toupper((unsigned char)*np++);
+                /* Include type sigil if present (e.g. GetNum#, CalcDelay!) */
+                if ((*np == '#' || *np == '!' || *np == '%' || *np == '&') && si < MAX_VARNAME - 1)
+                    subname[si++] = *np++;
+                subname[si] = '\0';
+                if (subname[0]) {
+                    label_add(subname, num);
+                }
+            }
+
             #define STORE_SEG(lnum, sp) do { \
                 if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
                 g_lines[g_nlines].linenum = (lnum); \
@@ -374,12 +391,12 @@ void load(char *filename) {
         char *p = buf;
         while (isspace((unsigned char)*p)) p++;
 
-        /* skip blank lines and full-line comments */
-        if (!*p || *p == '\'') continue;
+        /* Skip blank and comment-only lines (they can't be GOTO targets) */
+        if (!*p || *p == '\'') {
+            continue;
+        }
 
-        /* skip QBasic meta-lines: '$DYNAMIC, '$STATIC, DECLARE … */
-        if (*p == '\'') continue;   /* already caught above */
-        if (*p == '$')  continue;
+        /* skip QBasic meta-lines: DECLARE … (but preserve $ directives like $NoPrefix) */
         if (strncasecmp(p, "DECLARE ", 8) == 0) continue;
 
         /* TYPE...END TYPE blocks: record field definitions, don't store as lines */
@@ -473,14 +490,13 @@ void load(char *filename) {
             char *np = strncasecmp(p, "SUB ", 4) == 0 ? p + 4 : p + 9;
             while (isspace((unsigned char)*np)) np++;
             char subname[MAX_VARNAME]; int si = 0;
+            /* Read base name (alphanumeric + underscore) */
             while ((isalnum((unsigned char)*np) || *np == '_') && si < MAX_VARNAME - 1)
                 subname[si++] = (char)toupper((unsigned char)*np++);
-            /* strip type sigil (e.g. CalcDelay!) */
-            if (si > 0 && (subname[si-1] == '!' || subname[si-1] == '#' ||
-                           subname[si-1] == '%' || subname[si-1] == '&'))
-                subname[si-1] = '\0';
-            else
-                subname[si] = '\0';
+            /* Include type sigil if present (e.g. GetNum#, CalcDelay!) */
+            if ((*np == '#' || *np == '!' || *np == '%' || *np == '&') && si < MAX_VARNAME - 1)
+                subname[si++] = *np++;
+            subname[si] = '\0';
             if (subname[0]) {
                 /* point at the next pseudo line (the SUB line itself) */
                 if (pending_count < 8) {
@@ -609,7 +625,10 @@ void clear_program(void) {
 }
 
 /* ================================================================
- * save_program — write g_lines[] back out as a numbered .bas file
+ * save_program — write g_lines[] back out as a free-form .bas file
+ *
+ * Saves in unnumbered (free-form) style to preserve structure.
+ * Comments, directives, and blank lines are stored as regular statements.
  * ================================================================ */
 void save_program(char *filename) {
     char path[DEFAULT_BUFFER];
@@ -620,17 +639,14 @@ void save_program(char *filename) {
 
     FILE *f = fopen(path, "w");
     if (!f) { perror(path); return; }
-    int prev = -1;
+    
+    /* Write preserving line numbers if they exist */
     for (int i = 0; i < g_nlines; i++) {
-        if (g_lines[i].linenum != prev) {
-            if (i > 0) fprintf(f, "\n");
-            fprintf(f, "%d %s", g_lines[i].linenum, g_lines[i].text);
-            prev = g_lines[i].linenum;
-        } else {
-            fprintf(f, ": %s", g_lines[i].text);
-        }
+        if (g_lines[i].linenum > 0)
+            fprintf(f, "%d %s\n", g_lines[i].linenum, g_lines[i].text);
+        else
+            fprintf(f, "%s\n", g_lines[i].text);
     }
-    if (g_nlines > 0) fprintf(f, "\n");
     fclose(f);
     printf("Saved %s\n", path);
 }
