@@ -1,6 +1,7 @@
 #pragma once
 #include "terminal.h"
 #include <string>
+#include <vector>
 
 // ============================================================================
 // URL DETECTION
@@ -64,7 +65,7 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 // New Terminal submenu item indices
 #define NEW_TERM_IDX_LOCAL  0
 #define NEW_TERM_IDX_SSH    1
-#define NEW_TERM_COUNT      2
+// NEW_TERM_COUNT is now dynamic — see g_available_terminals in term_ui.cpp
 
 // Entertainment submenu item indices
 #define ENT_IDX_FIGHT    0
@@ -97,8 +98,18 @@ int  menu_hit(ContextMenu *m, int px, int py);
 int  submenu_hit(ContextMenu *m, int px, int py);
 void menu_render(ContextMenu *m);
 
+struct TerminalOption {
+    std::string name;
+    std::string shell;
+    bool is_builtin;
+};
+
+extern std::vector<TerminalOption> g_available_terminals;
+
+void detect_available_terminals();
 void action_new_terminal();
 void action_new_ssh_session();
+void action_new_terminal_custom(int idx);
 
 // Free the dedicated menu font face — call before ft_shutdown().
 void menu_font_shutdown();
@@ -120,6 +131,16 @@ bool help_mousedown(int x, int y);
 
 // Returns true if hover state changed (caller should set needs_render).
 bool help_mousemotion(int x, int y);
+
+// ============================================================================
+// CUSTOM SHELL DIALOG
+// ============================================================================
+
+extern std::string g_custom_shell_input;
+extern bool g_custom_shell_dialog_open;
+
+void custom_shell_dialog_render(int win_w, int win_h);
+bool custom_shell_dialog_keydown(SDL_Keycode sym, const char *text);
 
 #include "fight_mode.h"
 #include "font_manager.h"

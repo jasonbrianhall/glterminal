@@ -315,6 +315,10 @@ int main(int argc, char **argv) {
     settings_load();  // applies font size, theme, sound — after ft_init and term_init
     SDL_Log("[DEBUG] settings_load done\n");
 
+    // Initialize available terminals for menu
+    detect_available_terminals();
+    SDL_Log("[DEBUG] Detected %d terminal options\n", (int)g_available_terminals.size());
+
     // Scan system fonts and restore saved font choice
     g_font_list = font_scan();
     {
@@ -998,6 +1002,11 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+                if (g_custom_shell_dialog_open) {
+                    custom_shell_dialog_keydown(ev.key.keysym.sym, nullptr);
+                    needs_render = true;
+                    break;
+                }
                 if (g_help_visible) {
                     help_keydown(ev.key.keysym.sym);
                     needs_render = true;
@@ -1034,6 +1043,12 @@ int main(int argc, char **argv) {
             }
 
             case SDL_TEXTINPUT: {
+                // Handle custom shell dialog input first
+                if (g_custom_shell_dialog_open) {
+                    custom_shell_dialog_keydown(SDLK_UNKNOWN, ev.text.text);
+                    needs_render = true;
+                    break;
+                }
 #ifdef USESSH
                 // Forward text to SFTP console when visible
                 if (g_sftp_console_visible) {
@@ -1172,8 +1187,7 @@ int main(int argc, char **argv) {
                                 }
                                 term_dirty_all(&term);
                             } else if (g_menu.sub_open == MENU_ID_NEW_TERMINAL) {
-                                if      (sub_hit == NEW_TERM_IDX_LOCAL) action_new_terminal();
-                                else if (sub_hit == NEW_TERM_IDX_SSH)   action_new_ssh_session();
+                                action_new_terminal_custom(sub_hit);
                             } else if (g_menu.sub_open == MENU_ID_ENTERTAINMENT) {
                                 if      (sub_hit == ENT_IDX_FIGHT)    fight_set_enabled(!fight_get_enabled());
                                 else if (sub_hit == ENT_IDX_BOUNCING) bc_set_enabled(!bc_get_enabled());
@@ -1293,7 +1307,7 @@ int main(int argc, char **argv) {
                             int count = (hit==MENU_ID_THEMES)        ? THEME_COUNT :
                                         (hit==MENU_ID_RENDER_MODE)    ? RENDER_MODE_COUNT :
                                         (hit==MENU_ID_ENTERTAINMENT)  ? ENT_COUNT :
-                                        (hit==MENU_ID_NEW_TERMINAL)   ? NEW_TERM_COUNT :
+                                        (hit==MENU_ID_NEW_TERMINAL)   ? (int)g_available_terminals.size() :
                                         (hit==MENU_ID_FONTS)          ? (int)g_font_list.size() : 6;
                             int sw = g_menu.width + g_font_size*2;
                             int sh = count * g_menu.item_h + 8;
@@ -1561,6 +1575,8 @@ int main(int argc, char **argv) {
 #endif
             // Image viewer (F5) — full-screen overlay
             iv_render(win_w, win_h);
+            // Custom shell dialog
+            custom_shell_dialog_render(win_w, win_h);
             // Help overlay renders last (topmost layer)
             help_render(win_w, win_h);
             // WOPR overlay — above everything including help
