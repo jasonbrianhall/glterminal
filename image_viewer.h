@@ -10,19 +10,17 @@
 // EYE OF FELIX  (F5)
 //
 // Image formats : JPEG, PNG, BMP, GIF, TIFF, WEBP  (via stb_image)
-// Audio formats : MP3, OGG, FLAC, OPUS, WAV         (via SDL_mixer)
+// Audio formats : MP3, OGG, FLAC, OPUS, WAV, AIFF, VOC          (via SDL_mixer)
+//                 MOD, XM, IT, S3M, 669, MED, MTM  (tracker, via SDL_mixer/libxmp)
+//                 MID/MIDI                           (via SDL_mixer + timidity/fluidsynth)
 // CD+G karaoke  : .cdg paired with any supported audio file
 // ZIP browsing  : peek inside zip files for images/audio/cdg
 // ============================================================================
 
-// .webp is included only when libwebp was detected at build time (HAVE_WEBP)
-#ifdef HAVE_WEBP
-#  define IV_WEBP_EXTS  , ".webp"
-#else
-#  define IV_WEBP_EXTS
-#endif
-#define IV_SUPPORTED_EXTS  { ".jpg",".jpeg",".png",".bmp",".gif",".tiff",".tif",".tga" IV_WEBP_EXTS }
-#define IV_AUDIO_EXTS      { ".mp3",".ogg",".flac",".opus",".wav",".mid",".midi" }
+#define IV_SUPPORTED_EXTS  { ".jpg",".jpeg",".png",".bmp",".gif",".webp",".tiff",".tif" }
+#define IV_AUDIO_EXTS      { ".mp3",".ogg",".flac",".opus",".wav",".mid",".midi", \
+                             ".aiff",".aif",".voc", \
+                             ".mod",".xm",".it",".s3m",".669",".med",".mtm" }
 
 struct IVEntry {
     char     name[512]      = {};

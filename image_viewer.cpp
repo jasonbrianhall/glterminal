@@ -16,11 +16,6 @@
 // stb_image.h must be in the include path (https://github.com/nothings/stb)
 #include "stb_image.h"
 
-// ---- libwebp (auto-detected by Makefile, defines HAVE_WEBP when present) --
-#ifdef HAVE_WEBP
-#  include <webp/decode.h>
-#endif
-
 // ---- miniz (zip support) --------------------------------------------------
 // Uses the split-header miniz distribution.
 #include "miniz.h"
@@ -641,44 +636,16 @@ static void iv_upload_texture(const unsigned char *rgba, int w, int h) {
 }
 
 static void iv_load_image_from_mem(const unsigned char *data, size_t len, const char *label) {
-    int w = 0, h = 0;
-    unsigned char *px = nullptr;
-    bool webp_alloc   = false;
-
-#ifdef HAVE_WEBP
-    // Detect WebP by magic: bytes 0-3 == "RIFF", bytes 8-11 == "WEBP"
-    if (len >= 12 &&
-        memcmp(data,     "RIFF", 4) == 0 &&
-        memcmp(data + 8, "WEBP", 4) == 0)
-    {
-        px = WebPDecodeRGBA(data, len, &w, &h);
-        if (!px) {
-            snprintf(g_iv.error, sizeof(g_iv.error), "WebP decode failed");
-            iv_free_tex();
-            return;
-        }
-        webp_alloc = true;
-    }
-#endif
-
+    int w, h, ch;
+    unsigned char *px = stbi_load_from_memory(data, (int)len, &w, &h, &ch, 4);
     if (!px) {
-        int ch = 0;
-        px = stbi_load_from_memory(data, (int)len, &w, &h, &ch, 4);
-        if (!px) {
-            snprintf(g_iv.error, sizeof(g_iv.error), "Decode failed: %s", stbi_failure_reason());
-            iv_free_tex();
-            return;
-        }
+        snprintf(g_iv.error, sizeof(g_iv.error), "Decode failed: %s", stbi_failure_reason());
+        iv_free_tex();
+        return;
     }
-
     g_iv.error[0] = '\0';
     iv_upload_texture(px, w, h);
-
-    if (webp_alloc)
-        WebPFree(px);
-    else
-        stbi_image_free(px);
-
+    stbi_image_free(px);
     strncpy(g_iv.img_label, label, sizeof(g_iv.img_label)-1);
     // Reset view for every new image
     g_iv.zoom    = 1.0f;
@@ -2041,9 +2008,11 @@ bool iv_keydown(SDL_Keycode sym) {
             }
             return true;
         }
-        // No shift — normal list navigation
-        if (sym == SDLK_UP) { if (g_iv.selected > 0) g_iv.selected--; }
-        else                 { if (g_iv.selected < n-1) g_iv.selected++; }
+        // No shift — normal list navigation with wrap-around
+        if (sym == SDLK_UP)
+            g_iv.selected = (g_iv.selected > 0) ? g_iv.selected - 1 : n - 1;
+        else
+            g_iv.selected = (g_iv.selected < n - 1) ? g_iv.selected + 1 : 0;
         return true;
     }
 
