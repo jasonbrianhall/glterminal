@@ -577,6 +577,10 @@ static bool s_mixer_ready = false;
 
 static void iv_ensure_mixer() {
     if (s_mixer_ready) return;
+    // Call Mix_Init before Mix_OpenAudio so SDL_mixer uses whichever codec
+    // libs are linked in at build time rather than trying to dlopen them.
+    Mix_Init(MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC |
+             MIX_INIT_OPUS | MIX_INIT_MID | MIX_INIT_MOD);
     Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048);
     Mix_AllocateChannels(8);
     s_mixer_ready = true;

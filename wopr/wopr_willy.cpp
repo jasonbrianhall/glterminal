@@ -1085,7 +1085,7 @@ void wopr_willy_update(WoprState *w, double dt) {
     if(s->sub==WSub::DEAD_WHITE) {
         s->sub_timer += dt;
         if(s->sub_timer >= 1.0) {  // hold white for 1 second
-            if(s->lives<=0) { s->sub=WSub::GAME_OVER; }
+            if(s->lives<0) { s->sub=WSub::GAME_OVER; }
             else            { ww_load_level(s,s->level_num); }
         }
         return;
