@@ -215,6 +215,7 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym);
 void wopr_willy_keyup(WoprState *w, SDL_Keycode sym);
 void wopr_willy_free(WoprState *w);
 void wopr_willy_mousedown(WoprState *w, int x, int y, int button);
+void wopr_willy_mousemove(WoprState *w, int x, int y);
 void wopr_willy_mouseup(WoprState *w, int x, int y, int button);
 void wopr_willy_textinput(WoprState *w, const char *text);
 

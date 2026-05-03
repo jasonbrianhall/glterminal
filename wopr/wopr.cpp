@@ -1296,6 +1296,7 @@ bool wopr_mousemove(int x, int y) {
         case WoprPhase::PLAYING_CHECKERS: wopr_checkers_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_MINES: wopr_mines_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_WAR:   wopr_war_mousemove(w, x, y);   break;
+        case WoprPhase::PLAYING_WILLY: wopr_willy_mousemove(w, x, y); break;
         case WoprPhase::PLAYING_SDI:   wopr_sdi_mousemove(w, x, y);   break;
         default: break;
     }
