@@ -985,11 +985,13 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
                     bool is_url = (sg.txt == GITHUB_URL ||
                                    std::string(sg.txt) == GITHUB_URL);
                     if(is_url) {
-                        // Render in cyan and record bounding rect for click handling
+                        // Render in cyan and record exact bounding rect for click handling.
+                        // Use gl_text_width/height at the same scale (1.f) so the stored
+                        // rect precisely matches the pixels drawn, regardless of cw truncation.
                         gl_draw_text(sg.txt, x, y, 0.f,1.f,1.f,1.f, 1.f);
-                        float tw = (float)count_cols(sg.txt) * cs;
                         s->link_x = x; s->link_y = y;
-                        s->link_w = tw; s->link_h = cs;
+                        s->link_w = gl_text_width(sg.txt, 1.f);
+                        s->link_h = gl_text_height(1.f);
                     } else {
                         gl_draw_text(sg.txt, x, y, 1.f,1.f,1.f,1.f, 1.f);
                     }
@@ -1014,7 +1016,7 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
 
     s->rx0=px; s->ry0=py; s->rcw=cell; s->rch=cell;
 
-    float gw=cell*W_COLS, gh=cell*W_ROWS;
+    float gh=cell*W_ROWS; (void)(cell*W_COLS);
 
     // Fill the entire window with blue — game area + margins + status strip
     gl_draw_rect(0.f, 0.f, (float)ww, (float)wh, 0.f, 0.f, 0.55f, 1.f);
@@ -1241,10 +1243,14 @@ void wopr_willy_mousedown(WoprState *w, int mx, int my, int button) {
     if(!w->sub_state) return;
     WillyWoprState *s=static_cast<WillyWoprState*>(w->sub_state);
 
-    // Intro screen: click on the GitHub URL to open it in a browser
-    if(s->sub==WSub::INTRO && button==1 && s->link_w > 0.f) {
-        if((float)mx >= s->link_x && (float)mx <= s->link_x + s->link_w &&
-           (float)my >= s->link_y && (float)my <= s->link_y + s->link_h) {
+    // Intro screen: click on the GitHub URL to open it in a browser.
+    // Intro screen: click on the GitHub URL to open it.
+    // Mirrors chess mousedown pattern: SDL_BUTTON_LEFT, int coords vs float rects.
+    if(s->sub == WSub::INTRO && button == SDL_BUTTON_LEFT && s->link_w > 0.f) {
+        // Generous hit region: full width of URL, 3x line height vertically
+        float pad_y = s->link_h;
+        if(mx >= (int)s->link_x && mx <= (int)(s->link_x + s->link_w) &&
+           my >= (int)(s->link_y - pad_y) && my <= (int)(s->link_y + s->link_h + pad_y)) {
             SDL_OpenURL("https://github.com/jasonbrianhall/willytheworm");
             return;
         }
@@ -1266,8 +1272,22 @@ void wopr_willy_mousedown(WoprState *w, int mx, int my, int button) {
     else if(button==2)   { s->moving_continuously=false; s->continuous_direction.clear(); }
 }
 
-void wopr_willy_mousemove(WoprState *w, int /*mx*/, int /*my*/) {
-    (void)w;  // no hover behaviour needed
+static void willy_set_cursor(SDL_SystemCursor id) {
+    static SDL_SystemCursor last = SDL_SYSTEM_CURSOR_ARROW;
+    if(id != last) { SDL_SetCursor(SDL_CreateSystemCursor(id)); last = id; }
+}
+
+void wopr_willy_mousemove(WoprState *w, int x, int y) {
+    if(!w->sub_state) return;
+    WillyWoprState *s = static_cast<WillyWoprState*>(w->sub_state);
+    if(s->sub == WSub::INTRO && s->link_w > 0.f) {
+        float pad_y = s->link_h;
+        bool over = (x >= (int)s->link_x && x <= (int)(s->link_x + s->link_w) &&
+                     y >= (int)(s->link_y - pad_y) && y <= (int)(s->link_y + s->link_h + pad_y));
+        willy_set_cursor(over ? SDL_SYSTEM_CURSOR_HAND : SDL_SYSTEM_CURSOR_ARROW);
+        return;
+    }
+    willy_set_cursor(SDL_SYSTEM_CURSOR_ARROW);
 }
 
 void wopr_willy_mouseup(WoprState *w, int,int,int button) {
