@@ -25,18 +25,8 @@
 #include <string>
 #include <vector>
 
-#if __has_include("wopr_willy_assets.h")
-#  include "wopr_willy_assets.h"
-#  define WILLY_ASSETS_EMBEDDED 1
-#else
-#  define WILLY_ASSETS_EMBEDDED 0
-static const unsigned char willy_levels_z[]   = {0};
-static const size_t        willy_levels_z_len  = 0;
-static const size_t        willy_levels_raw_len = 0;
-static const unsigned char willy_chr_z[]      = {0};
-static const size_t        willy_chr_z_len     = 0;
-static const size_t        willy_chr_raw_len    = 0;
-#endif
+#include "wopr_willy_assets.h"
+#define WILLY_ASSETS_EMBEDDED 1
 
 // =============================================================================
 // CHR SPRITES
@@ -428,6 +418,9 @@ struct WillyWoprState {
     // Render geometry
     float rx0=0,ry0=0,rcw=0,rch=0;
 
+    // Intro screen — bounding rect of the GitHub URL for click-to-open
+    float link_x=0,link_y=0,link_w=0,link_h=0;
+
     std::mt19937 rng{std::random_device{}()};
 };
 
@@ -790,7 +783,14 @@ static void ww_tick(WillyWoprState *s) {
         ww_snd_pts();
         ws(s,y,x,"EMPTY");
     }
-    if(cur_tile=="UPSPRING")   { do_jump(s); }
+    if(cur_tile=="UPSPRING") {
+        // Force a bounce regardless of whether Willy is already airborne —
+        // landing on a spring from above must always launch him back up.
+        s->jumping          = true;
+        s->willy_velocity_y = -4;   // stronger than a normal jump (-3)
+        s->fall_speed       = 0;
+        ww_snd_climb(s->wy - 1);
+    }
     if(cur_tile=="SIDESPRING") {
         if(s->moving_continuously) {
             if(s->continuous_direction=="RIGHT") { s->continuous_direction="LEFT"; s->willy_direction="LEFT"; }
@@ -910,7 +910,7 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
             {{{"", -1}}, 1},
             {{{"please share them with the world.", -1}}, 1},
             {{{"", -1}}, 1},
-
+            {{{"", -1}}, 1},
             {{{"Meet Willy the Worm. Willy is a fun-loving invertebrate who likes to climb", -1}}, 1},
             {{{"", -1}}, 1},
             {{{"ladders, bounce on springs, and find his presents.", -1}}, 1},
@@ -919,7 +919,7 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
             {{{"", -1}}, 1},
             {{{"", -1}}, 1},
 
-            {{{"You can press the arrow keys \xe2\x86\x90 \xe2\x86\x91 \xe2\x86\x92 \xe2\x86\x93", -1}}, 1},
+            {{{"Use WASD or the arrow keys \xe2\x86\x90 \xe2\x86\x91 \xe2\x86\x92 \xe2\x86\x93", -1}}, 1},
             {{{"", -1}}, 1},
             {{{"to make Willy run and climb, or the", -1}}, 1},
             {{{"", -1}}, 1},
@@ -972,6 +972,8 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
         float start_y = ((float)wh - NL * cs) * 0.5f;
         if(start_y < 0.f) start_y = 0.f;
 
+        static const char *GITHUB_URL = "https://github.com/jasonbrianhall/willytheworm";
+
         for(int i = 0; i < NL; i++) {
             float y = start_y + i * cs;
             if(L[i].n == 0) continue;  // blank — y already advances via i*cs, nothing to draw
@@ -980,7 +982,17 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
             for(int j = 0; j < L[i].n; j++) {
                 const Seg &sg = L[i].s[j];
                 if(sg.spr < 0 && sg.txt) {
-                    gl_draw_text(sg.txt, x, y, 1.f,1.f,1.f,1.f, 1.f);
+                    bool is_url = (sg.txt == GITHUB_URL ||
+                                   std::string(sg.txt) == GITHUB_URL);
+                    if(is_url) {
+                        // Render in cyan and record bounding rect for click handling
+                        gl_draw_text(sg.txt, x, y, 0.f,1.f,1.f,1.f, 1.f);
+                        float tw = (float)count_cols(sg.txt) * cs;
+                        s->link_x = x; s->link_y = y;
+                        s->link_w = tw; s->link_h = cs;
+                    } else {
+                        gl_draw_text(sg.txt, x, y, 1.f,1.f,1.f,1.f, 1.f);
+                    }
                     x += count_cols(sg.txt) * cs;
                 } else if(sg.spr >= 0) {
                     ww_draw_sprite(sg.spr, x, y, cs, cs);
@@ -1228,6 +1240,16 @@ void wopr_willy_keyup(WoprState *w, SDL_Keycode sym) {
 void wopr_willy_mousedown(WoprState *w, int mx, int my, int button) {
     if(!w->sub_state) return;
     WillyWoprState *s=static_cast<WillyWoprState*>(w->sub_state);
+
+    // Intro screen: click on the GitHub URL to open it in a browser
+    if(s->sub==WSub::INTRO && button==1 && s->link_w > 0.f) {
+        if((float)mx >= s->link_x && (float)mx <= s->link_x + s->link_w &&
+           (float)my >= s->link_y && (float)my <= s->link_y + s->link_h) {
+            SDL_OpenURL("https://github.com/jasonbrianhall/willytheworm");
+            return;
+        }
+    }
+
     if(s->sub!=WSub::PLAYING||s->rcw==0.f) return;
     int dc=(int)((mx-s->rx0)/s->rcw)-s->wx;
     int dr=(int)((my-s->ry0)/s->rch)-s->wy;
@@ -1242,6 +1264,10 @@ void wopr_willy_mousedown(WoprState *w, int mx, int my, int button) {
         }
     } else if(button==3) { do_jump(s); }
     else if(button==2)   { s->moving_continuously=false; s->continuous_direction.clear(); }
+}
+
+void wopr_willy_mousemove(WoprState *w, int /*mx*/, int /*my*/) {
+    (void)w;  // no hover behaviour needed
 }
 
 void wopr_willy_mouseup(WoprState *w, int,int,int button) {
