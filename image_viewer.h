@@ -10,13 +10,17 @@
 // EYE OF FELIX  (F5)
 //
 // Image formats : JPEG, PNG, BMP, GIF, TIFF, WEBP  (via stb_image)
-// Audio formats : MP3, OGG, FLAC, OPUS, WAV         (via SDL_mixer)
+// Audio formats : MP3, OGG, FLAC, OPUS, WAV, AIFF, VOC          (via SDL_mixer)
+//                 MOD, XM, IT, S3M, 669, MED, MTM  (tracker, via SDL_mixer/libxmp)
+//                 MID/MIDI                           (via SDL_mixer + timidity/fluidsynth)
 // CD+G karaoke  : .cdg paired with any supported audio file
 // ZIP browsing  : peek inside zip files for images/audio/cdg
 // ============================================================================
 
 #define IV_SUPPORTED_EXTS  { ".jpg",".jpeg",".png",".bmp",".gif",".webp",".tiff",".tif" }
-#define IV_AUDIO_EXTS      { ".mp3",".ogg",".flac",".opus",".wav",".mid",".midi" }
+#define IV_AUDIO_EXTS      { ".mp3",".ogg",".flac",".opus",".wav",".mid",".midi", \
+                             ".aiff",".aif",".voc", \
+                             ".mod",".xm",".it",".s3m",".669",".med",".mtm" }
 
 struct IVEntry {
     char     name[512]      = {};
@@ -68,7 +72,9 @@ struct ImageViewer {
     // Audio playback
     bool       audio_playing      = false;
     bool       audio_paused       = false;
-    Mix_Music *music              = nullptr;
+    Mix_Music *music              = nullptr;  // used for stream formats (MP3/OGG/FLAC/etc)
+    Mix_Chunk *chunk              = nullptr;  // used for PCM formats (VOC/AIFF)
+    int        chunk_channel      = -1;       // SDL_mixer channel chunk is playing on
     char       audio_label[512]   = {};
     double     audio_start_ticks  = 0.0;
     double     audio_position     = 0.0;

@@ -66,6 +66,32 @@ SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || e
   SSH_SUFFIX       = 
 
 # ============================================================================
+# AUDIO CODEC LIBS  (auto-detected — linked in statically to avoid dlopen)
+# Each lib is only added to LDFLAGS if pkg-config finds it.
+# Linux:   sudo apt install libxmp-dev libmpg123-dev libopus-dev libopusfile-dev
+#                           libvorbis-dev libflac-dev
+#          sudo dnf install libxmp-devel mpg123-devel opus-devel opusfile-devel
+#                           libvorbis-devel flac-devel
+# Windows: equivalent mingw64-* packages or via mxe.cc
+# ============================================================================
+pkg_lib_linux = $(shell $(PKG_CONFIG_LINUX) --exists $(1) 2>/dev/null && $(PKG_CONFIG_LINUX) --libs $(1) || echo "")
+pkg_lib_win   = $(shell $(PKG_CONFIG_WIN)   --exists $(1) 2>/dev/null && $(PKG_CONFIG_WIN)   --libs $(1) || echo "")
+
+CODEC_LIBS_LINUX := $(call pkg_lib_linux,libxmp) \
+                    $(call pkg_lib_linux,libmpg123) \
+                    $(call pkg_lib_linux,opusfile) \
+                    $(call pkg_lib_linux,opus) \
+                    $(call pkg_lib_linux,vorbisfile) \
+                    $(call pkg_lib_linux,flac)
+
+CODEC_LIBS_WIN   := $(call pkg_lib_win,libxmp) \
+                    $(call pkg_lib_win,libmpg123) \
+                    $(call pkg_lib_win,opusfile) \
+                    $(call pkg_lib_win,opus) \
+                    $(call pkg_lib_win,vorbisfile) \
+                    $(call pkg_lib_win,flac)
+
+# ============================================================================
 # MSIX BUILD  (opt-in via FELIXBASIC=1)
 # Adds -DFELIXBASIC_BUILD to Windows flags so #ifdef FELIXBASIC_BUILD can swap
 # cmd.exe for felixbasic.exe without needing runtime parameters.
@@ -87,7 +113,7 @@ CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                  $(SSH_LIBS_LINUX) \
-                 -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer -lgmp \
+                 -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lgmp \
                  -s -Wl,--gc-sections -flto
 
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
@@ -98,7 +124,7 @@ CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                        $(SSH_LIBS_LINUX) \
-                       -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer -lgmp
+                       -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lgmp
 
 # C flags for miniz .c files (no -std=c++17, no -Wextra pedantry on C)
 CFLAGS_LINUX       = $(CFLAGS_COMMON) -DLINUX -O2
@@ -117,7 +143,7 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
-               -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer -lshlwapi -lgmp \
+               -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lgmp \
                -s -Wl,--gc-sections -flto
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \

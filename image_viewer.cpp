@@ -495,6 +495,12 @@ static void iv_stop_audio() {
         Mix_FreeMusic(g_iv.music);
         g_iv.music = nullptr;
     }
+    if (g_iv.chunk) {
+        if (g_iv.chunk_channel >= 0) Mix_HaltChannel(g_iv.chunk_channel);
+        Mix_FreeChunk(g_iv.chunk);
+        g_iv.chunk         = nullptr;
+        g_iv.chunk_channel = -1;
+    }
     g_iv.audio_playing  = false;
     g_iv.audio_paused   = false;
     g_iv.audio_position = 0.0;
@@ -577,9 +583,25 @@ static bool s_mixer_ready = false;
 
 static void iv_ensure_mixer() {
     if (s_mixer_ready) return;
+    // Call Mix_Init before Mix_OpenAudio so SDL_mixer uses whichever codec
+    // libs are linked in at build time rather than trying to dlopen them.
+    Mix_Init(MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC |
+             MIX_INIT_OPUS | MIX_INIT_MID | MIX_INIT_MOD);
     Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048);
     Mix_AllocateChannels(8);
     s_mixer_ready = true;
+}
+
+// Returns true if the file extension is a PCM chunk format that must be
+// loaded with Mix_LoadWAV rather than Mix_LoadMUS.
+static bool is_chunk_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return false;
+    char ext[16] = {};
+    for (int i = 0; i < 15 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
+    return strcmp(ext, ".voc")  == 0 ||
+           strcmp(ext, ".aiff") == 0 ||
+           strcmp(ext, ".aif")  == 0;
 }
 
 static void iv_play_audio(const char *audio_path, const char *label, bool load_cdg) {
@@ -588,12 +610,29 @@ static void iv_play_audio(const char *audio_path, const char *label, bool load_c
     iv_free_tex();
     iv_ensure_mixer();
 
-    g_iv.music = Mix_LoadMUS(audio_path);
-    if (!g_iv.music) {
-        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot load: %s", Mix_GetError());
-        return;
+    if (is_chunk_ext(audio_path)) {
+        // VOC, AIFF — PCM chunk formats, not supported by Mix_LoadMUS
+        g_iv.chunk = Mix_LoadWAV(audio_path);
+        if (!g_iv.chunk) {
+            snprintf(g_iv.error, sizeof(g_iv.error), "Cannot load: %s", Mix_GetError());
+            return;
+        }
+        g_iv.chunk_channel = Mix_PlayChannel(-1, g_iv.chunk, 0);
+        if (g_iv.chunk_channel < 0) {
+            snprintf(g_iv.error, sizeof(g_iv.error), "Cannot play: %s", Mix_GetError());
+            Mix_FreeChunk(g_iv.chunk);
+            g_iv.chunk = nullptr;
+            return;
+        }
+    } else {
+        g_iv.music = Mix_LoadMUS(audio_path);
+        if (!g_iv.music) {
+            snprintf(g_iv.error, sizeof(g_iv.error), "Cannot load: %s", Mix_GetError());
+            return;
+        }
+        Mix_PlayMusic(g_iv.music, 1);
     }
-    Mix_PlayMusic(g_iv.music, 1);
+
     g_iv.audio_playing     = true;
     g_iv.audio_paused      = false;
     g_iv.audio_position    = 0.0;
@@ -720,10 +759,13 @@ void iv_close() {
 void iv_tick(double /*dt*/) {
     if (!g_iv.visible) return;
 
-    // Update audio position from wall clock whenever music is loaded
-    if (g_iv.music && g_iv.audio_playing && !g_iv.audio_paused) {
+    // Update audio position from wall clock whenever audio is playing
+    if (g_iv.audio_playing && !g_iv.audio_paused) {
         g_iv.audio_position = ((double)SDL_GetTicks() - g_iv.audio_start_ticks) / 1000.0;
-        if (!Mix_PlayingMusic()) {
+        // Check for playback completion
+        bool finished = g_iv.music  ? !Mix_PlayingMusic() :
+                        g_iv.chunk  ? !Mix_Playing(g_iv.chunk_channel) : true;
+        if (finished) {
             g_iv.audio_playing  = false;
             g_iv.audio_position = 0.0;
         }
@@ -1896,11 +1938,13 @@ bool iv_keydown(SDL_Keycode sym) {
     case SDLK_SPACE:
         // If audio is playing/paused, toggle pause; otherwise open selected
         if (g_iv.audio_playing) {
-            Mix_PauseMusic();
+            if (g_iv.music)                       Mix_PauseMusic();
+            else if (g_iv.chunk_channel >= 0)     Mix_Pause(g_iv.chunk_channel);
             g_iv.audio_paused  = true;
             g_iv.audio_playing = false;
         } else if (g_iv.audio_paused) {
-            Mix_ResumeMusic();
+            if (g_iv.music)                       Mix_ResumeMusic();
+            else if (g_iv.chunk_channel >= 0)     Mix_Resume(g_iv.chunk_channel);
             g_iv.audio_playing = true;
             g_iv.audio_paused  = false;
             // Adjust start_ticks to account for paused time
@@ -2008,9 +2052,11 @@ bool iv_keydown(SDL_Keycode sym) {
             }
             return true;
         }
-        // No shift — normal list navigation
-        if (sym == SDLK_UP) { if (g_iv.selected > 0) g_iv.selected--; }
-        else                 { if (g_iv.selected < n-1) g_iv.selected++; }
+        // No shift — normal list navigation with wrap-around
+        if (sym == SDLK_UP)
+            g_iv.selected = (g_iv.selected > 0) ? g_iv.selected - 1 : n - 1;
+        else
+            g_iv.selected = (g_iv.selected < n - 1) ? g_iv.selected + 1 : 0;
         return true;
     }
 
