@@ -72,7 +72,9 @@ struct ImageViewer {
     // Audio playback
     bool       audio_playing      = false;
     bool       audio_paused       = false;
-    Mix_Music *music              = nullptr;
+    Mix_Music *music              = nullptr;  // used for stream formats (MP3/OGG/FLAC/etc)
+    Mix_Chunk *chunk              = nullptr;  // used for PCM formats (VOC/AIFF)
+    int        chunk_channel      = -1;       // SDL_mixer channel chunk is playing on
     char       audio_label[512]   = {};
     double     audio_start_ticks  = 0.0;
     double     audio_position     = 0.0;
