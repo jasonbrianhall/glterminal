@@ -1,11 +1,6 @@
 # Felix Terminal Makefile
 # Cross-compile for Windows with: make windows
 # Native Linux build with:        make linux
-#
-# SSH support (libssh2) — opt-in via SSH=1:
-#   make linux   SSH=1
-#   make windows SSH=1
-#   make debug   SSH=1
 
 # Compiler settings
 CXX_LINUX = g++
@@ -49,21 +44,32 @@ GLEW_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags glew 2>/dev/null || echo
 GLEW_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   glew 2>/dev/null || echo "-lglew32")
 
 # ============================================================================
-# LIBSSH2  (only pulled in when SSH=1)
+# WEBP  (auto-detected — links -lwebp and defines HAVE_WEBP when libwebp is present)
+# Linux:   sudo apt install libwebp-dev  /  sudo dnf install libwebp-devel
+# Windows: mingw64-libwebp (Fedora)  or  build via mxe.cc
 # ============================================================================
-SSH2_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags libssh2 2>/dev/null || echo "")
-SSH2_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libssh2 2>/dev/null || echo "-lssh2")
+WEBP_FOUND_LINUX := $(shell $(PKG_CONFIG_LINUX) --exists libwebp 2>/dev/null && echo yes || echo no)
+WEBP_FOUND_WIN   := $(shell $(PKG_CONFIG_WIN)   --exists libwebp 2>/dev/null && echo yes || echo no)
 
-SSH2_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags libssh2 2>/dev/null || echo "")
-SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || echo "-lssh2")
+ifeq ($(WEBP_FOUND_LINUX),yes)
+  WEBP_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags libwebp)
+  WEBP_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libwebp)
+  WEBP_DEFINE_LINUX := -DHAVE_WEBP
+else
+  WEBP_CFLAGS_LINUX :=
+  WEBP_LIBS_LINUX   :=
+  WEBP_DEFINE_LINUX :=
+endif
 
-  SSH_SRCS         = ssh_session.cpp port_forward.cpp pf_overlay.cpp
-  SSH_DEFINE       = -DUSESSH
-  SSH_CFLAGS_LINUX = $(SSH2_CFLAGS_LINUX)
-  SSH_LIBS_LINUX   = $(SSH2_LIBS_LINUX) -lcrypto -lssl
-  SSH_CFLAGS_WIN   = $(SSH2_CFLAGS_WIN)
-  SSH_LIBS_WIN     = $(SSH2_LIBS_WIN) -lcrypto -lssl -lws2_32
-  SSH_SUFFIX       = 
+ifeq ($(WEBP_FOUND_WIN),yes)
+  WEBP_CFLAGS_WIN := $(shell $(PKG_CONFIG_WIN) --cflags libwebp)
+  WEBP_LIBS_WIN   := $(shell $(PKG_CONFIG_WIN) --libs   libwebp)
+  WEBP_DEFINE_WIN := -DHAVE_WEBP
+else
+  WEBP_CFLAGS_WIN :=
+  WEBP_LIBS_WIN   :=
+  WEBP_DEFINE_WIN :=
+endif
 
 # ============================================================================
 # MSIX BUILD  (opt-in via FELIXBASIC=1)
@@ -81,23 +87,23 @@ endif
 # ============================================================================
 CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
                  $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
-                 $(SSH_CFLAGS_LINUX) \
+                 $(WEBP_CFLAGS_LINUX) \
                  -Iwopr \
-                 -DLINUX $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
+                 -DLINUX $(WEBP_DEFINE_LINUX) -O2 -ffunction-sections -fdata-sections -flto
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
-                 $(SSH_LIBS_LINUX) \
+                 $(WEBP_LIBS_LINUX) \
                  -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer -lgmp \
                  -s -Wl,--gc-sections -flto
 
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
                        $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
-                       $(SSH_CFLAGS_LINUX) \
+                       $(WEBP_CFLAGS_LINUX) \
                        -Iwopr \
-                       -DLINUX $(SSH_DEFINE) -DDEBUG -g -O0
+                       -DLINUX $(WEBP_DEFINE_LINUX) -DDEBUG -g -O0
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
-                       $(SSH_LIBS_LINUX) \
+                       $(WEBP_LIBS_LINUX) \
                        -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer -lgmp
 
 # C flags for miniz .c files (no -std=c++17, no -Wextra pedantry on C)
@@ -109,23 +115,23 @@ CFLAGS_LINUX_DEBUG = $(CFLAGS_COMMON) -DLINUX -DDEBUG -g -O0
 # ============================================================================
 CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
                $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
-               $(SSH_CFLAGS_WIN) \
+               $(WEBP_CFLAGS_WIN) \
                -Iwopr \
                -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
-               $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
+               $(WEBP_DEFINE_WIN) $(FELIXBASIC_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
 
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
-               $(SSH_LIBS_WIN) \
+               $(WEBP_LIBS_WIN) \
                -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer -lshlwapi -lgmp \
                -s -Wl,--gc-sections -flto
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
-                     $(SSH_CFLAGS_WIN) \
+                     $(WEBP_CFLAGS_WIN) \
                      -Iwopr \
                      -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
-                     $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -DDEBUG -g -O0
+                     $(WEBP_DEFINE_WIN) $(FELIXBASIC_DEFINE) -DDEBUG -g -O0
 
 CFLAGS_WIN         = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -O2
 CFLAGS_WIN_DEBUG   = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -DDEBUG -g -O0
@@ -141,7 +147,7 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               felix_settings.cpp    kitty_graphics.cpp    \
               font_manager.cpp      sftp_overlay.cpp      \
               sftp_console.cpp      image_viewer.cpp      \
-              cdg.cpp               $(SSH_SRCS)           \
+              cdg.cpp                                     \
               basic_graphics.cpp    mml_player.cpp        \
               glyph_atlas.cpp
 
@@ -226,14 +232,14 @@ OBJECTS_WIN         = $(addprefix $(BUILD_DIR_WIN)/,          $(SRCS_WIN:.cpp=.w
 OBJECTS_WIN_DEBUG   = $(addprefix $(BUILD_DIR_WIN_DEBUG)/,    $(SRCS_WIN:.cpp=.win.debug.o)) \
                       $(addprefix $(BUILD_DIR_WIN_DEBUG)/,    $(SRCS_MINIZ:.c=.win.debug.o))
 
-EXECUTABLE_LINUX       = flt$(SSH_SUFFIX)
-EXECUTABLE_LINUX_DEBUG = flt_debug$(SSH_SUFFIX)
+EXECUTABLE_LINUX       = flt
+EXECUTABLE_LINUX_DEBUG = flt_debug
 ifeq ($(FELIXBASIC),1)
-EXECUTABLE_WIN         = flt-felixbasic$(SSH_SUFFIX).exe
-EXECUTABLE_WIN_DEBUG   = flt-felixbasic_debug$(SSH_SUFFIX).exe
+EXECUTABLE_WIN         = flt-felixbasic.exe
+EXECUTABLE_WIN_DEBUG   = flt-felixbasic_debug.exe
 else
-EXECUTABLE_WIN         = flt$(SSH_SUFFIX).exe
-EXECUTABLE_WIN_DEBUG   = flt_debug$(SSH_SUFFIX).exe
+EXECUTABLE_WIN         = flt.exe
+EXECUTABLE_WIN_DEBUG   = flt_debug.exe
 endif
 
 BUILD_DIR             = build
@@ -431,8 +437,8 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 		echo "Tip: write collect_dlls.sh or copy manually:"; \
 		echo "  SDL2.dll, glew32.dll, freetype.dll, libwinpthread-1.dll,"; \
 		echo "  libgcc_s_seh-1.dll, libstdc++-6.dll"; \
-		if [ "$(SSH)" = "1" ]; then \
-			echo "  (SSH build) libssh2.dll, libssl-*.dll, libcrypto-*.dll"; \
+		if [ "$(WEBP_FOUND_WIN)" = "yes" ]; then \
+			echo "  (WebP build) libwebp.dll"; \
 		fi \
 	fi
 
@@ -453,12 +459,12 @@ check-deps:
 	@$(PKG_CONFIG_LINUX) --exists freetype2 && echo "✓ freetype2" || echo "✗ freetype2"
 	@$(PKG_CONFIG_LINUX) --exists sdl2      && echo "✓ sdl2"      || echo "✗ sdl2"
 	@$(PKG_CONFIG_LINUX) --exists glew      && echo "✓ glew"      || echo "✗ glew"
-	@$(PKG_CONFIG_LINUX) --exists libssh2   && echo "✓ libssh2"   || echo "✗ libssh2 (optional, needed for SSH=1)"
+	@$(PKG_CONFIG_LINUX) --exists libwebp   && echo "✓ libwebp (WebP support enabled)"   || echo "○ libwebp not found (WebP support disabled)"
 	@echo "=== Windows (mingw64) ==="
 	@$(PKG_CONFIG_WIN) --exists freetype2 && echo "✓ freetype2" || echo "✗ freetype2"
 	@$(PKG_CONFIG_WIN) --exists sdl2      && echo "✓ sdl2"      || echo "✗ sdl2"
 	@$(PKG_CONFIG_WIN) --exists glew      && echo "✓ glew"      || echo "✗ glew"
-	@$(PKG_CONFIG_WIN) --exists libssh2   && echo "✓ libssh2"   || echo "✗ libssh2 (optional, needed for SSH=1)"
+	@$(PKG_CONFIG_WIN) --exists libwebp   && echo "✓ libwebp (WebP support enabled)"   || echo "○ libwebp not found (WebP support disabled)"
 
 clean:
 	find $(BUILD_DIR) -type f \( -name "*.o" -o -name "*.d" \) -delete 2>/dev/null || true
@@ -489,7 +495,8 @@ help:
 	@echo "  On Ubuntu: sudo apt install mingw-w64 mingw-w64-tools"
 	@echo "             (then build deps from source or use mxe.cc)"
 	@echo ""
-	@echo "SSH Linux deps:   sudo apt install libssh2-1-dev libssl-dev"
-	@echo "                  sudo dnf install libssh2-devel openssl-devel"
-	@echo "SSH Windows deps: mingw64-libssh2 mingw64-openssl (Fedora)"
-	@echo "                  or build from source via mxe.cc"
+	@echo "WebP is auto-detected via pkg-config — no build flag needed."
+	@echo "  Linux:   sudo apt install libwebp-dev"
+	@echo "           sudo dnf install libwebp-devel"
+	@echo "  Windows: mingw64-libwebp (Fedora)"
+	@echo "           or build from source via mxe.cc"

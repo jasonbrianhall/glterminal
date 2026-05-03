@@ -15,7 +15,13 @@
 // ZIP browsing  : peek inside zip files for images/audio/cdg
 // ============================================================================
 
-#define IV_SUPPORTED_EXTS  { ".jpg",".jpeg",".png",".bmp",".gif",".webp",".tiff",".tif" }
+// .webp is included only when libwebp was detected at build time (HAVE_WEBP)
+#ifdef HAVE_WEBP
+#  define IV_WEBP_EXTS  , ".webp"
+#else
+#  define IV_WEBP_EXTS
+#endif
+#define IV_SUPPORTED_EXTS  { ".jpg",".jpeg",".png",".bmp",".gif",".tiff",".tif",".tga" IV_WEBP_EXTS }
 #define IV_AUDIO_EXTS      { ".mp3",".ogg",".flac",".opus",".wav",".mid",".midi" }
 
 struct IVEntry {
