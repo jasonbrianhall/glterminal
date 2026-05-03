@@ -1,5 +1,5 @@
 // image_viewer.cpp — F5 image viewer overlay for Felix Terminal
-// Supports local filesystem browsing.
+// Supports local filesystem and (when USESSH) remote SFTP browsing.
 // Image decoding via stb_image (no extra library dependency).
 
 // GL must be included first — before stb_image and everything else
@@ -41,6 +41,12 @@
 #include <vector>
 #include <algorithm>
 #include <ctype.h>
+
+#ifdef USESSH
+#  include "ssh_session.h"
+#  include "sftp_overlay.h"
+#  include <libssh2_sftp.h>
+#endif
 
 #ifndef _WIN32
 #  include <dirent.h>
@@ -372,7 +378,104 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
     });
 }
 
+#ifdef USESSH
+// Reuse the SFTP subsystem from sftp_overlay (s_sftp is extern there).
+// We call the public sftp_panel helpers indirectly by duplicating the
+// list logic here so we don't need to expose s_sftp directly.
+static void iv_list_remote(const char *path, std::vector<IVEntry> &out) {
+    out.clear();
+    // Access the SFTP handle via the public SSH session API
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    if (!sess) return;
 
+    // We need the sftp handle. sftp_overlay.cpp owns it but doesn't expose it.
+    // Use SftpPanel as a vehicle: create a temporary panel, call sftp_panel_refresh.
+    // Instead, we open our own SFTP channel for listing (read-only, quick).
+    // Note: sftp_init() in sftp_overlay already initialised the subsystem;
+    // we open a second handle here for the directory listing to avoid
+    // touching sftp_overlay's internal state.
+    ssh_session_lock();
+    libssh2_session_set_blocking(sess, 1);
+    LIBSSH2_SFTP *sftp = libssh2_sftp_init(sess);
+    if (!sftp) { libssh2_session_set_blocking(sess, 0); ssh_session_unlock(); return; }
+
+    if (strcmp(path, "/") != 0) {
+        IVEntry up{}; strncpy(up.name, "..", sizeof(up.name)-1); up.is_dir = true;
+        out.push_back(up);
+    }
+
+    LIBSSH2_SFTP_HANDLE *dh = libssh2_sftp_opendir(sftp, path);
+    if (dh) {
+        char name[512], longentry[1024];
+        LIBSSH2_SFTP_ATTRIBUTES attrs{};
+        while (libssh2_sftp_readdir_ex(dh, name, sizeof(name), longentry, sizeof(longentry), &attrs) > 0) {
+            if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
+            bool is_dir = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) &&
+                          LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
+            bool img   = is_image_ext(name);
+            bool audio = is_audio_ext(name);
+            bool zip   = is_zip_ext(name);
+            bool cdg   = is_cdg_ext(name);
+            if (!is_dir && !img && !audio && !zip && !cdg) continue;
+            IVEntry e{};
+            strncpy(e.name, name, sizeof(e.name)-1);
+            e.is_dir = is_dir;
+            e.size   = (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) ? attrs.filesize : 0;
+            if (audio) e.is_audio = true;
+            if (zip)   e.is_zip   = true;
+            if (cdg)   e.is_cdg   = true;
+            // Note: has_cdg_pair and zip CDG peek not done for remote listings
+            // (would require extra SFTP round-trips per file)
+            out.push_back(e);
+        }
+        libssh2_sftp_closedir(dh);
+    }
+    libssh2_sftp_shutdown(sftp);
+    libssh2_session_set_blocking(sess, 0);
+    ssh_session_unlock();
+
+    std::stable_sort(out.begin(), out.end(), [](const IVEntry &a, const IVEntry &b){
+        if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
+        return strcmp(a.name, b.name) < 0;
+    });
+}
+
+// Download a remote file into a heap buffer. Returns nullptr on failure.
+static unsigned char *iv_download_remote(const char *path, size_t &out_size) {
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    if (!sess) return nullptr;
+
+    ssh_session_lock();
+    libssh2_session_set_blocking(sess, 1);
+    LIBSSH2_SFTP *sftp = libssh2_sftp_init(sess);
+    if (!sftp) { libssh2_session_set_blocking(sess, 0); ssh_session_unlock(); return nullptr; }
+
+    LIBSSH2_SFTP_HANDLE *fh = libssh2_sftp_open(sftp, path, LIBSSH2_FXF_READ, 0);
+    unsigned char *buf = nullptr;
+    out_size = 0;
+    if (fh) {
+        // Read in chunks, grow buffer
+        size_t cap = 256 * 1024;
+        buf = (unsigned char *)malloc(cap);
+        char tmp[32768];
+        ssize_t n;
+        while ((n = libssh2_sftp_read(fh, tmp, sizeof(tmp))) > 0) {
+            if (out_size + (size_t)n > cap) {
+                cap = (cap + (size_t)n) * 2;
+                buf = (unsigned char *)realloc(buf, cap);
+            }
+            memcpy(buf + out_size, tmp, n);
+            out_size += n;
+        }
+        libssh2_sftp_close(fh);
+        if (out_size == 0) { free(buf); buf = nullptr; }
+    }
+    libssh2_sftp_shutdown(sftp);
+    libssh2_session_set_blocking(sess, 0);
+    ssh_session_unlock();
+    return buf;
+}
+#endif // USESSH
 
 // ============================================================================
 // TEXTURE LOADING
@@ -577,6 +680,7 @@ static void iv_load_image_from_mem(const unsigned char *data, size_t len, const 
         stbi_image_free(px);
 
     strncpy(g_iv.img_label, label, sizeof(g_iv.img_label)-1);
+    // Reset view for every new image
     g_iv.zoom    = 1.0f;
     g_iv.pan_x   = 0.0f;
     g_iv.pan_y   = 0.0f;
@@ -611,10 +715,24 @@ static void iv_load_local(const char *filepath, const char *label) {
 void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
     g_iv = ImageViewer{};
     g_iv.visible = true;
-    g_iv.remote  = false;
+    g_iv.remote  = remote;
 
-    strncpy(g_iv.path, iv_home().c_str(), sizeof(g_iv.path)-1);
-    iv_list_local(g_iv.path, g_iv.entries);
+    if (!remote) {
+        strncpy(g_iv.path, iv_home().c_str(), sizeof(g_iv.path)-1);
+        iv_list_local(g_iv.path, g_iv.entries);
+    } else {
+#ifdef USESSH
+        // Start at remote filesystem root — getenv("HOME") is the *local*
+        // home directory and is wrong when connecting from Windows.
+        // The user can navigate to their home via the listing.
+        strncpy(g_iv.path, "/", sizeof(g_iv.path)-1);
+        iv_list_remote(g_iv.path, g_iv.entries);
+#else
+        g_iv.remote = false;
+        strncpy(g_iv.path, iv_home().c_str(), sizeof(g_iv.path)-1);
+        iv_list_local(g_iv.path, g_iv.entries);
+#endif
+    }
 }
 
 void iv_close() {
@@ -654,10 +772,15 @@ void iv_tick(double /*dt*/) {
 static void iv_refresh() {
     g_iv.selected   = 0;
     g_iv.scroll_top = 0;
-    if (g_iv.in_zip)
+    if (g_iv.in_zip) {
         iv_list_zip(g_iv.zip_file, g_iv.entries);
-    else
+    } else if (g_iv.remote) {
+#ifdef USESSH
+        iv_list_remote(g_iv.path, g_iv.entries);
+#endif
+    } else {
         iv_list_local(g_iv.path, g_iv.entries);
+    }
 }
 
 static void iv_enter_selected() {
@@ -765,7 +888,7 @@ static void iv_enter_selected() {
             bool ends_sep = plen > 0 &&
                 (g_iv.path[plen-1] == '/' || g_iv.path[plen-1] == '\\');
             const char *sep = ends_sep ? "" :
-                              (g_iv.path[0] == '/') ? "/" : "\\";
+                              (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\";
             snprintf(newpath, sizeof(newpath), "%s%s%s", g_iv.path, sep, e.name);
             strncpy(g_iv.path, newpath, sizeof(g_iv.path)-1);
         }
@@ -775,11 +898,29 @@ static void iv_enter_selected() {
         char fullpath[4096];
         snprintf(fullpath, sizeof(fullpath), "%s%s%s",
                  g_iv.path,
-                 (g_iv.path[0] == '/') ? "/" : "\\",
+                 (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\",
                  e.name);
 
+        // For remote zips, download to a temp file first
         std::string tmp_zip_path;
         const char *zip_to_open = fullpath;
+        if (g_iv.remote) {
+#ifdef USESSH
+            size_t zsz = 0;
+            unsigned char *zbuf = iv_download_remote(fullpath, zsz);
+            if (!zbuf) {
+                snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+                return;
+            }
+            tmp_zip_path = iv_write_tempfile(zbuf, zsz, ".zip");
+            free(zbuf);
+            if (tmp_zip_path.empty()) {
+                snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
+                return;
+            }
+            zip_to_open = tmp_zip_path.c_str();
+#endif
+        }
 
         // Peek inside the zip — if it contains a CDG+audio pair, auto-play it
         mz_zip_archive zip;
@@ -862,9 +1003,28 @@ static void iv_enter_selected() {
         if (!tmp_zip_path.empty()) iv_delete_tempfile(tmp_zip_path.c_str());
 
         if (!auto_played) {
-            strncpy(g_iv.zip_file, fullpath, sizeof(g_iv.zip_file)-1);
-            g_iv.in_zip = true; g_iv.selected = 0; g_iv.scroll_top = 0;
-            iv_list_zip(fullpath, g_iv.entries);
+            // No CDG pair — browse mode (re-download if remote, or use local path)
+            if (g_iv.remote) {
+#ifdef USESSH
+                // Re-download for browsing (or keep temp — but we deleted it above)
+                size_t zsz = 0;
+                unsigned char *zbuf = iv_download_remote(fullpath, zsz);
+                if (zbuf) {
+                    std::string tmp2 = iv_write_tempfile(zbuf, zsz, ".zip");
+                    free(zbuf);
+                    if (!tmp2.empty()) {
+                        strncpy(g_iv.zip_file, tmp2.c_str(), sizeof(g_iv.zip_file)-1);
+                        g_iv.in_zip = true; g_iv.selected = 0; g_iv.scroll_top = 0;
+                        iv_list_zip(tmp2.c_str(), g_iv.entries);
+                        // keep temp alive for zip entry extraction
+                    }
+                }
+#endif
+            } else {
+                strncpy(g_iv.zip_file, fullpath, sizeof(g_iv.zip_file)-1);
+                g_iv.in_zip = true; g_iv.selected = 0; g_iv.scroll_top = 0;
+                iv_list_zip(fullpath, g_iv.entries);
+            }
         }
 
     } else {
@@ -873,17 +1033,48 @@ static void iv_enter_selected() {
         char fullpath[4096];
         snprintf(fullpath, sizeof(fullpath), "%s%s%s",
                  g_iv.path,
-                 (g_iv.path[0] == '/') ? "/" : "\\",
+                 (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\",
                  e.name);
 
         if (e.is_audio) {
-            iv_play_audio(fullpath, e.name, e.has_cdg_pair);
+            if (g_iv.remote) {
+#ifdef USESSH
+                // Download to temp file — SDL_mixer can't read from SSH paths
+                size_t sz = 0;
+                unsigned char *buf = iv_download_remote(fullpath, sz);
+                if (buf) {
+                    const char *dot = strrchr(e.name, '.');
+                    std::string tmp = iv_write_tempfile(buf, sz, dot ? dot : ".tmp");
+                    free(buf);
+                    if (!tmp.empty()) {
+                        iv_play_audio(tmp.c_str(), e.name, false);
+                        iv_delete_tempfile(tmp.c_str());
+                    } else {
+                        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
+                    }
+                } else {
+                    snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+                }
+#endif
+            } else {
+                iv_play_audio(fullpath, e.name, e.has_cdg_pair);
+            }
+
         } else {
             // Image file
             iv_free_tex();
             iv_stop_audio();
             iv_cdg_free();
-            iv_load_local(fullpath, e.name);
+            if (g_iv.remote) {
+#ifdef USESSH
+                size_t sz = 0;
+                unsigned char *buf = iv_download_remote(fullpath, sz);
+                if (buf) { iv_load_image_from_mem(buf, sz, e.name); free(buf); }
+                else snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+#endif
+            } else {
+                iv_load_local(fullpath, e.name);
+            }
         }
     }
 }
