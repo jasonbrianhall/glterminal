@@ -12,6 +12,7 @@ extern void cp_to_utf8(uint32_t cp, char *buf);
 extern int g_font_size;
 extern int g_blink_text_on;
 extern bool s_basic_palette_active;
+extern bool cell_in_sel(Terminal *t, int r, int c);
 
 // ============================================================================
 // STATE
@@ -68,8 +69,15 @@ void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
             TermColorVal fg = c->fg, bg = c->bg;
             if (c->attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
             TermColor bc = tcolor_resolve(bg);
-            float bg_alpha = (s_basic_palette_active && bg == TCOLOR_PALETTE(0)) ? 0.f : 1.f;
-            draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, bg_alpha);
+            
+            // Check if cell is selected
+            int vrow = row + t->sb_count - t->sb_offset;
+            if (cell_in_sel(t, vrow, col)) {
+                draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
+            } else {
+                float bg_alpha = (s_basic_palette_active && bg == TCOLOR_PALETTE(0)) ? 0.f : 1.f;
+                draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, bg_alpha);
+            }
         }
     }
     
@@ -106,15 +114,21 @@ void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
     int input_row = t->rows - 1;
     float input_y = oy + input_row * ch;
     
-    // Background for input line
+    // Background for input line (with selection support)
     for (int col = 0; col < t->cols; col++) {
         float px = ox + col*cw;
         Cell *c = &CELL(t, input_row, col);
         TermColorVal fg = c->fg, bg = c->bg;
         if (c->attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
         TermColor bc = tcolor_resolve(bg);
-        float bg_alpha = (s_basic_palette_active && bg == TCOLOR_PALETTE(0)) ? 0.f : 1.f;
-        draw_rect(px, input_y, cw, ch, bc.r, bc.g, bc.b, bg_alpha);
+        
+        // Check if cell is selected
+        if (cell_in_sel(t, input_row, col)) {
+            draw_rect(px, input_y, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
+        } else {
+            float bg_alpha = (s_basic_palette_active && bg == TCOLOR_PALETTE(0)) ? 0.f : 1.f;
+            draw_rect(px, input_y, cw, ch, bc.r, bc.g, bc.b, bg_alpha);
+        }
     }
     
     // Glyphs for input line
