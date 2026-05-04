@@ -62,11 +62,6 @@ jobs:
           libssh2-devel \
           libwebp-devel-1.6.0-2.fc43.x86_64 \
           mingw64-libwebp-1.6.0-2.fc43.noarch
-          mpg123-devel \
-          opus-devel \
-          opusfile-devel \
-          libvorbis-devel \
-          flac-devel
 
     - name: Build Windows Executable
       run: |
