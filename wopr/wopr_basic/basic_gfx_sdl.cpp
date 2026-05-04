@@ -25,6 +25,14 @@
 #include "basic.h"       // g_break, BASIC_NS
 #include "DejaVuMono.h"  // DEJAVU_REGULAR_FONT_B64 / _SIZE
 
+#ifdef WOPR
+#include "wopr.h"
+extern WoprState g_wopr;
+extern void wopr_basic_cls(void);
+extern void wopr_basic_locate(int row, int col);
+extern void wopr_basic_color(int fg, int bg);
+#endif
+
 #include <SDL2/SDL.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -1332,16 +1340,34 @@ void display_shutdown(void) {
 }
 
 void display_cls(void) {
+#ifdef WOPR
+    if (g_wopr.visible && g_wopr.phase == WoprPhase::PLAYING_BASIC) {
+        wopr_basic_cls();
+        return;
+    }
+#endif
     scrollback_init();
     gfx_cls(s_cur_bg);
 }
 
 void display_locate(int row, int col) {
+#ifdef WOPR
+    if (g_wopr.visible && g_wopr.phase == WoprPhase::PLAYING_BASIC) {
+        wopr_basic_locate(row, col);
+        return;
+    }
+#endif
     if (row > 0) s_cur_row = std::min(row - 1, s_text_rows - 1);
     if (col > 0) s_cur_col = std::min(col - 1, s_text_cols - 1);
 }
 
 void display_color(int fg, int bg) {
+#ifdef WOPR
+    if (g_wopr.visible && g_wopr.phase == WoprPhase::PLAYING_BASIC) {
+        wopr_basic_color(fg, bg);
+        return;
+    }
+#endif
     s_cur_fg = fg & 15;
     s_cur_bg = bg & 15;
 }
