@@ -110,6 +110,7 @@ static inline void term_clear_dirty(Terminal *t) {
 void term_init(Terminal *t);
 void term_resize(Terminal *t, int win_w, int win_h);
 void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h);
+void term_update_cell_dims(Terminal *t);  // Update cell dimensions without resizing grid
 void term_newline(Terminal *t);  // advance cursor one line, scrolling if needed
 
 // ============================================================================

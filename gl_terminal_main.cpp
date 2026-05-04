@@ -333,6 +333,9 @@ int main(int argc, char **argv) {
         }
     }
 
+    // Update cell dimensions based on final font size before calculating window size
+    term_update_cell_dims(&term);
+
     win_w = (int)(term.cell_w * term.cols) + 4;
     win_h = (int)(term.cell_h * term.rows) + 4;
     SDL_SetWindowSize(window, win_w, win_h);

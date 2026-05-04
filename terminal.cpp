@@ -687,13 +687,10 @@ void term_resize(Terminal *t, int win_w, int win_h) {
     SDL_Log("[Term] resized to %dx%d\n", new_cols, new_rows);
 }
 
-void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h) {
-    if (new_size < FONT_SIZE_MIN) new_size = FONT_SIZE_MIN;
-    if (new_size > FONT_SIZE_MAX) new_size = FONT_SIZE_MAX;
-    if (new_size == g_font_size) return;
-
-    g_font_size = new_size;
-
+// Update cell dimensions based on current g_font_size.
+// Called during initialization after settings are loaded but before window is sized,
+// and also by term_set_font_size() during normal operation.
+void term_update_cell_dims(Terminal *t) {
     if (s_ft_face) {
         FT_Set_Pixel_Sizes(s_ft_face, 0, (FT_UInt)g_font_size);
         FT_UInt gi = FT_Get_Char_Index(s_ft_face, '0');
@@ -704,7 +701,15 @@ void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h) {
     }
     if (t->cell_w < 1) t->cell_w = 6;
     if (t->cell_h < 1) t->cell_h = 8;
+}
 
+void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h) {
+    if (new_size < FONT_SIZE_MIN) new_size = FONT_SIZE_MIN;
+    if (new_size > FONT_SIZE_MAX) new_size = FONT_SIZE_MAX;
+    if (new_size == g_font_size) return;
+
+    g_font_size = new_size;
+    term_update_cell_dims(t);
     term_resize(t, win_w, win_h);
     SDL_Log("[Term] font size %d, cell %.0fx%.0f, grid %dx%d\n", g_font_size, t->cell_w, t->cell_h, t->cols, t->rows);
 }
