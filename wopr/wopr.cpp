@@ -92,7 +92,7 @@ static const GameEntry GAMES[] = {
     { "TIC-TAC-TOE",              "TIC",         WoprGame::TIC_TAC_TOE},
     { "MINESWEEPER",              "MINESWEEPER", WoprGame::MINESWEEPER},
     { "ZORK",                     "ZORK",        WoprGame::ZORK       },
-    /*{ "BASIC",                    "BASIC",       WoprGame::BASIC      }, */
+    { "BASIC",                    "BASIC",       WoprGame::BASIC      },
     { "WIZARD'S CASTLE",          "WIZARD",      WoprGame::WIZARD     },
     { "WILLY THE WORM",           "WILLY",       WoprGame::WILLY_WORM },
     { "STRATEGIC DEFENSE INIT",   "SDI",         WoprGame::SDI        },
