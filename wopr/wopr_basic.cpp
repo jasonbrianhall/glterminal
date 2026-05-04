@@ -195,22 +195,102 @@ static const char *cp437_utf8[128] = {
 void wopr_basic_push_line(char *text)
 {
     if (!s_active || !s_active->wopr || !text) return;
-    for (unsigned char *p = (unsigned char *)text; *p; ++p) {
-        if (*p == '\n') {
+    
+    unsigned char *p = (unsigned char *)text;
+    while (*p) {
+        // Parse ANSI escape sequences
+        if (*p == '\033') {
+            // ESC sequence — look at next char
+            if (*(p+1) == '[') {
+                // CSI (Control Sequence Introducer)
+                unsigned char *seq_start = p;
+                p += 2;
+                
+                // Parse numeric parameters (separated by semicolons)
+                int params[16] = {0};
+                int param_count = 0;
+                
+                while (param_count < 16) {
+                    int val = 0;
+                    while (*p >= '0' && *p <= '9') {
+                        val = val * 10 + (*p - '0');
+                        p++;
+                    }
+                    params[param_count++] = val;
+                    if (*p != ';') break;
+                    p++;  // skip semicolon
+                }
+                
+                // Now *p should be the command letter
+                unsigned char cmd = *p;
+                p++;
+                
+                // Handle the command
+                if (cmd == 'H' || cmd == 'f') {
+                    // Cursor positioning: ESC[row;colH
+                    int row = params[0] ? params[0] : 1;
+                    int col = params[1] ? params[1] : 1;
+                    wopr_basic_locate(row, col);
+                } else if (cmd == 'J') {
+                    // Erase in display: ESC[2J = clear screen
+                    if (params[0] == 2) {
+                        wopr_basic_cls();
+                    }
+                } else if (cmd == 'K') {
+                    // Erase in line: ESC[K = clear to end of line
+                    // (flush any partial buffer)
+                    wopr_basic_flush_partial();
+                } else if (cmd == 'm') {
+                    // SGR (Select Graphic Rendition): ESC[...;...;...m
+                    // Parse color/attribute codes
+                    int fg = -1, bg = -1;
+                    for (int i = 0; i < param_count; i++) {
+                        int p = params[i];
+                        if (p == 0) {
+                            // Reset to default (white on black)
+                            fg = 7; bg = 0;
+                        } else if (p == 1) {
+                            // Bold (handled by CGA palette index 8+)
+                        } else if (p >= 30 && p <= 37) {
+                            // Foreground color (30-37)
+                            fg = p - 30;
+                        } else if (p >= 40 && p <= 47) {
+                            // Background color (40-47)
+                            bg = p - 40;
+                        }
+                    }
+                    // Apply the color (only if we got a valid FG color)
+                    if (fg >= 0) {
+                        if (bg < 0) bg = 0;  // default black background
+                        wopr_basic_color(fg, bg);
+                    }
+                }
+                // Unhandled escape sequences are just skipped
+                continue;
+            }
+            // Not a CSI — just output the ESC as a regular character
+            p++;
+            s_out_buf += '\033';
+            s_cur_col++;
+        } else if (*p == '\n') {
             commit_line();
+            p++;
         } else if (*p == '\t') {
             // GW-BASIC comma separator uses 14-column tab stops
             int spaces = 14 - ((s_cur_col - 1) % 14);
             if (spaces == 0) spaces = 14;
             for (int i = 0; i < spaces; i++) { s_out_buf += ' '; s_cur_col++; }
+            p++;
         } else if (*p >= 128) {
             // Convert CP437 high bytes to UTF-8 for the renderer.
             // The UTF-8 sequence counts as one display column.
             s_out_buf += cp437_utf8[*p - 128];
             s_cur_col++;
+            p++;
         } else {
             s_out_buf += (char)*p;
             s_cur_col++;
+            p++;
         }
     }
 }
