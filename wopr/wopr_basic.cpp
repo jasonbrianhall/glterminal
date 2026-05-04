@@ -206,6 +206,13 @@ void wopr_basic_push_line(char *text)
                 unsigned char *seq_start = p;
                 p += 2;
                 
+                // Skip mode modifier '?' if present (e.g. \033[?25h)
+                int has_mode = 0;
+                if (*p == '?') {
+                    has_mode = 1;
+                    p++;
+                }
+                
                 // Parse numeric parameters (separated by semicolons)
                 int params[16] = {0};
                 int param_count = 0;
@@ -240,6 +247,9 @@ void wopr_basic_push_line(char *text)
                     // Erase in line: ESC[K = clear to end of line
                     // (flush any partial buffer)
                     wopr_basic_flush_partial();
+                } else if (cmd == 'h' || cmd == 'l') {
+                    // Mode setting: ESC[?25h (show cursor) / ESC[?25l (hide cursor)
+                    // We just ignore these for now since WOPR handles cursor rendering
                 } else if (cmd == 'm') {
                     // SGR (Select Graphic Rendition): ESC[...;...;...m
                     // Parse color/attribute codes

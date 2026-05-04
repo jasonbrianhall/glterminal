@@ -132,9 +132,7 @@ void display_shutdown(void)
 
 void display_cls(void)
 {
-#ifdef WOPR
-    wopr_basic_cls();
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     felix_basic_cls();
 #else
     printf("\033[2J\033[H");
@@ -144,9 +142,7 @@ void display_cls(void)
 
 void display_locate(int row, int col)
 {
-#ifdef WOPR
-    wopr_basic_locate(row, col);
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     (void)row; (void)col;
     felix_basic_flush_partial();
 #else
@@ -159,9 +155,7 @@ void display_locate(int row, int col)
 
 void display_color(int fg, int bg)
 {
-#ifdef WOPR
-    wopr_basic_color(fg, bg);
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     (void)bg;
     felix_basic_color(fg);
 #else
@@ -179,9 +173,7 @@ void display_color(int fg, int bg)
 
 void display_width(int cols)
 {
-#ifdef WOPR
-    (void)cols;
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     (void)cols;
 #else
     g_width = cols;
@@ -245,9 +237,7 @@ void display_newline(void)
 
 void display_cursor(int visible)
 {
-#ifdef WOPR
-    (void)visible;
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     (void)visible;
 #else
     if (visible)
