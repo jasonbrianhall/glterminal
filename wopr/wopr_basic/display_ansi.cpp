@@ -198,6 +198,8 @@ void display_print(char *s)
     if (strncmp(s, "Felix BASIC", 11) == 0) return;
     if (strncmp(s, "In loving memory", 16) == 0) return;
     if (strncmp(s, "Type HELP", 9) == 0) return;
+    // Suppress output while waiting for input to avoid double echo
+    if (g_basic_waiting_input) return;
     g_basic_suppress_newline = 0;
     wopr_basic_push_line(s);
 #elif defined(FELIX_BASIC)
@@ -321,8 +323,7 @@ int display_getline(char *buf, int bufsz)
         buf[0] = '\0';
         return 0;
     }
-    // Echo the typed line to the terminal buffer
-    wopr_basic_push_line(buf);
+    // Don't echo here - wopr_basic_keydown already handled echo when Enter was pressed
     g_basic_suppress_newline = 1;
     SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);
