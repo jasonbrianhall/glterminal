@@ -108,7 +108,9 @@ void display_init(void)
 #ifndef _WIN32
     tcgetattr(STDIN_FILENO, &g_orig_termios);
 #endif
+#if !defined(WOPR) && !defined(FELIX_BASIC)
     enter_raw();
+#endif
     atexit(cleanup_terminal);
     signal(SIGTERM, signal_handler);
     signal(SIGSEGV, signal_handler);
@@ -351,7 +353,6 @@ int display_getline(char *buf, int bufsz)
     static HistInit _hist_init;
 
 
-    enter_raw();   /* make sure we're in raw/nonblocking → switch to blocking raw */
     {
         /* We want blocking reads, but still raw (no echo, no canonical) */
         struct termios raw = g_orig_termios;
