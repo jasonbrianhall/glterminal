@@ -1340,34 +1340,34 @@ void display_shutdown(void) {
 }
 
 void display_cls(void) {
-#ifdef WOPR
+/*#ifdef WOPR
     if (g_wopr.visible && g_wopr.phase == WoprPhase::PLAYING_BASIC) {
         wopr_basic_cls();
         return;
     }
-#endif
+#endif*/
     scrollback_init();
     gfx_cls(s_cur_bg);
 }
 
 void display_locate(int row, int col) {
-#ifdef WOPR
+/*#ifdef WOPR
     if (g_wopr.visible && g_wopr.phase == WoprPhase::PLAYING_BASIC) {
         wopr_basic_locate(row, col);
         return;
     }
-#endif
+#endif */
     if (row > 0) s_cur_row = std::min(row - 1, s_text_rows - 1);
     if (col > 0) s_cur_col = std::min(col - 1, s_text_cols - 1);
 }
 
 void display_color(int fg, int bg) {
-#ifdef WOPR
+/*#ifdef WOPR
     if (g_wopr.visible && g_wopr.phase == WoprPhase::PLAYING_BASIC) {
         wopr_basic_color(fg, bg);
         return;
     }
-#endif
+#endif */
     s_cur_fg = fg & 15;
     s_cur_bg = bg & 15;
 }
