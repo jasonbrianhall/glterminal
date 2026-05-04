@@ -7,6 +7,7 @@
 #include "gl_bouncingcircle.h"
 #include "kitty_graphics.h"
 #include "basic_graphics.h"
+#include "sticky_prompt.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -682,6 +683,12 @@ void term_paste(Terminal *t) {
 // ============================================================================
 
 void term_render(Terminal *t, int ox, int oy) {
+    // If sticky prompt is enabled, use split rendering
+    if (g_sticky_prompt_enabled) {
+        sticky_prompt_render_split(t, ox, oy);
+        return;
+    }
+    
     float cw = t->cell_w, ch = t->cell_h;
     bool scrolled = (t->sb_offset > 0);
 
@@ -854,7 +861,7 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
     case SDLK_F5:   term_write(t, "\x1b[15~", 5); break;
     case SDLK_F6:   term_write(t, "\x1b[17~", 5); break;
     case SDLK_F7:   term_write(t, "\x1b[18~", 5); break;
-    case SDLK_F8:   term_write(t, "\x1b[19~", 5); break;
+    case SDLK_F8:   sticky_prompt_toggle(); break;
     case SDLK_F9:   term_write(t, "\x1b[20~", 5); break;
     case SDLK_F10:  term_write(t, "\x1b[21~", 5); break;
     case SDLK_F11:  term_write(t, "\x1b[23~", 5); break;
@@ -1084,6 +1091,7 @@ static const HelpRow HELP_ROWS[] = {
     { nullptr, "F1",              "Toggle this help screen",                             nullptr },
     { nullptr, "F5",              "Felix Chirp image/audio player (SSH or local)      ", nullptr },
     { nullptr, "F7",              "WOPR terminal",                                       nullptr },
+    { nullptr, "F8",              "Sticky prompt",                                       nullptr },
     { nullptr, "F11",             "Toggle fullscreen",                                   nullptr },
     { nullptr, "Right-click",     "Open context menu",                                   nullptr },
     { nullptr, "Ctrl+A",          "Select all",                                          nullptr },
