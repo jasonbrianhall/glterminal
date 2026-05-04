@@ -16,6 +16,7 @@
 #include "terminal.h"
 #include "term_pty.h"
 #include "term_ui.h"
+#include "sticky_prompt.h"
 #include "gl_bouncingcircle.h"
 #include "crt_audio.h"
 #include "felix_settings.h"
@@ -1028,7 +1029,10 @@ int main(int argc, char **argv) {
                     term_dirty_all(&term);
                     break;
                 }
-                term.sb_offset = 0;
+                // Only scroll to bottom on keypress if not in sticky prompt mode
+                if (!g_sticky_prompt_enabled) {
+                    term.sb_offset = 0;
+                }
                 if (mod & KMOD_CTRL) {
                     if (ev.key.keysym.sym == SDLK_c && (mod & KMOD_SHIFT)) {
                         term_copy_selection_html(&term); break;
