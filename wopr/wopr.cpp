@@ -92,7 +92,7 @@ static const GameEntry GAMES[] = {
     { "TIC-TAC-TOE",              "TIC",         WoprGame::TIC_TAC_TOE},
     { "MINESWEEPER",              "MINESWEEPER", WoprGame::MINESWEEPER},
     { "ZORK",                     "ZORK",        WoprGame::ZORK       },
-    /*{ "BASIC",                    "BASIC",       WoprGame::BASIC      }, */
+    { "BASIC",                    "BASIC",       WoprGame::BASIC      },
     { "WIZARD'S CASTLE",          "WIZARD",      WoprGame::WIZARD     },
     { "WILLY THE WORM",           "WILLY",       WoprGame::WILLY_WORM },
     { "STRATEGIC DEFENSE INIT",   "SDI",         WoprGame::SDI        },
@@ -275,14 +275,14 @@ static void launch_game(WoprState *w, WoprGame game) {
             set_phase(w, WoprPhase::PLAYING_ZORK);
             wopr_zork_enter(w);
             break;
-        /*case WoprGame::BASIC:
+        case WoprGame::BASIC:
             push_line(w, "INITIATING: BASIC");
             push_line(w, "");
-            push_line(w, "  LOADING PROGRAMMING LANGUAGE...");
+            push_line(w, "  LOADING ANTIQUATED PROGRAMMING LANGUAGE...");
             push_line(w, "");
             set_phase(w, WoprPhase::PLAYING_BASIC);
             wopr_basic_enter(w);
-            break;*/
+            break;
         case WoprGame::WIZARD:
             push_line(w, "INITIATING: WIZARD'S CASTLE");
             push_line(w, "");

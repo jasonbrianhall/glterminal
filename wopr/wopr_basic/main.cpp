@@ -443,7 +443,17 @@ return 0;
                 if (ln < from || ln > to) continue;
                 if (ln != prev) { if (prev != -1) display_print("\n"); char hdr[32]; snprintf(hdr,sizeof hdr,"%d ",ln); display_print(hdr); prev = ln; }
                 else display_print(": ");
-                display_print(g_lines[i].text);
+                // Strip trailing newline from line text since we control newlines here
+                char *text = g_lines[i].text;
+                int len = strlen(text);
+                if (len > 0 && text[len-1] == '\n') {
+                    char buf[MAX_LINE_LEN];
+                    strncpy(buf, text, len-1);
+                    buf[len-1] = '\0';
+                    display_print(buf);
+                } else {
+                    display_print(text);
+                }
             }
             if (prev != -1) display_print("\n");
 

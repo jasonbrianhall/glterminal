@@ -108,7 +108,9 @@ void display_init(void)
 #ifndef _WIN32
     tcgetattr(STDIN_FILENO, &g_orig_termios);
 #endif
+#if !defined(WOPR) && !defined(FELIX_BASIC)
     enter_raw();
+#endif
     atexit(cleanup_terminal);
     signal(SIGTERM, signal_handler);
     signal(SIGSEGV, signal_handler);
@@ -130,9 +132,7 @@ void display_shutdown(void)
 
 void display_cls(void)
 {
-#ifdef WOPR
-    wopr_basic_cls();
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     felix_basic_cls();
 #else
     printf("\033[2J\033[H");
@@ -142,9 +142,7 @@ void display_cls(void)
 
 void display_locate(int row, int col)
 {
-#ifdef WOPR
-    wopr_basic_locate(row, col);
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     (void)row; (void)col;
     felix_basic_flush_partial();
 #else
@@ -157,9 +155,7 @@ void display_locate(int row, int col)
 
 void display_color(int fg, int bg)
 {
-#ifdef WOPR
-    wopr_basic_color(fg, bg);
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     (void)bg;
     felix_basic_color(fg);
 #else
@@ -177,9 +173,7 @@ void display_color(int fg, int bg)
 
 void display_width(int cols)
 {
-#ifdef WOPR
-    (void)cols;
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     (void)cols;
 #else
     g_width = cols;
@@ -198,6 +192,8 @@ void display_print(char *s)
     if (strncmp(s, "Felix BASIC", 11) == 0) return;
     if (strncmp(s, "In loving memory", 16) == 0) return;
     if (strncmp(s, "Type HELP", 9) == 0) return;
+    // Suppress output while waiting for input to avoid double echo
+    if (g_basic_waiting_input) return;
     g_basic_suppress_newline = 0;
     wopr_basic_push_line(s);
 #elif defined(FELIX_BASIC)
@@ -241,9 +237,7 @@ void display_newline(void)
 
 void display_cursor(int visible)
 {
-#ifdef WOPR
-    (void)visible;
-#elif defined(FELIX_BASIC)
+#if defined(FELIX_BASIC)
     (void)visible;
 #else
     if (visible)
@@ -321,8 +315,7 @@ int display_getline(char *buf, int bufsz)
         buf[0] = '\0';
         return 0;
     }
-    // Echo the typed line to the terminal buffer
-    wopr_basic_push_line(buf);
+    // Don't echo here - wopr_basic_keydown already handled echo when Enter was pressed
     g_basic_suppress_newline = 1;
     SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);
@@ -350,7 +343,6 @@ int display_getline(char *buf, int bufsz)
     static HistInit _hist_init;
 
 
-    enter_raw();   /* make sure we're in raw/nonblocking → switch to blocking raw */
     {
         /* We want blocking reads, but still raw (no echo, no canonical) */
         struct termios raw = g_orig_termios;
