@@ -41,6 +41,14 @@ extern const float PAL_SOLARIZED[16][3];
 extern const float PAL_MONOKAI[16][3];
 extern const float PAL_NORD[16][3];
 extern const float PAL_GRUVBOX[16][3];
+extern const float PAL_DRACULA[16][3];
+extern const float PAL_ONE_DARK[16][3];
+extern const float PAL_CATPPUCCIN[16][3];
+extern const float PAL_TOKYO_NIGHT[16][3];
+extern const float PAL_EVERFOREST[16][3];
+extern const float PAL_CYBERPUNK[16][3];
+extern const float PAL_AYU_MIRAGE[16][3];
+extern const float PAL_ROSE_PINE[16][3];
 
 extern const Theme THEMES[];
 extern const int   THEME_COUNT;
