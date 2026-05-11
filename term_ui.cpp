@@ -34,6 +34,7 @@
 
 extern bool g_sticky_prompt_enabled;
 extern bool g_autoscroll_enabled;
+extern bool g_line_numbers_enabled;
 
 // ============================================================================
 // TERMINAL DETECTION & LAUNCHING
@@ -266,6 +267,9 @@ static const float OPACITY_LEVELS[] = { 1.0f, 0.85f, 0.7f, 0.5f, 0.3f, 0.1f };
 static const char* OPACITY_NAMES[]  = { "100%", "85%", "70%", "50%", "30%", "10%" };
 static const int   OPACITY_COUNT    = 6;
 
+static const char* ADV_OPTIONS_NAMES[] = { "Sticky Prompt", "Disable Autoscroll", "Line Numbers" };
+static const int   ADV_OPTIONS_COUNT   = 3;
+
 static const char* RENDER_MODE_NAMES[] = { "Normal", "CRT", "LCD", "VHS", "Focus", "Commodore 64", "Bad Composite", "Bloom", "Ghosting", "Wireframe" };
 static_assert(sizeof(RENDER_MODE_NAMES)/sizeof(RENDER_MODE_NAMES[0]) == RENDER_MODE_COUNT,
               "RENDER_MODE_NAMES count mismatch");
@@ -288,9 +292,8 @@ const MenuItem MENU_ITEMS[] = {
     { "Select All",      false },
     { nullptr,           true  },
     { "Font  >",         false },
-    { "Sticky Prompt",   false },
     { nullptr,           true  },
-    { "Disable Autoscroll", false },
+    { "Advanced Options >", false },
     { nullptr,           true  },
     { "Help",            false },
     { nullptr,           true  },
@@ -700,6 +703,14 @@ void term_render(Terminal *t, int ox, int oy) {
     }
     
     float cw = t->cell_w, ch = t->cell_h;
+    
+    // Adjust ox for line numbers if enabled
+    float line_num_width = 0;
+    if (g_line_numbers_enabled) {
+        line_num_width = cw * 6;  // 6 character widths for line numbers
+        ox += line_num_width;  // Shift terminal to the right
+    }
+    
     bool scrolled = (t->sb_offset > 0);
 
     Cell blank = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
@@ -735,6 +746,19 @@ void term_render(Terminal *t, int ox, int oy) {
                 float bg_alpha = (s_basic_palette_active && bg == TCOLOR_PALETTE(0)) ? 0.f : 1.f;
                 draw_rect(px, py, cw, ch, bc.r, bc.g, bc.b, bg_alpha);
             }
+        }
+    }
+
+    // Pass 1.5: line numbers (if enabled)
+    if (g_line_numbers_enabled) {
+        for (int row = 0; row < t->rows; row++) {
+            int vrow = row + t->sb_count - t->sb_offset;
+            char line_num[16];
+            snprintf(line_num, sizeof(line_num), "%5d", vrow);
+            // Draw at original ox position (before we shifted right)
+            float line_num_x = ox - line_num_width;
+            float line_num_y = oy + row * ch;
+            draw_text(line_num, line_num_x, line_num_y + ch * 0.82f, g_font_size, (int)ch, 0.6f, 0.6f, 0.7f, 0.8f, 0);  // Dim gray
         }
     }
 
@@ -977,10 +1001,6 @@ void menu_render(ContextMenu *m) {
         
         // Check if this menu item should be highlighted (active/enabled)
         bool active = false;
-        if (i == MENU_ID_STICKY_PROMPT)
-            active = g_sticky_prompt_enabled;
-        else if (i == MENU_ID_AUTOSCROLL)
-            active = !g_autoscroll_enabled;  // "Disable Autoscroll" is active when autoscroll is disabled
         
         if (hov || sub_open) draw_rect(mx+2, y, mw-4, ih, 0.25f, 0.45f, 0.85f, 0.85f);
         else if (active) draw_rect(mx+2, y, mw-4, ih, 0.2f, 0.35f, 0.6f, 0.6f);  // Highlight active toggles
@@ -993,12 +1013,14 @@ void menu_render(ContextMenu *m) {
 
     if (m->sub_open == MENU_ID_THEMES || m->sub_open == MENU_ID_OPACITY ||
         m->sub_open == MENU_ID_RENDER_MODE || m->sub_open == MENU_ID_ENTERTAINMENT ||
-        m->sub_open == MENU_ID_NEW_TERMINAL || m->sub_open == MENU_ID_FONTS) {
+        m->sub_open == MENU_ID_NEW_TERMINAL || m->sub_open == MENU_ID_FONTS ||
+        m->sub_open == MENU_ID_ADV_OPTIONS) {
         int count = (m->sub_open == MENU_ID_THEMES)       ? THEME_COUNT :
                     (m->sub_open == MENU_ID_RENDER_MODE)   ? RENDER_MODE_COUNT :
                     (m->sub_open == MENU_ID_ENTERTAINMENT) ? ENT_COUNT :
                     (m->sub_open == MENU_ID_NEW_TERMINAL)  ? (int)g_available_terminals.size() :
                     (m->sub_open == MENU_ID_FONTS)         ? (int)g_font_list.size() :
+                    (m->sub_open == MENU_ID_ADV_OPTIONS)   ? ADV_OPTIONS_COUNT :
                                                              OPACITY_COUNT;
         float sw = (float)(m->width + (int)(MENU_FONT_SIZE * 2));
         float sh = (float)(count * m->item_h + 8);
@@ -1020,6 +1042,8 @@ void menu_render(ContextMenu *m) {
                 lbl = g_available_terminals[j].name.c_str();
             } else if (m->sub_open == MENU_ID_FONTS) {
                 lbl = g_font_list[j].display_name.c_str();
+            } else if (m->sub_open == MENU_ID_ADV_OPTIONS) {
+                lbl = ADV_OPTIONS_NAMES[j];
             } else {
                 lbl = OPACITY_NAMES[j];
             }
@@ -1040,6 +1064,11 @@ void menu_render(ContextMenu *m) {
                 active = (j == ENT_IDX_FIGHT    && fight_get_enabled())   ||
                          (j == ENT_IDX_BOUNCING  && bc_get_enabled())      ||
                          (j == ENT_IDX_SOUND     && term_audio_get_enabled());
+            else if (m->sub_open == MENU_ID_ADV_OPTIONS) {
+                if (j == 0) active = g_sticky_prompt_enabled;           // Sticky Prompt
+                else if (j == 1) active = !g_autoscroll_enabled;        // Disable Autoscroll
+                else if (j == 2) active = g_line_numbers_enabled;       // Line Numbers
+            }
 
             if (hov)          draw_rect(sx+2,iy,sw-4,ih,0.25f,0.45f,0.85f,0.85f);
             if (active&&!hov) draw_rect(sx+2,iy,sw-4,ih,0.2f,0.35f,0.6f,0.6f);

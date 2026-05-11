@@ -13,6 +13,7 @@ extern int g_font_size;
 extern int g_blink_text_on;
 extern bool s_basic_palette_active;
 extern bool cell_in_sel(Terminal *t, int r, int c);
+extern bool g_line_numbers_enabled;
 
 // ============================================================================
 // STATE
@@ -42,6 +43,13 @@ Cell* sticky_prompt_get_input_line(Terminal *t) {
 
 void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
     float cw = t->cell_w, ch = t->cell_h;
+    
+    // Adjust ox for line numbers if enabled
+    float line_num_width = 0;
+    if (g_line_numbers_enabled) {
+        line_num_width = cw * 6;  // 6 character widths for line numbers
+        ox += line_num_width;  // Shift terminal to the right
+    }
     
     Cell blank = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
     
@@ -174,6 +182,19 @@ void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
         float bar_x = ox + t->cols * cw - 4;
         draw_rect(bar_x, oy, 4, win_h, 0,0,0, 0.3f);
         draw_rect(bar_x, bar_y, 4, bar_h, 0.6f, 0.6f, 0.7f, 0.8f);
+    }
+    
+    // Draw line numbers (if enabled)
+    if (g_line_numbers_enabled) {
+        for (int row = 0; row < t->rows; row++) {
+            int vrow = row + t->sb_count - t->sb_offset;
+            char line_num[16];
+            snprintf(line_num, sizeof(line_num), "%5d", vrow);
+            // Draw at original ox position (before we shifted right)
+            float line_num_x = ox - line_num_width;
+            float line_num_y = oy + row * ch;
+            draw_text(line_num, line_num_x, line_num_y + ch * 0.82f, g_font_size, (int)ch, 0.6f, 0.6f, 0.7f, 0.8f, 0);
+        }
     }
     
     // Clear dirty flags
