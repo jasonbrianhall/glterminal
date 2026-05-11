@@ -1277,9 +1277,78 @@ int main(int argc, char **argv) {
                     } else {
                         autoscroll_mouse_x = ev.button.x;
                         autoscroll_mouse_y = ev.button.y;
-                        term.sel_start_row = term.sel_end_row = r;
-                        term.sel_start_col = term.sel_end_col = c;
-                        term.sel_active = true; term.sel_exists = false;
+                        
+                        // Double-click word selection
+                        static uint32_t last_click_time = 0;
+                        static int last_click_row = -1, last_click_col = -1;
+                        uint32_t now = SDL_GetTicks();
+                        bool is_double_click = (now - last_click_time < 500 &&
+                                                last_click_row == r && last_click_col == c);
+                        
+                        if (is_double_click) {
+                            // Select entire word on double-click
+                            Cell *cell = vcell(&term, r, c);
+                            
+                            // Check if we're on a word character
+                            auto is_separator = [](uint32_t cp) {
+                                if (cp <= 32 || cp == 127) return true;
+                                switch (cp) {
+                                    case '!': case '"': case '#': case '$': case '%': case '&':
+                                    case '\'': case '(': case ')': case '*': case '+': case ',':
+                                    case '.': case '/': case ':': case ';': case '<': case '=':
+                                    case '>': case '?': case '@': case '[': case '\\': case ']':
+                                    case '^': case '`': case '{': case '|': case '}': case '~':
+                                        return true;
+                                    default: return false;
+                                }
+                            };
+                            
+                            if (cell && !is_separator(cell->cp)) {
+                                // Expand left
+                                int start_col = c;
+                                for (int col = c; col >= 0; col--) {
+                                    Cell *ch = vcell(&term, r, col);
+                                    if (!ch || is_separator(ch->cp)) {
+                                        start_col = col + 1;
+                                        break;
+                                    }
+                                    if (col == 0) start_col = 0;
+                                }
+                                
+                                // Expand right
+                                int end_col = c;
+                                for (int col = c; col < term.cols; col++) {
+                                    Cell *ch = vcell(&term, r, col);
+                                    if (!ch || is_separator(ch->cp)) {
+                                        end_col = col - 1;
+                                        break;
+                                    }
+                                    if (col == term.cols - 1) end_col = term.cols - 1;
+                                }
+                                
+                                term.sel_start_row = term.sel_end_row = r;
+                                term.sel_start_col = start_col;
+                                term.sel_end_col = end_col;
+                                term.sel_active = false;
+                                term.sel_exists = true;
+                            } else {
+                                // Single character selection if on separator
+                                term.sel_start_row = term.sel_end_row = r;
+                                term.sel_start_col = term.sel_end_col = c;
+                                term.sel_active = false;
+                                term.sel_exists = true;
+                            }
+                        } else {
+                            // Single click: start selection
+                            term.sel_start_row = term.sel_end_row = r;
+                            term.sel_start_col = term.sel_end_col = c;
+                            term.sel_active = true;
+                            term.sel_exists = false;
+                        }
+                        
+                        last_click_time = now;
+                        last_click_row = r;
+                        last_click_col = c;
                         term_dirty_all(&term);
                     }
                 } else if (ev.button.button == SDL_BUTTON_MIDDLE) {
@@ -1416,6 +1485,10 @@ int main(int argc, char **argv) {
                                  term.sel_start_col == term.sel_end_col);
                     term.sel_exists = !same;
                     if (term.sel_exists) term_copy_selection(&term);
+                    term_dirty_all(&term);
+                } else if (ev.button.button == SDL_BUTTON_LEFT && term.sel_exists) {
+                    // Double-click word selection already set - just copy and keep selection
+                    term_copy_selection(&term);
                     term_dirty_all(&term);
                 }
                 break;
