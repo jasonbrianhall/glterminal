@@ -51,6 +51,8 @@
 int         g_font_size   = FONT_SIZE_DEFAULT;
 float       g_opacity     = 1.0f;
 bool        g_blink_text_on = true;
+bool        g_autoscroll_enabled = true;  // true = autoscroll ON, false = autoscroll OFF
+bool        g_line_numbers_enabled = false;  // Toggle for line numbering in scrollback
 SDL_Window *g_sdl_window  = nullptr;
 std::vector<FontEntry> g_font_list;
 // Current window size exposed to terminal.cpp for basic_handle_osc coordinate mapping.
@@ -697,7 +699,15 @@ int main(int argc, char **argv) {
                 needs_render = true;
                 bool new_lines = (term.sb_count != old_sb_count);
                 if (new_lines) {
-                    term.sb_offset = 0;
+                    if (g_autoscroll_enabled) {
+                        // Autoscroll ON: jump to bottom to show new data
+                        term.sb_offset = 0;
+                    } else {
+                        // Autoscroll OFF: keep viewport in same position by shifting offset
+                        int new_lines_added = term.sb_count - old_sb_count;
+                        term.sb_offset += new_lines_added;
+                        if (term.sb_offset > term.sb_count) term.sb_offset = term.sb_count;
+                    }
                     if (had_sel) { term.sel_exists = false; term.sel_active = false; }
                 }
             }
@@ -1029,10 +1039,6 @@ int main(int argc, char **argv) {
                     term_dirty_all(&term);
                     break;
                 }
-                // Only scroll to bottom on keypress if not in sticky prompt mode
-                if (!g_sticky_prompt_enabled) {
-                    term.sb_offset = 0;
-                }
                 if (mod & KMOD_CTRL) {
                     if (ev.key.keysym.sym == SDLK_c && (mod & KMOD_SHIFT)) {
                         term_copy_selection_html(&term); break;
@@ -1207,16 +1213,30 @@ int main(int argc, char **argv) {
                                 font_save_config(g_font_list[sub_hit].display_name);
                                 ft_invalidate_glyph_cache();
                                 fbo_needs_clear = true;
-                                G.proj = mat4_ortho(0, (float)win_w, (float)win_h, 0, -1, 1);
-                                settings_save();
                                 term_dirty_all(&term);
+                            } else if (g_menu.sub_open == MENU_ID_ADV_OPTIONS) {
+                                if (sub_hit == 0) {
+                                    // Sticky Prompt
+                                    sticky_prompt_toggle();
+                                } else if (sub_hit == 1) {
+                                    // Disable Autoscroll
+                                    g_autoscroll_enabled = !g_autoscroll_enabled;
+                                } else if (sub_hit == 2) {
+                                    // Line Numbers
+                                    g_line_numbers_enabled = !g_line_numbers_enabled;
+                                    term_dirty_all(&term);  // Redraw all rows when toggling line numbers
+                                }
+                                needs_render = true;
+                                // Keep submenu open so user can toggle multiple items
+                                break;
                             }
                             g_menu.visible = false;
                         } else {
                             int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
                             bool is_sub_parent = (hit==MENU_ID_THEMES || hit==MENU_ID_OPACITY ||
                                                   hit==MENU_ID_RENDER_MODE || hit==MENU_ID_ENTERTAINMENT ||
-                                                  hit==MENU_ID_NEW_TERMINAL || hit==MENU_ID_FONTS);
+                                                  hit==MENU_ID_NEW_TERMINAL || hit==MENU_ID_FONTS ||
+                                                  hit==MENU_ID_ADV_OPTIONS);
                             if (!is_sub_parent) g_menu.visible = false;
                             switch (hit) {
                             case MENU_ID_COPY:      term_copy_selection(&term); break;
@@ -1303,7 +1323,8 @@ int main(int argc, char **argv) {
                     if (hit >= 0) g_menu.hovered = hit;
                     if (hit == MENU_ID_THEMES || hit == MENU_ID_OPACITY ||
                         hit == MENU_ID_RENDER_MODE || hit == MENU_ID_ENTERTAINMENT ||
-                        hit == MENU_ID_NEW_TERMINAL || hit == MENU_ID_FONTS) {
+                        hit == MENU_ID_NEW_TERMINAL || hit == MENU_ID_FONTS ||
+                        hit == MENU_ID_ADV_OPTIONS) {
                         if (g_menu.sub_open != hit) {
                             g_menu.sub_open = hit; g_menu.sub_hovered = -1;
                             g_menu.sub_x = g_menu.x + g_menu.width + 2;

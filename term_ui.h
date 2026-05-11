@@ -59,8 +59,9 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_ENTERTAINMENT 12
 #define MENU_ID_SELECT_ALL   14
 #define MENU_ID_FONTS        16
-#define MENU_ID_HELP         18
-#define MENU_ID_QUIT         20
+#define MENU_ID_ADV_OPTIONS  18
+#define MENU_ID_HELP         20
+#define MENU_ID_QUIT         22
 
 // New Terminal submenu item indices
 #define NEW_TERM_IDX_LOCAL  0
