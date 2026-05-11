@@ -34,6 +34,8 @@ struct Theme {
     const float (*palette)[3];  // [16][3], or nullptr = use PAL_DEFAULT
 };
 
+extern const float PAL_GNOME_TERMINAL[16][3];
+extern const float PAL_LEGACY[16][3];
 extern const float PAL_DEFAULT[16][3];
 extern const float PAL_SOLARIZED[16][3];
 extern const float PAL_MONOKAI[16][3];

@@ -5,6 +5,47 @@
 // PALETTE DATA
 // ============================================================================
 
+const float PAL_GNOME_TERMINAL[16][3] = {
+    // normal
+    {0.090f, 0.078f, 0.129f},  // black   #171421
+    {0.753f, 0.110f, 0.157f},  // red     #c01c28
+    {0.149f, 0.635f, 0.412f},  // green   #26a269
+    {0.635f, 0.451f, 0.298f},  // yellow  #a2734c
+    {0.071f, 0.282f, 0.545f},  // blue    #12488b
+    {0.639f, 0.278f, 0.729f},  // magenta #a347ba
+    {0.165f, 0.631f, 0.702f},  // cyan    #2aa1b3
+    {0.816f, 0.812f, 0.800f},  // white   #d0cfcc
+
+    // bright
+    {0.369f, 0.361f, 0.392f},  // bright black  #5e5c64
+    {0.965f, 0.380f, 0.318f},  // bright red    #f66151
+    {0.200f, 0.820f, 0.478f},  // bright green  #33d17a
+    {0.914f, 0.678f, 0.047f},  // bright yellow #e9ad0c
+    {0.165f, 0.482f, 0.871f},  // bright blue   #2a7bde
+    {0.753f, 0.380f, 0.796f},  // bright magenta#c061cb
+    {0.200f, 0.780f, 0.871f},  // bright cyan   #33c7de
+    {1.000f, 1.000f, 1.000f},  // bright white  #ffffff
+};
+
+const float PAL_LEGACY[16][3] = {
+    {0.f,    0.f,    0.f},
+    {0.8f,   0.1f,   0.1f},
+    {0.1f,   0.8f,   0.1f},
+    {0.8f,   0.8f,   0.1f},
+    {0.2f,   0.2f,   0.9f},
+    {0.8f,   0.1f,   0.8f},
+    {0.1f,   0.8f,   0.8f},
+    {0.75f,  0.75f,  0.75f},
+    {0.4f,   0.4f,   0.4f},
+    {1.f,    0.3f,   0.3f},
+    {0.3f,   1.f,    0.3f},
+    {1.f,    1.f,    0.3f},
+    {0.3f,   0.4f,   1.f},
+    {1.f,    0.3f,   1.f},
+    {0.3f,   1.f,    1.f},
+    {1.f,    1.f,    1.f},
+};
+
 const float PAL_DEFAULT[16][3] = {
     {0.f,    0.f,    0.f},
     {0.8f,   0.1f,   0.1f},
@@ -101,14 +142,16 @@ const float PAL_GRUVBOX[16][3] = {
 };
 
 const Theme THEMES[] = {
-    { "Default",         0.04f,  0.04f,  0.08f,  PAL_DEFAULT   },
+    { "Default",         0.078f, 0.078f, 0.118f, PAL_GNOME_TERMINAL }, // ~#14141e bluish gray
+    { "Classic",         0.0f,   0.0f,   0.0f,   PAL_LEGACY },
     { "Solarized Dark",  0.000f, 0.169f, 0.212f, PAL_SOLARIZED },
-    { "Monokai",         0.117f, 0.117f, 0.117f, PAL_MONOKAI   },
-    { "Nord",            0.180f, 0.204f, 0.251f, PAL_NORD      },
-    { "Gruvbox",         0.157f, 0.157f, 0.157f, PAL_GRUVBOX   },
-    { "Matrix",          0.f,    0.05f,  0.f,    nullptr       },
-    { "Ocean",           0.047f, 0.082f, 0.133f, nullptr       },
+    { "Monokai",         0.117f, 0.117f, 0.117f, PAL_MONOKAI },
+    { "Nord",            0.180f, 0.204f, 0.251f, PAL_NORD },
+    { "Gruvbox",         0.157f, 0.157f, 0.157f, PAL_GRUVBOX },
+    { "Matrix",          0.f,    0.05f,  0.f,    nullptr },
+    { "Ocean",           0.047f, 0.082f, 0.133f, nullptr },
 };
+
 const int THEME_COUNT = (int)(sizeof(THEMES)/sizeof(THEMES[0]));
 
 // ============================================================================
@@ -128,16 +171,16 @@ void apply_theme(int idx) {
     const Theme &th = THEMES[idx];
     if (!th.palette) {
         if (strcmp(th.name, "Matrix") == 0) {
-            memcpy(g_palette16, PAL_DEFAULT, sizeof(g_palette16));
+            memcpy(g_palette16, PAL_GNOME_TERMINAL, sizeof(g_palette16));
             g_palette16[2][0]=0.f; g_palette16[2][1]=1.f; g_palette16[2][2]=0.f;
             g_palette16[7][0]=0.f; g_palette16[7][1]=0.9f; g_palette16[7][2]=0.f;
         } else if (strcmp(th.name, "Ocean") == 0) {
-            memcpy(g_palette16, PAL_DEFAULT, sizeof(g_palette16));
+            memcpy(g_palette16, PAL_GNOME_TERMINAL, sizeof(g_palette16));
             g_palette16[4][0]=0.4f; g_palette16[4][1]=0.7f; g_palette16[4][2]=1.0f;
             g_palette16[6][0]=0.4f; g_palette16[6][1]=0.9f; g_palette16[6][2]=1.0f;
             g_palette16[7][0]=0.85f;g_palette16[7][1]=0.92f;g_palette16[7][2]=1.0f;
         } else {
-            memcpy(g_palette16, PAL_DEFAULT, sizeof(g_palette16));
+            memcpy(g_palette16, PAL_GNOME_TERMINAL, sizeof(g_palette16));
         }
     } else {
         memcpy(g_palette16, th.palette, sizeof(g_palette16));
