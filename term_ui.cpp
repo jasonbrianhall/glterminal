@@ -29,6 +29,13 @@
 #include "font_manager.h"
 
 // ============================================================================
+// GLOBALS
+// ============================================================================
+
+extern bool g_sticky_prompt_enabled;
+extern bool g_autoscroll_enabled;
+
+// ============================================================================
 // TERMINAL DETECTION & LAUNCHING
 // ============================================================================
 
@@ -281,6 +288,9 @@ const MenuItem MENU_ITEMS[] = {
     { "Select All",      false },
     { nullptr,           true  },
     { "Font  >",         false },
+    { "Sticky Prompt",   false },
+    { nullptr,           true  },
+    { "Disable Autoscroll", false },
     { nullptr,           true  },
     { "Help",            false },
     { nullptr,           true  },
@@ -843,7 +853,9 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
     }
 
     switch (ks.sym) {
-    case SDLK_RETURN:    term_write(t, "\r",      1); break;
+    case SDLK_RETURN:
+        term_write(t, "\r", 1);
+        break;
     case SDLK_BACKSPACE: term_write(t, "\x7f",    1); break;
     case SDLK_TAB:
         if (shift) term_write(t, "\x1b[Z", 3);
@@ -962,9 +974,20 @@ void menu_render(ContextMenu *m) {
         float ih = (float)m->item_h;
         bool hov = (i == m->hovered);
         bool sub_open = (m->sub_open == i);
+        
+        // Check if this menu item should be highlighted (active/enabled)
+        bool active = false;
+        if (i == MENU_ID_STICKY_PROMPT)
+            active = g_sticky_prompt_enabled;
+        else if (i == MENU_ID_AUTOSCROLL)
+            active = !g_autoscroll_enabled;  // "Disable Autoscroll" is active when autoscroll is disabled
+        
         if (hov || sub_open) draw_rect(mx+2, y, mw-4, ih, 0.25f, 0.45f, 0.85f, 0.85f);
-        float tr = (hov||sub_open)?1.f:0.88f, tg=tr, tb=(hov||sub_open)?1.f:0.92f;
-        draw_text_menu(MENU_ITEMS[i].label, mx + m->pad_x, y + ih*0.72f, tr,tg,tb,1.f);
+        else if (active) draw_rect(mx+2, y, mw-4, ih, 0.2f, 0.35f, 0.6f, 0.6f);  // Highlight active toggles
+        
+        float tr = (hov||sub_open)?1.f:(active?0.7f:0.88f), tg = (hov||sub_open)?1.f:(active?0.9f:0.88f), tb = (hov||sub_open)?1.f:(active?1.0f:0.92f);
+        if (active) draw_text_menu("\xe2\x9c\x93", mx+4, y + ih*0.72f, 0.4f,0.8f,0.4f,1.f);  // Checkmark
+        draw_text_menu(MENU_ITEMS[i].label, mx + m->pad_x + (active?MENU_FONT_SIZE:0), y + ih*0.72f, tr,tg,tb,1.f);
         y += ih;
     }
 

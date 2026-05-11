@@ -51,6 +51,7 @@
 int         g_font_size   = FONT_SIZE_DEFAULT;
 float       g_opacity     = 1.0f;
 bool        g_blink_text_on = true;
+bool        g_autoscroll_enabled = true;  // true = autoscroll ON, false = autoscroll OFF
 SDL_Window *g_sdl_window  = nullptr;
 std::vector<FontEntry> g_font_list;
 // Current window size exposed to terminal.cpp for basic_handle_osc coordinate mapping.
@@ -697,7 +698,15 @@ int main(int argc, char **argv) {
                 needs_render = true;
                 bool new_lines = (term.sb_count != old_sb_count);
                 if (new_lines) {
-                    term.sb_offset = 0;
+                    if (g_autoscroll_enabled) {
+                        // Autoscroll ON: jump to bottom to show new data
+                        term.sb_offset = 0;
+                    } else {
+                        // Autoscroll OFF: keep viewport in same position by shifting offset
+                        int new_lines_added = term.sb_count - old_sb_count;
+                        term.sb_offset += new_lines_added;
+                        if (term.sb_offset > term.sb_count) term.sb_offset = term.sb_count;
+                    }
                     if (had_sel) { term.sel_exists = false; term.sel_active = false; }
                 }
             }
@@ -1029,10 +1038,6 @@ int main(int argc, char **argv) {
                     term_dirty_all(&term);
                     break;
                 }
-                // Only scroll to bottom on keypress if not in sticky prompt mode
-                if (!g_sticky_prompt_enabled) {
-                    term.sb_offset = 0;
-                }
                 if (mod & KMOD_CTRL) {
                     if (ev.key.keysym.sym == SDLK_c && (mod & KMOD_SHIFT)) {
                         term_copy_selection_html(&term); break;
@@ -1237,6 +1242,14 @@ int main(int argc, char **argv) {
 #endif
                                 break;
                             case MENU_ID_SELECT_ALL: term_select_all(&term); break;
+                            case MENU_ID_STICKY_PROMPT:
+                                sticky_prompt_toggle();
+                                needs_render = true;
+                                break;
+                            case MENU_ID_AUTOSCROLL:
+                                g_autoscroll_enabled = !g_autoscroll_enabled;
+                                needs_render = true;
+                                break;
                             case MENU_ID_HELP:
                                 g_iv.visible = false;
                                 if (g_wopr.visible) wopr_close();
