@@ -1293,11 +1293,10 @@ int main(int argc, char **argv) {
                             auto is_separator = [](uint32_t cp) {
                                 if (cp <= 32 || cp == 127) return true;
                                 switch (cp) {
-                                    case '!': case '"': case '#': case '$': case '%': case '&':
-                                    case '\'': case '(': case ')': case '*': case '+': case ',':
-                                    case '.': case '/': case ':': case ';': case '<': case '=':
-                                    case '>': case '?': case '@': case '[': case '\\': case ']':
-                                    case '^': case '`': case '{': case '|': case '}': case '~':
+                                    case '!':  case '"': case '#': case '$': case '%': case '&':
+                                    case '(':  case ')': case '*': case '+': case ',': case '|':
+                                    case ';':  case '<': case '=': case '`': case '^': case '{':
+                                    case '>':  case '?': case '[': case ']': case '}':       
                                         return true;
                                     default: return false;
                                 }
