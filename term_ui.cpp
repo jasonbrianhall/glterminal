@@ -739,7 +739,9 @@ void term_render(Terminal *t, int ox, int oy) {
             TermColor bc = tcolor_resolve(bg);
             int vrow = row + t->sb_count - t->sb_offset;
             if (cell_in_sel(t, vrow, col)) {
-                draw_rect(px, py, cw, ch, 0.3f, 0.5f, 1.0f, 0.5f);
+                // Selection highlight: use original foreground color as background
+                TermColor sel_bg = tcolor_resolve(fg);
+                draw_rect(px, py, cw, ch, sel_bg.r, sel_bg.g, sel_bg.b, 1.0f);
             } else {
                 // When BASIC graphics are active, draw default cell backgrounds
                 // transparent so the BASIC layer shows through underneath.
@@ -775,6 +777,14 @@ void term_render(Terminal *t, int ox, int oy) {
             if ((c->attrs & ATTR_BOLD) && !TCOLOR_IS_RGB(fg) && TCOLOR_IDX(fg) < 8)
                 fc = tcolor_resolve(TCOLOR_PALETTE(TCOLOR_IDX(fg)+8));
             if (c->attrs & ATTR_DIM) { fc.r *= 0.5f; fc.g *= 0.5f; fc.b *= 0.5f; }
+
+            // If cell is selected, invert: use background color as text on foreground-colored background
+            int vrow = row + t->sb_count - t->sb_offset;
+            if (cell_in_sel(t, vrow, col)) {
+                // Use background color as text (inverted)
+                TermColor bc = tcolor_resolve(bg);
+                fc = bc;
+            }
 
             uint32_t cp = c->cp;
             bool blink_hidden = (c->attrs & ATTR_BLINK) && !g_blink_text_on;

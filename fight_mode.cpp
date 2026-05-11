@@ -170,9 +170,9 @@ static void fight_init_round(float ww, float wh) {
     // On first round, pick opponent type for entire match
     if (s_ff[0].rounds_won == 0 && s_ff[1].rounds_won == 0) {
         float mystery = frand();
-        if (mystery < 0.25f) {
+        if (mystery < 0.05f) {
             s_opponent_type = OPP_CHICKEN;
-        } else if (mystery < 0.50f) {
+        } else if (mystery < 0.10f) {
             s_opponent_type = OPP_LION;
         } else {
             s_opponent_type = OPP_HUMAN;
