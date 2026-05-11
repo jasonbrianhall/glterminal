@@ -2,6 +2,7 @@
 #include "terminal.h"
 #include "term_color.h"
 #include "gl_renderer.h"
+#include <cstdio>
 #include <SDL2/SDL.h>
 #include <string.h>
 
