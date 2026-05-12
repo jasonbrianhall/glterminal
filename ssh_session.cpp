@@ -386,23 +386,50 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
         authed = auth_key(cfg.user, cfg.key_path, cfg.key_path_pub, cfg.password);
 
     if (!authed) {
-        std::string password = cfg.password;
         bool server_allows_password = !auth_methods ||
                                       strstr(auth_methods, "password") != nullptr;
-        SDL_Log("[SSH] password auth stage: password=%s prompt_cb=%s server_allows=%s\n",
-                password.empty() ? "empty" : "set",
-                cfg.prompt_password ? "set" : "NULL",
+        SDL_Log("[SSH] password auth stage: password_set=%s prompt_cb=%s server_allows=%s\n",
+                cfg.password.empty() ? "no" : "yes",
+                cfg.prompt_password ? "yes" : "no",
                 server_allows_password ? "yes" : "no");
-        if (password.empty() && cfg.prompt_password && server_allows_password) {
-            char prompt[256];
-            snprintf(prompt, sizeof(prompt), "%s@%s's password: ",
-                     cfg.user.c_str(), cfg.host.c_str());
-            SDL_Log("[SSH] calling prompt_password callback\n");
-            password = cfg.prompt_password(prompt);
-            SDL_Log("[SSH] prompt_password returned: %s\n", password.empty() ? "empty" : "got password");
+        
+        if (server_allows_password) {
+            // Try supplied password first (if any)
+            if (!cfg.password.empty()) {
+                SDL_Log("[SSH] attempting with supplied password\n");
+                authed = auth_password(cfg.user, cfg.password);
+            }
+            
+            // If that failed and we have a prompt callback, allow up to 3 attempts
+            if (!authed && cfg.prompt_password) {
+                const int MAX_ATTEMPTS = 3;
+                for (int attempt = 1; attempt <= MAX_ATTEMPTS && !authed; attempt++) {
+                    char prompt[256];
+                    if (attempt == 1) {
+                        snprintf(prompt, sizeof(prompt), "%s@%s's password: ",
+                                 cfg.user.c_str(), cfg.host.c_str());
+                    } else {
+                        snprintf(prompt, sizeof(prompt), "Permission denied, try again. %s@%s's password: ",
+                                 cfg.user.c_str(), cfg.host.c_str());
+                    }
+                    
+                    SDL_Log("[SSH] password prompt attempt %d/%d\n", attempt, MAX_ATTEMPTS);
+                    std::string password = cfg.prompt_password(prompt);
+                    
+                    if (password.empty()) {
+                        SDL_Log("[SSH] user aborted password entry\n");
+                        break;
+                    }
+                    
+                    authed = auth_password(cfg.user, password);
+                    if (authed) {
+                        SDL_Log("[SSH] authenticated via password on attempt %d\n", attempt);
+                    } else {
+                        SDL_Log("[SSH] password attempt %d failed\n", attempt);
+                    }
+                }
+            }
         }
-        if (!password.empty())
-            authed = auth_password(cfg.user, password);
     }
 
     if (!authed) {
