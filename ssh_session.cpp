@@ -235,67 +235,72 @@ static bool verify_host_key(const std::string &host, int port,
     if (kh_path.empty()) {
 #ifndef _WIN32
         const char *home = getenv("HOME");
-        if (home) kh_path = std::string(home) + "/.ssh/known_hosts";
+        if (home)
+            kh_path = std::string(home) + "/.ssh/known_hosts";
 #else
-        const char *userprofile = getenv("USERPROFILE");
-        if (userprofile) kh_path = std::string(userprofile) + "\\.ssh\\known_hosts";
+        // Windows: skip host key verification for now (return true to allow connection)
+        return true;
 #endif
     }
 
-    // known_hosts_path == "" after expansion means skip verification (INSECURE)
+    // If path is still empty, allow the connection
     if (kh_path.empty()) {
-        SDL_Log("[SSH] WARNING: host key verification skipped (no known_hosts path)\n");
+        SDL_Log("[SSH] no known_hosts path, skipping host key verification\n");
         return true;
     }
 
     LIBSSH2_KNOWNHOSTS *kh = libssh2_knownhost_init(s_session);
     if (!kh) {
-        SDL_Log("[SSH] failed to init known_hosts\n");
+        SDL_Log("[SSH] knownhost init failed\n");
         return false;
     }
 
-    // Ignore failure loading the file — it may not exist yet
-    libssh2_knownhost_readfile(kh, kh_path.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
-
-    size_t key_len = 0;
-    int    key_type = 0;
-    const char *key = libssh2_session_hostkey(s_session, &key_len, &key_type);
-    if (!key) {
-        SDL_Log("[SSH] could not get server host key\n");
+    int readrc = libssh2_knownhost_readfile(kh, kh_path.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+    if (readrc < 0) {
+        SDL_Log("[SSH] error reading known_hosts file '%s'\n", kh_path.c_str());
         libssh2_knownhost_free(kh);
         return false;
     }
 
-    int type_mask = LIBSSH2_KNOWNHOST_TYPE_PLAIN
-                  | LIBSSH2_KNOWNHOST_KEYENC_RAW
-                  | hostkey_type_to_knownhost_flag(key_type);
+    // Get the host key from the server
+    size_t hkey_len = 0;
+    int hkey_type = 0;
+    const char *hkey = libssh2_session_hostkey(s_session, &hkey_len, &hkey_type);
 
-    struct libssh2_knownhost *found = nullptr;
-    int check = libssh2_knownhost_checkp(
-        kh, host.c_str(), port, key, key_len, type_mask, &found);
+    if (!hkey) {
+        SDL_Log("[SSH] cannot retrieve host key from session\n");
+        libssh2_knownhost_free(kh);
+        return false;
+    }
+
+    // Check the host key
+    int check_flags = LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW;
+    check_flags |= hostkey_type_to_knownhost_flag(hkey_type);
+
+    struct libssh2_knownhost *store = nullptr;
+    int checkrc = libssh2_knownhost_checkp(kh, host.c_str(), port, hkey, hkey_len,
+                                            check_flags, &store);
 
     bool trusted = false;
-    switch (check) {
+    switch (checkrc) {
     case LIBSSH2_KNOWNHOST_CHECK_MATCH:
+        SDL_Log("[SSH] host key verified: %s:%d\n", host.c_str(), port);
         trusted = true;
         break;
     case LIBSSH2_KNOWNHOST_CHECK_NOTFOUND:
-        // First connection — add the key and trust it
-        SDL_Log("[SSH] new host '%s' — adding to known_hosts\n", host.c_str());
-        libssh2_knownhost_addc(kh, host.c_str(), nullptr,
-                               key, key_len, nullptr, 0, type_mask, nullptr);
-        libssh2_knownhost_writefile(kh, kh_path.c_str(),
-                                    LIBSSH2_KNOWNHOST_FILE_OPENSSH);
-        trusted = true;
+        SDL_Log("[SSH] WARNING: host key not in known_hosts: %s:%d\n", host.c_str(), port);
+        trusted = false;
         break;
     case LIBSSH2_KNOWNHOST_CHECK_MISMATCH:
-        SDL_Log("[SSH] ERROR: host key MISMATCH for '%s' — possible MITM attack!\n",
-                host.c_str());
+        SDL_Log("[SSH] ERROR: host key mismatch (possible MITM): %s:%d\n", host.c_str(), port);
         trusted = false;
         break;
     case LIBSSH2_KNOWNHOST_CHECK_FAILURE:
+        SDL_Log("[SSH] host key check failure\n");
+        trusted = false;
+        break;
     default:
-        SDL_Log("[SSH] known_hosts check failed for '%s'\n", host.c_str());
+        SDL_Log("[SSH] unknown host key check result: %d\n", checkrc);
         trusted = false;
         break;
     }
@@ -578,5 +583,24 @@ LIBSSH2_SESSION *ssh_get_session() { return s_session; }
 int              ssh_get_socket()  { return s_sock; }
 void             ssh_session_lock()   { s_session_mutex.lock(); }
 void             ssh_session_unlock() { s_session_mutex.unlock(); }
+
+void ssh_reset_after_fork() {
+    // Clean up inherited libssh2 state from parent process.
+    // After fork(), child inherits parent's static variables which point to
+    // freed/invalid memory. This resets them so the child can initialize
+    // its own libssh2 session cleanly.
+    libssh2_exit();
+    
+    // Reset static state
+    s_session = nullptr;
+    s_channel = nullptr;
+    s_sock    = -1;
+    s_active  = false;
+    
+    // Re-initialize libssh2 for the child process
+    if (libssh2_init(0) != 0) {
+        SDL_Log("[SSH] libssh2_init (post-fork) failed\n");
+    }
+}
 
 #endif // USESSH

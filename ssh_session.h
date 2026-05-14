@@ -97,4 +97,9 @@ int              ssh_get_socket();
 void ssh_session_lock();
 void ssh_session_unlock();
 
+// Reset SSH session state after fork().
+// Call in child process before any SSH/SFTP operations.
+// Cleans up inherited libssh2 pointers and reinitializes for the child.
+void ssh_reset_after_fork();
+
 #endif // USESSH

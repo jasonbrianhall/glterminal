@@ -321,10 +321,19 @@ static std::string do_get(const char *remote_full, const char *local_full,
         return e;
     }
 
-    char buf[32768]; ssize_t n; uint64_t total = 0; bool ok = true;
+    // Allocate buffer on heap to avoid stack overflow on large transfers
+    const size_t TRANSFER_BUFFER_SIZE = 1024 * 1024;  // 1MB buffer
+    char *buf = (char *)malloc(TRANSFER_BUFFER_SIZE);
+    if (!buf) {
+        fclose(out);
+        while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        return "out of memory";
+    }
+    
+    ssize_t n; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
     for (;;) {
-        n = libssh2_sftp_read(fh, buf, sizeof(buf));
+        n = libssh2_sftp_read(fh, buf, TRANSFER_BUFFER_SIZE);
         if (n == LIBSSH2_ERROR_EAGAIN) { waitsocket_con(sock, sess); continue; }
         if (n < 0) { ok = false; break; }
         if (n == 0) break;
@@ -334,6 +343,7 @@ static std::string do_get(const char *remote_full, const char *local_full,
     }
     fclose(out);
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+    free(buf);
 
     if (!ok) return std::string("transfer failed for '") + remote_full + "'";
     s_progress.store(1.f);
@@ -375,9 +385,18 @@ static std::string do_put(const char *local_full, const char *remote_full) {
         }
     }
 
-    char buf[32768]; size_t nread; uint64_t total = 0; bool ok = true;
+    // Allocate buffer on heap to avoid stack overflow on large transfers
+    const size_t TRANSFER_BUFFER_SIZE = 1024 * 1024;  // 1MB buffer
+    char *buf = (char *)malloc(TRANSFER_BUFFER_SIZE);
+    if (!buf) {
+        fclose(in);
+        while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        return "out of memory";
+    }
+    
+    size_t nread; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
-    while ((nread = fread(buf, 1, sizeof(buf), in)) > 0) {
+    while ((nread = fread(buf, 1, TRANSFER_BUFFER_SIZE, in)) > 0) {
         size_t sent = 0;
         while (sent < nread) {
             ssize_t rc = libssh2_sftp_write(fh, buf + sent, nread - sent);
@@ -391,6 +410,7 @@ static std::string do_put(const char *local_full, const char *remote_full) {
 put_done:
     fclose(in);
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+    free(buf);
     if (!ok) return std::string("transfer failed for '") + local_full + "'";
     s_progress.store(1.f);
     return "";
@@ -401,20 +421,22 @@ struct RemoteEntry { std::string name; bool is_dir; uint64_t size; uint32_t perm
 static std::vector<RemoteEntry> list_remote_dir(const char *path) {
     LIBSSH2_SESSION *sess = ssh_get_session();
     int sock = ssh_get_socket();
-    libssh2_session_set_blocking(sess, 0);
+    
+    // Use blocking mode for directory listing to ensure complete enumeration
+    bool was_blocking = (libssh2_session_get_blocking(sess) != 0);
+    if (!was_blocking) libssh2_session_set_blocking(sess, 1);
 
-    LIBSSH2_SFTP_HANDLE *dh = nullptr;
-    for (int i = 0; i < 300 && !dh; i++) {
-        dh = libssh2_sftp_opendir(s_sftp, path);
-        if (!dh && libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN)
-        { waitsocket_con(sock, sess); }
-        else if (!dh) break;
-    }
+    LIBSSH2_SFTP_HANDLE *dh = libssh2_sftp_opendir(s_sftp, path);
+    
     std::vector<RemoteEntry> out;
-    if (!dh) return out;
+    if (!dh) {
+        if (!was_blocking) libssh2_session_set_blocking(sess, 0);
+        return out;
+    }
 
     char name[512], longentry[1024];
     LIBSSH2_SFTP_ATTRIBUTES attrs{};
+    // In blocking mode, readdir will wait until it gets data or EOF
     while (libssh2_sftp_readdir_ex(dh, name, sizeof(name), longentry, sizeof(longentry), &attrs) > 0) {
         if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
         RemoteEntry e;
@@ -426,6 +448,10 @@ static std::vector<RemoteEntry> list_remote_dir(const char *path) {
         out.push_back(std::move(e));
     }
     libssh2_sftp_closedir(dh);
+    
+    // Restore original blocking mode
+    if (!was_blocking) libssh2_session_set_blocking(sess, 0);
+    
     return out;
 }
 
@@ -877,7 +903,7 @@ static void cmd_worker(std::vector<std::string> toks) {
         s_busy.store(false); return;
     }
 
-    // ------------------------------------------------------------------ mget (with -r support)
+    // ------------------------------------------------------------------ mget (with -r support for nested patterns)
     if (cmd == "mget") {
         bool recursive = false;
         std::string pattern;
@@ -903,85 +929,116 @@ static void cmd_worker(std::vector<std::string> toks) {
         
         int got = 0;
         
-        // Recursive walker lambda
-        std::function<void(const std::string &)> walk_and_get = 
-            [&](const std::string &dir) {
-            auto entries = list_remote_dir(dir.c_str());
-            if (entries.empty()) return;
-            
+        // Check if pattern contains path separator (e.g., "*/*.py" or "subdir/*")
+        bool pattern_has_path = (pattern.find('/') != std::string::npos);
+        
+        if (!recursive || !pattern_has_path) {
+            // Non-recursive OR pattern doesn't have path separators: only search current dir
+            auto entries = list_remote_dir(s_remote_cwd);
             lk.~SessionLock();
             new (&lk) SessionLock();
             
             for (auto &e : entries) {
-                // Handle directories
-                if (e.is_dir) {
-                    // Only recurse if -r flag is set
-                    if (recursive) {
-                        std::string subdir = dir + "/" + e.name;
-                        walk_and_get(subdir);
-                    }
-                    continue;
-                }
-                
-                // Check if file matches pattern (match against filename only, not full path)
+                if (e.is_dir) continue;
                 if (fnmatch(pattern.c_str(), e.name.c_str(), 0) != 0) continue;
                 
-                // Construct full remote path (avoid double slashes)
-                std::string rpath;
-                if (dir.back() == '/') {
-                    rpath = dir + e.name;
-                } else {
-                    rpath = dir + "/" + e.name;
-                }
+                std::string rpath = std::string(s_remote_cwd);
+                if (rpath.back() != '/') rpath += "/";
+                rpath += e.name;
                 
-                // Compute relative path from remote_cwd for local directory structure
-                std::string rel_from_cwd;
-                if (dir == s_remote_cwd) {
-                    // File is directly in the cwd
-                    rel_from_cwd = "";
-                } else {
-                    // File is in a subdirectory; compute relative path
-                    rel_from_cwd = dir;
-                    if (rel_from_cwd.find(s_remote_cwd) == 0) {
-                        rel_from_cwd = rel_from_cwd.substr(strlen(s_remote_cwd));
-                        // Remove leading slash
-                        if (!rel_from_cwd.empty() && rel_from_cwd[0] == '/') {
-                            rel_from_cwd = rel_from_cwd.substr(1);
-                        }
-                    }
-                }
-                
-                // Build local path
-                std::string lpath;
-                if (rel_from_cwd.empty()) {
-                    // File from cwd goes directly to local_cwd
-                    lpath = std::string(s_local_cwd) + "/" + e.name;
-                } else {
-                    // File from subdir preserves structure
-                    lpath = std::string(s_local_cwd) + "/" + rel_from_cwd + "/" + e.name;
-                    
-                    // Create subdirectory structure
-                    std::string local_subdir = std::string(s_local_cwd) + "/" + rel_from_cwd;
-                    ensure_local_dir(local_subdir);
-                }
+                std::string lpath = std::string(s_local_cwd) + "/" + e.name;
                 
                 s_progress_label = "mget " + e.name;
                 s_progress.store(0.f);
                 
-                // do_get re-acquires session lock internally
                 std::string err = do_get(rpath.c_str(), lpath.c_str(), e.name);
                 if (err.empty()) {
-                    char buf[1024]; 
-                    snprintf(buf, sizeof(buf), "  ↓ %s", e.name.c_str());
-                    push_ok(buf); 
-                    got++;
+                    char buf[1024]; snprintf(buf, sizeof(buf), "  ↓ %s", e.name.c_str());
+                    push_ok(buf); got++;
                 } else {
                     push_err(err.c_str());
                 }
             }
-        };  // end walk_and_get lambda
-        
-        walk_and_get(s_remote_cwd);
+        } else {
+            // Recursive mode with path pattern (e.g., "*/*.py"): walk directory tree
+            std::function<void(const std::string &)> walk_and_get = 
+                [&](const std::string &dir) {
+                auto entries = list_remote_dir(dir.c_str());
+                if (entries.empty()) return;
+                
+                lk.~SessionLock();
+                new (&lk) SessionLock();
+                
+                for (auto &e : entries) {
+                    // Handle directories
+                    if (e.is_dir) {
+                        std::string subdir = dir + "/" + e.name;
+                        walk_and_get(subdir);
+                        continue;
+                    }
+                    
+                    // Build the relative path from remote_cwd for pattern matching
+                    std::string rel_path;
+                    if (dir == s_remote_cwd) {
+                        rel_path = e.name;
+                    } else {
+                        rel_path = dir;
+                        if (rel_path.find(s_remote_cwd) == 0) {
+                            rel_path = rel_path.substr(strlen(s_remote_cwd));
+                            if (!rel_path.empty() && rel_path[0] == '/') {
+                                rel_path = rel_path.substr(1);
+                            }
+                        }
+                        rel_path += "/" + e.name;
+                    }
+                    
+                    // Match pattern against relative path (e.g., "subdir/file.py" against "*/*.py")
+                    if (fnmatch(pattern.c_str(), rel_path.c_str(), 0) != 0) continue;
+                    
+                    // Construct full remote path
+                    std::string rpath;
+                    if (dir.back() == '/') {
+                        rpath = dir + e.name;
+                    } else {
+                        rpath = dir + "/" + e.name;
+                    }
+                    
+                    // Build local path preserving directory structure
+                    std::string lpath;
+                    if (dir == s_remote_cwd) {
+                        lpath = std::string(s_local_cwd) + "/" + e.name;
+                    } else {
+                        std::string rel_from_cwd = dir;
+                        if (rel_from_cwd.find(s_remote_cwd) == 0) {
+                            rel_from_cwd = rel_from_cwd.substr(strlen(s_remote_cwd));
+                            if (!rel_from_cwd.empty() && rel_from_cwd[0] == '/') {
+                                rel_from_cwd = rel_from_cwd.substr(1);
+                            }
+                        }
+                        lpath = std::string(s_local_cwd) + "/" + rel_from_cwd + "/" + e.name;
+                        
+                        // Create subdirectory structure
+                        std::string local_subdir = std::string(s_local_cwd) + "/" + rel_from_cwd;
+                        ensure_local_dir(local_subdir);
+                    }
+                    
+                    s_progress_label = "mget " + e.name;
+                    s_progress.store(0.f);
+                    
+                    std::string err = do_get(rpath.c_str(), lpath.c_str(), e.name);
+                    if (err.empty()) {
+                        char buf[1024]; 
+                        snprintf(buf, sizeof(buf), "  ↓ %s", rel_path.c_str());
+                        push_ok(buf); 
+                        got++;
+                    } else {
+                        push_err(err.c_str());
+                    }
+                }
+            };  // end walk_and_get lambda
+            
+            walk_and_get(s_remote_cwd);
+        }
         
         if (got == 0) push_info("mget: no matching files");
         s_busy.store(false); 
@@ -1536,6 +1593,33 @@ void sftp_console_render(int win_w, int win_h) {
     }
 
     gl_flush_verts();
+}
+
+
+void sftp_console_reset_after_fork() {
+    // Clean up inherited console state from parent process.
+    // The SDL_mutex is not safe to use after fork if the parent had it locked.
+    if (s_pending_mtx) {
+        SDL_DestroyMutex(s_pending_mtx);
+        s_pending_mtx = nullptr;
+    }
+    
+    // Reset console state
+    s_lines.clear();
+    s_scroll_offset = 0;
+    memset(s_input, 0, sizeof(s_input));
+    s_input_len = 0;
+    s_cursor_pos = 0;
+    s_history.clear();
+    s_history_idx = -1;
+    s_sel_active = false;
+    s_sel_exists = false;
+    g_sftp_console_visible = false;
+    
+    // Reset worker state
+    s_busy.store(false);
+    s_progress.store(0.f);
+    s_pending.clear();
 }
 
 #endif // USESSH
