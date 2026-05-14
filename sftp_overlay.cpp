@@ -916,4 +916,18 @@ bool sftp_overlay_mousedown(int x, int y, int button, int win_w, int win_h) {
     return true;
 }
 
+
+void sftp_reset_after_fork() {
+    // Clean up inherited SFTP state from parent process.
+    // Joins any transfer thread and clears the SFTP handle.
+    sftp_transfer_join();
+    s_sftp = nullptr;
+    
+    // Reset transfer state atomics
+    s_progress.store(0.f);
+    s_transferring.store(false);
+    memset(s_status_buf, 0, sizeof(s_status_buf));
+    s_transfer_ok = false;
+}
+
 #endif // USESSH

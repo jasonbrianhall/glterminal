@@ -34,4 +34,8 @@ void sftp_console_scroll(int delta_y);
 // Must be called before sftp_shutdown() if a background transfer may be running.
 void sftp_console_join();
 
+// Reset console state after fork().
+// Call in child process before any console operations.
+void sftp_console_reset_after_fork();
+
 #endif // USESSH

@@ -213,6 +213,46 @@ static void push_cmd (const char *t) {
     push_line(buf, 0.95f, 0.90f, 0.50f);
 }
 
+// Helper to recursively create directories (mkdir -p equivalent)
+static bool ensure_local_dir(const std::string &path) {
+#ifndef _WIN32
+    if (path.empty()) return true;
+    // Check if already exists
+    struct stat st{};
+    if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+        return true;
+    
+    // Recursively create parent
+    size_t last_slash = path.rfind('/');
+    if (last_slash != std::string::npos && last_slash > 0) {
+        std::string parent = path.substr(0, last_slash);
+        if (!ensure_local_dir(parent)) return false;
+    }
+    
+    // Create this directory
+    return mkdir(path.c_str(), 0755) == 0 || (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+#else
+    if (path.empty()) return true;
+    // Check if already exists
+    DWORD attrs = GetFileAttributesA(path.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+        return true;
+    
+    // Recursively create parent
+    size_t last_slash = path.rfind('\\');
+    if (last_slash == std::string::npos) last_slash = path.rfind('/');
+    if (last_slash != std::string::npos && last_slash > 0) {
+        std::string parent = path.substr(0, last_slash);
+        if (!ensure_local_dir(parent)) return false;
+    }
+    
+    // Create this directory
+    return CreateDirectoryA(path.c_str(), nullptr) || 
+           (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES && 
+            (GetFileAttributesA(path.c_str()) & FILE_ATTRIBUTE_DIRECTORY));
+#endif
+}
+
 // ============================================================================
 // REMOTE HELPERS  (all called on worker thread — must hold session lock)
 // ============================================================================
@@ -281,10 +321,19 @@ static std::string do_get(const char *remote_full, const char *local_full,
         return e;
     }
 
-    char buf[32768]; ssize_t n; uint64_t total = 0; bool ok = true;
+    // Allocate buffer on heap to avoid stack overflow on large transfers
+    const size_t TRANSFER_BUFFER_SIZE = 1024 * 1024;  // 1MB buffer
+    char *buf = (char *)malloc(TRANSFER_BUFFER_SIZE);
+    if (!buf) {
+        fclose(out);
+        while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        return "out of memory";
+    }
+    
+    ssize_t n; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
     for (;;) {
-        n = libssh2_sftp_read(fh, buf, sizeof(buf));
+        n = libssh2_sftp_read(fh, buf, TRANSFER_BUFFER_SIZE);
         if (n == LIBSSH2_ERROR_EAGAIN) { waitsocket_con(sock, sess); continue; }
         if (n < 0) { ok = false; break; }
         if (n == 0) break;
@@ -294,6 +343,7 @@ static std::string do_get(const char *remote_full, const char *local_full,
     }
     fclose(out);
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+    free(buf);
 
     if (!ok) return std::string("transfer failed for '") + remote_full + "'";
     s_progress.store(1.f);
@@ -335,9 +385,18 @@ static std::string do_put(const char *local_full, const char *remote_full) {
         }
     }
 
-    char buf[32768]; size_t nread; uint64_t total = 0; bool ok = true;
+    // Allocate buffer on heap to avoid stack overflow on large transfers
+    const size_t TRANSFER_BUFFER_SIZE = 1024 * 1024;  // 1MB buffer
+    char *buf = (char *)malloc(TRANSFER_BUFFER_SIZE);
+    if (!buf) {
+        fclose(in);
+        while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+        return "out of memory";
+    }
+    
+    size_t nread; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
-    while ((nread = fread(buf, 1, sizeof(buf), in)) > 0) {
+    while ((nread = fread(buf, 1, TRANSFER_BUFFER_SIZE, in)) > 0) {
         size_t sent = 0;
         while (sent < nread) {
             ssize_t rc = libssh2_sftp_write(fh, buf + sent, nread - sent);
@@ -351,6 +410,7 @@ static std::string do_put(const char *local_full, const char *remote_full) {
 put_done:
     fclose(in);
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
+    free(buf);
     if (!ok) return std::string("transfer failed for '") + local_full + "'";
     s_progress.store(1.f);
     return "";
@@ -361,20 +421,22 @@ struct RemoteEntry { std::string name; bool is_dir; uint64_t size; uint32_t perm
 static std::vector<RemoteEntry> list_remote_dir(const char *path) {
     LIBSSH2_SESSION *sess = ssh_get_session();
     int sock = ssh_get_socket();
-    libssh2_session_set_blocking(sess, 0);
+    
+    // Use blocking mode for directory listing to ensure complete enumeration
+    bool was_blocking = (libssh2_session_get_blocking(sess) != 0);
+    if (!was_blocking) libssh2_session_set_blocking(sess, 1);
 
-    LIBSSH2_SFTP_HANDLE *dh = nullptr;
-    for (int i = 0; i < 300 && !dh; i++) {
-        dh = libssh2_sftp_opendir(s_sftp, path);
-        if (!dh && libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN)
-        { waitsocket_con(sock, sess); }
-        else if (!dh) break;
-    }
+    LIBSSH2_SFTP_HANDLE *dh = libssh2_sftp_opendir(s_sftp, path);
+    
     std::vector<RemoteEntry> out;
-    if (!dh) return out;
+    if (!dh) {
+        if (!was_blocking) libssh2_session_set_blocking(sess, 0);
+        return out;
+    }
 
     char name[512], longentry[1024];
     LIBSSH2_SFTP_ATTRIBUTES attrs{};
+    // In blocking mode, readdir will wait until it gets data or EOF
     while (libssh2_sftp_readdir_ex(dh, name, sizeof(name), longentry, sizeof(longentry), &attrs) > 0) {
         if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
         RemoteEntry e;
@@ -386,6 +448,10 @@ static std::vector<RemoteEntry> list_remote_dir(const char *path) {
         out.push_back(std::move(e));
     }
     libssh2_sftp_closedir(dh);
+    
+    // Restore original blocking mode
+    if (!was_blocking) libssh2_session_set_blocking(sess, 0);
+    
     return out;
 }
 
@@ -489,7 +555,7 @@ static std::vector<std::string> tokenise(const char *line) {
 
 static void cmd_help() {
     push_info("Commands:");
-    push_info("  ls [-l] [path]          List remote directory");
+    push_info("  ls [glob] [-l]          List remote directory (supports *, ?)");
     push_info("  cd <path>               Change remote directory");
     push_info("  pwd                     Print remote directory");
     push_info("  lcd [path]              Change / print local directory");
@@ -497,7 +563,7 @@ static void cmd_help() {
     push_info("  lls [path]              List local directory");
     push_info("  lmkdir <path>           Create local directory");
     push_info("  get <file> [localname]  Download file");
-    push_info("  mget <glob>             Download matching files");
+    push_info("  mget [-r] <glob>        Download matching files (-r for recursive)");
     push_info("  put <file> [remotename] Upload file");
     push_info("  mput <glob>             Upload matching local files");
     push_info("  mkdir <path>            Create remote directory");
@@ -596,25 +662,94 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
     if (cmd == "ls") {
         bool long_fmt = false;
         std::string path = s_remote_cwd;
+        std::string glob_pattern;
+        
+        // Parse arguments: detect -l flag and glob patterns
         for (int i = 1; i < (int)toks.size(); i++) {
-            if (toks[i] == "-l") long_fmt = true;
-            else path = remote_abs(toks[i]);
+            if (toks[i] == "-l") {
+                long_fmt = true;
+            } else if (toks[i].find('*') != std::string::npos || 
+                       toks[i].find('?') != std::string::npos) {
+                // It's a glob pattern — extract directory and pattern
+                glob_pattern = toks[i];
+                size_t last_slash = glob_pattern.rfind('/');
+                if (last_slash != std::string::npos) {
+                    // Pattern like "/path/*.mp4" — split into dir and pattern
+                    path = remote_abs(glob_pattern.substr(0, last_slash));
+                    glob_pattern = glob_pattern.substr(last_slash + 1);
+                } else {
+                    // Pattern like "*.mp4" — use current directory
+                    path = s_remote_cwd;
+                }
+            } else {
+                // Regular path argument
+                path = remote_abs(toks[i]);
+            }
         }
+        
         SessionLock lk;
         LIBSSH2_SESSION *sess = ssh_get_session();
         libssh2_session_set_blocking(sess, 0);
         auto entries = list_remote_dir(path.c_str());
+        
         // On first use after open, the SFTP subsystem may need one round-trip
         // to settle — retry once if we got nothing back from a valid directory.
         if (entries.empty() && remote_is_dir(path.c_str()))
             entries = list_remote_dir(path.c_str());
+        
         if (entries.empty() && !remote_is_dir(path.c_str())) {
             push_err(("ls: cannot access " + path).c_str());
+        } else if (!glob_pattern.empty()) {
+            // Filter entries by glob pattern
+            entries.erase(
+                std::remove_if(entries.begin(), entries.end(),
+                    [&](const RemoteEntry &e) {
+                        return fnmatch(glob_pattern.c_str(), e.name.c_str(), 0) != 0;
+                    }),
+                entries.end()
+            );
+            
+            if (entries.empty()) {
+                push_info("ls: no matches");
+            } else {
+                // Sort and display matching entries
+                std::sort(entries.begin(), entries.end(), 
+                    [](const RemoteEntry &a, const RemoteEntry &b) {
+                        if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
+                        return a.name < b.name;
+                    });
+                for (auto &e : entries) {
+                    if (long_fmt) {
+                        char perm[12], sz[24], tmbuf[32];
+                        fmt_perms(e.perms, perm);
+                        fmt_size(e.size, sz, sizeof(sz));
+                        if (e.mtime) {
+                            struct tm *tm = gmtime(&e.mtime);
+                            strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d %H:%M", tm);
+                        } else {
+                            strcpy(tmbuf, "                ");
+                        }
+                        char line2[1024];
+                        snprintf(line2, sizeof(line2), "%s  %8s  %s  %s%s",
+                                 perm, sz, tmbuf, e.name.c_str(), e.is_dir ? "/" : "");
+                        push_line(line2, e.is_dir ? 0.90f : 0.82f, 
+                                         e.is_dir ? 0.90f : 0.82f,
+                                         e.is_dir ? 0.50f : 0.96f);
+                    } else {
+                        std::string disp = e.is_dir ? ("[" + e.name + "]") : e.name;
+                        push_line(disp.c_str(), e.is_dir ? 0.90f : 0.82f,
+                                                e.is_dir ? 0.90f : 0.82f,
+                                                e.is_dir ? 0.50f : 0.96f);
+                    }
+                }
+            }
         } else {
-            std::sort(entries.begin(), entries.end(), [](const RemoteEntry &a, const RemoteEntry &b){
-                if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
-                return a.name < b.name;
-            });
+            // No glob pattern — display all entries as before
+            std::sort(entries.begin(), entries.end(), 
+                [](const RemoteEntry &a, const RemoteEntry &b) {
+                    if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
+                    return a.name < b.name;
+                });
             for (auto &e : entries) {
                 if (long_fmt) {
                     char perm[12], sz[24], tmbuf[32];
@@ -623,11 +758,14 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
                     if (e.mtime) {
                         struct tm *tm = gmtime(&e.mtime);
                         strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d %H:%M", tm);
-                    } else strcpy(tmbuf, "                ");
+                    } else {
+                        strcpy(tmbuf, "                ");
+                    }
                     char line2[1024];
                     snprintf(line2, sizeof(line2), "%s  %8s  %s  %s%s",
                              perm, sz, tmbuf, e.name.c_str(), e.is_dir ? "/" : "");
-                    push_line(line2, e.is_dir ? 0.90f : 0.82f, e.is_dir ? 0.90f : 0.82f,
+                    push_line(line2, e.is_dir ? 0.90f : 0.82f,
+                                     e.is_dir ? 0.90f : 0.82f,
                                      e.is_dir ? 0.50f : 0.96f);
                 } else {
                     std::string disp = e.is_dir ? ("[" + e.name + "]") : e.name;
@@ -637,6 +775,7 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
                 }
             }
         }
+        
         return true;
     }
 
@@ -764,36 +903,146 @@ static void cmd_worker(std::vector<std::string> toks) {
         s_busy.store(false); return;
     }
 
-    // ------------------------------------------------------------------ mget
+    // ------------------------------------------------------------------ mget (with -r support for nested patterns)
     if (cmd == "mget") {
-        if (toks.size() < 2) { push_err("usage: mget <glob>"); s_busy.store(false); return; }
-        const std::string &pattern = toks[1];
+        bool recursive = false;
+        std::string pattern;
+        
+        // Parse flags and pattern
+        for (int i = 1; i < (int)toks.size(); i++) {
+            if (toks[i] == "-r" || toks[i] == "-R") {
+                recursive = true;
+            } else if (pattern.empty()) {
+                pattern = toks[i];
+            }
+        }
+        
+        if (pattern.empty()) { 
+            push_err("usage: mget [-r] <glob>"); 
+            s_busy.store(false); 
+            return; 
+        }
+        
         SessionLock lk;
         LIBSSH2_SESSION *sess = ssh_get_session();
         libssh2_session_set_blocking(sess, 0);
-        auto entries = list_remote_dir(s_remote_cwd);
-        lk.~SessionLock(); // release before per-file transfers re-acquire
-        new (&lk) SessionLock(); // dummy — we manually manage below
-        // Actually we release and re-lock per file
+        
         int got = 0;
-        for (auto &e : entries) {
-            if (e.is_dir) continue;
-            if (fnmatch(pattern.c_str(), e.name.c_str(), 0) != 0) continue;
-            std::string rpath = std::string(s_remote_cwd) + "/" + e.name;
-            std::string lpath = std::string(s_local_cwd)  + "/" + e.name;
-            s_progress_label = "mget " + e.name;
-            s_progress.store(0.f);
-            // do_get re-acquires session lock internally
-            std::string err = do_get(rpath.c_str(), lpath.c_str(), e.name);
-            if (err.empty()) {
-                char buf[1024]; snprintf(buf, sizeof(buf), "  ↓ %s", e.name.c_str());
-                push_ok(buf); got++;
-            } else {
-                push_err(err.c_str());
+        
+        // Check if pattern contains path separator (e.g., "*/*.py" or "subdir/*")
+        bool pattern_has_path = (pattern.find('/') != std::string::npos);
+        
+        if (!recursive || !pattern_has_path) {
+            // Non-recursive OR pattern doesn't have path separators: only search current dir
+            auto entries = list_remote_dir(s_remote_cwd);
+            lk.~SessionLock();
+            new (&lk) SessionLock();
+            
+            for (auto &e : entries) {
+                if (e.is_dir) continue;
+                if (fnmatch(pattern.c_str(), e.name.c_str(), 0) != 0) continue;
+                
+                std::string rpath = std::string(s_remote_cwd);
+                if (rpath.back() != '/') rpath += "/";
+                rpath += e.name;
+                
+                std::string lpath = std::string(s_local_cwd) + "/" + e.name;
+                
+                s_progress_label = "mget " + e.name;
+                s_progress.store(0.f);
+                
+                std::string err = do_get(rpath.c_str(), lpath.c_str(), e.name);
+                if (err.empty()) {
+                    char buf[1024]; snprintf(buf, sizeof(buf), "  ↓ %s", e.name.c_str());
+                    push_ok(buf); got++;
+                } else {
+                    push_err(err.c_str());
+                }
             }
+        } else {
+            // Recursive mode with path pattern (e.g., "*/*.py"): walk directory tree
+            std::function<void(const std::string &)> walk_and_get = 
+                [&](const std::string &dir) {
+                auto entries = list_remote_dir(dir.c_str());
+                if (entries.empty()) return;
+                
+                lk.~SessionLock();
+                new (&lk) SessionLock();
+                
+                for (auto &e : entries) {
+                    // Handle directories
+                    if (e.is_dir) {
+                        std::string subdir = dir + "/" + e.name;
+                        walk_and_get(subdir);
+                        continue;
+                    }
+                    
+                    // Build the relative path from remote_cwd for pattern matching
+                    std::string rel_path;
+                    if (dir == s_remote_cwd) {
+                        rel_path = e.name;
+                    } else {
+                        rel_path = dir;
+                        if (rel_path.find(s_remote_cwd) == 0) {
+                            rel_path = rel_path.substr(strlen(s_remote_cwd));
+                            if (!rel_path.empty() && rel_path[0] == '/') {
+                                rel_path = rel_path.substr(1);
+                            }
+                        }
+                        rel_path += "/" + e.name;
+                    }
+                    
+                    // Match pattern against relative path (e.g., "subdir/file.py" against "*/*.py")
+                    if (fnmatch(pattern.c_str(), rel_path.c_str(), 0) != 0) continue;
+                    
+                    // Construct full remote path
+                    std::string rpath;
+                    if (dir.back() == '/') {
+                        rpath = dir + e.name;
+                    } else {
+                        rpath = dir + "/" + e.name;
+                    }
+                    
+                    // Build local path preserving directory structure
+                    std::string lpath;
+                    if (dir == s_remote_cwd) {
+                        lpath = std::string(s_local_cwd) + "/" + e.name;
+                    } else {
+                        std::string rel_from_cwd = dir;
+                        if (rel_from_cwd.find(s_remote_cwd) == 0) {
+                            rel_from_cwd = rel_from_cwd.substr(strlen(s_remote_cwd));
+                            if (!rel_from_cwd.empty() && rel_from_cwd[0] == '/') {
+                                rel_from_cwd = rel_from_cwd.substr(1);
+                            }
+                        }
+                        lpath = std::string(s_local_cwd) + "/" + rel_from_cwd + "/" + e.name;
+                        
+                        // Create subdirectory structure
+                        std::string local_subdir = std::string(s_local_cwd) + "/" + rel_from_cwd;
+                        ensure_local_dir(local_subdir);
+                    }
+                    
+                    s_progress_label = "mget " + e.name;
+                    s_progress.store(0.f);
+                    
+                    std::string err = do_get(rpath.c_str(), lpath.c_str(), e.name);
+                    if (err.empty()) {
+                        char buf[1024]; 
+                        snprintf(buf, sizeof(buf), "  ↓ %s", rel_path.c_str());
+                        push_ok(buf); 
+                        got++;
+                    } else {
+                        push_err(err.c_str());
+                    }
+                }
+            };  // end walk_and_get lambda
+            
+            walk_and_get(s_remote_cwd);
         }
+        
         if (got == 0) push_info("mget: no matching files");
-        s_busy.store(false); return;
+        s_busy.store(false); 
+        return;
     }
 
     // ------------------------------------------------------------------ put
@@ -1344,6 +1593,33 @@ void sftp_console_render(int win_w, int win_h) {
     }
 
     gl_flush_verts();
+}
+
+
+void sftp_console_reset_after_fork() {
+    // Clean up inherited console state from parent process.
+    // The SDL_mutex is not safe to use after fork if the parent had it locked.
+    if (s_pending_mtx) {
+        SDL_DestroyMutex(s_pending_mtx);
+        s_pending_mtx = nullptr;
+    }
+    
+    // Reset console state
+    s_lines.clear();
+    s_scroll_offset = 0;
+    memset(s_input, 0, sizeof(s_input));
+    s_input_len = 0;
+    s_cursor_pos = 0;
+    s_history.clear();
+    s_history_idx = -1;
+    s_sel_active = false;
+    s_sel_exists = false;
+    g_sftp_console_visible = false;
+    
+    // Reset worker state
+    s_busy.store(false);
+    s_progress.store(0.f);
+    s_pending.clear();
 }
 
 #endif // USESSH

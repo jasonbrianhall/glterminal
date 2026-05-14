@@ -79,4 +79,8 @@ void sftp_transfer_join();
 // Returns current transfer progress 0..1 (thread-safe).
 float sftp_progress();
 
+// Reset SFTP state after fork().
+// Call in child process before any SFTP operations.
+void sftp_reset_after_fork();
+
 #endif // USESSH
