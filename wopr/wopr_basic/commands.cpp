@@ -2882,6 +2882,20 @@ static int cmd_defint(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
  * Command registration table
  * ================================================================ */
 const Command commands[] = {
+    /* Hot loop commands first (Mandelbrot inner loop hits these 1000x/sec) */
+    { "WHILE",      cmd_while      },
+    { "WEND",       cmd_wend       },
+    { "FOR",        cmd_for        },
+    { "NEXT",       cmd_next       },
+    
+    /* Common assignment/output */
+    { "LET",        cmd_let        },
+    { "PRINT",      cmd_print      },
+    
+    /* Graphics (called in draw loops) */
+    { "PSET",       cmd_pset       },
+    
+    /* Everything else */
     { "DECLARE",    cmd_rem        },
     { "REM",        cmd_rem        },
     { "'",          cmd_rem        },
@@ -2893,7 +2907,6 @@ const Command commands[] = {
     { "DRAW",       cmd_draw       },
     { "CIRCLE",     cmd_circle     },
     { "PRESET",     cmd_preset     },
-    { "PSET",       cmd_pset       },
     { "PAINT",      cmd_paint      },
     { "END SELECT", cmd_end_select },
     { "END SUB",    cmd_end_sub    },
@@ -2910,8 +2923,6 @@ const Command commands[] = {
     { "ERASE",      cmd_erase      },
     { "OPTION",     cmd_option     },
     { "CONST",      cmd_const      },
-    { "LET",        cmd_let        },
-    { "PRINT",      cmd_print      },
     { "DEBUG",      cmd_debug      },
     { "CLS",        cmd_cls        },
     { "BEEP",       cmd_beep       },
@@ -2933,12 +2944,8 @@ const Command commands[] = {
     { "REDIM",      cmd_redim      },
     { "DIM",        cmd_dim        },
     { "STATIC",     cmd_static     },
-    { "FOR",        cmd_for        },
-    { "NEXT",       cmd_next       },
     { "DO",         cmd_do         },
     { "LOOP",       cmd_loop       },
-    { "WHILE",      cmd_while      },
-    { "WEND",       cmd_wend       },
     { "SELECT",     cmd_select     },
     { "CASE",       cmd_case       },  /* reached after a case body completes  jump to END SELECT */
     { "GOTO",       cmd_goto       },
