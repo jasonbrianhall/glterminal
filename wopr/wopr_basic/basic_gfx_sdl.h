@@ -80,4 +80,13 @@ void gfx_sdl_toggle_fullscreen(void);
 /* Reset all 16 palette slots to CGA defaults */
 void gfx_palette_reset_pub(void);
 
+/*
+ * gfx_sdl_frame_start / frame_end — 60 FPS frame rate limiting.
+ * Call frame_start() at the beginning of your main loop iteration,
+ * then frame_end() after rendering. This ensures display updates
+ * only 60 times per second regardless of how fast the loop runs.
+ */
+void gfx_sdl_frame_start(void);
+void gfx_sdl_frame_end(void);
+
 #endif /* USE_SDL_WINDOW */

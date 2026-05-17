@@ -100,6 +100,12 @@ static int           s_win_w = 800, s_win_h = 600;
 static Uint32        s_last_dirty = 0;
 
 // ============================================================================
+// Frame rate limiting (60 FPS)
+// ============================================================================
+static Uint32        s_frame_start_time = 0;
+static const Uint32  FRAME_TIME_MS = 16;  /* ~60 FPS (1000/60 = 16.67 ms) */
+
+// ============================================================================
 // Graphics surface
 // ============================================================================
 static SDL_Texture         *s_gfx_tex = nullptr;
@@ -1263,8 +1269,6 @@ void gfx_put(int id, int x, int y, int xor_mode) {
         }
     }
     s_needs_render = true;
-    gfx_sdl_pump();
-    gfx_sdl_render();
 }
 
 void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) {
@@ -1317,8 +1321,6 @@ void gfx_put_array(const int *raw_longs, int count, int x, int y, int xor_mode) 
         }
     }
     s_needs_render = true;
-    gfx_sdl_pump();
-    gfx_sdl_render();
 }
 
 int gfx_active(void) { return s_gfx_active ? 1 : 0; }
@@ -1379,22 +1381,18 @@ void display_width(int cols) {
 
 void display_print(char *s) {
     for (; *s; s++) text_putchar(*s);
-    // Pump events periodically so SDL_QUIT is handled even during long output
-    // (render only when dirty to avoid wasted frames)
-    gfx_sdl_pump();
-    gfx_sdl_render();
+    // Note: Do NOT pump/render here. This gets called on every PSET.
+    // Batching is handled at the BASIC interpreter level (main loop).
 }
 
 void display_putchar(int c) {
     text_putchar((char)c);
-    gfx_sdl_pump();
-    gfx_sdl_render();
+    // Rendering batched at interpreter level, not here
 }
 
 void display_newline(void) {
     text_newline();
-    gfx_sdl_pump();
-    gfx_sdl_render();
+    // Rendering batched at interpreter level, not here
 }
 
 void display_spc(int n) {
@@ -1415,11 +1413,19 @@ int display_get_width(void) {
 
 // Non-blocking key poll (INKEY$)
 int display_inkey(void) {
-    gfx_sdl_pump();
-    gfx_sdl_render();
+    static Uint32 s_last_inkey_render = 0;
+    Uint32 now = SDL_GetTicks();
+    
+    // Only render every ~16ms (60 FPS) during INKEY polling
+    if (now - s_last_inkey_render >= 16) {
+        gfx_sdl_pump();
+        gfx_sdl_render();
+        s_last_inkey_render = now;
+    }
+    
     int c = key_pop();
     if (c < 0) {
-        SDL_Delay(5);   // yield to OS — prevents 100% CPU in polling loops
+        SDL_Delay(5);   // yield to OS
         return 0;
     }
     return c;
@@ -1572,6 +1578,23 @@ int display_getline(char *buf, int bufsz) {
     s_cursor_vis = false;
     gfx_sdl_render();
     return len;
+}
+
+/* ============================================================================
+ * Frame rate limiting (60 FPS)
+ * ============================================================================ */
+
+void gfx_sdl_frame_start(void)
+{
+    s_frame_start_time = SDL_GetTicks();
+}
+
+void gfx_sdl_frame_end(void)
+{
+    Uint32 elapsed = SDL_GetTicks() - s_frame_start_time;
+    if (elapsed < FRAME_TIME_MS) {
+        SDL_Delay(FRAME_TIME_MS - elapsed);
+    }
 }
 
 BASIC_NS_END
