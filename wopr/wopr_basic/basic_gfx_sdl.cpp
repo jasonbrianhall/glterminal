@@ -792,14 +792,19 @@ void gfx_sdl_render() {
     //
     if (s_gfx_active && s_gfx_tex) {
         SDL_RenderSetViewport(s_renderer, nullptr);
-        // Palette mode: alpha byte holds palette index — replace with 0xFF for rendering.
-        // Truecolor mode: pixels already have 0xFF alpha, OR is a no-op.
         // Render from the visible page (vpage), not necessarily the draw page
         const std::vector<Uint32> &vpx = (s_vpage < GFX_MAX_PAGES && !s_pages[s_vpage].empty())
                                           ? s_pages[s_vpage] : s_pages[0];
-        std::vector<Uint32> tex_pixels(vpx.size());
+        
+        // Use static buffer to avoid allocation per frame
+        static std::vector<Uint32> tex_pixels;
+        if (tex_pixels.size() != vpx.size())
+            tex_pixels.resize(vpx.size());
+        
+        // Set alpha channel for all pixels in one pass
         for (size_t i = 0; i < vpx.size(); i++)
             tex_pixels[i] = vpx[i] | 0xFF000000u;
+        
         SDL_UpdateTexture(s_gfx_tex, nullptr, tex_pixels.data(), s_gfx_w * 4);
         // Stretch to window — window height already accounts for pixel aspect ratio
         SDL_Rect dst = { 0, 0, s_win_w, s_win_h };
