@@ -407,6 +407,52 @@ static int cmd_screen(Interp *ip, char *args) {
     }
     return 0;
 }
+/* _DISPLAY — QB64 command to flush graphics to screen */
+static int cmd_qdisplay(Interp *ip, char *args) {
+    (void)ip; (void)args;
+#ifdef USE_SDL_WINDOW
+    ::gfx_sdl_render();
+#endif
+    return 0;
+}
+
+static int cmd_qtitle(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+    char title[MAX_LINE_LEN];
+    p = sk(eval_str_expr(p, title, sizeof title));
+#ifdef USE_SDL_WINDOW
+    /* SDL window title setting — would need SDL_SetWindowTitle call */
+    /* For now this is a no-op since we don't have direct access to the window */
+#endif
+    return 0;
+}
+
+/* _LIMIT fps — QB64 frame rate limiter */
+static int cmd_qlimit(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+    mpf_t fps_val; mpf_init2(fps_val, g_prec);
+    p = sk(eval_expr(p, fps_val));
+    double fps = mpf_get_d(fps_val);
+    mpf_clear(fps_val);
+    
+    if (fps > 0) {
+        /* Sleep to maintain target frame rate */
+        static uint32_t last_time = 0;
+        uint32_t now = SDL_GetTicks();
+        if (last_time > 0) {
+            uint32_t frame_time = (uint32_t)(1000.0 / fps);
+            uint32_t elapsed = now - last_time;
+            if (elapsed < frame_time) {
+                SDL_Delay(frame_time - elapsed);
+            }
+        }
+        last_time = SDL_GetTicks();
+    }
+    return 0;
+}
+
 static int cmd_beep(Interp *ip, char *args) {
     (void)ip; (void)args;
     sound_beep();
@@ -524,6 +570,10 @@ static int cmd_erase(Interp *ip, char *args) {
 static int cmd_option(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
+    if (kw_match(p, "_EXPLICIT")) {
+        /* QB64 option for strict variable declaration — just ignore it */
+        return 0;
+    }
     if (kw_match(p, "BASE")) {
         p = sk(p + 4);
         mpf_t n; mpf_init2(n, g_prec);
@@ -2865,6 +2915,9 @@ const Command commands[] = {
     { "DEBUG",      cmd_debug      },
     { "CLS",        cmd_cls        },
     { "BEEP",       cmd_beep       },
+    { "_DISPLAY",   cmd_qdisplay   },
+    { "_TITLE",     cmd_qtitle     },
+    { "_LIMIT",     cmd_qlimit     },
     { "SOUND",      cmd_sound      },
     { "PLAY",       cmd_play       },
     { "COLOR",      cmd_color      },

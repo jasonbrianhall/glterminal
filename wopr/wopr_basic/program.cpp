@@ -606,6 +606,14 @@ void prescan_data(void) {
 }
 
 /* ================================================================
+ * const_init_builtins — initialize built-in QB64-compatible constants
+ * ================================================================ */
+static void const_init_builtins(void) {
+    /* QB64 mathematical constant */
+    const_set("_PI", "3.14159265358979323846", 0);
+}
+
+/* ================================================================
  * clear_program — reset all program and interpreter state
  * ================================================================ */
 void clear_program(void) {
@@ -619,6 +627,7 @@ void clear_program(void) {
     g_cont_pc     = -1;
     label_clear();
     const_clear();
+    const_init_builtins();
     sprites_reset();
     for (int i = 1; i <= MAX_FILE_HANDLES; i++)
         if (g_files[i].fp) { fclose(g_files[i].fp); g_files[i].fp = NULL; g_files[i].mode = 0; }
