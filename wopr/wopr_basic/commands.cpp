@@ -407,7 +407,13 @@ static int cmd_screen(Interp *ip, char *args) {
     }
     return 0;
 }
-/* _DISPLAY — QB64 command to flush graphics to screen */
+/* WINDOW (x1, y1)-(x2, y2) — QB64 logical coordinate system (stub) */
+static int cmd_window(Interp *ip, char *args) {
+    (void)ip; (void)args;
+    /* Just consume the arguments and do nothing */
+    return 0;
+}
+
 static int cmd_qdisplay(Interp *ip, char *args) {
     (void)ip; (void)args;
 #ifdef USE_SDL_WINDOW
@@ -417,14 +423,8 @@ static int cmd_qdisplay(Interp *ip, char *args) {
 }
 
 static int cmd_qtitle(Interp *ip, char *args) {
-    (void)ip;
-    char *p = sk(args);
-    char title[MAX_LINE_LEN];
-    p = sk(eval_str_expr(p, title, sizeof title));
-#ifdef USE_SDL_WINDOW
-    /* SDL window title setting — would need SDL_SetWindowTitle call */
-    /* For now this is a no-op since we don't have direct access to the window */
-#endif
+    (void)ip; (void)args;
+    /* Just skip the string - don't evaluate it */
     return 0;
 }
 
@@ -2915,6 +2915,7 @@ const Command commands[] = {
     { "DEBUG",      cmd_debug      },
     { "CLS",        cmd_cls        },
     { "BEEP",       cmd_beep       },
+    { "WINDOW",     cmd_window     },
     { "_DISPLAY",   cmd_qdisplay   },
     { "_TITLE",     cmd_qtitle     },
     { "_LIMIT",     cmd_qlimit     },
