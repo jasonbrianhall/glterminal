@@ -13,12 +13,6 @@
 #endif
 
 
-#ifndef DONTUSEGMP
-mp_bitcnt_t g_prec = DEFAULT_PREC;
-#else
-int g_prec = DEFAULT_PREC;
-#endif
-
 #ifdef _WIN32
 #include <windows.h>
 #include <ctype.h>
@@ -50,6 +44,13 @@ static char *strcasestr(char *haystack, char *needle) {
 #endif
 
 BASIC_NS_BEGIN
+
+/* Global precision variable */
+#ifndef DONTUSEGMP
+mp_bitcnt_t g_prec = DEFAULT_PREC;
+#else
+int g_prec = DEFAULT_PREC;
+#endif
 
 #if defined(WOPR) || defined(FELIX_BASIC)
 

@@ -4,6 +4,7 @@
 #   make windows               → Windows cross      (output: build/windows/felixbasic.exe)
 #   make sdlwindow             → Linux SDL GUI      (output: build/linux/felixbasic_sdlwin)
 #   make sdlwindow TARGET=windows → Windows SDL GUI (output: build/windows/felixbasic_sdlwin.exe)
+#   make DONTUSEGMP=1          → build without GMP (uses double fallback)
 #   make help                  → show this help
 # --------------------------------------------------------------------
 ifeq ($(TARGET),windows)
@@ -12,7 +13,7 @@ ifeq ($(TARGET),windows)
     BUILDDIR   = build/windows
     EXE        = $(BUILDDIR)/felixbasic.exe
     CFLAGS     = -O2 -Wall -std=c++11 -DWIN32 -D_WIN32
-    LDFLAGS    = -lgmp -lm -mconsole
+    LDFLAGS    = -lm -mconsole
     SDL_WIN_EXE = $(BUILDDIR)/felixbasic_sdlwin.exe
 else
     CC         = g++
@@ -20,8 +21,18 @@ else
     BUILDDIR   = build/linux
     EXE        = $(BUILDDIR)/felixbasic
     CFLAGS     = -O2 -Wall -std=c++11
-    LDFLAGS    = -lgmp -lm
+    LDFLAGS    = -lm
     SDL_WIN_EXE = $(BUILDDIR)/felixbasic_sdlwin
+endif
+
+# GMP support (default: enabled; disable with DONTUSEGMP=1)
+ifndef DONTUSEGMP
+    CFLAGS += -DHAVE_GMP
+    LDFLAGS += -lgmp
+    $(info Building with GMP arbitrary-precision arithmetic)
+else
+    CFLAGS += -DDONTUSEGMP
+    $(info Building WITHOUT GMP — using double precision fallback)
 endif
 
 # --------------------------------------------------------------------
@@ -81,7 +92,7 @@ all: linux
 # --------------------------------------------------------------------
 help:
 	@echo ""
-	@echo "Usage: make [TARGET=windows] <target>"
+	@echo "Usage: make [TARGET=windows] [DONTUSEGMP=1] <target>"
 	@echo ""
 	@echo "Targets:"
 	@echo "  (default) / linux        Build native Linux console binary"
@@ -107,6 +118,7 @@ help:
 	@echo ""
 	@echo "Optional variables:"
 	@echo "  TARGET=windows           Cross-compile for Windows (use with any target)"
+	@echo "  DONTUSEGMP=1             Build without GMP (uses double precision fallback)"
 	@echo "  FILE=<path>              BASIC source file to embed (used with 'embed')"
 	@echo "  INLINEBASIC=<path>       Alias for FILE when invoking embed directly"
 	@echo ""

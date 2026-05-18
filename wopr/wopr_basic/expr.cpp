@@ -16,7 +16,6 @@ BASIC_NS_BEGIN
 /* ================================================================
  * Global state
  * ================================================================ */
-mp_bitcnt_t g_prec       = DEFAULT_PREC;
 int         g_option_base = 0;
 
 #if !defined(WOPR) && !defined(FELIX_BASIC)
@@ -353,7 +352,11 @@ static char *eval_str_primary(char *p, char *buf, int bufsz) {
         p = eval_expr(sk(p), n);
         /* BASIC STR$ always prefixes a space for non-negative numbers */
         char tmp_num[DEFAULT_BUFFER];
+#ifndef DONTUSEGMP
         gmp_snprintf(tmp_num, sizeof tmp_num, "%.6Fg", n);
+#else
+        snprintf(tmp_num, sizeof tmp_num, "%.6g", mpf_get_d(n));
+#endif
         if (mpf_sgn(n) >= 0)
             snprintf(buf, bufsz, " %s", tmp_num);
         else

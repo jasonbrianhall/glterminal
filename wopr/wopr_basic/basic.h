@@ -23,10 +23,10 @@
 #include <signal.h>
 #ifndef DONTUSEGMP
 #include <gmp.h>
-extern mp_bitcnt_t      g_prec;
 #else
 
 #define mpf_t double
+#define mp_bitcnt_t unsigned long
 
 #define mpf_abs(dst, src) ((dst) = fabs(src))
 #define mpf_add(dst, x, y) ((dst) = (x) + (y))
@@ -41,6 +41,7 @@ extern mp_bitcnt_t      g_prec;
 #define mpf_neg(dst, src) ((dst) = -(src))
 #define mpf_set(dst, src) ((dst) = (src))
 #define mpf_set_d(dst, n) ((dst) = (n))
+#define mpf_set_default_prec(prec) ((void)0)
 #define mpf_set_si(dst, n) ((dst) = (n))
 #define mpf_set_str(dst, buf, base) ((dst) = strtod((buf), NULL))
 #define mpf_set_ui(dst, n) ((dst) = (n))
@@ -78,6 +79,11 @@ BASIC_NS_BEGIN
 /* ================================================================
  * Global interpreter settings
  * ================================================================ */
+#ifndef DONTUSEGMP
+extern mp_bitcnt_t      g_prec;
+#else
+extern int              g_prec;
+#endif
 extern int              g_option_base;
 /* g_break: in hosted builds it is a macro (defined in basic_ns.h) that
  * expands to ::BASIC_BREAK_SYM.  In standalone builds it is a normal extern. */

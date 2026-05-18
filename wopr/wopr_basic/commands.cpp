@@ -3031,7 +3031,11 @@ static void print_mpf(mpf_t val) {
     /* Get scientific form to inspect the exponent */
     char *tmp = (char *)malloc(bufsz);
     if (!tmp) { free(buf); return; }
+#ifndef DONTUSEGMP
     gmp_snprintf(tmp, bufsz, "%.*Fe", PRINT_DIGITS, val);
+#else
+    snprintf(tmp, bufsz, "%.*e", PRINT_DIGITS, mpf_get_d(val));
+#endif
 
     /* Parse exponent */
     char *ep = strchr(tmp, 'e');
@@ -3042,7 +3046,11 @@ static void print_mpf(mpf_t val) {
         int dp = PRINT_DIGITS - exp;
         if (dp < 0) dp = 0;
         if (dp > PRINT_DIGITS) dp = PRINT_DIGITS;
+#ifndef DONTUSEGMP
         gmp_snprintf(buf, bufsz, "%.*Ff", dp, val);
+#else
+        snprintf(buf, bufsz, "%.*f", dp, mpf_get_d(val));
+#endif
         /* Trim trailing zeros after decimal point */
         if (strchr(buf, '.')) {
             char *end = buf + strlen(buf) - 1;
@@ -3051,7 +3059,11 @@ static void print_mpf(mpf_t val) {
         }
     } else {
         /* Scientific notation  trim trailing zeros in significand */
+#ifndef DONTUSEGMP
         gmp_snprintf(buf, bufsz, "%.*Fe", PRINT_DIGITS, val);
+#else
+        snprintf(buf, bufsz, "%.*e", PRINT_DIGITS, mpf_get_d(val));
+#endif
         char *e = strchr(buf, 'e');
         if (e) {
             char *z = e - 1;
