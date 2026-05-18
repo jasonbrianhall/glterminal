@@ -144,7 +144,7 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
                -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lgmp \
-               -s -Wl,--gc-sections -flto -lwepb
+               -s -Wl,--gc-sections -flto -lwebp
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
