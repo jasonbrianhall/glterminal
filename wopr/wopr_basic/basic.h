@@ -37,6 +37,7 @@ typedef struct _mpf_struct mpf_t[1];
 #define mpf_div(dst, a, b) ((dst)[0].val = (a)[0].val / (b)[0].val)
 #define mpf_get_d(x) ((x)[0].val)
 #define mpf_get_si(x) ((long)(x)[0].val)
+#define mpf_get_ui(x) ((unsigned long)(x)[0].val)
 #define mpf_init2(x, prec) ((x)[0].val = 0.0)
 #define mpf_mul(dst, a, b) ((dst)[0].val = (a)[0].val * (b)[0].val)
 #define mpf_neg(dst, src) ((dst)[0].val = -(src)[0].val)
