@@ -13,8 +13,14 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO          // we feed raw bytes, not filenames
 // Note: do NOT use STBI_ONLY_* — the full decoder handles progressive JPEGs
+// stb_image.h supports: JPEG, PNG, BMP, GIF, TIFF (and others)
 // stb_image.h must be in the include path (https://github.com/nothings/stb)
 #include "stb_image.h"
+
+// ---- libwebp (for WebP support) -------------------------------------------
+// WebP is decoded via libwebp if available
+// Link with: -lwebp
+#  include <webp/decode.h>
 
 // ---- miniz (zip support) --------------------------------------------------
 // Uses the split-header miniz distribution.
@@ -67,6 +73,12 @@ struct TextLine {
     int header_level;
     bool is_code_block;
     bool is_list_item;
+    
+    // For links and images
+    std::string image_url;     // If non-empty, this line has an image to display
+    std::string image_alt;     // Alt text for image
+    std::string link_url;      // If non-empty, text is a clickable link
+    bool is_link;              // True if this line contains a link
 };
 
 struct TextDocument {
@@ -135,6 +147,7 @@ static TextLine iv_parse_markdown_line(const std::string &raw_line) {
     line.header_level = 0;
     line.is_code_block = false;
     line.is_list_item = false;
+    line.is_link = false;
 
     // Detect headers: # Header, ## Header2, etc.
     if (!raw_line.empty() && raw_line[0] == '#') {
@@ -172,48 +185,45 @@ static TextLine iv_parse_markdown_line(const std::string &raw_line) {
         }
     }
 
-    // Strip markdown syntax for display
-    // Remove ![alt](url) image syntax
+    // Extract images: ![alt](url)
     {
-        size_t pos = 0;
-        while ((pos = display_text.find("![", pos)) != std::string::npos) {
+        size_t pos = display_text.find("![");
+        if (pos != std::string::npos) {
             size_t end = display_text.find("](", pos);
             if (end != std::string::npos) {
                 size_t close = display_text.find(")", end);
                 if (close != std::string::npos) {
+                    line.image_alt = display_text.substr(pos + 2, end - pos - 2);
+                    line.image_url = display_text.substr(end + 2, close - end - 2);
+                    // Remove the image syntax from display text, leave alt text
                     display_text.erase(pos, close - pos + 1);
-                } else {
-                    pos++;
+                    if (!line.image_alt.empty()) {
+                        display_text.insert(pos, "[" + line.image_alt + "]");
+                    }
                 }
-            } else {
-                pos++;
             }
         }
     }
 
-    // Remove [text](url) link syntax, keep just the text
+    // Extract links: [text](url)
     {
-        size_t pos = 0;
-        while ((pos = display_text.find("[", pos)) != std::string::npos) {
+        size_t pos = display_text.find("[");
+        if (pos != std::string::npos) {
             size_t close = display_text.find("]", pos);
             if (close != std::string::npos && close + 1 < display_text.size() && display_text[close+1] == '(') {
                 size_t paren_close = display_text.find(")", close);
                 if (paren_close != std::string::npos) {
-                    // Keep the text inside [], remove the (url) part
                     std::string link_text = display_text.substr(pos + 1, close - pos - 1);
-                    display_text.erase(pos, paren_close - pos + 1);
-                    display_text.insert(pos, link_text);
-                    pos += link_text.size();
-                } else {
-                    pos++;
+                    line.link_url = display_text.substr(close + 2, paren_close - close - 2);
+                    line.is_link = true;
+                    // Keep link text, remove the URL part
+                    display_text.erase(close + 1, paren_close - close);
                 }
-            } else {
-                pos++;
             }
         }
     }
 
-    // Remove HTML comments and other HTML
+    // Remove HTML comments
     {
         size_t pos = 0;
         while ((pos = display_text.find("<!--", pos)) != std::string::npos) {
@@ -227,16 +237,14 @@ static TextLine iv_parse_markdown_line(const std::string &raw_line) {
         }
     }
 
-    // Detect table separators (|---|---|)
+    // Detect table separators (|---|---|) and skip them
     if (display_text.find("|") != std::string::npos && display_text.find("-") != std::string::npos) {
-        // Simple heuristic: if it's mostly pipes and dashes, it's a table separator
         int pipes = 0, dashes = 0;
         for (char c : display_text) {
             if (c == '|') pipes++;
             if (c == '-') dashes++;
         }
         if (pipes > 1 && dashes > 2) {
-            // Skip rendering table separators entirely
             line.text = "";
             return line;
         }
@@ -265,10 +273,17 @@ static TextDocument iv_parse_text_document(const unsigned char *data, size_t len
             }
 
             TextLine line{};
+            // Only parse as markdown if format is explicitly TEXT_MARKDOWN
             if (format == TEXT_MARKDOWN) {
                 line = iv_parse_markdown_line(line_str);
             } else {
+                // Plain text: just store as-is, no markdown parsing
                 line.text = line_str;
+                line.is_header = false;
+                line.header_level = 0;
+                line.is_code_block = false;
+                line.is_list_item = false;
+                line.is_link = false;
             }
             doc.lines.push_back(line);
             start = i + 1;
@@ -308,7 +323,7 @@ static void iv_render_text_document(const TextDocument &doc, int viewport_x, int
     glVertex2f((float)viewport_x, (float)(viewport_y + viewport_h - 1));
     glEnd();
 
-    // Render lines — start with more padding from top to account for title area
+    // Render lines
     int y = viewport_y + IV_PAD + IV_PAD;
     for (int i = 0; i < visible_lines && (scroll + i) < (int)doc.lines.size(); i++) {
         const TextLine &line = doc.lines[scroll + i];
@@ -326,12 +341,16 @@ static void iv_render_text_document(const TextDocument &doc, int viewport_x, int
         } else if (line.is_code_block) {
             r = 0.3f; g = 0.9f; b = 0.3f;
             font_px = (int)(base_px * 0.9f);
+        } else if (line.is_link) {
+            // Links in cyan/blue with underline hint
+            r = 0.2f; g = 0.6f; b = 1.0f;
         }
 
         int indent = 0;
         if (line.is_code_block) indent = base_px;
         else if (line.is_list_item) indent = base_px / 2;
 
+        // Render the text line
         if (!line.text.empty()) {
             draw_text(line.text.c_str(),
                      (float)(viewport_x + IV_PAD + indent),
@@ -340,6 +359,42 @@ static void iv_render_text_document(const TextDocument &doc, int viewport_x, int
                      r, g, b, a);
         }
         y += line_height;
+
+        // If this line has an image, try to load and display it
+        if (!line.image_url.empty()) {
+            // Try to load image relative to current document location
+            // For now, just display placeholder
+            std::string img_path = line.image_url;
+            
+            // Skip remote/absolute URLs (start with http:// or https://)
+            bool is_url = (img_path.find("http://") == 0 || img_path.find("https://") == 0);
+            
+            if (!is_url && !img_path.empty()) {
+                // Try to load as local/relative path
+                // Note: This is a simplified version. Full implementation would:
+                // 1. Resolve relative paths from the document's directory
+                // 2. Support both local and remote paths
+                // 3. Cache loaded images
+                // 4. Display them with proper sizing
+                
+                // For now, just show the alt text as a placeholder
+                float img_y = y;
+                draw_text(("[Image: " + line.image_alt + "]").c_str(),
+                         (float)(viewport_x + IV_PAD + indent),
+                         img_y,
+                         font_px * 0.8f, font_px * 0.8f,
+                         0.6f, 0.6f, 0.6f, 0.7f);
+                y += line_height / 2;
+            } else if (is_url) {
+                // Show URL placeholder
+                draw_text(("[Image URL: " + line.image_url.substr(0, 40) + "...]").c_str(),
+                         (float)(viewport_x + IV_PAD + indent),
+                         (float)y,
+                         font_px * 0.7f, font_px * 0.7f,
+                         0.5f, 0.5f, 0.5f, 0.5f);
+                y += line_height / 2;
+            }
+        }
     }
 
     // Scroll indicator
@@ -390,7 +445,7 @@ static void iv_text_keyboard(TextDocument &doc, SDL_Keycode sym) {
 // Text scroll
 static void iv_text_scroll(TextDocument &doc, int delta_y) {
     int max_scroll = std::max(0, (int)doc.lines.size() - 20);
-    int step = (delta_y > 0) ? 3 : -3;
+    int step = (delta_y > 0) ? -3 : 3;  // wheel up = scroll up (negative step)
     doc.scroll_line = std::max(0, std::min(doc.scroll_line + step, max_scroll));
 }
 
@@ -996,6 +1051,16 @@ static void iv_upload_texture(const unsigned char *rgba, int w, int h) {
 static void iv_load_image_from_mem(const unsigned char *data, size_t len, const char *label) {
     int w, h, ch;
     unsigned char *px = stbi_load_from_memory(data, (int)len, &w, &h, &ch, 4);
+    
+    // If stbi fails, try WebP decoder
+    if (!px) {
+        px = WebPDecodeRGBA(data, len, &w, &h);
+        if (px) {
+            // WebP decoder returns RGBA, which matches what we need
+            ch = 4;
+        }
+    }
+    
     if (!px) {
         snprintf(g_iv.error, sizeof(g_iv.error), "Decode failed: %s", stbi_failure_reason());
         iv_free_tex();
@@ -1003,7 +1068,15 @@ static void iv_load_image_from_mem(const unsigned char *data, size_t len, const 
     }
     g_iv.error[0] = '\0';
     iv_upload_texture(px, w, h);
-    stbi_image_free(px);
+    
+    // Free with appropriate function based on source
+    // Check if this was decoded by WebP (simple heuristic: if stbi_load_from_memory failed above)
+    if (stbi_load_from_memory(data, (int)len, &w, &h, &ch, 4) == nullptr) {
+        WebPFree(px);
+    } else {
+        stbi_image_free(px);
+    }
+    
     strncpy(g_iv.img_label, label, sizeof(g_iv.img_label)-1);
     // Reset view for every new image
     g_iv.zoom    = 1.0f;
@@ -1064,6 +1137,12 @@ void iv_close() {
     iv_stop_audio();
     iv_cdg_free();
     iv_free_tex();
+    
+    // Clean up text document - use swap to safely clear without double-free
+    TextDocument empty_doc;
+    s_text_doc = empty_doc;
+    s_viewing_text = false;
+    
     g_iv.visible = false;
 }
 
@@ -1394,6 +1473,10 @@ static void iv_enter_selected() {
             iv_stop_audio();
             iv_cdg_free();
             g_iv.error[0] = '\0';
+            
+            // Clear old text document immediately
+            s_text_doc.lines.clear();
+            s_viewing_text = false;
 
             size_t sz = 0;
             unsigned char *buf = nullptr;
@@ -1437,6 +1520,24 @@ static void iv_enter_selected() {
             }
 
             if (success && buf) {
+                // Validate that this looks like text (not binary/encoded)
+                // Check if more than 10% of bytes are non-printable (excluding common whitespace)
+                int non_printable = 0;
+                for (size_t j = 0; j < sz && j < 1000; j++) {  // Sample first 1000 bytes
+                    unsigned char c = buf[j];
+                    if (c < 9 || (c > 13 && c < 32) || c == 127) {
+                        non_printable++;
+                    }
+                }
+                if (non_printable * 10 > 1000) {
+                    // More than 10% non-printable: likely binary or encoded
+                    snprintf(g_iv.error, sizeof(g_iv.error), "Binary file: %s", e.name);
+                    s_text_doc.lines.clear();
+                    s_viewing_text = false;
+                    free(buf);
+                    return;
+                }
+
                 // Parse document
                 TextFormatType format = is_markdown_ext(e.name) ? TEXT_MARKDOWN : TEXT_PLAIN;
                 s_text_doc = iv_parse_text_document(buf, sz, format);
@@ -1456,6 +1557,7 @@ static void iv_enter_selected() {
             iv_stop_audio();
             iv_cdg_free();
             s_viewing_text = false;  // Switch back to image mode
+            s_text_doc.lines.clear();  // Clear previous text document
             if (g_iv.remote) {
 #ifdef USESSH
                 size_t sz = 0;
@@ -2296,6 +2398,23 @@ bool iv_keydown(SDL_Keycode sym) {
 
     // Handle text document navigation
     if (s_viewing_text) {
+        // Left/Right arrows: navigate to prev/next file (like with images/audio)
+        if (sym == SDLK_LEFT) {
+            if (g_iv.selected > 0) {
+                g_iv.selected--;
+                iv_enter_selected();
+            }
+            return true;
+        }
+        if (sym == SDLK_RIGHT) {
+            int n = (int)g_iv.entries.size();
+            if (g_iv.selected < n - 1) {
+                g_iv.selected++;
+                iv_enter_selected();
+            }
+            return true;
+        }
+        
         iv_text_keyboard(s_text_doc, sym);
         // Also handle close/navigate keys
         if (sym == SDLK_ESCAPE || sym == SDLK_F5) {
