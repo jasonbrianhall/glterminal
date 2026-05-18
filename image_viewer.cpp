@@ -56,6 +56,26 @@
 #endif
 
 // ============================================================================
+// TEXT & MARKDOWN SUPPORT STRUCTURES
+// ============================================================================
+
+enum TextFormatType { TEXT_PLAIN, TEXT_MARKDOWN };
+
+struct TextLine {
+    std::string text;
+    bool is_header;
+    int header_level;
+    bool is_code_block;
+    bool is_list_item;
+};
+
+struct TextDocument {
+    std::vector<TextLine> lines;
+    TextFormatType format;
+    int scroll_line;
+};
+
+// ============================================================================
 // CROSS-PLATFORM TEMP FILE
 // ============================================================================
 
@@ -101,7 +121,278 @@ static void iv_delete_tempfile(const char *path) {
 ImageViewer g_iv;
 extern int  g_font_size;
 
+// Text document currently being viewed
+static TextDocument s_text_doc;
+static bool s_viewing_text = false;
+
 static const int IV_PAD = 8;
+
+// Simple markdown line parser with enhanced formatting
+static TextLine iv_parse_markdown_line(const std::string &raw_line) {
+    TextLine line{};
+    std::string display_text = raw_line;
+    line.is_header = false;
+    line.header_level = 0;
+    line.is_code_block = false;
+    line.is_list_item = false;
+
+    // Detect headers: # Header, ## Header2, etc.
+    if (!raw_line.empty() && raw_line[0] == '#') {
+        int level = 0;
+        size_t i = 0;
+        while (i < raw_line.size() && raw_line[i] == '#') {
+            level++;
+            i++;
+        }
+        if (level <= 6 && i < raw_line.size() && raw_line[i] == ' ') {
+            line.is_header = true;
+            line.header_level = level;
+            display_text = raw_line.substr(i + 1);
+        }
+    }
+
+    // Detect code blocks (4+ space indent)
+    if (!raw_line.empty() && !line.is_header) {
+        int spaces = 0;
+        for (char c : raw_line) {
+            if (c == ' ') spaces++;
+            else if (c == '\t') spaces += 4;
+            else break;
+        }
+        if (spaces >= 4) {
+            line.is_code_block = true;
+        }
+    }
+
+    // Detect list items
+    if (!raw_line.empty() && !line.is_header && !line.is_code_block) {
+        if ((raw_line[0] == '-' || raw_line[0] == '*' || raw_line[0] == '+') 
+            && raw_line.size() > 1 && raw_line[1] == ' ') {
+            line.is_list_item = true;
+        }
+    }
+
+    // Strip markdown syntax for display
+    // Remove ![alt](url) image syntax
+    {
+        size_t pos = 0;
+        while ((pos = display_text.find("![", pos)) != std::string::npos) {
+            size_t end = display_text.find("](", pos);
+            if (end != std::string::npos) {
+                size_t close = display_text.find(")", end);
+                if (close != std::string::npos) {
+                    display_text.erase(pos, close - pos + 1);
+                } else {
+                    pos++;
+                }
+            } else {
+                pos++;
+            }
+        }
+    }
+
+    // Remove [text](url) link syntax, keep just the text
+    {
+        size_t pos = 0;
+        while ((pos = display_text.find("[", pos)) != std::string::npos) {
+            size_t close = display_text.find("]", pos);
+            if (close != std::string::npos && close + 1 < display_text.size() && display_text[close+1] == '(') {
+                size_t paren_close = display_text.find(")", close);
+                if (paren_close != std::string::npos) {
+                    // Keep the text inside [], remove the (url) part
+                    std::string link_text = display_text.substr(pos + 1, close - pos - 1);
+                    display_text.erase(pos, paren_close - pos + 1);
+                    display_text.insert(pos, link_text);
+                    pos += link_text.size();
+                } else {
+                    pos++;
+                }
+            } else {
+                pos++;
+            }
+        }
+    }
+
+    // Remove HTML comments and other HTML
+    {
+        size_t pos = 0;
+        while ((pos = display_text.find("<!--", pos)) != std::string::npos) {
+            size_t end = display_text.find("-->", pos);
+            if (end != std::string::npos) {
+                display_text.erase(pos, end - pos + 3);
+            } else {
+                display_text.erase(pos);
+                break;
+            }
+        }
+    }
+
+    // Detect table separators (|---|---|)
+    if (display_text.find("|") != std::string::npos && display_text.find("-") != std::string::npos) {
+        // Simple heuristic: if it's mostly pipes and dashes, it's a table separator
+        int pipes = 0, dashes = 0;
+        for (char c : display_text) {
+            if (c == '|') pipes++;
+            if (c == '-') dashes++;
+        }
+        if (pipes > 1 && dashes > 2) {
+            // Skip rendering table separators entirely
+            line.text = "";
+            return line;
+        }
+    }
+
+    line.text = display_text;
+    return line;
+}
+
+// Parse text file into document
+static TextDocument iv_parse_text_document(const unsigned char *data, size_t len, 
+                                           TextFormatType format) {
+    TextDocument doc{};
+    doc.format = format;
+    doc.scroll_line = 0;
+
+    if (!data || len == 0) return doc;
+
+    std::string text((const char *)data, len);
+    size_t start = 0;
+    for (size_t i = 0; i <= text.size(); i++) {
+        if (i == text.size() || text[i] == '\n') {
+            std::string line_str = text.substr(start, i - start);
+            if (!line_str.empty() && line_str.back() == '\r') {
+                line_str.pop_back();
+            }
+
+            TextLine line{};
+            if (format == TEXT_MARKDOWN) {
+                line = iv_parse_markdown_line(line_str);
+            } else {
+                line.text = line_str;
+            }
+            doc.lines.push_back(line);
+            start = i + 1;
+        }
+    }
+
+    return doc;
+}
+
+// Render text document
+static void iv_render_text_document(const TextDocument &doc, int viewport_x, int viewport_y,
+                                    int viewport_w, int viewport_h) {
+    if (doc.lines.empty()) return;
+
+    int base_px = g_font_size;
+    int line_height = (int)(base_px * 1.6f);
+    int visible_lines = (viewport_h - IV_PAD * 2) / line_height;
+    
+    int max_scroll = std::max(0, (int)doc.lines.size() - visible_lines);
+    int scroll = std::min(doc.scroll_line, max_scroll);
+
+    // Background
+    glColor4f(0.08f, 0.08f, 0.1f, 0.95f);
+    glBegin(GL_QUADS);
+    glVertex2f((float)viewport_x, (float)viewport_y);
+    glVertex2f((float)(viewport_x + viewport_w), (float)viewport_y);
+    glVertex2f((float)(viewport_x + viewport_w), (float)(viewport_y + viewport_h));
+    glVertex2f((float)viewport_x, (float)(viewport_y + viewport_h));
+    glEnd();
+
+    // Border
+    glColor4f(0.3f, 0.3f, 0.35f, 0.8f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f((float)viewport_x, (float)viewport_y);
+    glVertex2f((float)(viewport_x + viewport_w - 1), (float)viewport_y);
+    glVertex2f((float)(viewport_x + viewport_w - 1), (float)(viewport_y + viewport_h - 1));
+    glVertex2f((float)viewport_x, (float)(viewport_y + viewport_h - 1));
+    glEnd();
+
+    // Render lines — start with more padding from top to account for title area
+    int y = viewport_y + IV_PAD + IV_PAD;
+    for (int i = 0; i < visible_lines && (scroll + i) < (int)doc.lines.size(); i++) {
+        const TextLine &line = doc.lines[scroll + i];
+
+        int font_px = base_px;
+        float r = 1.0f, g = 1.0f, b = 1.0f, a = 1.0f;
+
+        if (line.is_header) {
+            font_px = base_px + (7 - std::min(line.header_level, 6)) * 2;
+            switch (line.header_level) {
+                case 1: r = 0.4f; g = 0.8f; b = 1.0f; break;
+                case 2: r = 0.3f; g = 0.7f; b = 1.0f; break;
+                default: r = 0.5f; g = 0.7f; b = 1.0f; break;
+            }
+        } else if (line.is_code_block) {
+            r = 0.3f; g = 0.9f; b = 0.3f;
+            font_px = (int)(base_px * 0.9f);
+        }
+
+        int indent = 0;
+        if (line.is_code_block) indent = base_px;
+        else if (line.is_list_item) indent = base_px / 2;
+
+        if (!line.text.empty()) {
+            draw_text(line.text.c_str(),
+                     (float)(viewport_x + IV_PAD + indent),
+                     (float)y,
+                     font_px, font_px,
+                     r, g, b, a);
+        }
+        y += line_height;
+    }
+
+    // Scroll indicator
+    if (max_scroll > 0) {
+        float scroll_ratio = (float)scroll / (float)max_scroll;
+        float scroll_height = (float)visible_lines / (float)doc.lines.size();
+        if (scroll_height < 1.0f) {
+            float bar_y = viewport_y + IV_PAD + (float)viewport_h * scroll_ratio * 0.9f;
+            float bar_h = (float)viewport_h * scroll_height * 0.9f;
+            glColor4f(0.5f, 0.5f, 0.55f, 0.7f);
+            glBegin(GL_QUADS);
+            glVertex2f((float)(viewport_x + viewport_w - 6), bar_y);
+            glVertex2f((float)(viewport_x + viewport_w - 2), bar_y);
+            glVertex2f((float)(viewport_x + viewport_w - 2), bar_y + bar_h);
+            glVertex2f((float)(viewport_x + viewport_w - 6), bar_y + bar_h);
+            glEnd();
+        }
+    }
+}
+
+// Text keyboard navigation
+static void iv_text_keyboard(TextDocument &doc, SDL_Keycode sym) {
+    int max_scroll = std::max(0, (int)doc.lines.size() - 20);
+    switch (sym) {
+        case SDLK_UP:
+            doc.scroll_line = std::max(0, doc.scroll_line - 1);
+            break;
+        case SDLK_DOWN:
+            doc.scroll_line = std::min(max_scroll, doc.scroll_line + 1);
+            break;
+        case SDLK_PAGEUP:
+            doc.scroll_line = std::max(0, doc.scroll_line - 20);
+            break;
+        case SDLK_PAGEDOWN:
+            doc.scroll_line = std::min(max_scroll, doc.scroll_line + 20);
+            break;
+        case SDLK_HOME:
+            doc.scroll_line = 0;
+            break;
+        case SDLK_END:
+            doc.scroll_line = max_scroll;
+            break;
+        default:
+            break;
+    }
+}
+
+// Text scroll
+static void iv_text_scroll(TextDocument &doc, int delta_y) {
+    int max_scroll = std::max(0, (int)doc.lines.size() - 20);
+    int step = (delta_y > 0) ? 3 : -3;
+    doc.scroll_line = std::max(0, std::min(doc.scroll_line + step, max_scroll));
+}
 
 // ============================================================================
 // HELPERS
@@ -141,6 +432,28 @@ static bool is_cdg_ext(const char *name) {
     char ext[8] = {};
     for (int i = 0; i < 7 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
     return strcmp(ext, ".cdg") == 0;
+}
+
+static bool is_text_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return false;
+    char ext[16] = {};
+    for (int i = 0; i < 15 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
+    const char *exts[] = { ".txt", ".text", ".log", ".csv", ".tsv", ".conf", 
+                           ".config", ".sh", ".bash", ".h", ".c", ".cpp", 
+                           ".py", ".js", ".json", ".xml", ".html", ".css" };
+    for (auto *e : exts) if (strcmp(ext, e) == 0) return true;
+    return false;
+}
+
+static bool is_markdown_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return false;
+    char ext[16] = {};
+    for (int i = 0; i < 15 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
+    const char *exts[] = { ".md", ".markdown", ".mdown", ".mkd", ".mdwn" };
+    for (auto *e : exts) if (strcmp(ext, e) == 0) return true;
+    return false;
 }
 
 // Given an audio filename, check if a matching .cdg exists in the same directory
@@ -214,9 +527,11 @@ static void iv_list_zip(const char *zip_filepath, std::vector<IVEntry> &out) {
         if (strncmp(fname, "__MACOSX", 8) == 0) continue;
 
         bool img   = is_image_ext(fname);
+        bool txt   = is_text_ext(fname);
+        bool md    = is_markdown_ext(fname);
         bool audio = is_audio_ext(fname);
         bool cdg   = is_cdg_ext(fname);
-        if (!img && !audio && !cdg) continue;
+        if (!img && !txt && !md && !audio && !cdg) continue;
 
         mz_zip_archive_file_stat st;
         mz_zip_reader_file_stat(&zip, i, &st);
@@ -326,10 +641,12 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
             e.size   = (uint64_t)st.st_size;
         }
         bool img   = is_image_ext(e.name);
+        bool txt   = is_text_ext(e.name);
+        bool md    = is_markdown_ext(e.name);
         bool zip   = is_zip_ext(e.name);
         bool audio = is_audio_ext(e.name);
         bool cdg   = is_cdg_ext(e.name);
-        if (e.is_dir || img || zip || audio || cdg) {
+        if (e.is_dir || img || txt || md || zip || audio || cdg) {
             if (zip)   { e.is_zip = true; e.has_cdg_pair = zip_contains_cdg_pair(full); }
             if (audio) { e.is_audio = true; e.has_cdg_pair = has_paired_cdg(path, e.name); }
             if (cdg)   e.is_cdg = true;
@@ -408,10 +725,12 @@ static void iv_list_remote(const char *path, std::vector<IVEntry> &out) {
             bool is_dir = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) &&
                           LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
             bool img   = is_image_ext(name);
+            bool txt   = is_text_ext(name);
+            bool md    = is_markdown_ext(name);
             bool audio = is_audio_ext(name);
             bool zip   = is_zip_ext(name);
             bool cdg   = is_cdg_ext(name);
-            if (!is_dir && !img && !audio && !zip && !cdg) continue;
+            if (!is_dir && !img && !txt && !md && !audio && !zip && !cdg) continue;
             IVEntry e{};
             strncpy(e.name, name, sizeof(e.name)-1);
             e.is_dir = is_dir;
@@ -1069,11 +1388,74 @@ static void iv_enter_selected() {
                 iv_play_audio(fullpath, e.name, e.has_cdg_pair);
             }
 
+        } else if (is_text_ext(e.name) || is_markdown_ext(e.name)) {
+            // Text or Markdown file
+            iv_free_tex();
+            iv_stop_audio();
+            iv_cdg_free();
+            g_iv.error[0] = '\0';
+
+            size_t sz = 0;
+            unsigned char *buf = nullptr;
+            bool success = false;
+            
+            if (g_iv.remote) {
+#ifdef USESSH
+                buf = iv_download_remote(fullpath, sz);
+                if (!buf) {
+                    snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+                } else {
+                    success = true;
+                }
+#else
+                snprintf(g_iv.error, sizeof(g_iv.error), "SSH not compiled in");
+#endif
+            } else {
+                // Read local file
+                FILE *f = fopen(fullpath, "rb");
+                if (!f) {
+                    snprintf(g_iv.error, sizeof(g_iv.error), "Cannot open: %s", e.name);
+                } else {
+                    fseek(f, 0, SEEK_END);
+                    sz = ftell(f);
+                    fseek(f, 0, SEEK_SET);
+                    buf = (unsigned char *)malloc(sz + 1);
+                    if (!buf) {
+                        fclose(f);
+                        snprintf(g_iv.error, sizeof(g_iv.error), "Out of memory");
+                    } else {
+                        if (fread(buf, 1, sz, f) != sz) {
+                            free(buf);
+                            buf = nullptr;
+                            snprintf(g_iv.error, sizeof(g_iv.error), "Read error: %s", e.name);
+                        } else {
+                            success = true;
+                        }
+                        fclose(f);
+                    }
+                }
+            }
+
+            if (success && buf) {
+                // Parse document
+                TextFormatType format = is_markdown_ext(e.name) ? TEXT_MARKDOWN : TEXT_PLAIN;
+                s_text_doc = iv_parse_text_document(buf, sz, format);
+                s_text_doc.scroll_line = 0;
+                s_viewing_text = true;
+                free(buf);
+                
+                // Mark that we're viewing text, not an image
+                g_iv.tex = 0;
+                g_iv.sdl_tex = nullptr;
+            }
+            return;
+
         } else {
             // Image file
             iv_free_tex();
             iv_stop_audio();
             iv_cdg_free();
+            s_viewing_text = false;  // Switch back to image mode
             if (g_iv.remote) {
 #ifdef USESSH
                 size_t sz = 0;
@@ -1804,6 +2186,10 @@ void iv_render(int win_w, int win_h) {
                              0.30f, 0.35f, 0.50f, 0.5f);
             }
 
+        } else if (s_viewing_text) {
+            // ── Text/Markdown display ──────────────────────────────────────
+            iv_render_text_document(s_text_doc, (int)ix, (int)iy, (int)iw, (int)ih);
+            
         } else if (g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex) {
             // ── Image display with zoom / pan / rotation ──────────────────
             // tw/th = texture dimensions in the rotated orientation (for fit calc)
@@ -1907,6 +2293,17 @@ void iv_render(int win_w, int win_h) {
 
 bool iv_keydown(SDL_Keycode sym) {
     if (!g_iv.visible) return false;
+
+    // Handle text document navigation
+    if (s_viewing_text) {
+        iv_text_keyboard(s_text_doc, sym);
+        // Also handle close/navigate keys
+        if (sym == SDLK_ESCAPE || sym == SDLK_F5) {
+            s_viewing_text = false;
+            return true;
+        }
+        return true;
+    }
 
     int n = (int)g_iv.entries.size();
 
@@ -2138,6 +2535,12 @@ static int iv_panel_width(int win_w) {
 
 bool iv_mousewheel(int x, int y, int delta_y, int win_w, int win_h) {
     if (!g_iv.visible) return false;
+
+    // Handle text document scroll
+    if (s_viewing_text) {
+        iv_text_scroll(s_text_doc, delta_y);
+        return true;
+    }
 
     float ix, iy, iw, ih;
     iv_image_rect(win_w, win_h, ix, iy, iw, ih);
