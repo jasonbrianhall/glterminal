@@ -21,10 +21,39 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <signal.h>
+#ifndef DONTUSEGMP
 #include <gmp.h>
+extern mp_bitcnt_t      g_prec;
+#else
+
+#define mpf_t double
+
+#define mpf_abs(dst, src) ((dst) = fabs(src))
+#define mpf_add(dst, x, y) ((dst) = (x) + (y))
+#define mpf_clear(x)  ((void)0)
+#define mpf_clears(...) ((void)0)
+#define mpf_cmp(a, b) (((a) > (b)) - ((a) < (b)))
+#define mpf_div(dst, a, b) ((dst) = (a) / (b))
+#define mpf_get_d(x) (x)
+#define mpf_get_si(x) ((long)(x))
+#define mpf_init2(x, prec) ((x) = 0.0)
+#define mpf_mul(dst, a, b) ((dst) = (a) * (b))
+#define mpf_neg(dst, src) ((dst) = -(src))
+#define mpf_set(dst, src) ((dst) = (src))
+#define mpf_set_d(dst, n) ((dst) = (n))
+#define mpf_set_si(dst, n) ((dst) = (n))
+#define mpf_set_str(dst, buf, base) ((dst) = strtod((buf), NULL))
+#define mpf_set_ui(dst, n) ((dst) = (n))
+#define mpf_sgn(x) (((x) > 0) - ((x) < 0))
+#define mpf_sub(dst, x, y) ((dst) = (x) - (y))
+
+#endif
+
 
 #include "display.h"
 #include "sound.h"
+
+
 
 BASIC_NS_BEGIN
 
@@ -49,7 +78,6 @@ BASIC_NS_BEGIN
 /* ================================================================
  * Global interpreter settings
  * ================================================================ */
-extern mp_bitcnt_t      g_prec;
 extern int              g_option_base;
 /* g_break: in hosted builds it is a macro (defined in basic_ns.h) that
  * expands to ::BASIC_BREAK_SYM.  In standalone builds it is a normal extern. */
