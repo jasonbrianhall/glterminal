@@ -13,6 +13,12 @@
 #endif
 
 
+#ifndef DONTUSEGMP
+mp_bitcnt_t g_prec = DEFAULT_PREC;
+#else
+int g_prec = DEFAULT_PREC;
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 #include <ctype.h>
