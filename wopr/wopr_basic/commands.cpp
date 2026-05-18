@@ -407,6 +407,52 @@ static int cmd_screen(Interp *ip, char *args) {
     }
     return 0;
 }
+/* WINDOW (x1, y1)-(x2, y2) — QB64 logical coordinate system (stub) */
+static int cmd_window(Interp *ip, char *args) {
+    (void)ip; (void)args;
+    /* Just consume the arguments and do nothing */
+    return 0;
+}
+
+static int cmd_qdisplay(Interp *ip, char *args) {
+    (void)ip; (void)args;
+#ifdef USE_SDL_WINDOW
+    ::gfx_sdl_render();
+#endif
+    return 0;
+}
+
+static int cmd_qtitle(Interp *ip, char *args) {
+    (void)ip; (void)args;
+    /* Just skip the string - don't evaluate it */
+    return 0;
+}
+
+/* _LIMIT fps — QB64 frame rate limiter */
+static int cmd_qlimit(Interp *ip, char *args) {
+    (void)ip;
+    char *p = sk(args);
+    mpf_t fps_val; mpf_init2(fps_val, g_prec);
+    p = sk(eval_expr(p, fps_val));
+    double fps = mpf_get_d(fps_val);
+    mpf_clear(fps_val);
+    
+    if (fps > 0) {
+        /* Sleep to maintain target frame rate */
+        static uint32_t last_time = 0;
+        uint32_t now = SDL_GetTicks();
+        if (last_time > 0) {
+            uint32_t frame_time = (uint32_t)(1000.0 / fps);
+            uint32_t elapsed = now - last_time;
+            if (elapsed < frame_time) {
+                SDL_Delay(frame_time - elapsed);
+            }
+        }
+        last_time = SDL_GetTicks();
+    }
+    return 0;
+}
+
 static int cmd_beep(Interp *ip, char *args) {
     (void)ip; (void)args;
     sound_beep();
@@ -524,6 +570,10 @@ static int cmd_erase(Interp *ip, char *args) {
 static int cmd_option(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
+    if (kw_match(p, "_EXPLICIT")) {
+        /* QB64 option for strict variable declaration — just ignore it */
+        return 0;
+    }
     if (kw_match(p, "BASE")) {
         p = sk(p + 4);
         mpf_t n; mpf_init2(n, g_prec);
@@ -2832,6 +2882,20 @@ static int cmd_defint(Interp *ip, char *args) { (void)ip;(void)args; return 0; }
  * Command registration table
  * ================================================================ */
 const Command commands[] = {
+    /* Hot loop commands first (Mandelbrot inner loop hits these 1000x/sec) */
+    { "WHILE",      cmd_while      },
+    { "WEND",       cmd_wend       },
+    { "FOR",        cmd_for        },
+    { "NEXT",       cmd_next       },
+    
+    /* Common assignment/output */
+    { "LET",        cmd_let        },
+    { "PRINT",      cmd_print      },
+    
+    /* Graphics (called in draw loops) */
+    { "PSET",       cmd_pset       },
+    
+    /* Everything else */
     { "DECLARE",    cmd_rem        },
     { "REM",        cmd_rem        },
     { "'",          cmd_rem        },
@@ -2843,7 +2907,6 @@ const Command commands[] = {
     { "DRAW",       cmd_draw       },
     { "CIRCLE",     cmd_circle     },
     { "PRESET",     cmd_preset     },
-    { "PSET",       cmd_pset       },
     { "PAINT",      cmd_paint      },
     { "END SELECT", cmd_end_select },
     { "END SUB",    cmd_end_sub    },
@@ -2860,11 +2923,13 @@ const Command commands[] = {
     { "ERASE",      cmd_erase      },
     { "OPTION",     cmd_option     },
     { "CONST",      cmd_const      },
-    { "LET",        cmd_let        },
-    { "PRINT",      cmd_print      },
     { "DEBUG",      cmd_debug      },
     { "CLS",        cmd_cls        },
     { "BEEP",       cmd_beep       },
+    { "WINDOW",     cmd_window     },
+    { "_DISPLAY",   cmd_qdisplay   },
+    { "_TITLE",     cmd_qtitle     },
+    { "_LIMIT",     cmd_qlimit     },
     { "SOUND",      cmd_sound      },
     { "PLAY",       cmd_play       },
     { "COLOR",      cmd_color      },
@@ -2879,12 +2944,8 @@ const Command commands[] = {
     { "REDIM",      cmd_redim      },
     { "DIM",        cmd_dim        },
     { "STATIC",     cmd_static     },
-    { "FOR",        cmd_for        },
-    { "NEXT",       cmd_next       },
     { "DO",         cmd_do         },
     { "LOOP",       cmd_loop       },
-    { "WHILE",      cmd_while      },
-    { "WEND",       cmd_wend       },
     { "SELECT",     cmd_select     },
     { "CASE",       cmd_case       },  /* reached after a case body completes  jump to END SELECT */
     { "GOTO",       cmd_goto       },
@@ -2970,7 +3031,11 @@ static void print_mpf(mpf_t val) {
     /* Get scientific form to inspect the exponent */
     char *tmp = (char *)malloc(bufsz);
     if (!tmp) { free(buf); return; }
+#ifndef DONTUSEGMP
     gmp_snprintf(tmp, bufsz, "%.*Fe", PRINT_DIGITS, val);
+#else
+    snprintf(tmp, bufsz, "%.*e", PRINT_DIGITS, mpf_get_d(val));
+#endif
 
     /* Parse exponent */
     char *ep = strchr(tmp, 'e');
@@ -2981,7 +3046,11 @@ static void print_mpf(mpf_t val) {
         int dp = PRINT_DIGITS - exp;
         if (dp < 0) dp = 0;
         if (dp > PRINT_DIGITS) dp = PRINT_DIGITS;
+#ifndef DONTUSEGMP
         gmp_snprintf(buf, bufsz, "%.*Ff", dp, val);
+#else
+        snprintf(buf, bufsz, "%.*f", dp, mpf_get_d(val));
+#endif
         /* Trim trailing zeros after decimal point */
         if (strchr(buf, '.')) {
             char *end = buf + strlen(buf) - 1;
@@ -2990,7 +3059,11 @@ static void print_mpf(mpf_t val) {
         }
     } else {
         /* Scientific notation  trim trailing zeros in significand */
+#ifndef DONTUSEGMP
         gmp_snprintf(buf, bufsz, "%.*Fe", PRINT_DIGITS, val);
+#else
+        snprintf(buf, bufsz, "%.*e", PRINT_DIGITS, mpf_get_d(val));
+#endif
         char *e = strchr(buf, 'e');
         if (e) {
             char *z = e - 1;

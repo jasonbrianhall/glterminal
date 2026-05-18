@@ -16,7 +16,6 @@ BASIC_NS_BEGIN
 /* ================================================================
  * Global state
  * ================================================================ */
-mp_bitcnt_t g_prec       = DEFAULT_PREC;
 int         g_option_base = 0;
 
 #if !defined(WOPR) && !defined(FELIX_BASIC)
@@ -353,7 +352,11 @@ static char *eval_str_primary(char *p, char *buf, int bufsz) {
         p = eval_expr(sk(p), n);
         /* BASIC STR$ always prefixes a space for non-negative numbers */
         char tmp_num[DEFAULT_BUFFER];
+#ifndef DONTUSEGMP
         gmp_snprintf(tmp_num, sizeof tmp_num, "%.6Fg", n);
+#else
+        snprintf(tmp_num, sizeof tmp_num, "%.6g", mpf_get_d(n));
+#endif
         if (mpf_sgn(n) >= 0)
             snprintf(buf, bufsz, " %s", tmp_num);
         else
@@ -408,7 +411,7 @@ static char *eval_str_primary(char *p, char *buf, int bufsz) {
     }
 
     /* Struct field string read: name.field$ or name(idx).field$ */
-    if (isalpha((unsigned char)*p)) {
+    if (isalpha((unsigned char)*p) || *p == '_') {
         char *save2 = p;
         char base2[MAX_VARNAME]; int bi2 = 0;
         while ((isalnum((unsigned char)*p) || *p == '_') && bi2 < MAX_VARNAME - 1)
@@ -459,7 +462,7 @@ static char *eval_str_primary(char *p, char *buf, int bufsz) {
     }
 
     /* String variable (scalar or array element) — check CONST table first */
-    if (isalpha((unsigned char)*p)) {
+    if (isalpha((unsigned char)*p) || *p == '_') {
         char vname[MAX_VARNAME];
         char *after = read_varname(p, vname);
 
@@ -521,7 +524,7 @@ int is_str_token(char *p) {
     if (kw_match(p, "RTRIM$"))  return 1;
     if (kw_match(p, "HEX$"))    return 1;
     if (kw_match(p, "OCT$"))    return 1;
-    if (isalpha((unsigned char)*p)) {
+    if (isalpha((unsigned char)*p) || *p == '_') {
         char name[MAX_VARNAME];
         char *after = read_varname(p, name);
         if (var_is_str_name(name)) return 1;
@@ -1021,8 +1024,34 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
         return;
     }
 
+    /* _HYPOT(x, y) — QB64 function: returns sqrt(x^2 + y^2) */
+    if (kw_match(ps->p, "_HYPOT")) {
+        ps->p += 6; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        mpf_t mx; mpf_init2(mx, g_prec); parse_expr_p(ps, mx); double xx = mpf_get_d(mx); mpf_clear(mx);
+        skip_ws_p(ps); if (*ps->p == ',') ps->p++;
+        mpf_t my; mpf_init2(my, g_prec); parse_expr_p(ps, my); double yy = mpf_get_d(my); mpf_clear(my);
+        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        mpf_set_d(result, hypot(xx, yy));
+        return;
+    }
+
     /* _RGB(r, g, b) — QB64 compat: return packed 0x00RRGGBB value.
      * Drawing commands call color_resolve() to map to nearest palette entry. */
+    if (kw_match(ps->p, "_RGB32")) {
+        ps->p += 6; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
+        mpf_t mr; mpf_init2(mr, g_prec); parse_expr_p(ps, mr); int rr = (int)mpf_get_si(mr); mpf_clear(mr);
+        skip_ws_p(ps); if (*ps->p == ',') ps->p++;
+        mpf_t mg; mpf_init2(mg, g_prec); parse_expr_p(ps, mg); int gg = (int)mpf_get_si(mg); mpf_clear(mg);
+        skip_ws_p(ps); if (*ps->p == ',') ps->p++;
+        mpf_t mb; mpf_init2(mb, g_prec); parse_expr_p(ps, mb); int bb = (int)mpf_get_si(mb); mpf_clear(mb);
+        skip_ws_p(ps); if (*ps->p == ')') ps->p++;
+        rr &= 255; gg &= 255; bb &= 255;
+        /* Store as 0x01RRGGBB — high byte 0x01 flags this as a truecolor value */
+        long packed = 0x01000000L | ((long)rr << 16) | ((long)gg << 8) | bb;
+        mpf_set_si(result, packed);
+        return;
+    }
+
     if (kw_match(ps->p, "_RGB")) {
         ps->p += 4; skip_ws_p(ps); if (*ps->p == '(') ps->p++;
         mpf_t mr; mpf_init2(mr, g_prec); parse_expr_p(ps, mr); int rr = (int)mpf_get_si(mr); mpf_clear(mr);
@@ -1447,7 +1476,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     /* Struct field read: name.field or name(idx).field
      * Flat encoding: "BASE.IDX.FIELD" (numeric) or "BASE.IDX.FIELD$" (string)
      * We detect this by peeking ahead for a dot after the name or closing paren */
-    if (isalpha((unsigned char)*ps->p)) {
+    if (isalpha((unsigned char)*ps->p) || *ps->p == '_') {
         char *save = ps->p;
         char base[MAX_VARNAME]; int bi = 0;
         while ((isalnum((unsigned char)*ps->p) || *ps->p == '_') && bi < MAX_VARNAME - 1)
@@ -1509,7 +1538,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
      * Detected when the name followed by '(' matches a program label.
      * We run the function body inline by temporarily pushing a GOSUB frame,
      * executing lines until RETURN, then reading the return variable. */
-    if (isalpha((unsigned char)*ps->p)) {
+    if (isalpha((unsigned char)*ps->p) || *ps->p == '_') {
         char *fname_start = ps->p;
         char fname[MAX_VARNAME]; int fi2 = 0;
         char *pp = ps->p;
@@ -1651,7 +1680,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     }
 
     /* Variable or array element — check CONST table first */
-    if (isalpha((unsigned char)*ps->p)) {
+    if (isalpha((unsigned char)*ps->p) || *ps->p == '_') {
         char name[MAX_VARNAME];
         char *name_start = ps->p;
         ps->p = read_varname(ps->p, name);

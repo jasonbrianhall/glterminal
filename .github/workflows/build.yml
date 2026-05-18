@@ -60,8 +60,8 @@ jobs:
           zip unzip \
           ImageMagick \
           libssh2-devel \
-          libwebp-devel-1.6.0-2.fc43.x86_64 \
-          mingw64-libwebp-1.6.0-2.fc43.noarch
+          libwebp-devel \
+          mingw64-libwebp
 
     - name: Build Windows Executable
       run: |
