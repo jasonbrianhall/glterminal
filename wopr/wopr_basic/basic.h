@@ -25,28 +25,29 @@
 #include <gmp.h>
 #else
 
-#define mpf_t double
+struct _mpf_struct { double val; };
+typedef struct _mpf_struct mpf_t[1];
 #define mp_bitcnt_t unsigned long
 
-#define mpf_abs(dst, src) ((dst) = fabs(src))
-#define mpf_add(dst, x, y) ((dst) = (x) + (y))
+#define mpf_abs(dst, src) ((dst)[0].val = fabs((src)[0].val))
+#define mpf_add(dst, x, y) ((dst)[0].val = (x)[0].val + (y)[0].val)
 #define mpf_clear(x)  ((void)0)
 #define mpf_clears(...) ((void)0)
-#define mpf_cmp(a, b) (((a) > (b)) - ((a) < (b)))
-#define mpf_div(dst, a, b) ((dst) = (a) / (b))
-#define mpf_get_d(x) (x)
-#define mpf_get_si(x) ((long)(x))
-#define mpf_init2(x, prec) ((x) = 0.0)
-#define mpf_mul(dst, a, b) ((dst) = (a) * (b))
-#define mpf_neg(dst, src) ((dst) = -(src))
-#define mpf_set(dst, src) ((dst) = (src))
-#define mpf_set_d(dst, n) ((dst) = (n))
+#define mpf_cmp(a, b) (((a)[0].val > (b)[0].val) - ((a)[0].val < (b)[0].val))
+#define mpf_div(dst, a, b) ((dst)[0].val = (a)[0].val / (b)[0].val)
+#define mpf_get_d(x) ((x)[0].val)
+#define mpf_get_si(x) ((long)(x)[0].val)
+#define mpf_init2(x, prec) ((x)[0].val = 0.0)
+#define mpf_mul(dst, a, b) ((dst)[0].val = (a)[0].val * (b)[0].val)
+#define mpf_neg(dst, src) ((dst)[0].val = -(src)[0].val)
+#define mpf_set(dst, src) ((dst)[0].val = (src)[0].val)
+#define mpf_set_d(dst, n) ((dst)[0].val = (n))
 #define mpf_set_default_prec(prec) ((void)0)
-#define mpf_set_si(dst, n) ((dst) = (n))
-#define mpf_set_str(dst, buf, base) ((dst) = strtod((buf), NULL))
-#define mpf_set_ui(dst, n) ((dst) = (n))
-#define mpf_sgn(x) (((x) > 0) - ((x) < 0))
-#define mpf_sub(dst, x, y) ((dst) = (x) - (y))
+#define mpf_set_si(dst, n) ((dst)[0].val = (n))
+#define mpf_set_str(dst, buf, base) ((dst)[0].val = strtod((buf), NULL))
+#define mpf_set_ui(dst, n) ((dst)[0].val = (n))
+#define mpf_sgn(x) (((x)[0].val > 0) - ((x)[0].val < 0))
+#define mpf_sub(dst, x, y) ((dst)[0].val = (x)[0].val - (y)[0].val)
 
 #endif
 
