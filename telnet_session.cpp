@@ -219,15 +219,19 @@ bool telnet_connect(const TelnetConfig &cfg, Terminal *t) {
         return false;
 
     // Options we want to negotiate:
-    //   NAWS  — we WILL send window size, server DO ask us
-    //   TTYPE — we WILL send terminal type, server DO ask us
-    //   ECHO  — server WILL echo (suppress local echo), we DO accept
-    //   SGA   — suppress go-ahead on both sides (character mode)
+    //   BINARY — raw 8-bit pass-through on both sides; required for Kitty
+    //            graphics (APC payloads may contain 0xFF which would otherwise
+    //            be misread as IAC).  Server must agree for this to take effect.
+    //   NAWS   — we WILL send window size, server DO ask us
+    //   TTYPE  — we WILL send terminal type, server DO ask us
+    //   ECHO   — server WILL echo (suppress local echo), we DO accept
+    //   SGA    — suppress go-ahead on both sides (character mode)
     static const telnet_telopt_t telopts[] = {
-        { TELNET_TELOPT_ECHO,  TELNET_WONT, TELNET_DO   },
-        { TELNET_TELOPT_SGA,   TELNET_WILL, TELNET_DO   },
-        { TELNET_TELOPT_TTYPE, TELNET_WILL, TELNET_DONT },
-        { TELNET_TELOPT_NAWS,  TELNET_WILL, TELNET_DONT },
+        { TELNET_TELOPT_BINARY, TELNET_WILL, TELNET_DO   },
+        { TELNET_TELOPT_ECHO,   TELNET_WONT, TELNET_DO   },
+        { TELNET_TELOPT_SGA,    TELNET_WILL, TELNET_DO   },
+        { TELNET_TELOPT_TTYPE,  TELNET_WILL, TELNET_DONT },
+        { TELNET_TELOPT_NAWS,   TELNET_WILL, TELNET_DONT },
         { -1, 0, 0 }
     };
 
