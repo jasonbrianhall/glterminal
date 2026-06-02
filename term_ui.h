@@ -64,8 +64,9 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text);
 #define MENU_ID_QUIT         22
 
 // New Terminal submenu item indices
-#define NEW_TERM_IDX_LOCAL  0
-#define NEW_TERM_IDX_SSH    1
+#define NEW_TERM_IDX_LOCAL   0
+#define NEW_TERM_IDX_SSH     1
+#define NEW_TERM_IDX_TELNET  2
 // NEW_TERM_COUNT is now dynamic — see g_available_terminals in term_ui.cpp
 
 // Entertainment submenu item indices
@@ -110,6 +111,7 @@ extern std::vector<TerminalOption> g_available_terminals;
 void detect_available_terminals();
 void action_new_terminal();
 void action_new_ssh_session();
+void action_new_telnet_session();
 void action_new_terminal_custom(int idx);
 
 // Free the dedicated menu font face — call before ft_shutdown().

@@ -32,6 +32,7 @@
 #  include "port_forward.h"
 #  include "pf_overlay.h"
 #endif
+#include "telnet_session.h"
 
 #include <SDL2/SDL.h>
 #include "icon.h"
@@ -60,22 +61,25 @@ int         g_basic_win_w = 800;
 int         g_basic_win_h = 480;
 
 // ============================================================================
-// SSH / PTY dispatch helpers — used throughout the main loop.
+// SSH / PTY / Telnet dispatch helpers — used throughout the main loop.
 //
 // TERM_WRITE always goes through term_write(), which internally checks
-// g_term_write_override (set by ssh_connect) to route to SSH when active.
-// This means handle_key(), term_paste() etc. also work transparently.
+// g_term_write_override (set by ssh_connect / telnet_connect) to route to
+// the active transport.  handle_key(), term_paste() etc. work transparently.
 //
-// TERM_READ must explicitly pick ssh_read vs term_read since they pull from
-// different sources (SSH channel vs pty_fd).
+// TERM_READ must explicitly pick the right source since SSH, Telnet, and the
+// local PTY all pull from different file descriptors / libraries.
 // ============================================================================
 
 #ifdef USESSH
-static inline bool _term_read_dispatch(bool ssh, Terminal *t)
-    { return ssh ? ssh_read(t) : term_read(t); }
-#  define TERM_READ()  _term_read_dispatch(use_ssh, &term)
+static inline bool _term_read_dispatch(bool ssh, bool tnet, Terminal *t) {
+    if (ssh)  return ssh_read(t);
+    if (tnet) return telnet_read(t);
+    return term_read(t);
+}
+#  define TERM_READ()  _term_read_dispatch(use_ssh, use_telnet, &term)
 #else
-#  define TERM_READ()  term_read(&term)
+#  define TERM_READ()  (use_telnet ? telnet_read(&term) : term_read(&term))
 #endif
 #define TERM_WRITE(buf, n)  term_write(&term, (buf), (n))
 
@@ -97,11 +101,39 @@ int main(int argc, char **argv) {
     std::vector<PfPending> pf_locals_pending, pf_remotes_pending;
     std::vector<int> pf_socks_pending;
 #endif
-    bool use_ssh = false;
-    bool force_sdl = false;
+    bool use_ssh    = false;
+    bool use_telnet = false;
+    bool force_sdl  = false;
+    TelnetConfig telnet_cfg;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
+
+        // --telnet [host[:port]]  — port defaults to 23 if omitted
+        if (strcmp(arg, "--telnet") == 0 || strcmp(arg, "-telnet") == 0) {
+            use_telnet = true;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                const char *target = argv[++i];
+                const char *colon  = strrchr(target, ':');
+                if (colon) {
+                    telnet_cfg.host = std::string(target, colon - target);
+                    telnet_cfg.port = atoi(colon + 1);
+                    if (telnet_cfg.port <= 0 || telnet_cfg.port > 65535)
+                        telnet_cfg.port = 23;
+                } else {
+                    telnet_cfg.host = target;
+                }
+            }
+            continue;
+        }
+        if ((strcmp(arg, "--telnet-port") == 0 || strcmp(arg, "-telnet-port") == 0) && i + 1 < argc) {
+            telnet_cfg.port = atoi(argv[++i]);
+            continue;
+        }
+        if ((strcmp(arg, "--telnet-ttype") == 0 || strcmp(arg, "-telnet-ttype") == 0) && i + 1 < argc) {
+            telnet_cfg.ttype = argv[++i];
+            continue;
+        }
 
 #ifdef USESSH
         // --ssh [user@host[:port]]  — argument is optional; missing parts are
@@ -439,10 +471,49 @@ int main(int argc, char **argv) {
         }
     }
 #endif
-    // ---- local shell (non-SSH) -----------------------------------------------
+    // ---- Telnet: in-window host/port prompt then connect ----------------------
+    // Mirrors the SSH SETUP phase: if host was not supplied on the command line,
+    // we collect it interactively in the GL window before connecting.
+    enum class TelnetPhase { IDLE, SETUP, CONNECTING, ACTIVE, FAILED };
+    TelnetPhase telnet_phase = use_telnet
+        ? (telnet_cfg.host.empty() ? TelnetPhase::SETUP : TelnetPhase::CONNECTING)
+        : TelnetPhase::IDLE;
+
+    std::string telnet_field_input;
+    bool        telnet_collecting_port = false;  // false=host, true=port
+
+    auto telnet_begin_prompt = [&](const char *text) {
+        term_feed(&term, text, (int)strlen(text));
+        telnet_field_input.clear();
+    };
+
+    if (use_telnet) {
+        SDL_StartTextInput();
+        if (telnet_phase == TelnetPhase::SETUP) {
+            term_feed(&term, "Telnet connection setup\r\n", 24);
+            telnet_begin_prompt("\r\nHost: ");
+            telnet_collecting_port = false;
+        } else {
+            // Host given on CLI — connect immediately (blocking; fast for TCP)
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Connecting to %s:%d …\r\n",
+                     telnet_cfg.host.c_str(), telnet_cfg.port);
+            term_feed(&term, msg, (int)strlen(msg));
+            if (telnet_connect(telnet_cfg, &term)) {
+                telnet_phase = TelnetPhase::ACTIVE;
+            } else {
+                telnet_phase = TelnetPhase::FAILED;
+                const char *fail = "\r\nConnection failed. Press any key to close.\r\n";
+                term_feed(&term, fail, (int)strlen(fail));
+            }
+        }
+    }
+
+    // ---- local shell (non-SSH, non-Telnet) -----------------------------------
 #ifdef USESSH
     if (!use_ssh)
 #endif
+    if (!use_telnet)
     {
         if (!term_spawn(&term, shell)) {
             char msg[256];
@@ -459,6 +530,7 @@ int main(int argc, char **argv) {
 #  ifdef USESSH
     if (!use_ssh)
 #  endif
+    if (!use_telnet)
     {
         SDL_Delay(200);
         term_read(&term);
@@ -669,21 +741,26 @@ int main(int argc, char **argv) {
         }
 #endif
 
-        // PTY / SSH read.
+        // Telnet connection state machine
+        if (use_telnet && (telnet_phase == TelnetPhase::SETUP ||
+                           telnet_phase == TelnetPhase::FAILED))
+            needs_render = true;
+
+        // PTY / SSH / Telnet read.
         // For local PTY: loop up to 8ms to drain burst output without falling behind.
-        // For SSH: ssh_read() already loops internally until EAGAIN, so one call
-        // per frame is correct — looping again just hammers the keepalive path.
+        // For SSH/Telnet: one call per frame — both loop internally until EAGAIN.
 #ifdef USESSH
         bool ssh_ready = !use_ssh || ssh_phase == SshPhase::ACTIVE;
 #else
         constexpr bool ssh_ready = true;
 #endif
+        bool telnet_ready = !use_telnet || telnet_phase == TelnetPhase::ACTIVE;
         {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_sb_count = term.sb_count;
             bool got_data = false;
 #ifdef USESSH
-            if (ssh_ready) {
+            if (ssh_ready && telnet_ready) {
                 got_data = TERM_READ();
             }
 #else
@@ -724,6 +801,14 @@ int main(int argc, char **argv) {
             }
         } else
 #endif
+        if (use_telnet) {
+            if (telnet_phase == TelnetPhase::FAILED) {
+                // waiting for keypress — handled in event loop
+            } else if (telnet_phase == TelnetPhase::ACTIVE && telnet_channel_closed()) {
+                settings_save();
+                running = false;
+            }
+        } else
         {
 #ifdef _WIN32
             if (term_child_exited()) {
@@ -878,6 +963,50 @@ int main(int argc, char **argv) {
                 // Still connecting — ignore all normal key input
                 if (!ssh_ready) break;
 #endif
+                // Telnet SETUP: collecting host and port interactively
+                if (use_telnet && telnet_phase == TelnetPhase::SETUP) {
+                    SDL_Keycode sym = ev.key.keysym.sym;
+                    if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
+                        term_feed(&term, "\r\n", 2);
+                        if (!telnet_collecting_port) {
+                            // Host entered — now ask for port
+                            telnet_cfg.host = telnet_field_input;
+                            telnet_collecting_port = true;
+                            char p[64];
+                            snprintf(p, sizeof(p), "Port [%d]: ", telnet_cfg.port);
+                            telnet_begin_prompt(p);
+                        } else {
+                            // Port entered (empty = keep default)
+                            if (!telnet_field_input.empty()) {
+                                int p = atoi(telnet_field_input.c_str());
+                                if (p > 0 && p <= 65535) telnet_cfg.port = p;
+                            }
+                            // All fields collected — connect now
+                            char msg[256];
+                            snprintf(msg, sizeof(msg), "Connecting to %s:%d …\r\n",
+                                     telnet_cfg.host.c_str(), telnet_cfg.port);
+                            term_feed(&term, msg, (int)strlen(msg));
+                            if (telnet_connect(telnet_cfg, &term)) {
+                                telnet_phase = TelnetPhase::ACTIVE;
+                            } else {
+                                telnet_phase = TelnetPhase::FAILED;
+                                const char *fail = "\r\nConnection failed. Press any key to close.\r\n";
+                                term_feed(&term, fail, (int)strlen(fail));
+                            }
+                        }
+                    } else if (sym == SDLK_BACKSPACE && !telnet_field_input.empty()) {
+                        telnet_field_input.pop_back();
+                        term_feed(&term, "\b \b", 3);
+                    }
+                    break;
+                }
+                // Any key on Telnet failure screen closes the window
+                if (use_telnet && telnet_phase == TelnetPhase::FAILED) {
+                    running = false;
+                    break;
+                }
+                // Still in Telnet setup — ignore normal key input
+                if (use_telnet && !telnet_ready) break;
                 // F11 fullscreen — checked before any overlay so it always works
                 if (ev.key.keysym.sym == SDLK_F11) {
                     bool is_full = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
@@ -1097,6 +1226,13 @@ int main(int argc, char **argv) {
                 }
                 if (!ssh_ready) break;
 #endif
+                if (use_telnet && telnet_phase == TelnetPhase::SETUP) {
+                    // Visible echo for host/port fields
+                    telnet_field_input += ev.text.text;
+                    term_feed(&term, ev.text.text, (int)strlen(ev.text.text));
+                    break;
+                }
+                if (use_telnet && !telnet_ready) break;
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
                     TERM_WRITE(ev.text.text, (int)strlen(ev.text.text));
@@ -1568,6 +1704,8 @@ int main(int argc, char **argv) {
 #ifdef USESSH
                     if (use_ssh) ssh_pty_resize(term.cols, term.rows);
 #endif
+                    if (use_telnet && telnet_phase == TelnetPhase::ACTIVE)
+                        telnet_pty_resize(term.cols, term.rows);
                 }
                 break;
             }
@@ -1735,6 +1873,7 @@ int main(int argc, char **argv) {
         ssh_disconnect();
     }
 #endif
+    if (use_telnet) telnet_disconnect();
     SDL_Quit();
     ft_shutdown();
 

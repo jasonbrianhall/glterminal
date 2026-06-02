@@ -143,7 +143,7 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
-               -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lgmp \
+               -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lgmp -lws2_32 \
                -s -Wl,--gc-sections -flto -lwebp
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
@@ -168,10 +168,11 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               font_manager.cpp      sftp_overlay.cpp      \
               sftp_console.cpp      image_viewer.cpp      \
               cdg.cpp               $(SSH_SRCS)           \
+              telnet_session.cpp                          \
               basic_graphics.cpp    mml_player.cpp        \
               glyph_atlas.cpp       sticky_prompt.cpp
 
-SRCS_MINIZ = miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
+SRCS_MINIZ = libtelnet.c miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
             wopr/zork/actors.c \
             wopr/zork/ballop.c \
             wopr/zork/clockr.c \

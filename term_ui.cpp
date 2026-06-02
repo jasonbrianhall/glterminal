@@ -50,8 +50,9 @@ bool g_custom_shell_dialog_open = false;
 
 void detect_available_terminals() {
     g_available_terminals.clear();
-    g_available_terminals.push_back({"Local Terminal", "", true});
-    g_available_terminals.push_back({"SSH Session", "--ssh", true});
+    g_available_terminals.push_back({"Local Terminal",   "", true});
+    g_available_terminals.push_back({"SSH Session",      "--ssh", true});
+    g_available_terminals.push_back({"Telnet Session",   "--telnet", true});
     g_available_terminals.push_back({"Custom Shell...", "", false});
 }
 
@@ -79,8 +80,9 @@ void action_new_terminal_custom(int idx) {
     if (idx < 0 || idx >= (int)g_available_terminals.size()) return;
     const TerminalOption &opt = g_available_terminals[idx];
     if (opt.is_builtin) {
-        if (opt.name == "Local Terminal") action_new_terminal();
-        else if (opt.name == "SSH Session") action_new_ssh_session();
+        if (opt.name == "Local Terminal")      action_new_terminal();
+        else if (opt.name == "SSH Session")    action_new_ssh_session();
+        else if (opt.name == "Telnet Session") action_new_telnet_session();
     } else {
         // Custom Shell - open input dialog
         g_custom_shell_input.clear();
@@ -1132,6 +1134,26 @@ void action_new_ssh_session() {
     self[n] = '\0';
     pid_t pid = fork();
     if (pid == 0) { setsid(); execl(self, self, "--ssh", nullptr); _exit(1); }
+#endif
+}
+
+void action_new_telnet_session() {
+#ifdef _WIN32
+    char self[512] = {};
+    if (!GetModuleFileNameA(nullptr, self, sizeof(self)-1)) return;
+    char cmd[640];
+    snprintf(cmd, sizeof(cmd), "\"%s\" --telnet", self);
+    STARTUPINFOA si = {}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    CreateProcessA(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si, &pi);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+#else
+    char self[512] = {};
+    ssize_t n = readlink("/proc/self/exe", self, sizeof(self)-1);
+    if (n <= 0) return;
+    self[n] = '\0';
+    pid_t pid = fork();
+    if (pid == 0) { setsid(); execl(self, self, "--telnet", nullptr); _exit(1); }
 #endif
 }
 
