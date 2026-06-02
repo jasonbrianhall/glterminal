@@ -1,12 +1,12 @@
 #pragma once
 
 // ============================================================================
-// TELNET / RAW TCP SESSION
+// TELNET / RAW TCP / SSL SESSION
 //
 // Port 23 (default): full Telnet protocol negotiation via libtelnet.
 // Any other port, or cfg.raw_mode = true: raw TCP — bytes pass straight
-// through to term_feed() with no IAC processing.  Useful for HTTP, SMTP,
-// finger, or any plain-text TCP service.
+// through to term_feed() with no IAC processing.
+// cfg.use_ssl = true (or auto-detected on port 443): TLS via OpenSSL.
 // ============================================================================
 
 #include "terminal.h"
@@ -17,6 +17,7 @@ struct TelnetConfig {
     int         port     = 23;
     std::string ttype    = "xterm-256color";
     bool        raw_mode = false;  // true = skip Telnet negotiation entirely
+    bool        use_ssl  = false;  // true = wrap socket in TLS (auto on port 443)
 };
 
 bool telnet_connect(const TelnetConfig &cfg, Terminal *t);

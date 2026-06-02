@@ -138,6 +138,10 @@ int main(int argc, char **argv) {
             telnet_cfg.raw_mode = true;
             continue;
         }
+        if (strcmp(arg, "--ssl") == 0 || strcmp(arg, "-ssl") == 0) {
+            telnet_cfg.use_ssl = true;
+            continue;
+        }
 
 #ifdef USESSH
         // --ssh [user@host[:port]]  — argument is optional; missing parts are
@@ -486,6 +490,7 @@ int main(int argc, char **argv) {
 
     std::string telnet_field_input;
     bool        telnet_collecting_port = false;  // false=host, true=port
+    bool        telnet_collecting_ssl  = false;  // true=asking SSL y/n
 
     auto telnet_begin_prompt = [&](const char *text) {
         term_feed(&term, text, (int)strlen(text));
@@ -501,10 +506,11 @@ int main(int argc, char **argv) {
         } else {
             // Host given on CLI — connect immediately (blocking; fast for TCP)
             char msg[256];
-            bool will_be_raw = telnet_cfg.raw_mode || telnet_cfg.port != 23;
+            bool will_be_ssl = telnet_cfg.use_ssl || telnet_cfg.port == 443;
+            bool will_be_raw = !will_be_ssl && (telnet_cfg.raw_mode || telnet_cfg.port != 23);
+            const char *mode_str = will_be_ssl ? "SSL" : will_be_raw ? "raw TCP" : "telnet";
             snprintf(msg, sizeof(msg), "Connecting to %s:%d (%s) …\r\n",
-                     telnet_cfg.host.c_str(), telnet_cfg.port,
-                     will_be_raw ? "raw TCP" : "telnet");
+                     telnet_cfg.host.c_str(), telnet_cfg.port, mode_str);
             term_feed(&term, msg, (int)strlen(msg));
             if (telnet_connect(telnet_cfg, &term)) {
                 telnet_phase = TelnetPhase::ACTIVE;
@@ -976,30 +982,44 @@ int main(int argc, char **argv) {
                 // Still connecting — ignore all normal key input
                 if (!ssh_ready) break;
 #endif
-                // Telnet SETUP: collecting host and port interactively
+                // Telnet SETUP: collecting host, port, SSL interactively
                 if (use_telnet && telnet_phase == TelnetPhase::SETUP) {
                     SDL_Keycode sym = ev.key.keysym.sym;
                     if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
                         term_feed(&term, "\r\n", 2);
                         if (!telnet_collecting_port) {
-                            // Host entered — now ask for port
+                            // Host entered — ask for port
                             telnet_cfg.host = telnet_field_input;
                             telnet_collecting_port = true;
                             char p[64];
                             snprintf(p, sizeof(p), "Port [%d]: ", telnet_cfg.port);
                             telnet_begin_prompt(p);
-                        } else {
+                        } else if (!telnet_collecting_ssl) {
                             // Port entered (empty = keep default)
                             if (!telnet_field_input.empty()) {
                                 int p = atoi(telnet_field_input.c_str());
                                 if (p > 0 && p <= 65535) telnet_cfg.port = p;
                             }
+                            // Ask SSL — default yes if port is 443
+                            telnet_collecting_ssl = true;
+                            char p[32];
+                            snprintf(p, sizeof(p), "SSL? [%s]: ", telnet_cfg.port == 443 ? "Y/n" : "y/N");
+                            telnet_begin_prompt(p);
+                        } else {
+                            // SSL entered — y/Y/yes = true, empty keeps port-based default
+                            if (!telnet_field_input.empty()) {
+                                char c = telnet_field_input[0];
+                                telnet_cfg.use_ssl = (c == 'y' || c == 'Y');
+                            } else {
+                                telnet_cfg.use_ssl = (telnet_cfg.port == 443);
+                            }
                             // All fields collected — connect now
                             char msg[256];
-                            bool will_be_raw = telnet_cfg.raw_mode || telnet_cfg.port != 23;
+                            bool will_be_ssl = telnet_cfg.use_ssl;
+                            bool will_be_raw = !will_be_ssl && (telnet_cfg.raw_mode || telnet_cfg.port != 23);
+                            const char *mode_str = will_be_ssl ? "SSL" : will_be_raw ? "raw TCP" : "telnet";
                             snprintf(msg, sizeof(msg), "Connecting to %s:%d (%s) …\r\n",
-                                     telnet_cfg.host.c_str(), telnet_cfg.port,
-                                     will_be_raw ? "raw TCP" : "telnet");
+                                     telnet_cfg.host.c_str(), telnet_cfg.port, mode_str);
                             term_feed(&term, msg, (int)strlen(msg));
                             if (telnet_connect(telnet_cfg, &term)) {
                                 telnet_phase = TelnetPhase::ACTIVE;
