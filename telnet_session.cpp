@@ -1,4 +1,4 @@
-// telnet_session.cpp — libtelnet Telnet session for gl_terminal
+// telnet_session.cpp — libtelnet Telnet session / raw TCP for gl_terminal
 
 #include "telnet_session.h"
 #include "terminal.h"
@@ -28,10 +28,11 @@
 // STATE
 // ============================================================================
 
-static telnet_t *s_telnet  = nullptr;
-static int       s_sock    = -1;
-static bool      s_active  = false;
-static bool      s_closed  = false;   // set when recv() returns 0 (server EOF)
+static telnet_t *s_telnet   = nullptr;
+static int       s_sock     = -1;
+static bool      s_active   = false;
+static bool      s_closed   = false;
+static bool      s_raw_mode = false;  // true = bypass libtelnet entirely
 
 // Terminal dimensions — kept in sync so NAWS sub-neg can read them.
 static int s_cols = 80;
@@ -101,7 +102,6 @@ static int tcp_connect(const std::string &host, int port) {
 // Send NAWS (window size) sub-negotiation for the current dimensions.
 static void send_naws(int cols, int rows) {
     if (!s_telnet) return;
-    // NAWS data: 4 bytes — cols high, cols low, rows high, rows low
     unsigned char naws[4] = {
         (unsigned char)((cols >> 8) & 0xFF),
         (unsigned char)( cols       & 0xFF),
@@ -112,7 +112,7 @@ static void send_naws(int cols, int rows) {
 }
 
 // ============================================================================
-// LIBTELNET CALLBACK
+// LIBTELNET CALLBACK  (not used in raw mode)
 // ============================================================================
 
 static void telnet_event_handler(telnet_t *telnet,
@@ -123,7 +123,6 @@ static void telnet_event_handler(telnet_t *telnet,
 
     switch (ev->type) {
 
-    // Raw bytes to write to the socket (already IAC-escaped by libtelnet)
     case TELNET_EV_SEND:
         if (ev->data.size > 0 && s_sock >= 0) {
             const char *ptr = ev->data.buffer;
@@ -136,29 +135,23 @@ static void telnet_event_handler(telnet_t *telnet,
         }
         break;
 
-    // Clean terminal data (IAC stripped) — feed into the VT parser
     case TELNET_EV_DATA:
         if (ev->data.size > 0 && s_term)
             term_feed(s_term, ev->data.buffer, (int)ev->data.size);
         break;
 
-    // Remote side wants us to enable an option (DO <opt>)
     case TELNET_EV_WILL:
-        // Server will echo: suppress our local echo by accepting
         if (ev->neg.telopt == TELNET_TELOPT_ECHO)
-            SDL_Log("[TELNET] server WILL ECHO — suppressing local echo\n");
+            SDL_Log("[TELNET] server WILL ECHO\n");
         break;
 
-    // Remote side requests we enable an option (DO <opt>)
     case TELNET_EV_DO:
         switch (ev->neg.telopt) {
         case TELNET_TELOPT_NAWS:
-            // Server wants window size — send current dimensions immediately
             SDL_Log("[TELNET] server DO NAWS — sending %dx%d\n", s_cols, s_rows);
             send_naws(s_cols, s_rows);
             break;
         case TELNET_TELOPT_TTYPE:
-            // Server wants terminal type — advertise on next SB TTYPE SEND
             SDL_Log("[TELNET] server DO TTYPE\n");
             break;
         default:
@@ -166,13 +159,10 @@ static void telnet_event_handler(telnet_t *telnet,
         }
         break;
 
-    // Server is sub-negotiating terminal type: SB TTYPE SEND
     case TELNET_EV_SUBNEGOTIATION:
         if (ev->sub.telopt == TELNET_TELOPT_TTYPE) {
-            // Data[0] == TELNET_TTYPE_SEND (1) means the server is asking
             if (ev->sub.size >= 1 && (unsigned char)ev->sub.buffer[0] == 1) {
                 SDL_Log("[TELNET] server SB TTYPE SEND — replying '%s'\n", s_ttype.c_str());
-                // TTYPE IS response: 0x00 = IS, then the type string
                 std::string reply = std::string("\x00", 1) + s_ttype;
                 telnet_subnegotiation(telnet, TELNET_TELOPT_TTYPE,
                                       reply.c_str(), (size_t)reply.size());
@@ -180,7 +170,6 @@ static void telnet_event_handler(telnet_t *telnet,
         }
         break;
 
-    // libtelnet error
     case TELNET_EV_ERROR:
         SDL_Log("[TELNET] error: %s\n", ev->error.msg ? ev->error.msg : "(unknown)");
         break;
@@ -191,7 +180,7 @@ static void telnet_event_handler(telnet_t *telnet,
 }
 
 // ============================================================================
-// WRITE BRIDGE  — registered as g_term_write_override
+// WRITE BRIDGE
 // ============================================================================
 
 static void telnet_write_bridge(Terminal *t, const char *buf, int n) {
@@ -203,11 +192,13 @@ static void telnet_write_bridge(Terminal *t, const char *buf, int n) {
 // ============================================================================
 
 bool telnet_connect(const TelnetConfig &cfg, Terminal *t) {
-    s_ttype  = cfg.ttype;
-    s_cols   = t->cols;
-    s_rows   = t->rows;
-    s_term   = t;
-    s_closed = false;
+    s_ttype    = cfg.ttype;
+    s_cols     = t->cols;
+    s_rows     = t->rows;
+    s_term     = t;
+    s_closed   = false;
+    // Raw mode: explicit flag, or any non-23 port that isn't a known Telnet port
+    s_raw_mode = cfg.raw_mode || cfg.port != 23;
 
 #ifdef _WIN32
     WSADATA wsa;
@@ -218,44 +209,40 @@ bool telnet_connect(const TelnetConfig &cfg, Terminal *t) {
     if (s_sock < 0)
         return false;
 
-    // Options we want to negotiate:
-    //   BINARY — raw 8-bit pass-through on both sides; required for Kitty
-    //            graphics (APC payloads may contain 0xFF which would otherwise
-    //            be misread as IAC).  Server must agree for this to take effect.
-    //   NAWS   — we WILL send window size, server DO ask us
-    //   TTYPE  — we WILL send terminal type, server DO ask us
-    //   ECHO   — server WILL echo (suppress local echo), we DO accept
-    //   SGA    — suppress go-ahead on both sides (character mode)
-    static const telnet_telopt_t telopts[] = {
-        { TELNET_TELOPT_BINARY, TELNET_WILL, TELNET_DO   },
-        { TELNET_TELOPT_ECHO,   TELNET_WONT, TELNET_DO   },
-        { TELNET_TELOPT_SGA,    TELNET_WILL, TELNET_DO   },
-        { TELNET_TELOPT_TTYPE,  TELNET_WILL, TELNET_DONT },
-        { TELNET_TELOPT_NAWS,   TELNET_WILL, TELNET_DONT },
-        { -1, 0, 0 }
-    };
-
-    s_telnet = telnet_init(telopts, telnet_event_handler, 0, nullptr);
-    if (!s_telnet) {
-        SDL_Log("[TELNET] telnet_init failed\n");
-        sock_close(s_sock);
-        s_sock = -1;
-        return false;
+    if (!s_raw_mode) {
+        // Full Telnet negotiation via libtelnet
+        static const telnet_telopt_t telopts[] = {
+            { TELNET_TELOPT_BINARY, TELNET_WILL, TELNET_DO   },
+            { TELNET_TELOPT_ECHO,   TELNET_WONT, TELNET_DO   },
+            { TELNET_TELOPT_SGA,    TELNET_WILL, TELNET_DO   },
+            { TELNET_TELOPT_TTYPE,  TELNET_WILL, TELNET_DONT },
+            { TELNET_TELOPT_NAWS,   TELNET_WILL, TELNET_DONT },
+            { -1, 0, 0 }
+        };
+        s_telnet = telnet_init(telopts, telnet_event_handler, 0, nullptr);
+        if (!s_telnet) {
+            SDL_Log("[TELNET] telnet_init failed\n");
+            sock_close(s_sock);
+            s_sock = -1;
+            return false;
+        }
+        SDL_Log("[TELNET] mode=telnet %s:%d ttype=%s\n",
+                cfg.host.c_str(), cfg.port, cfg.ttype.c_str());
+    } else {
+        // Raw TCP — no Telnet negotiation at all
+        s_telnet = nullptr;
+        SDL_Log("[TELNET] mode=raw %s:%d\n", cfg.host.c_str(), cfg.port);
     }
 
-    // Route all term_write() calls through Telnet
     g_term_write_override = telnet_write_bridge;
-
     s_active = true;
-    SDL_Log("[TELNET] session active — %s:%d ttype=%s\n",
-            cfg.host.c_str(), cfg.port, cfg.ttype.c_str());
     return true;
 }
 
 bool telnet_read(Terminal *t) {
-    if (!s_active || s_sock < 0) return false;
+    if (s_sock < 0) return false;
 
-    s_term = t;   // ensure callback has current terminal pointer
+    s_term = t;
 
     char buf[4096];
     bool got_data = false;
@@ -267,18 +254,17 @@ bool telnet_read(Terminal *t) {
         int n = recv(s_sock, buf, (int)sizeof(buf), 0);
 #endif
         if (n > 0) {
-            // Pass raw bytes through libtelnet — it calls our handler for
-            // TELNET_EV_DATA (clean data) and TELNET_EV_SEND (protocol bytes)
-            telnet_recv(s_telnet, buf, (size_t)n);
+            if (s_raw_mode) {
+                // Bypass libtelnet — feed bytes directly into the VT parser
+                term_feed(t, buf, (int)n);
+            } else {
+                telnet_recv(s_telnet, buf, (size_t)n);
+            }
             got_data = true;
         } else if (n == 0) {
-            // Server closed connection cleanly
-            SDL_Log("[TELNET] server closed connection\n");
-            s_active = false;
-            s_closed = true;
+            s_closed = true;  // keep s_active/socket open so writes still work
             break;
         } else {
-            // EAGAIN / EWOULDBLOCK = no data right now, not an error
 #ifndef _WIN32
             if (errno == EAGAIN || errno == EWOULDBLOCK)
 #else
@@ -286,7 +272,6 @@ bool telnet_read(Terminal *t) {
 #endif
                 break;
             SDL_Log("[TELNET] recv error: %s\n", strerror(errno));
-            s_active = false;
             s_closed = true;
             break;
         }
@@ -295,17 +280,44 @@ bool telnet_read(Terminal *t) {
 }
 
 void telnet_write(Terminal *t, const char *buf, int n) {
-    (void)t;
-    if (!s_active || !s_telnet || n <= 0) return;
-    // telnet_send() IAC-escapes the data then fires TELNET_EV_SEND,
-    // which our handler writes to s_sock.
-    telnet_send(s_telnet, buf, (size_t)n);
+    if (s_sock < 0 || n <= 0) return;
+    if (s_raw_mode) {
+        // Local echo — no PTY means no server echo in raw TCP mode.
+        // Only echo printable bytes and CR; suppress escape sequences.
+        if (t && n >= 1) {
+            unsigned char first = (unsigned char)buf[0];
+            if (first == '\r') {
+                term_feed(t, "\r\n", 2);   // Enter: show as newline
+            } else if (first >= 0x20 && first < 0x7F) {
+                term_feed(t, buf, n);      // printable ASCII — echo as-is
+            } else if (first == 0x08 || first == 0x7F) {
+                term_feed(t, "\b \b", 3);  // backspace
+            }
+            // Suppress ESC sequences, control chars etc.
+        }
+        const char *ptr = buf;
+        int rem = n;
+        // HTTP and most raw TCP protocols expect \r\n line endings.
+        // handle_key sends bare \r for Enter — upgrade it here.
+        char crlf[2] = { '\r', '\n' };
+        if (n == 1 && buf[0] == '\r') {
+            ptr = crlf;
+            rem = 2;
+        }
+        while (rem > 0) {
+            int sent = (int)send(s_sock, ptr, (size_t)rem, 0);
+            if (sent > 0) { ptr += sent; rem -= sent; }
+            else break;
+        }
+    } else {
+        telnet_send(s_telnet, buf, (size_t)n);
+    }
 }
 
 void telnet_pty_resize(int cols, int rows) {
     s_cols = cols;
     s_rows = rows;
-    if (!s_active || !s_telnet) return;
+    if (!s_active || s_raw_mode || !s_telnet) return;
     send_naws(cols, rows);
 }
 
@@ -323,8 +335,9 @@ void telnet_disconnect() {
         sock_close(s_sock);
         s_sock = -1;
     }
-    s_active = false;
-    s_term   = nullptr;
+    s_active   = false;
+    s_raw_mode = false;
+    s_term     = nullptr;
 
 #ifdef _WIN32
     WSACleanup();

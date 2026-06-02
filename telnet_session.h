@@ -1,23 +1,12 @@
 #pragma once
 
 // ============================================================================
-// TELNET SESSION  — libtelnet-backed remote shell.
-// Mirrors the ssh_session read/write interface so the main loop needs
-// only minimal guards alongside the SSH ones.
+// TELNET / RAW TCP SESSION
 //
-// Build:
-//   g++ ... telnet_session.cpp libtelnet.c ... -o gl_terminal
-//
-// Typical usage:
-//   TelnetConfig cfg;
-//   cfg.host = "bbs.example.com";
-//   cfg.port = 23;
-//   cfg.ttype = "xterm-256color";
-//
-//   if (!telnet_connect(cfg, &term))  return 1;
-//   if (telnet_read(&term))           needs_render = true;
-//   telnet_pty_resize(term.cols, term.rows);
-//   telnet_disconnect();
+// Port 23 (default): full Telnet protocol negotiation via libtelnet.
+// Any other port, or cfg.raw_mode = true: raw TCP — bytes pass straight
+// through to term_feed() with no IAC processing.  Useful for HTTP, SMTP,
+// finger, or any plain-text TCP service.
 // ============================================================================
 
 #include "terminal.h"
@@ -25,8 +14,9 @@
 
 struct TelnetConfig {
     std::string host;
-    int         port  = 23;
-    std::string ttype = "xterm-256color";
+    int         port     = 23;
+    std::string ttype    = "xterm-256color";
+    bool        raw_mode = false;  // true = skip Telnet negotiation entirely
 };
 
 bool telnet_connect(const TelnetConfig &cfg, Terminal *t);

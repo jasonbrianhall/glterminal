@@ -134,6 +134,10 @@ int main(int argc, char **argv) {
             telnet_cfg.ttype = argv[++i];
             continue;
         }
+        if (strcmp(arg, "--raw") == 0 || strcmp(arg, "-raw") == 0) {
+            telnet_cfg.raw_mode = true;
+            continue;
+        }
 
 #ifdef USESSH
         // --ssh [user@host[:port]]  — argument is optional; missing parts are
@@ -478,6 +482,7 @@ int main(int argc, char **argv) {
     TelnetPhase telnet_phase = use_telnet
         ? (telnet_cfg.host.empty() ? TelnetPhase::SETUP : TelnetPhase::CONNECTING)
         : TelnetPhase::IDLE;
+    uint32_t telnet_active_since = 0;  // SDL_GetTicks() when we entered ACTIVE
 
     std::string telnet_field_input;
     bool        telnet_collecting_port = false;  // false=host, true=port
@@ -496,11 +501,14 @@ int main(int argc, char **argv) {
         } else {
             // Host given on CLI — connect immediately (blocking; fast for TCP)
             char msg[256];
-            snprintf(msg, sizeof(msg), "Connecting to %s:%d …\r\n",
-                     telnet_cfg.host.c_str(), telnet_cfg.port);
+            bool will_be_raw = telnet_cfg.raw_mode || telnet_cfg.port != 23;
+            snprintf(msg, sizeof(msg), "Connecting to %s:%d (%s) …\r\n",
+                     telnet_cfg.host.c_str(), telnet_cfg.port,
+                     will_be_raw ? "raw TCP" : "telnet");
             term_feed(&term, msg, (int)strlen(msg));
             if (telnet_connect(telnet_cfg, &term)) {
                 telnet_phase = TelnetPhase::ACTIVE;
+                telnet_active_since = SDL_GetTicks();
             } else {
                 telnet_phase = TelnetPhase::FAILED;
                 const char *fail = "\r\nConnection failed. Press any key to close.\r\n";
@@ -736,8 +744,6 @@ int main(int argc, char **argv) {
             }
         } else if (use_ssh && ssh_phase == SshPhase::PROMPTING) {
             needs_render = true;
-        } else if (use_ssh && ssh_phase == SshPhase::FAILED) {
-            needs_render = true;
         }
 #endif
 
@@ -750,11 +756,11 @@ int main(int argc, char **argv) {
         // For local PTY: loop up to 8ms to drain burst output without falling behind.
         // For SSH/Telnet: one call per frame — both loop internally until EAGAIN.
 #ifdef USESSH
-        bool ssh_ready = !use_ssh || ssh_phase == SshPhase::ACTIVE;
+        bool ssh_ready = !use_ssh || ssh_phase == SshPhase::ACTIVE || ssh_phase == SshPhase::FAILED;
 #else
         constexpr bool ssh_ready = true;
 #endif
-        bool telnet_ready = !use_telnet || telnet_phase == TelnetPhase::ACTIVE;
+        bool telnet_ready = !use_telnet || telnet_phase == TelnetPhase::ACTIVE || telnet_phase == TelnetPhase::FAILED;
         {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_sb_count = term.sb_count;
@@ -793,20 +799,21 @@ int main(int argc, char **argv) {
         // Child / channel exit check
 #ifdef USESSH
         if (use_ssh && ssh_phase == SshPhase::FAILED) {
-            // Already showing error — running stays true until keypress (handled in events)
+            // Connection failed during setup — already showing error
         } else if (use_ssh) {
             if (ssh_phase == SshPhase::ACTIVE && ssh_channel_closed()) {
-                settings_save();
-                running = false;
+                const char *msg = "\r\n[Connection closed — press spacebar to exit or close window]\r\n";
+                term_feed(&term, msg, (int)strlen(msg));
+                ssh_phase = SshPhase::FAILED;
             }
         } else
 #endif
         if (use_telnet) {
-            if (telnet_phase == TelnetPhase::FAILED) {
-                // waiting for keypress — handled in event loop
-            } else if (telnet_phase == TelnetPhase::ACTIVE && telnet_channel_closed()) {
-                settings_save();
-                running = false;
+            if (telnet_phase == TelnetPhase::ACTIVE && telnet_channel_closed() &&
+                       (SDL_GetTicks() - telnet_active_since) >= 500) {
+                const char *msg = "\r\n[Connection closed — press spacebar to exit or close window]\r\n";
+                term_feed(&term, msg, (int)strlen(msg));
+                telnet_phase = TelnetPhase::FAILED;
             }
         } else
         {
@@ -931,10 +938,16 @@ int main(int argc, char **argv) {
                     }
                     break;
                 }
-                // Any key on failure screen closes the window
-                if (use_ssh && ssh_phase == SshPhase::FAILED) {
-                    running = false;
-                    break;
+                // Spacebar exits after connection closed
+                if (ev.key.keysym.sym == SDLK_SPACE) {
+#ifdef USESSH
+                    if (use_ssh && ssh_phase == SshPhase::FAILED) {
+                        settings_save(); running = false; break;
+                    }
+#endif
+                    if (use_telnet && telnet_phase == TelnetPhase::FAILED) {
+                        settings_save(); running = false; break;
+                    }
                 }
                 // F7/WOPR checked before ssh_ready so it works in local sessions
                 if (ev.key.keysym.sym == SDLK_F7) {
@@ -983,11 +996,14 @@ int main(int argc, char **argv) {
                             }
                             // All fields collected — connect now
                             char msg[256];
-                            snprintf(msg, sizeof(msg), "Connecting to %s:%d …\r\n",
-                                     telnet_cfg.host.c_str(), telnet_cfg.port);
+                            bool will_be_raw = telnet_cfg.raw_mode || telnet_cfg.port != 23;
+                            snprintf(msg, sizeof(msg), "Connecting to %s:%d (%s) …\r\n",
+                                     telnet_cfg.host.c_str(), telnet_cfg.port,
+                                     will_be_raw ? "raw TCP" : "telnet");
                             term_feed(&term, msg, (int)strlen(msg));
                             if (telnet_connect(telnet_cfg, &term)) {
                                 telnet_phase = TelnetPhase::ACTIVE;
+                                telnet_active_since = SDL_GetTicks();
                             } else {
                                 telnet_phase = TelnetPhase::FAILED;
                                 const char *fail = "\r\nConnection failed. Press any key to close.\r\n";
@@ -998,11 +1014,6 @@ int main(int argc, char **argv) {
                         telnet_field_input.pop_back();
                         term_feed(&term, "\b \b", 3);
                     }
-                    break;
-                }
-                // Any key on Telnet failure screen closes the window
-                if (use_telnet && telnet_phase == TelnetPhase::FAILED) {
-                    running = false;
                     break;
                 }
                 // Still in Telnet setup — ignore normal key input
