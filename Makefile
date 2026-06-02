@@ -114,6 +114,7 @@ CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                  $(SSH_LIBS_LINUX) \
                  -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lgmp \
+                 -lssl -lcrypto \
                  -s -Wl,--gc-sections -flto -lwebp
 
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
@@ -124,7 +125,7 @@ CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                        $(SSH_LIBS_LINUX) \
-                       -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lgmp -lwebp
+                       -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lgmp -lssl -lcrypto -lwebp
 
 # C flags for miniz .c files (no -std=c++17, no -Wextra pedantry on C)
 CFLAGS_LINUX       = $(CFLAGS_COMMON) -DLINUX -O2

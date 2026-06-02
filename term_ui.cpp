@@ -52,7 +52,7 @@ void detect_available_terminals() {
     g_available_terminals.clear();
     g_available_terminals.push_back({"Local Terminal",   "", true});
     g_available_terminals.push_back({"SSH Session",      "--ssh", true});
-    g_available_terminals.push_back({"Telnet Session",   "--telnet", true});
+    g_available_terminals.push_back({"Telnet/SSL Session",   "--telnet", true});
     g_available_terminals.push_back({"Custom Shell...", "", false});
 }
 
@@ -82,7 +82,7 @@ void action_new_terminal_custom(int idx) {
     if (opt.is_builtin) {
         if (opt.name == "Local Terminal")      action_new_terminal();
         else if (opt.name == "SSH Session")    action_new_ssh_session();
-        else if (opt.name == "Telnet Session") action_new_telnet_session();
+        else if (opt.name == "Telnet/SSL Session") action_new_telnet_session();
     } else {
         // Custom Shell - open input dialog
         g_custom_shell_input.clear();

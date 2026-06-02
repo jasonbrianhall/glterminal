@@ -14,6 +14,12 @@
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <openssl/bio.h>
+#include <openssl/pem.h>
+#include <openssl/evp.h>
+#include <stdarg.h>
 
 #ifndef _WIN32
 #  include <sys/socket.h>
@@ -99,7 +105,183 @@ static int tcp_connect(const std::string &host, int port) {
     return fd;
 }
 
-// Perform blocking SSL handshake on a non-blocking socket using poll/select.
+// Format an X509_NAME into a one-line string (C=US, O=Foo, CN=Bar)
+static std::string x509_name_str(X509_NAME *name) {
+    if (!name) return "(none)";
+    char buf[512];
+    X509_NAME_oneline(name, buf, sizeof(buf));
+    // X509_NAME_oneline returns "/C=US/O=Foo/CN=Bar" — convert to "C=US, O=Foo, CN=Bar"
+    std::string s(buf);
+    if (!s.empty() && s[0] == '/') s.erase(0, 1);
+    for (char &c : s) if (c == '/') c = ',';
+    // Fix ",CN=..." → ", CN=..."
+    std::string out;
+    out.reserve(s.size() + 16);
+    for (size_t i = 0; i < s.size(); i++) {
+        out += s[i];
+        if (s[i] == ',' && i + 1 < s.size() && s[i+1] != ' ')
+            out += ' ';
+    }
+    return out;
+}
+
+// Format ASN1_TIME to "MMM DD HH:MM:SS YYYY GMT"
+static std::string asn1_time_str(const ASN1_TIME *t) {
+    if (!t) return "(unknown)";
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (!bio) return "(error)";
+    ASN1_TIME_print(bio, t);
+    char buf[128] = {};
+    BIO_read(bio, buf, sizeof(buf) - 1);
+    BIO_free(bio);
+    return std::string(buf);
+}
+
+// Feed a line of text into the terminal with \r\n ending
+static void ssl_print(const char *line) {
+    if (!s_term) return;
+    term_feed(s_term, line, (int)strlen(line));
+    term_feed(s_term, "\r\n", 2);
+}
+
+static void ssl_printf(const char *fmt, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    ssl_print(buf);
+}
+
+// Print full cert info to terminal, mirroring openssl s_client output
+static void ssl_print_cert_info(const std::string &host) {
+    ssl_print("---");
+
+    // --- Certificate chain ---
+    STACK_OF(X509) *chain = SSL_get_peer_cert_chain(s_ssl);
+    int chain_len = chain ? sk_X509_num(chain) : 0;
+    ssl_print("Certificate chain");
+    for (int i = 0; i < chain_len; i++) {
+        X509 *cert = sk_X509_value(chain, i);
+        std::string subj = x509_name_str(X509_get_subject_name(cert));
+        std::string issr = x509_name_str(X509_get_issuer_name(cert));
+
+        // Key type and size
+        EVP_PKEY *pkey = X509_get0_pubkey(cert);
+        const char *key_type = "unknown";
+        int key_bits = 0;
+        if (pkey) {
+            key_type = OBJ_nid2sn(EVP_PKEY_id(pkey));
+            key_bits = EVP_PKEY_bits(pkey);
+        }
+        // Signature algorithm
+        char sig_alg[128] = "(unknown)";
+        const X509_ALGOR *algor = X509_get0_tbs_sigalg(cert);
+        if (algor) {
+            int nid = OBJ_obj2nid(algor->algorithm);
+            snprintf(sig_alg, sizeof(sig_alg), "%s", OBJ_nid2ln(nid));
+        }
+
+        ssl_printf(" %d s:%s", i, subj.c_str());
+        ssl_printf("   i:%s", issr.c_str());
+        ssl_printf("   a:PKEY: %s, %d (bit); sigalg: %s", key_type, key_bits, sig_alg);
+
+        // Validity
+        const ASN1_TIME *nb = X509_get0_notBefore(cert);
+        const ASN1_TIME *na = X509_get0_notAfter(cert);
+        ssl_printf("   v:NotBefore: %s; NotAfter: %s",
+                   asn1_time_str(nb).c_str(), asn1_time_str(na).c_str());
+    }
+    ssl_print("---");
+
+    // --- Server certificate (PEM) ---
+    X509 *cert = SSL_get_peer_certificate(s_ssl);
+    if (cert) {
+        ssl_print("Server certificate");
+        // Print PEM
+        BIO *bio = BIO_new(BIO_s_mem());
+        if (bio) {
+            PEM_write_bio_X509(bio, cert);
+            char buf[65536];
+            int n = BIO_read(bio, buf, sizeof(buf) - 1);
+            if (n > 0) {
+                buf[n] = '\0';
+                // Feed line by line with \r\n
+                char *line = buf;
+                for (char *p = buf; p <= buf + n; p++) {
+                    if (*p == '\n' || *p == '\0') {
+                        *p = '\0';
+                        if (*line) {
+                            term_feed(s_term, line, (int)strlen(line));
+                            term_feed(s_term, "\r\n", 2);
+                        }
+                        line = p + 1;
+                    }
+                }
+            }
+            BIO_free(bio);
+        }
+        ssl_printf("subject=%s", x509_name_str(X509_get_subject_name(cert)).c_str());
+        ssl_printf("issuer=%s",  x509_name_str(X509_get_issuer_name(cert)).c_str());
+        X509_free(cert);
+    }
+    ssl_print("---");
+    ssl_print("No client certificate CA names sent");
+
+    // --- Peer signature info ---
+    {
+        int digest_nid = NID_undef;
+        int sig_nid    = NID_undef;
+        SSL_get_peer_signature_nid(s_ssl, &digest_nid);
+        SSL_get_peer_signature_type_nid(s_ssl, &sig_nid);
+        if (digest_nid != NID_undef)
+            ssl_printf("Peer signing digest: %s", OBJ_nid2sn(digest_nid));
+        if (sig_nid != NID_undef)
+            ssl_printf("Peer signature type: %s", OBJ_nid2sn(sig_nid));
+    }
+
+    // Server temp key
+    EVP_PKEY *tmp_key = nullptr;
+    if (SSL_get_peer_tmp_key(s_ssl, &tmp_key) && tmp_key) {
+        int nid  = EVP_PKEY_id(tmp_key);
+        int bits = EVP_PKEY_bits(tmp_key);
+        if (nid == EVP_PKEY_EC) {
+            char curve_name[80] = "unknown";
+            size_t curve_len = sizeof(curve_name);
+            EVP_PKEY_get_group_name(tmp_key, curve_name, curve_len, &curve_len);
+            ssl_printf("Server Temp Key: %s, %d bits", curve_name, bits);
+        } else {
+            ssl_printf("Server Temp Key: %s, %d bits", OBJ_nid2sn(nid), bits);
+        }
+        EVP_PKEY_free(tmp_key);
+    }
+    ssl_print("---");
+
+    // --- Handshake stats ---
+    ssl_printf("SSL handshake has read %ld bytes and written %ld bytes",
+               BIO_number_read(SSL_get_rbio(s_ssl)),
+               BIO_number_written(SSL_get_wbio(s_ssl)));
+
+    // Verification result
+    long vresult = SSL_get_verify_result(s_ssl);
+    ssl_printf("Verification: %s",
+               vresult == X509_V_OK ? "OK" : X509_verify_cert_error_string(vresult));
+    ssl_print("---");
+
+    // --- Session info ---
+    ssl_printf("New, %s, Cipher is %s",
+               SSL_get_version(s_ssl), SSL_get_cipher(s_ssl));
+
+    // Session reuse
+    ssl_printf("Secure Renegotiation IS%s supported",
+               SSL_get_secure_renegotiation_support(s_ssl) ? "" : " NOT");
+
+    ssl_print("---");
+    ssl_printf("Connected to %s", host.c_str());
+    ssl_print("---");
+}
+
+// Perform TLS handshake and print certificate info to terminal
 static bool ssl_connect(const std::string &host) {
     s_ssl_ctx = SSL_CTX_new(TLS_client_method());
     if (!s_ssl_ctx) {
@@ -107,7 +289,6 @@ static bool ssl_connect(const std::string &host) {
         return false;
     }
 
-    // Use system CA bundle for certificate verification
     SSL_CTX_set_default_verify_paths(s_ssl_ctx);
     SSL_CTX_set_verify(s_ssl_ctx, SSL_VERIFY_PEER, nullptr);
 
@@ -118,28 +299,29 @@ static bool ssl_connect(const std::string &host) {
     }
 
     SSL_set_fd(s_ssl, s_sock);
+    SSL_set_tlsext_host_name(s_ssl, host.c_str());  // SNI
 
-    // SNI — required by most modern HTTPS servers
-    SSL_set_tlsext_host_name(s_ssl, host.c_str());
-
-    // Handshake loop — socket is non-blocking so we retry on WANT_READ/WANT_WRITE
+    // Handshake loop
     while (true) {
         int ret = SSL_connect(s_ssl);
-        if (ret == 1) break;  // success
+        if (ret == 1) break;
 
         int err = SSL_get_error(s_ssl, ret);
         if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
             SDL_Delay(5);
             continue;
         }
-        // Real error
         char errbuf[256];
         ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
         SDL_Log("[SSL] handshake failed: %s\n", errbuf);
+        if (s_term) {
+            ssl_printf("SSL handshake failed: %s", errbuf);
+        }
         return false;
     }
 
-    SDL_Log("[SSL] handshake complete — %s\n", SSL_get_cipher(s_ssl));
+    // Print cert info like openssl s_client
+    ssl_print_cert_info(host);
     return true;
 }
 
