@@ -205,6 +205,149 @@ static void chess_reorder_moves_with_killers(ChessGameState *game, ChessMove *mo
 static int chess_aggressive_filter_moves(ChessGameState *game, ChessMove *moves, 
                                         int count, int depth, int initial_depth);
 
+/* ============================================================================
+ * Static Exchange Evaluation (SEE)
+ * Simulates the full capture sequence on a square to determine net material
+ * gain/loss. Returns centipawns gained (positive = good, negative = bad).
+ *
+ * Example: Rxe5, pxe5 -> net = rook_value - pawn_value (bad trade)
+ *          Nxe5, pxe5 -> net = pawn_value - knight_value (bad trade)
+ *          Pxe5       -> net = pawn_value (free pawn, great)
+ * ============================================================================ */
+
+static int see_piece_value(PieceType t) {
+    switch (t) {
+        case PAWN:   return 100;
+        case KNIGHT: return 320;
+        case BISHOP: return 330;
+        case ROOK:   return 500;
+        case QUEEN:  return 900;
+        case KING:   return 20000;
+        default:     return 0;
+    }
+}
+
+/* Find the least-valuable attacker of `color` that can reach (tr,tc).
+ * Returns the from-square via *fr_out, *fc_out. Returns false if none. */
+static bool see_least_attacker(ChessGameState *game, int tr, int tc,
+                                ChessColor color, int *fr_out, int *fc_out) {
+    int best_val = INT_MAX;
+    bool found = false;
+
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            ChessPiece p = game->board[r][c];
+            if (p.color != color || p.type == EMPTY) continue;
+            if (r == tr && c == tc) continue;
+
+            bool attacks = false;
+            int dr = tr - r, dc = tc - c;
+            int adr = abs(dr), adc = abs(dc);
+
+            switch (p.type) {
+                case PAWN:
+                    if (color == WHITE && dr == -1 && adc == 1) attacks = true;
+                    if (color == BLACK && dr ==  1 && adc == 1) attacks = true;
+                    break;
+                case KNIGHT:
+                    if ((adr==2&&adc==1)||(adr==1&&adc==2)) attacks = true;
+                    break;
+                case BISHOP:
+                    if (adr == adc) attacks = chess_is_path_clear(game, r, c, tr, tc);
+                    break;
+                case ROOK:
+                    if (r==tr||c==tc) attacks = chess_is_path_clear(game, r, c, tr, tc);
+                    break;
+                case QUEEN:
+                    if (adr==adc || r==tr || c==tc)
+                        attacks = chess_is_path_clear(game, r, c, tr, tc);
+                    break;
+                case KING:
+                    if (adr<=1 && adc<=1) attacks = true;
+                    break;
+                default: break;
+            }
+
+            if (attacks) {
+                int val = see_piece_value(p.type);
+                if (val < best_val) { best_val = val; *fr_out = r; *fc_out = c; found = true; }
+            }
+        }
+    }
+    return found;
+}
+
+/* SEE on square (tr,tc) after initial capture by piece at (fr,fc).
+ * Returns net material gain for the side making the initial capture. */
+static int see(ChessGameState *game, int fr, int fc, int tr, int tc) {
+    ChessPiece victim   = game->board[tr][tc];
+    ChessPiece attacker = game->board[fr][fc];
+    if (victim.type == EMPTY) return 0;
+
+    int gain[32];
+    int d = 0;
+    gain[d] = see_piece_value(victim.type);
+
+    /* Simulate the capture: remove attacker from its square, place on target */
+    ChessGameState tmp = *game;
+    tmp.board[tr][tc] = attacker;
+    tmp.board[fr][fc].type  = EMPTY;
+    tmp.board[fr][fc].color = NONE;
+
+    ChessColor next = (attacker.color == WHITE) ? BLACK : WHITE;
+
+    while (true) {
+        int nfr, nfc;
+        if (!see_least_attacker(&tmp, tr, tc, next, &nfr, &nfc)) break;
+        d++;
+        gain[d] = see_piece_value(tmp.board[tr][tc].type) - gain[d-1];
+        /* Move the next attacker to the target square */
+        ChessPiece na = tmp.board[nfr][nfc];
+        tmp.board[tr][tc] = na;
+        tmp.board[nfr][nfc].type  = EMPTY;
+        tmp.board[nfr][nfc].color = NONE;
+        next = (next == WHITE) ? BLACK : WHITE;
+    }
+
+    /* Minimax back through the gain array */
+    while (d > 0) {
+        gain[d-1] = (gain[d-1] > -gain[d]) ? gain[d-1] : -gain[d];
+        d--;
+    }
+    return gain[0];
+}
+
+/* Score a move for ordering using SEE:
+ *   Free captures  (SEE > 0):  100000 + SEE  — always first, sorted by gain
+ *   Equal captures (SEE == 0):  50000         — after free captures
+ *   Non-captures:                   0         — after all captures
+ *   Losing captures (SEE < 0): -100000 + SEE — dead last
+ */
+static int move_order_score(ChessGameState *game, ChessMove move) {
+    ChessPiece victim = game->board[move.to_row][move.to_col];
+    if (victim.type != EMPTY) {
+        int s = see(game, move.from_row, move.from_col, move.to_row, move.to_col);
+        if (s > 0)  return 100000 + s;   /* winning capture — heavily prioritised */
+        if (s == 0) return  50000;        /* equal trade */
+        return      -100000 + s;          /* losing capture — explore last */
+    }
+    return 0;
+}
+
+static void sort_moves(ChessGameState *game, ChessMove *moves, int n) {
+    for (int i = 1; i < n; i++) {
+        ChessMove key = moves[i];
+        int key_score = move_order_score(game, key);
+        int j = i - 1;
+        while (j >= 0 && move_order_score(game, moves[j]) < key_score) {
+            moves[j+1] = moves[j];
+            j--;
+        }
+        moves[j+1] = key;
+    }
+}
+
+
 int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, int alpha, int beta, bool maximizing, KillerMoveTable *killers) {
     uint64_t hash = chess_zobrist_hash(game);
     int tt_value = 0;
@@ -212,6 +355,7 @@ int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, i
     
     ChessMove moves[256];
     int move_count = chess_get_all_moves(game, game->turn, moves);
+    sort_moves(game, moves, move_count);
     
     if (move_count == 0) {
         if (chess_is_in_check(game, game->turn)) {
@@ -743,12 +887,12 @@ int chess_evaluate_position(ChessGameState *game) {
                 if (p.color == WHITE) {
                     // White king starting position: row 7, col 4
                     int dist_from_start = abs(r - 7) + abs(c - 4);  // Manhattan distance
-                    distance_penalty = dist_from_start * 30;  // 30 points per square away from start
+                    distance_penalty = dist_from_start * 10;  // 10 points per square away from start
                     score -= distance_penalty;
                 } else {
                     // Black king starting position: row 0, col 4
                     int dist_from_start = abs(r - 0) + abs(c - 4);  // Manhattan distance
-                    distance_penalty = dist_from_start * 30;  // 30 points per square away from start
+                    distance_penalty = dist_from_start * 10;  // 10 points per square away from start
                     score += distance_penalty;
                 }
             }
@@ -987,7 +1131,7 @@ int chess_evaluate_position(ChessGameState *game) {
                     
                     // Penalty for king in exposed position
                     if (!safe_square) {
-                        int exposure_penalty = 30;  // 30 centipawn penalty
+                        int exposure_penalty = 10;  // 10 centipawn penalty
                         score += (p.color == WHITE) ? -exposure_penalty : exposure_penalty;
                     }
                 }
@@ -995,6 +1139,48 @@ int chess_evaluate_position(ChessGameState *game) {
         }
     }
     
+
+    // HANGING PIECE PENALTY
+    // A piece is "hanging" if attacked and undefended (or attacked by lower-value piece).
+    // Penalty: 60% of piece value if fully hanging, 25% of loss if losing trade.
+    {
+        int pv[] = {0, 100, 320, 330, 500, 900, 20000};
+        int atk_w[8][8] = {}, atk_b[8][8] = {};  // lowest attacker value (0=none)
+        int def_w[8][8] = {}, def_b[8][8] = {};  // sum of defender values
+
+        ChessMove wm[256], bm[256];
+        int wn = chess_get_all_moves(game, WHITE, wm);
+        int bn = chess_get_all_moves(game, BLACK, bm);
+
+        for (int i = 0; i < wn; i++) {
+            int tr=wm[i].to_row, tc=wm[i].to_col;
+            int av=pv[game->board[wm[i].from_row][wm[i].from_col].type];
+            if (game->board[tr][tc].color==BLACK) { if (!atk_w[tr][tc]||av<atk_w[tr][tc]) atk_w[tr][tc]=av; }
+            if (game->board[tr][tc].color==WHITE) def_w[tr][tc]+=av;
+        }
+        for (int i = 0; i < bn; i++) {
+            int tr=bm[i].to_row, tc=bm[i].to_col;
+            int av=pv[game->board[bm[i].from_row][bm[i].from_col].type];
+            if (game->board[tr][tc].color==WHITE) { if (!atk_b[tr][tc]||av<atk_b[tr][tc]) atk_b[tr][tc]=av; }
+            if (game->board[tr][tc].color==BLACK) def_b[tr][tc]+=av;
+        }
+
+        for (int r=0;r<8;r++) for (int c=0;c<8;c++) {
+            ChessPiece p=game->board[r][c];
+            if (p.type==EMPTY||p.type==KING) continue;
+            int val=pv[p.type];
+            if (p.color==WHITE) {
+                int la=atk_b[r][c]; if (!la) continue;
+                if (!def_w[r][c])           score -= (val*60)/100;
+                else if (la<val)            score -= ((val-la)*25)/100;
+            } else {
+                int la=atk_w[r][c]; if (!la) continue;
+                if (!def_b[r][c])           score += (val*60)/100;
+                else if (la<val)            score += ((val-la)*25)/100;
+            }
+        }
+    }
+
     return score;
 }
 
@@ -1531,6 +1717,7 @@ void chess_stop_thinking(ChessThinkingState *ts) {
 ChessGameStatus chess_check_game_status(ChessGameState *game) {
     ChessMove moves[256];
     int move_count = chess_get_all_moves(game, game->turn, moves);
+    sort_moves(game, moves, move_count);
     
     if (move_count == 0) {
         if (chess_is_in_check(game, game->turn)) {

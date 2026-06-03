@@ -9,6 +9,10 @@
 #ifdef MSDOS
     #define BEATCHESS_DOS 1
     #define BEATCHESS_HAS_PTHREAD 0
+#elif defined(SDL_BUILD)
+    #define BEATCHESS_DOS 0
+    #define BEATCHESS_HAS_PTHREAD 1
+    #include <pthread.h>
 #else
     #define BEATCHESS_DOS 0
     #define BEATCHESS_HAS_PTHREAD 1
@@ -212,6 +216,13 @@ typedef struct {
     int selected_piece_was_pressed;
 
 } BeatChessVisualization;
+
+typedef struct {
+    int x, y, w, h;
+    const char *label;
+    int hotkey;
+    bool enabled;
+} Button;
 
 /* Core chess functions */
 bool chess_can_undo(BeatChessVisualization *chess);
