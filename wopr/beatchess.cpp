@@ -327,9 +327,13 @@ static int move_order_score(ChessGameState *game, ChessMove move) {
     ChessPiece victim = game->board[move.to_row][move.to_col];
     if (victim.type != EMPTY) {
         int s = see(game, move.from_row, move.from_col, move.to_row, move.to_col);
-        if (s > 0)  return 100000 + s;   /* winning capture — heavily prioritised */
-        if (s == 0) return  50000;        /* equal trade */
-        return      -100000 + s;          /* losing capture — explore last */
+        /* Extra bonus for capturing a queen — always explore these first */
+        int queen_bonus = (victim.type == QUEEN) ? 50000 : 0;
+        if (s > 0)  return 200000 + queen_bonus + s;
+        if (s == 0) return 100000 + queen_bonus;
+        /* Losing capture of a queen still gets explored before quiet moves */
+        if (victim.type == QUEEN) return 50000 + s;
+        return -100000 + s;   /* other losing captures last */
     }
     return 0;
 }
@@ -401,9 +405,17 @@ int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, i
     if (maximizing) {
         for (int i = 0; i < move_count; i++) {
             ChessPiece target = game->board[moves[i].to_row][moves[i].to_col];
+            /* SEE bonus: winning free captures get a direct score boost */
+            int see_bonus = 0;
+            if (target.type != EMPTY) {
+                int sv = see(game, moves[i].from_row, moves[i].from_col,
+                             moves[i].to_row, moves[i].to_col);
+                if (sv > 0) see_bonus = sv;
+            }
             ChessGameState temp = *game;
             chess_make_move(&temp, moves[i]);
             int eval = chess_minimax_enhanced(&temp, depth - 1, initial_depth, alpha, beta, false, killers);
+            eval += see_bonus;
             best_value = (eval > best_value) ? eval : best_value;
             alpha = (alpha > best_value) ? alpha : best_value;
             if (beta <= alpha) {
@@ -416,9 +428,16 @@ int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, i
     } else {
         for (int i = 0; i < move_count; i++) {
             ChessPiece target = game->board[moves[i].to_row][moves[i].to_col];
+            int see_bonus = 0;
+            if (target.type != EMPTY) {
+                int sv = see(game, moves[i].from_row, moves[i].from_col,
+                             moves[i].to_row, moves[i].to_col);
+                if (sv > 0) see_bonus = sv;
+            }
             ChessGameState temp = *game;
             chess_make_move(&temp, moves[i]);
             int eval = chess_minimax_enhanced(&temp, depth - 1, initial_depth, alpha, beta, true, killers);
+            eval -= see_bonus;
             best_value = (eval < best_value) ? eval : best_value;
             beta = (beta < best_value) ? beta : best_value;
             if (beta <= alpha) {
@@ -1140,43 +1159,33 @@ int chess_evaluate_position(ChessGameState *game) {
     }
     
 
-    // HANGING PIECE PENALTY
-    // A piece is "hanging" if attacked and undefended (or attacked by lower-value piece).
-    // Penalty: 60% of piece value if fully hanging, 25% of loss if losing trade.
+    // HANGING / LOSING TRADE PENALTY using SEE
+    // For every piece on the board, run SEE from the opponent's perspective.
+    // If SEE > 0 for the opponent (i.e. they gain material by capturing here),
+    // penalise the position by 80% of that expected loss.
+    // This catches:
+    //   - Fully hanging pieces (SEE = full piece value)
+    //   - Queen in front of pawn defended only by another queen (SEE = queen - pawn)
+    //   - Any piece where recapture sequence favours the opponent
     {
-        int pv[] = {0, 100, 320, 330, 500, 900, 20000};
-        int atk_w[8][8] = {}, atk_b[8][8] = {};  // lowest attacker value (0=none)
-        int def_w[8][8] = {}, def_b[8][8] = {};  // sum of defender values
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 8; c++) {
+                ChessPiece p = game->board[r][c];
+                if (p.type == EMPTY || p.type == KING) continue;
+                ChessColor opp = (p.color == WHITE) ? BLACK : WHITE;
 
-        ChessMove wm[256], bm[256];
-        int wn = chess_get_all_moves(game, WHITE, wm);
-        int bn = chess_get_all_moves(game, BLACK, bm);
+                // Find the least-valuable opponent attacker
+                int fr_opp, fc_opp;
+                if (!see_least_attacker(game, r, c, opp, &fr_opp, &fc_opp)) continue;
 
-        for (int i = 0; i < wn; i++) {
-            int tr=wm[i].to_row, tc=wm[i].to_col;
-            int av=pv[game->board[wm[i].from_row][wm[i].from_col].type];
-            if (game->board[tr][tc].color==BLACK) { if (!atk_w[tr][tc]||av<atk_w[tr][tc]) atk_w[tr][tc]=av; }
-            if (game->board[tr][tc].color==WHITE) def_w[tr][tc]+=av;
-        }
-        for (int i = 0; i < bn; i++) {
-            int tr=bm[i].to_row, tc=bm[i].to_col;
-            int av=pv[game->board[bm[i].from_row][bm[i].from_col].type];
-            if (game->board[tr][tc].color==WHITE) { if (!atk_b[tr][tc]||av<atk_b[tr][tc]) atk_b[tr][tc]=av; }
-            if (game->board[tr][tc].color==BLACK) def_b[tr][tc]+=av;
-        }
+                // Run SEE: how much does the opponent gain by capturing here?
+                int see_gain = see(game, fr_opp, fc_opp, r, c);
+                if (see_gain <= 0) continue;  /* no gain for opponent — piece is safe */
 
-        for (int r=0;r<8;r++) for (int c=0;c<8;c++) {
-            ChessPiece p=game->board[r][c];
-            if (p.type==EMPTY||p.type==KING) continue;
-            int val=pv[p.type];
-            if (p.color==WHITE) {
-                int la=atk_b[r][c]; if (!la) continue;
-                if (!def_w[r][c])           score -= (val*60)/100;
-                else if (la<val)            score -= ((val-la)*25)/100;
-            } else {
-                int la=atk_w[r][c]; if (!la) continue;
-                if (!def_b[r][c])           score += (val*60)/100;
-                else if (la<val)            score += ((val-la)*25)/100;
+                // Penalise 80% of expected loss (not 100% to allow positional compensation)
+                int penalty = (see_gain * 80) / 100;
+                if (p.color == WHITE) score -= penalty;
+                else                  score += penalty;
             }
         }
     }
