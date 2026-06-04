@@ -12,15 +12,6 @@
 #include "chess_ai_move.h"
 #include <stdlib.h>
 #include <limits.h>
-#include <time.h>
-#ifdef _WIN32
-    #include <windows.h>
-#endif
-    
-static void ensure_seeded(void) {
-    static bool seeded = false;
-    if (!seeded) { srand((unsigned)time(nullptr)); seeded = true; }
-}
 
 #ifdef ALLEGRO_H
     #include <allegro.h>
@@ -66,7 +57,6 @@ ChessAIConfig chess_ai_get_default_config(void) {
 #endif
     config.threshold_centipawns = 25;
     config.use_randomization = true;
-    config.min_think_ms = 1500.0;
     return config;
 }
 
@@ -84,17 +74,6 @@ ChessAIConfig chess_ai_get_default_config(void) {
 ChessAIMoveResult chess_ai_compute_move(ChessGameState *game, ChessAIConfig config) {
     ChessAIMoveResult result;
     
-    ensure_seeded();
-    clock_t think_start = clock();
-
-    /* Clear stale transposition table and killer move entries from any previous
-     * search (e.g. BeatChess background thread).  Without this, hash collisions
-     * can cause minimax to return cached scores for wrong positions, leading the
-     * AI to pick moves like a pawn push while the king is in check. */
-    chess_clear_transposition_table();
-    KillerMoveTable local_killers;
-    chess_clear_killers(&local_killers);
-
     /* Initialize result */
     result.move.from_row = -1;
     result.move.from_col = -1;
@@ -148,7 +127,7 @@ ChessAIMoveResult chess_ai_compute_move(ChessGameState *game, ChessAIConfig conf
         
         /* Evaluate this move using minimax from opponent's perspective */
         bool opponent_is_white = (temp.turn == WHITE);
-        int score = chess_minimax_enhanced(&temp, config.search_depth - 1, config.search_depth - 1, INT_MIN, INT_MAX, opponent_is_white, &local_killers);
+        int score = chess_minimax(&temp, config.search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
         
         result.total_moves_evaluated++;
         
@@ -263,24 +242,6 @@ ChessAIMoveResult chess_ai_compute_move(ChessGameState *game, ChessAIConfig conf
     DEBUG_MOVE(result.move);
     DEBUG_PRINT(" (score: %d, chosen from %d candidates)\n\n", result.score, result.candidate_moves);
     AI_YIELD_IMPL();
-
-    /* Enforce minimum think time */
-    if (config.min_think_ms > 0.0) {
-        clock_t end = clock();
-        double elapsed_ms = (double)(end - think_start) / CLOCKS_PER_SEC * 1000.0;
-        double remaining_ms = config.min_think_ms - elapsed_ms;
-        if (remaining_ms > 0.0) {
-#ifdef _WIN32
-            Sleep((DWORD)remaining_ms);
-#else
-            struct timespec ts;
-            double remaining_s = remaining_ms / 1000.0;
-            ts.tv_sec  = (time_t)remaining_s;
-            ts.tv_nsec = (long)((remaining_s - ts.tv_sec) * 1e9);
-            nanosleep(&ts, nullptr);
-#endif
-        }
-    }
 
     return result;
 }
