@@ -42,7 +42,9 @@ struct SshKeyMgr {
     char  gen_name[128]    = "id_ed25519";   // filename (no path)
     char  gen_comment[256] = {};             // -C comment
     char  gen_passphrase[256] = {};          // may be empty
-    int   gen_type     = 0;   // 0=Ed25519, 1=RSA-4096
+    int   gen_type     = 0;   // 0=Ed25519, 1=ECDSA-256, 2=ECDSA-384, 3=ECDSA-521, 4=RSA
+    int   gen_rsa_size = 1;   // index into rsa_sizes[] = {2048,3072,4096}
+    bool  gen_dropdown_open = false;  // RSA size dropdown open
     char  status[512]  = {};  // feedback line
     bool  status_ok    = true;
 

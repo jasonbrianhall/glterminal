@@ -439,6 +439,20 @@ static void render_list_pane(SshKeyMgr &m, float ox, float oy,
 // RENDER — GENERATE PANE
 // ============================================================================
 
+static constexpr int RSA_SIZE_COUNT = 3;
+static constexpr int rsa_sizes[RSA_SIZE_COUNT] = { 2048, 3072, 4096 };
+static constexpr const char *rsa_size_labels[RSA_SIZE_COUNT] = { "2048", "3072", "4096" };
+
+struct KeyTypeDef { int id; const char *label; const char *default_name; };
+static constexpr KeyTypeDef key_types[] = {
+    { 0, "Ed25519 (recommended)", "id_ed25519" },
+    { 1, "ECDSA-256",             "id_ecdsa"   },
+    { 2, "ECDSA-384",             "id_ecdsa384"},
+    { 3, "ECDSA-521",             "id_ecdsa521"},
+    { 4, "RSA",                   "id_rsa"     },
+};
+static constexpr int KEY_TYPE_COUNT = 5;
+
 static void render_generate_pane(SshKeyMgr &m, float ox, float oy,
                                  float pw, float ph, int /*win_w*/, int /*win_h*/)
 {
@@ -446,19 +460,34 @@ static void render_generate_pane(SshKeyMgr &m, float ox, float oy,
     dt("Generate New SSH Key", ox + PAD, y + MFONT * 0.85f, 0.55f, 0.75f, 1.0f, 1.f, ATTR_BOLD);
     y += MFONT + PAD;
 
-    // Key type radio
+    // Key type radios — two rows of ~3
     dt("Key type:", ox + PAD, y + MFONT * 0.85f, 0.70f, 0.75f, 0.82f, 1.f);
     float rx = ox + PAD + 90;
-    for (int t = 0; t < 2; t++) {
+    float row1_y = y;
+    for (int t = 0; t < KEY_TYPE_COUNT; t++) {
+        if (t == 3) { rx = ox + PAD + 90; y += ROW_H; } // wrap to second row
         bool sel = (m.gen_type == t);
-        const char *lbl = (t == 0) ? "Ed25519 (recommended)" : "RSA-4096";
         draw_rect(rx, y + 2, 12, 12, 0.15f, 0.20f, 0.30f, 1.f);
-        if (sel)
-            draw_rect(rx + 3, y + 5, 6, 6, 0.40f, 0.75f, 1.0f, 1.f);
-        dt(lbl, rx + 16, y + MFONT * 0.85f, sel ? 0.92f : 0.68f, sel ? 0.95f : 0.72f, 1.0f, 1.f);
-        rx += (t == 0) ? 200 : 0;
+        if (sel) draw_rect(rx + 3, y + 5, 6, 6, 0.40f, 0.75f, 1.0f, 1.f);
+        float lw = (float)(strlen(key_types[t].label) * MFONT) * 0.56f + 24;
+        dt(key_types[t].label, rx + 16, y + MFONT * 0.85f,
+           sel ? 0.92f : 0.68f, sel ? 0.95f : 0.72f, 1.0f, 1.f);
+        rx += lw + 8;
     }
-    y += ROW_H + 4;
+    (void)row1_y;
+    y += ROW_H + 8;
+
+    // RSA size buttons (only when RSA selected)
+    if (m.gen_type == 4) {
+        dt("Key size:", ox + PAD, y + MFONT * 0.85f, 0.70f, 0.75f, 0.82f, 1.f);
+        float bx2 = ox + PAD + 90;
+        for (int i = 0; i < RSA_SIZE_COUNT; i++) {
+            bool sel = (i == m.gen_rsa_size);
+            draw_btn(rsa_size_labels[i], bx2, y, 90, BTN_H, false, sel);
+            bx2 += 98;
+        }
+        y += BTN_H + PAD;
+    }
 
     // Filename
     dt("Filename:", ox + PAD, y + MFONT * 0.85f, 0.70f, 0.75f, 0.82f, 1.f);
@@ -657,8 +686,17 @@ static void action_generate(SshKeyMgr &m)
 #endif
 
     // Build ssh-keygen command
-    // -t type -b bits (for RSA) -f path -C comment -N passphrase -q
-    std::string type_flag  = (m.gen_type == 0) ? "-t ed25519" : "-t rsa -b 4096";
+    std::string type_flag;
+    std::string default_name;
+    switch (m.gen_type) {
+    case 0: type_flag = "-t ed25519";                                              default_name = "id_ed25519";  break;
+    case 1: type_flag = "-t ecdsa -b 256";                                         default_name = "id_ecdsa";    break;
+    case 2: type_flag = "-t ecdsa -b 384";                                         default_name = "id_ecdsa384"; break;
+    case 3: type_flag = "-t ecdsa -b 521";                                         default_name = "id_ecdsa521"; break;
+    case 4: type_flag = std::string("-t rsa -b ") + std::to_string(rsa_sizes[m.gen_rsa_size]);
+            default_name = "id_rsa";    break;
+    default: type_flag = "-t ed25519"; default_name = "id_ed25519"; break;
+    }
     std::string comment    = m.gen_comment[0] ? m.gen_comment : (std::string(m.gen_name));
     std::string passphrase = m.gen_passphrase;
 
@@ -685,8 +723,7 @@ static void action_generate(SshKeyMgr &m)
                  "Generated: ~/.ssh/%s", m.gen_name);
         m.status_ok = true;
         // Reset generate fields
-        if (m.gen_type == 0) strncpy(m.gen_name, "id_ed25519", sizeof(m.gen_name) - 1);
-        else                 strncpy(m.gen_name, "id_rsa",     sizeof(m.gen_name) - 1);
+        strncpy(m.gen_name, key_types[m.gen_type].default_name, sizeof(m.gen_name) - 1);
         m.gen_comment[0]    = '\0';
         m.gen_passphrase[0] = '\0';
         m.pane = KeyMgrPane::LIST;
@@ -765,8 +802,7 @@ bool ssh_key_mgr_keydown(SDL_Keysym ks, const char *text_input)
             m.status[0] = '\0';
             m.gen_focus = 0;
             // Pre-fill filename based on type
-            if (m.gen_type == 0) strncpy(m.gen_name, "id_ed25519", sizeof(m.gen_name) - 1);
-            else                 strncpy(m.gen_name, "id_rsa",     sizeof(m.gen_name) - 1);
+            strncpy(m.gen_name, key_types[m.gen_type].default_name, sizeof(m.gen_name) - 1);
             return true;
         }
         if (sym == SDLK_r) {
@@ -807,9 +843,9 @@ bool ssh_key_mgr_keydown(SDL_Keysym ks, const char *text_input)
         }
         // Toggle key type with left/right when no field is focused (focus==3)
         if (sym == SDLK_LEFT || sym == SDLK_RIGHT) {
-            m.gen_type ^= 1;
-            if (m.gen_type == 0) strncpy(m.gen_name, "id_ed25519", sizeof(m.gen_name) - 1);
-            else                 strncpy(m.gen_name, "id_rsa",     sizeof(m.gen_name) - 1);
+            if (sym == SDLK_RIGHT) m.gen_type = (m.gen_type + 1) % KEY_TYPE_COUNT;
+            else                   m.gen_type = (m.gen_type + KEY_TYPE_COUNT - 1) % KEY_TYPE_COUNT;
+            strncpy(m.gen_name, key_types[m.gen_type].default_name, sizeof(m.gen_name) - 1);
             return true;
         }
         if (text_input && text_input[0]) {
@@ -917,18 +953,34 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
     else if (m.pane == KeyMgrPane::GENERATE) {
         float y = coy + PAD + MFONT + PAD;
 
-        // Key type radio buttons (approximate positions)
-        float ry = y + 2;
-        float rx0 = ox + PAD + 90;
-        float rx1 = rx0 + 200;
-        if (my >= ry && my < ry + 16) {
-            if (mx >= rx0 && mx < rx0 + 200) { m.gen_type = 0; strncpy(m.gen_name,"id_ed25519",sizeof(m.gen_name)-1); }
-            else if (mx >= rx1 && mx < rx1 + 120) { m.gen_type = 1; strncpy(m.gen_name,"id_rsa",sizeof(m.gen_name)-1); }
-            return true;
+        // Key type radio buttons — mirrors render layout (two rows, wraps at t==3)
+        float rx = ox + PAD + 90;
+        float row_y = y;
+        for (int t = 0; t < KEY_TYPE_COUNT; t++) {
+            if (t == 3) { rx = ox + PAD + 90; row_y += ROW_H; }
+            float lw = (float)(strlen(key_types[t].label) * MFONT) * 0.56f + 24 + 8;
+            if (my >= row_y && my < row_y + ROW_H && mx >= rx && mx < rx + lw) {
+                m.gen_type = t;
+                m.gen_dropdown_open = false;
+                strncpy(m.gen_name, key_types[t].default_name, sizeof(m.gen_name) - 1);
+                return true;
+            }
+            rx += lw;
         }
-        y += ROW_H + 4;
+        y += ROW_H * 2 + 8;  // two radio rows + gap
 
-        // Field click-to-focus
+        // RSA size buttons
+        if (m.gen_type == 4) {
+            float bx2 = ox + PAD + 90;
+            for (int i = 0; i < RSA_SIZE_COUNT; i++) {
+                Btn b = { bx2, y, 90, BTN_H };
+                if (btn_hit(b, mx, my)) { m.gen_rsa_size = i; return true; }
+                bx2 += 98;
+            }
+            y += BTN_H + PAD;
+        }
+
+        // Field click-to-focus (filename, comment, passphrase)
         float fw = pw - PAD * 2 - 90;
         float fx = ox + PAD + 90;
         if (my >= y && my < y + FIELD_H && mx >= fx && mx < fx + fw) { m.gen_focus = 0; return true; }
@@ -938,17 +990,13 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
         if (my >= y && my < y + FIELD_H && mx >= fx && mx < fx + fw) { m.gen_focus = 2; return true; }
 
         // Show/hide passphrase button
-        float show_x = ox + pw - PAD - BTN_W / 2;
-        Btn b_show = { show_x, y - FIELD_H - PAD, (float)(BTN_W/2), FIELD_H };
-        // Recompute (y was incremented past the passphrase row)
-        float pass_y = coy + PAD + MFONT + PAD + (ROW_H + 4) + (FIELD_H + PAD) * 2;
-        b_show.y = pass_y;
+        Btn b_show = { ox + pw - PAD - (float)(BTN_W/2), y, (float)(BTN_W/2), FIELD_H };
         if (btn_hit(b_show, mx, my)) { m.gen_pass_show = !m.gen_pass_show; return true; }
 
         float by = coy + cph - BTN_H - PAD;
         float bx = ox + PAD;
-        Btn b_gen = { bx, by, BTN_W, BTN_H };
-        Btn b_back = { bx + BTN_W + 8, by, BTN_W, BTN_H };
+        Btn b_gen  = { bx,              by, BTN_W, BTN_H };
+        Btn b_back = { bx + BTN_W + 8,  by, BTN_W, BTN_H };
         if (btn_hit(b_gen,  mx, my)) { action_generate(m); return true; }
         if (btn_hit(b_back, mx, my)) { m.pane = KeyMgrPane::LIST; m.status[0] = '\0'; return true; }
     }
