@@ -399,11 +399,11 @@ static void render_list_pane(SshKeyMgr &m, float ox, float oy,
     y += MFONT + PAD / 2;
 
     // Column headers
-    // Type | Bits | Filename (sortable) | Comment (sortable) | Fingerprint (sortable)
-    float col_type     = ox + PAD;
+    // Filename (sortable) | Type | Bits | Comment (sortable) | Fingerprint (sortable)
+    float col_filename = ox + PAD;
+    float col_type     = col_filename + 150;
     float col_bits     = col_type + 70;
-    float col_filename = col_bits + 44;
-    float col_comment  = col_filename + 140;
+    float col_comment  = col_bits + 44;
     float col_fp       = col_comment + 150;
 
     draw_rect(ox + 1, y, pw - 2, ROW_H, 0.14f, 0.18f, 0.28f, 1.f);
@@ -421,7 +421,7 @@ static void render_list_pane(SshKeyMgr &m, float ox, float oy,
         }
     };
 
-    draw_sortable_hdr("Filename",    col_filename, col_comment - col_filename, KeySortCol::FILENAME);
+    draw_sortable_hdr("Filename",    col_filename, col_type    - col_filename, KeySortCol::FILENAME);
     draw_sortable_hdr("Comment",     col_comment,  col_fp      - col_comment,  KeySortCol::COMMENT);
     draw_sortable_hdr("Fingerprint", col_fp,       ox + pw - PAD - col_fp,     KeySortCol::FINGERPRINT);
     y += ROW_H;
@@ -455,23 +455,23 @@ static void render_list_pane(SshKeyMgr &m, float ox, float oy,
               fg = sel ? 0.97f : 0.88f,
               fb = sel ? 1.00f : 0.92f;
 
-        dt(e.type.c_str(), col_type, y + ROW_H * 0.68f, fr, fg, fb, 1.f);
-
-        char bits[16] = "-";
-        if (e.bits > 0) snprintf(bits, sizeof(bits), "%d", e.bits);
-        dt(bits, col_bits, y + ROW_H * 0.68f, fr * 0.85f, fg * 0.85f, fb, 1.f);
-
-        // Filename — truncate to column width
-        // Truncate by character count, not byte size, to avoid infinite loop with
-        // multi-byte UTF-8 ellipsis. Work in chars, append ASCII "..." instead.
         auto truncate_col = [&](const std::string &s, float max_w) -> std::string {
             if ((float)(s.size() * MFONT) * 0.56f <= max_w) return s;
             int max_chars = (int)(max_w / (MFONT * 0.56f));
             if (max_chars < 4) max_chars = 4;
             return s.substr(0, (size_t)max_chars - 3) + "...";
         };
-        dt(truncate_col(e.filename, col_comment - col_filename - 4).c_str(),
+
+        // Filename (first column)
+        dt(truncate_col(e.filename, col_type - col_filename - 4).c_str(),
            col_filename, y + ROW_H * 0.68f, fr, fg * 0.90f, fb * 0.80f, 1.f);
+
+        // Type / Bits
+        dt(e.type.c_str(), col_type, y + ROW_H * 0.68f, fr, fg, fb, 1.f);
+
+        char bits[16] = "-";
+        if (e.bits > 0) snprintf(bits, sizeof(bits), "%d", e.bits);
+        dt(bits, col_bits, y + ROW_H * 0.68f, fr * 0.85f, fg * 0.85f, fb, 1.f);
 
         // Comment
         dt(truncate_col(e.comment, col_fp - col_comment - 4).c_str(),
@@ -1119,9 +1119,11 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
     if (m.pane == KeyMgrPane::LIST) {
         // Column header clicks (sort) — must match render_list_pane column layout
         float hdr_y        = coy + PAD + MFONT + PAD / 2;
-        float col_filename = ox + PAD + 70 + 44;          // col_bits + 44
-        float col_comment  = col_filename + 140;
-        float col_fp       = col_comment  + 150;
+        float col_filename = ox + PAD;                     // first column
+        float col_type     = col_filename + 150;
+        float col_bits     = col_type + 70;
+        float col_comment  = col_bits + 44;
+        float col_fp       = col_comment + 150;
         if (my >= hdr_y && my < hdr_y + ROW_H) {
             if      (mx >= col_filename && mx < col_comment) toggle_sort(m, KeySortCol::FILENAME);
             else if (mx >= col_comment  && mx < col_fp)      toggle_sort(m, KeySortCol::COMMENT);
