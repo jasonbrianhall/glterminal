@@ -1030,7 +1030,8 @@ static void render_list_pane(SshKeyMgr &m, float ox, float oy,
         draw_btn("Copy Pub Key",  bx + BTN_W + 8,        by, BTN_W, BTN_H, false);
         draw_btn("Copy Priv Key", bx + (BTN_W + 8) * 2,  by, BTN_W, BTN_H, false);
         draw_btn("Auth Keys",     bx + (BTN_W + 8) * 3,  by, BTN_W, BTN_H, false);
-        draw_btn("Delete",        bx + (BTN_W + 8) * 4,  by, BTN_W, BTN_H, false);
+        draw_btn("SSH Config",    bx + (BTN_W + 8) * 4,  by, BTN_W, BTN_H, false);
+        draw_btn("Delete",        bx + (BTN_W + 8) * 5,  by, BTN_W, BTN_H, false);
     }
     draw_btn("Close (F8)",   ox + pw - BTN_W - PAD, by, BTN_W, BTN_H, false);
 
@@ -1210,6 +1211,114 @@ static void render_confirm_remove_remote_pane(SshKeyMgr &m, float ox, float oy,
 }
 
 // ============================================================================
+// RENDER — SSH CONFIG SNIPPET PANE
+// ============================================================================
+
+static void render_show_config_pane(SshKeyMgr &m, float ox, float oy,
+                                    float pw, float ph, int, int)
+{
+    if (m.keys.empty() || m.selected >= (int)m.keys.size()) return;
+    const SshKeyEntry &e = m.keys[m.selected];
+
+    float y = oy + PAD;
+    dt("~/.ssh/config  —  Host block for this key",
+       ox + PAD, y + MFONT * 0.85f, 0.55f, 0.75f, 1.0f, 1.f, ATTR_BOLD);
+    y += MFONT + PAD;
+
+    // Disclaimer
+    static const char *warn =
+        "This snippet is for reference only.  Felix will not modify your config file.";
+    static const char *warn2 =
+        "Edit ~/.ssh/config manually — make a backup first.";
+    draw_rect(ox + PAD - 4, y - 4, pw - PAD * 2 + 8, MFONT * 2 + PAD + 8,
+              0.35f, 0.22f, 0.08f, 0.45f);
+    draw_rect(ox + PAD - 4, y - 4, pw - PAD * 2 + 8, 1, 0.70f, 0.50f, 0.15f, 0.80f);
+    dt(warn,  ox + PAD, y + MFONT * 0.85f,            0.90f, 0.70f, 0.30f, 1.f);
+    y += MFONT + 4;
+    dt(warn2, ox + PAD, y + MFONT * 0.85f,            0.75f, 0.58f, 0.25f, 1.f);
+    y += MFONT + PAD + 8;
+
+    // Build config snippet
+    // Use the key comment as a suggested hostname if it looks like user@host,
+    // otherwise fall back to a placeholder.
+    std::string host_alias  = "myserver";
+    std::string host_addr   = "myserver.example.com";
+    std::string remote_user = "user";
+    if (!e.comment.empty()) {
+        // comment is often "user@hostname" — split on @
+        size_t at = e.comment.find('@');
+        if (at != std::string::npos) {
+            remote_user = e.comment.substr(0, at);
+            host_alias  = e.comment.substr(at + 1);
+            host_addr   = host_alias;
+        }
+    }
+#ifndef _WIN32
+    std::string key_path = "~/.ssh/" + e.filename;
+#else
+    std::string key_path = "~/.ssh/" + e.filename;  // SSH on Windows still uses forward slashes here
+#endif
+
+    char snippet[1024];
+    snprintf(snippet, sizeof(snippet),
+             "Host %s\n"
+             "    HostName %s\n"
+             "    User %s\n"
+             "    IdentityFile %s\n"
+             "    IdentitiesOnly yes\n",
+             host_alias.c_str(), host_addr.c_str(),
+             remote_user.c_str(), key_path.c_str());
+
+    // Render snippet in a code-style box
+    float box_h = 5 * (MFONT + 4) + PAD;
+    draw_rect(ox + PAD, y, pw - PAD * 2, box_h, 0.05f, 0.07f, 0.11f, 1.f);
+    draw_rect(ox + PAD, y, pw - PAD * 2, 1, 0.25f, 0.40f, 0.70f, 0.60f);
+
+    static const char *lines[] = {
+        nullptr, nullptr, nullptr, nullptr, nullptr
+    };
+    // Split snippet into lines for rendering
+    char tmp[1024];
+    strncpy(tmp, snippet, sizeof(tmp) - 1);
+    int li = 0;
+    static char rendered[5][256];
+    char *tok = tmp, *nl;
+    while (li < 5 && (nl = strchr(tok, '\n'))) {
+        *nl = '\0';
+        strncpy(rendered[li], tok, 255);
+        lines[li] = rendered[li];
+        tok = nl + 1;
+        li++;
+    }
+
+    float ly = y + PAD / 2;
+    for (int i = 0; i < 5 && lines[i]; i++) {
+        // Dim "Host" line differently from indented values
+        bool is_host = (i == 0);
+        dt(lines[i], ox + PAD + 8, ly + MFONT * 0.85f,
+           is_host ? 0.55f : 0.45f,
+           is_host ? 0.82f : 0.72f,
+           is_host ? 1.00f : 0.90f,
+           1.f, is_host ? ATTR_BOLD : 0);
+        ly += MFONT + 4;
+    }
+    y += box_h + PAD;
+
+    // Hint about editing
+    dt("Replace Host / HostName / User with your actual values before saving.",
+       ox + PAD, y + MFONT * 0.85f, 0.45f, 0.48f, 0.55f, 1.f);
+    y += MFONT + PAD / 2;
+    dt("IdentitiesOnly yes  prevents SSH from trying other keys first.",
+       ox + PAD, y + MFONT * 0.85f, 0.40f, 0.42f, 0.50f, 1.f);
+
+    // Buttons
+    float bx = ox + PAD;
+    float by = oy + ph - BTN_H - PAD;
+    draw_btn("Copy Snippet", bx,             by, BTN_W, BTN_H, false, true);
+    draw_btn("← Back",      bx + BTN_W + 8, by, BTN_W, BTN_H, false);
+}
+
+// ============================================================================
 // MAIN RENDER
 // ============================================================================
 
@@ -1259,6 +1368,9 @@ void ssh_key_mgr_render(int win_w, int win_h)
         break;
     case KeyMgrPane::CONFIRM_REMOVE_REMOTE:
         render_confirm_remove_remote_pane(m, ox, content_oy, pw, content_ph, win_w, win_h);
+        break;
+    case KeyMgrPane::SHOW_CONFIG:
+        render_show_config_pane(m, ox, content_oy, pw, content_ph, win_w, win_h);
         break;
     }
 
@@ -1963,6 +2075,33 @@ bool ssh_key_mgr_keydown(SDL_Keysym ks, const char *text_input)
         if (sym == SDLK_RETURN || sym == SDLK_y) { action_remote_remove_auth(m); return true; }
         if (sym == SDLK_n) { m.pane = KeyMgrPane::LIST; m.remote_status[0] = '\0'; return true; }
     }
+    else if (m.pane == KeyMgrPane::SHOW_CONFIG) {
+        // Enter / C copies snippet; any other key or Escape handled by the generic F8/Esc block above
+        if (sym == SDLK_RETURN || sym == SDLK_c) {
+            if (!m.keys.empty() && m.selected < (int)m.keys.size()) {
+                const SshKeyEntry &e = m.keys[m.selected];
+                std::string host_alias = "myserver", host_addr = "myserver.example.com", remote_user = "user";
+                if (!e.comment.empty()) {
+                    size_t at = e.comment.find('@');
+                    if (at != std::string::npos) {
+                        remote_user = e.comment.substr(0, at);
+                        host_alias  = e.comment.substr(at + 1);
+                        host_addr   = host_alias;
+                    }
+                }
+                char snippet[1024];
+                snprintf(snippet, sizeof(snippet),
+                         "Host %s\n    HostName %s\n    User %s\n"
+                         "    IdentityFile ~/.ssh/%s\n    IdentitiesOnly yes\n",
+                         host_alias.c_str(), host_addr.c_str(),
+                         remote_user.c_str(), e.filename.c_str());
+                SDL_SetClipboardText(snippet);
+                snprintf(m.status, sizeof(m.status), "Config snippet copied to clipboard.");
+                m.status_ok = true;
+            }
+            return true;
+        }
+    }
 
     return true;
 }
@@ -2127,7 +2266,8 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
         Btn b_copy  = { bx + BTN_W + 8,        by, BTN_W, BTN_H };
         Btn b_cpriv = { bx + (BTN_W + 8) * 2, by, BTN_W, BTN_H };
         Btn b_auth  = { bx + (BTN_W + 8) * 3, by, BTN_W, BTN_H };
-        Btn b_del   = { bx + (BTN_W + 8) * 4, by, BTN_W, BTN_H };
+        Btn b_cfg   = { bx + (BTN_W + 8) * 4, by, BTN_W, BTN_H };
+        Btn b_del   = { bx + (BTN_W + 8) * 5, by, BTN_W, BTN_H };
         Btn b_close = { ox + pw - BTN_W - PAD, by, BTN_W, BTN_H };
 
         if (btn_hit(b_gen, mx, my)) {
@@ -2139,6 +2279,11 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
         if (has_key && btn_hit(b_copy,  mx, my)) { action_copy_pubkey(m);  return true; }
         if (has_key && btn_hit(b_cpriv, mx, my)) { action_copy_privkey(m); return true; }
         if (has_key && btn_hit(b_auth,  mx, my)) { action_add_authorized_key(m); return true; }
+        if (has_key && btn_hit(b_cfg,   mx, my)) {
+            m.pane = KeyMgrPane::SHOW_CONFIG;
+            m.status[0] = '\0';
+            return true;
+        }
         if (has_key && btn_hit(b_del,   mx, my)) {
             m.pane = KeyMgrPane::CONFIRM_DELETE;
             m.status[0] = '\0';
@@ -2207,6 +2352,38 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
         Btn b_no  = { bx + BTN_W + 12, by, BTN_W, BTN_H };
         if (btn_hit(b_yes, mx, my)) { action_generate_do(m); return true; }
         if (btn_hit(b_no,  mx, my)) { m.pane = KeyMgrPane::GENERATE; m.status[0] = '\0'; return true; }
+    }
+    else if (m.pane == KeyMgrPane::SHOW_CONFIG) {
+        float by = coy + cph - BTN_H - PAD;
+        float bx = ox + PAD;
+        Btn b_copy = { bx,             by, BTN_W, BTN_H };
+        Btn b_back = { bx + BTN_W + 8, by, BTN_W, BTN_H };
+        if (btn_hit(b_copy, mx, my)) {
+            // Rebuild snippet and copy — same logic as render
+            if (!m.keys.empty() && m.selected < (int)m.keys.size()) {
+                const SshKeyEntry &e = m.keys[m.selected];
+                std::string host_alias = "myserver", host_addr = "myserver.example.com", remote_user = "user";
+                if (!e.comment.empty()) {
+                    size_t at = e.comment.find('@');
+                    if (at != std::string::npos) {
+                        remote_user = e.comment.substr(0, at);
+                        host_alias  = e.comment.substr(at + 1);
+                        host_addr   = host_alias;
+                    }
+                }
+                char snippet[1024];
+                snprintf(snippet, sizeof(snippet),
+                         "Host %s\n    HostName %s\n    User %s\n"
+                         "    IdentityFile ~/.ssh/%s\n    IdentitiesOnly yes\n",
+                         host_alias.c_str(), host_addr.c_str(),
+                         remote_user.c_str(), e.filename.c_str());
+                SDL_SetClipboardText(snippet);
+                snprintf(m.status, sizeof(m.status), "Config snippet copied to clipboard.");
+                m.status_ok = true;
+            }
+            return true;
+        }
+        if (btn_hit(b_back, mx, my)) { m.pane = KeyMgrPane::LIST; m.status[0] = '\0'; return true; }
     }
     else if (m.pane == KeyMgrPane::CONFIRM_REMOVE_REMOTE) {
         float by = coy + cph - BTN_H - PAD;

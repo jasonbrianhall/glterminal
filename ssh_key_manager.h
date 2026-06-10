@@ -43,7 +43,8 @@ enum class KeyMgrPane {
     GENERATE,
     CONFIRM_DELETE,
     CONFIRM_OVERWRITE,
-    CONFIRM_REMOVE_REMOTE   // confirm removing an authorized_keys entry
+    CONFIRM_REMOVE_REMOTE,  // confirm removing an authorized_keys entry
+    SHOW_CONFIG             // read-only ~/.ssh/config snippet for selected key
 };
 enum class KeySortCol  { NONE, FILENAME, FINGERPRINT, COMMENT };
 enum class KeySortDir  { ASC, DESC };
