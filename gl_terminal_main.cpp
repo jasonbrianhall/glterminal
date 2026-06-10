@@ -1,7 +1,7 @@
 // gl_terminal_main.cpp  — entry point only
 // Build (local shell):
 //   g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
-//       terminal.cpp term_pty.cpp term_ui.cpp gl_bouncingcircle.cpp
+//       terminal.cpp term_pty.cpp term_ui.cpp ssh_key_manager.cpp gl_bouncingcircle.cpp
 //       font_manager.cpp basic_graphics.cpp
 //       -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
 //
@@ -17,6 +17,7 @@
 #include "term_pty.h"
 #include "term_ui.h"
 #include "sticky_prompt.h"
+#include "ssh_key_manager.h"
 #include "gl_bouncingcircle.h"
 #include "crt_audio.h"
 #include "felix_settings.h"
@@ -967,6 +968,7 @@ int main(int argc, char **argv) {
                         g_sftp.visible         = false;
                         g_sftp_console_visible = false;
                         g_pf_overlay.visible   = false;
+                        g_ssh_key_mgr.visible  = false;
 #endif
                         g_menu.visible         = false;
                         wopr_open();
@@ -1046,6 +1048,11 @@ int main(int argc, char **argv) {
                 }
 
                 // SFTP console (F4) — forward all keys when visible
+                if (g_ssh_key_mgr.visible) {
+                    if (ssh_key_mgr_keydown(ev.key.keysym, nullptr))
+                        needs_render = true;
+                    break;
+                }
 #ifdef USESSH
                 if (g_sftp_console_visible) {
                     if (sftp_console_keydown(ev.key.keysym, nullptr))
@@ -1070,6 +1077,7 @@ int main(int argc, char **argv) {
                         g_iv.visible   = false;
                         if (g_wopr.visible) wopr_close();
                         g_pf_overlay.visible   = false;
+                        g_ssh_key_mgr.visible  = false;
                         g_sftp_console_visible = false;
                         g_menu.visible = false;
                         SDL_GetWindowSize(window, &win_w, &win_h);
@@ -1084,6 +1092,7 @@ int main(int argc, char **argv) {
                         g_iv.visible   = false;
                         if (g_wopr.visible) wopr_close();
                         g_pf_overlay.visible   = false;
+                        g_ssh_key_mgr.visible  = false;
                         g_sftp_console_visible = false;
                         g_menu.visible = false;
                         SDL_GetWindowSize(window, &win_w, &win_h);
@@ -1098,6 +1107,7 @@ int main(int argc, char **argv) {
                         g_iv.visible   = false;
                         if (g_wopr.visible) wopr_close();
                         g_pf_overlay.visible = false;
+                        g_ssh_key_mgr.visible  = false;
                         g_sftp.visible       = false;
                         g_menu.visible       = false;
                         SDL_GetWindowSize(window, &win_w, &win_h);
@@ -1121,6 +1131,7 @@ int main(int argc, char **argv) {
                         g_sftp.visible         = false;
                         g_sftp_console_visible = false;
                         g_pf_overlay.visible   = false;
+                        g_ssh_key_mgr.visible  = false;
 #endif
                         g_menu.visible = false;
                     }
@@ -1136,6 +1147,7 @@ int main(int argc, char **argv) {
                     g_sftp.visible         = false;
                     g_sftp_console_visible = false;
                     g_pf_overlay.visible   = false;
+                    g_ssh_key_mgr.visible  = false;
 #endif
                     g_menu.visible = false;
                     SDL_GetWindowSize(window, &win_w, &win_h);
@@ -1151,6 +1163,7 @@ int main(int argc, char **argv) {
                 if (ev.key.keysym.sym == SDLK_F6 && use_ssh && ssh_active()) {
                     if (g_pf_overlay.visible) {
                         g_pf_overlay.visible = false;
+                        g_ssh_key_mgr.visible  = false;
                     } else {
                         // Close all other overlays first
                         g_help_visible         = false;
@@ -1223,6 +1236,13 @@ int main(int argc, char **argv) {
                     break;
                 }
 #ifdef USESSH
+                // Forward text input to SSH key manager when visible
+                if (g_ssh_key_mgr.visible) {
+                    SDL_Keysym ks{}; ks.sym = SDLK_UNKNOWN;
+                    ssh_key_mgr_keydown(ks, ev.text.text);
+                    needs_render = true;
+                    break;
+                }
                 // Forward text to SFTP console when visible
                 if (g_sftp_console_visible) {
                     SDL_Keysym ks{}; ks.sym = SDLK_UNKNOWN;
@@ -1273,6 +1293,11 @@ int main(int argc, char **argv) {
             }
 
             case SDL_MOUSEBUTTONDOWN: {
+                if (g_ssh_key_mgr.visible) {
+                    ssh_key_mgr_mousedown(ev.button.x, ev.button.y, ev.button.button);
+                    needs_render = true;
+                    break;
+                }
 #ifdef USESSH
                 if (g_sftp_console_visible) {
                     sftp_console_mousedown(ev.button.x, ev.button.y, ev.button.button);
@@ -1431,6 +1456,7 @@ int main(int argc, char **argv) {
                                 g_sftp.visible         = false;
                                 g_sftp_console_visible = false;
                                 g_pf_overlay.visible   = false;
+                                g_ssh_key_mgr.visible  = false;
 #endif
                                 g_help_visible = true;
                                 needs_render = true;
@@ -1525,6 +1551,12 @@ int main(int argc, char **argv) {
             }
 
             case SDL_MOUSEMOTION:
+                if (g_ssh_key_mgr.visible) {
+                    ssh_key_mgr_mousemotion(ev.motion.x, ev.motion.y,
+                                            (ev.motion.state & SDL_BUTTON_LMASK) != 0);
+                    needs_render = true;
+                    break;
+                }
 #ifdef USESSH
                 if (g_sftp_console_visible) {
                     sftp_console_mousemotion(ev.motion.x, ev.motion.y,
@@ -1665,6 +1697,11 @@ int main(int argc, char **argv) {
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     iv_mousewheel(ev.wheel.mouseX, ev.wheel.mouseY,
                                   ev.wheel.y, win_w, win_h);
+                    needs_render = true;
+                    break;
+                }
+                if (g_ssh_key_mgr.visible) {
+                    ssh_key_mgr_scroll(ev.wheel.y);
                     needs_render = true;
                     break;
                 }
@@ -1841,6 +1878,7 @@ int main(int argc, char **argv) {
             sftp_overlay_render(win_w, win_h);
             sftp_console_render(win_w, win_h);
             pf_overlay_render(win_w, win_h);
+            ssh_key_mgr_render(win_w, win_h);
 #endif
             // Image viewer (F5) — full-screen overlay
             iv_render(win_w, win_h);

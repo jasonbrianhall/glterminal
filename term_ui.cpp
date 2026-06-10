@@ -8,6 +8,7 @@
 #include "kitty_graphics.h"
 #include "basic_graphics.h"
 #include "sticky_prompt.h"
+#include "ssh_key_manager.h"
 
 #include <SDL2/SDL.h>
 #include <stdlib.h>
@@ -414,7 +415,6 @@ void term_copy_selection(Terminal *t) {
     buf[pos] = '\0';
     SDL_SetClipboardText(buf);
     free(buf);
-    //SDL_Log("[Term] copied %d chars to clipboard\n", pos);
 }
 
 static void append_hex_color(std::string &s, float r, float g, float b) {
@@ -679,7 +679,6 @@ void term_copy_selection_ansi(Terminal *t) {
         if (r < r1) out += '\n';
     }
     SDL_SetClipboardText(out.c_str());
-    //SDL_Log("[Term] copied %zu bytes of ANSI to clipboard\n", out.size());
 }
 
 void term_paste(Terminal *t) {
@@ -909,7 +908,12 @@ void handle_key(Terminal *t, SDL_Keysym ks, const char *text) {
     case SDLK_F5:   term_write(t, "\x1b[15~", 5); break;
     case SDLK_F6:   term_write(t, "\x1b[17~", 5); break;
     case SDLK_F7:   term_write(t, "\x1b[18~", 5); break;
-    case SDLK_F8:   sticky_prompt_toggle(); break;
+    case SDLK_F8:
+        if (!g_ssh_key_mgr.visible)
+            ssh_key_mgr_open(0, 0);
+        else
+            ssh_key_mgr_close();
+        break;
     case SDLK_F9:   term_write(t, "\x1b[20~", 5); break;
     case SDLK_F10:  term_write(t, "\x1b[21~", 5); break;
     case SDLK_F11:  term_write(t, "\x1b[23~", 5); break;
@@ -1175,7 +1179,7 @@ static const HelpRow HELP_ROWS[] = {
     { nullptr, "F1",              "Toggle this help screen",                             nullptr },
     { nullptr, "F5",              "Felix Chirp image/audio player (SSH or local)      ", nullptr },
     { nullptr, "F7",              "WOPR terminal",                                       nullptr },
-    { nullptr, "F8",              "Sticky prompt",                                       nullptr },
+    { nullptr, "F8",              "SSH Key Manager (generate / copy / delete keys)",     nullptr },
     { nullptr, "F11",             "Toggle fullscreen",                                   nullptr },
     { nullptr, "Right-click",     "Open context menu",                                   nullptr },
     { nullptr, "Ctrl+A",          "Select all",                                          nullptr },
