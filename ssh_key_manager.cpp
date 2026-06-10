@@ -209,7 +209,30 @@ static void scan_keys(SshKeyMgr &m)
 }
 
 // ============================================================================
-// OPEN / CLOSE
+// SORTING
+// ============================================================================
+
+static void sort_keys(SshKeyMgr &m)
+{
+    if (m.sort_col == KeySortCol::NONE) return;
+    std::sort(m.keys.begin(), m.keys.end(),
+        [&](const SshKeyEntry &a, const SshKeyEntry &b) {
+            const std::string &va = (m.sort_col == KeySortCol::FINGERPRINT) ? a.fingerprint : a.comment;
+            const std::string &vb = (m.sort_col == KeySortCol::FINGERPRINT) ? b.fingerprint : b.comment;
+            return (m.sort_dir == KeySortDir::ASC) ? (va < vb) : (va > vb);
+        });
+}
+
+static void toggle_sort(SshKeyMgr &m, KeySortCol col)
+{
+    if (m.sort_col == col)
+        m.sort_dir = (m.sort_dir == KeySortDir::ASC) ? KeySortDir::DESC : KeySortDir::ASC;
+    else {
+        m.sort_col = col;
+        m.sort_dir = KeySortDir::ASC;
+    }
+    sort_keys(m);
+}
 // ============================================================================
 
 void ssh_key_mgr_open(int /*win_w*/, int /*win_h*/)
@@ -218,6 +241,7 @@ void ssh_key_mgr_open(int /*win_w*/, int /*win_h*/)
     g_ssh_key_mgr.pane       = KeyMgrPane::LIST;
     g_ssh_key_mgr.status[0]  = '\0';
     scan_keys(g_ssh_key_mgr);
+    sort_keys(g_ssh_key_mgr);
     if (g_ssh_key_mgr.selected >= (int)g_ssh_key_mgr.keys.size())
         g_ssh_key_mgr.selected = 0;
 }
@@ -296,16 +320,37 @@ static void render_list_pane(SshKeyMgr &m, float ox, float oy,
     y += MFONT + PAD / 2;
 
     // Column headers
-    float col_type = ox + PAD;
-    float col_bits = col_type + 80;
-    float col_fp   = col_bits + 52;
-    float col_comment = col_fp + 250;
+    float col_type    = ox + PAD;
+    float col_bits    = col_type + 80;
+    float col_comment = col_bits + 52;
+    float col_fp      = col_comment + 160;
 
     draw_rect(ox + 1, y, pw - 2, ROW_H, 0.14f, 0.18f, 0.28f, 1.f);
     dt("Type",        col_type,    y + ROW_H * 0.68f, 0.55f, 0.65f, 0.85f, 1.f);
     dt("Bits",        col_bits,    y + ROW_H * 0.68f, 0.55f, 0.65f, 0.85f, 1.f);
-    dt("Fingerprint", col_fp,      y + ROW_H * 0.68f, 0.55f, 0.65f, 0.85f, 1.f);
-    dt("Comment",     col_comment, y + ROW_H * 0.68f, 0.55f, 0.65f, 0.85f, 1.f);
+
+    // Fingerprint header — highlight if sorted
+    {
+        bool active = (m.sort_col == KeySortCol::FINGERPRINT);
+        float hr = active ? 0.70f : 0.55f, hg = active ? 0.85f : 0.65f, hb = active ? 1.0f : 0.85f;
+        if (active) draw_rect(col_fp, y, 250.f, ROW_H, 0.20f, 0.28f, 0.45f, 0.60f);
+        dt("Fingerprint", col_fp, y + ROW_H * 0.68f, hr, hg, hb, 1.f, active ? ATTR_BOLD : 0);
+        const char *arrow = (m.sort_dir == KeySortDir::ASC) ? " ▲" : " ▼";
+        if (active) dt(arrow, col_fp + (float)(strlen("Fingerprint") * MFONT) * 0.56f,
+                        y + ROW_H * 0.68f, hr, hg, hb, 1.f);
+    }
+
+    // Comment header — highlight if sorted
+    {
+        bool active = (m.sort_col == KeySortCol::COMMENT);
+        float hr = active ? 0.70f : 0.55f, hg = active ? 0.85f : 0.65f, hb = active ? 1.0f : 0.85f;
+        float col_comment_w = pw - (col_comment - ox) - PAD;
+        if (active) draw_rect(col_comment, y, col_comment_w, ROW_H, 0.20f, 0.28f, 0.45f, 0.60f);
+        dt("Comment", col_comment, y + ROW_H * 0.68f, hr, hg, hb, 1.f, active ? ATTR_BOLD : 0);
+        const char *arrow = (m.sort_dir == KeySortDir::ASC) ? " ▲" : " ▼";
+        if (active) dt(arrow, col_comment + (float)(strlen("Comment") * MFONT) * 0.56f,
+                        y + ROW_H * 0.68f, hr, hg, hb, 1.f);
+    }
     y += ROW_H;
 
     // Compute visible rows
@@ -577,6 +622,7 @@ static void action_delete_key(SshKeyMgr &m)
     }
     m.pane = KeyMgrPane::LIST;
     scan_keys(m);
+    sort_keys(m);
     if (m.selected >= (int)m.keys.size())
         m.selected = (int)m.keys.size() - 1;
     if (m.selected < 0) m.selected = 0;
@@ -645,6 +691,7 @@ static void action_generate(SshKeyMgr &m)
         m.gen_passphrase[0] = '\0';
         m.pane = KeyMgrPane::LIST;
         scan_keys(m);
+        sort_keys(m);
     } else {
         // Show ssh-keygen error (first line)
         size_t nl = out.find('\n');
@@ -724,6 +771,7 @@ bool ssh_key_mgr_keydown(SDL_Keysym ks, const char *text_input)
         }
         if (sym == SDLK_r) {
             scan_keys(m);
+            sort_keys(m);
             snprintf(m.status, sizeof(m.status), "Refreshed.");
             m.status_ok = true;
             return true;
@@ -820,6 +868,18 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
     }
 
     if (m.pane == KeyMgrPane::LIST) {
+        // Column header clicks (sort)
+        float hdr_y       = coy + PAD + MFONT + PAD / 2;
+        float col_comment = ox + PAD + 80 + 52;
+        float col_fp      = col_comment + 160;
+        if (my >= hdr_y && my < hdr_y + ROW_H) {
+            if (mx >= col_comment && mx < col_fp)
+                toggle_sort(m, KeySortCol::COMMENT);
+            else if (mx >= col_fp && mx < ox + pw - PAD)
+                toggle_sort(m, KeySortCol::FINGERPRINT);
+            return true;
+        }
+
         // Row clicks
         float list_y = coy + PAD + MFONT + PAD / 2 + ROW_H; // after header
         for (int i = 0; i < m.visible_rows && m.scroll_top + i < (int)m.keys.size(); i++) {

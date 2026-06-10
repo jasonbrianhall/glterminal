@@ -23,6 +23,8 @@ struct SshKeyEntry {
 };
 
 enum class KeyMgrPane { LIST, GENERATE, CONFIRM_DELETE };
+enum class KeySortCol  { NONE, FINGERPRINT, COMMENT };
+enum class KeySortDir  { ASC, DESC };
 
 struct SshKeyMgr {
     bool    visible    = false;
@@ -31,6 +33,10 @@ struct SshKeyMgr {
     std::vector<SshKeyEntry> keys;
     int  selected      = 0;   // index in keys
     int  scroll_top    = 0;
+
+    // Column sorting
+    KeySortCol sort_col = KeySortCol::NONE;
+    KeySortDir sort_dir = KeySortDir::ASC;
 
     // Generate pane
     char  gen_name[128]    = "id_ed25519";   // filename (no path)
