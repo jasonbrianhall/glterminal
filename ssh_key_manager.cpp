@@ -894,9 +894,17 @@ static void action_generate_do(SshKeyMgr &m)
         return;
     }
 
-    // Write private key (PEM, no passphrase for now — passphrase support TODO)
+    // Write private key — encrypt with AES-256-CBC if a passphrase was given
+    const EVP_CIPHER *cipher = nullptr;
+    const char *pp = m.gen_passphrase;
+    if (pp[0] != '\0')
+        cipher = EVP_aes_256_cbc();
+
     FILE *fpriv = fopen(outpath.c_str(), "wb");
-    bool ok = fpriv && PEM_write_PrivateKey(fpriv, pkey, nullptr, nullptr, 0, nullptr, nullptr);
+    bool ok = fpriv && PEM_write_PrivateKey(fpriv, pkey, cipher,
+                           pp[0] ? (const unsigned char *)pp : nullptr,
+                           pp[0] ? (int)strlen(pp) : 0,
+                           nullptr, nullptr);
     if (fpriv) {
         fclose(fpriv);
 #ifndef _WIN32
