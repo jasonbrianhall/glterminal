@@ -1020,20 +1020,32 @@ static void render_list_pane(SshKeyMgr &m, float ox, float oy,
         draw_rect(sb_x, bar_y, 4, bar_h, 0.40f, 0.60f, 0.90f, 0.75f);
     }
 
-    // Local action buttons
+    // Local action buttons — compute width so all 7 fit without overlap
     float bx = ox + PAD;
     float by = oy + local_ph - BTN_H - PAD;
     bool has_key = !m.keys.empty() && m.selected < (int)m.keys.size();
 
-    draw_btn("+ Generate",   bx,                   by, BTN_W, BTN_H, false, true);
+    // 7 buttons when a key is selected (Generate + 5 key-actions + Close),
+    // 2 when none (Generate + Close).  Close is right-aligned; the rest fill left.
+    // Available width between left edge and Close button:
+    float close_w  = BTN_W;
+    float avail    = pw - PAD * 2 - close_w - 8;  // 8 = gap before Close
+    int   n_left   = has_key ? 6 : 1;              // Generate [+ 5 actions]
+    float gap      = 6;
+    float lbw      = (avail - gap * (n_left - 1)) / n_left;
+    if (lbw > BTN_W) lbw = BTN_W;   // don't grow wider than normal
+
+    auto lbx = [&](int i) { return bx + i * (lbw + gap); };
+
+    draw_btn("+ Generate",   lbx(0), by, lbw, BTN_H, false, true);
     if (has_key) {
-        draw_btn("Copy Pub Key",  bx + BTN_W + 8,        by, BTN_W, BTN_H, false);
-        draw_btn("Copy Priv Key", bx + (BTN_W + 8) * 2,  by, BTN_W, BTN_H, false);
-        draw_btn("Auth Keys",     bx + (BTN_W + 8) * 3,  by, BTN_W, BTN_H, false);
-        draw_btn("SSH Config",    bx + (BTN_W + 8) * 4,  by, BTN_W, BTN_H, false);
-        draw_btn("Delete",        bx + (BTN_W + 8) * 5,  by, BTN_W, BTN_H, false);
+        draw_btn("Copy Pub",  lbx(1), by, lbw, BTN_H, false);
+        draw_btn("Copy Priv", lbx(2), by, lbw, BTN_H, false);
+        draw_btn("Auth Keys", lbx(3), by, lbw, BTN_H, false);
+        draw_btn("SSH Config",lbx(4), by, lbw, BTN_H, false);
+        draw_btn("Delete",    lbx(5), by, lbw, BTN_H, false);
     }
-    draw_btn("Close (F8)",   ox + pw - BTN_W - PAD, by, BTN_W, BTN_H, false);
+    draw_btn("Close (F8)", ox + pw - close_w - PAD, by, close_w, BTN_H, false);
 
     // Local status line
     if (m.status[0]) {
@@ -1221,31 +1233,26 @@ static void render_show_config_pane(SshKeyMgr &m, float ox, float oy,
     const SshKeyEntry &e = m.keys[m.selected];
 
     float y = oy + PAD;
-    dt("~/.ssh/config  —  Host block for this key",
+    dt("~/.ssh/config  —  Example blocks for this key",
        ox + PAD, y + MFONT * 0.85f, 0.55f, 0.75f, 1.0f, 1.f, ATTR_BOLD);
     y += MFONT + PAD;
 
-    // Disclaimer
-    static const char *warn =
-        "This snippet is for reference only.  Felix will not modify your config file.";
-    static const char *warn2 =
-        "Edit ~/.ssh/config manually — make a backup first.";
+    // Disclaimer box
     draw_rect(ox + PAD - 4, y - 4, pw - PAD * 2 + 8, MFONT * 2 + PAD + 8,
               0.35f, 0.22f, 0.08f, 0.45f);
     draw_rect(ox + PAD - 4, y - 4, pw - PAD * 2 + 8, 1, 0.70f, 0.50f, 0.15f, 0.80f);
-    dt(warn,  ox + PAD, y + MFONT * 0.85f,            0.90f, 0.70f, 0.30f, 1.f);
+    dt("This is for reference only.  Felix will not modify your config file.",
+       ox + PAD, y + MFONT * 0.85f, 0.90f, 0.70f, 0.30f, 1.f);
     y += MFONT + 4;
-    dt(warn2, ox + PAD, y + MFONT * 0.85f,            0.75f, 0.58f, 0.25f, 1.f);
+    dt("Edit ~/.ssh/config manually — make a backup first.",
+       ox + PAD, y + MFONT * 0.85f, 0.75f, 0.58f, 0.25f, 1.f);
     y += MFONT + PAD + 8;
 
-    // Build config snippet
-    // Use the key comment as a suggested hostname if it looks like user@host,
-    // otherwise fall back to a placeholder.
+    // Derive values from key comment
     std::string host_alias  = "myserver";
     std::string host_addr   = "myserver.example.com";
     std::string remote_user = "user";
     if (!e.comment.empty()) {
-        // comment is often "user@hostname" — split on @
         size_t at = e.comment.find('@');
         if (at != std::string::npos) {
             remote_user = e.comment.substr(0, at);
@@ -1253,69 +1260,79 @@ static void render_show_config_pane(SshKeyMgr &m, float ox, float oy,
             host_addr   = host_alias;
         }
     }
-#ifndef _WIN32
     std::string key_path = "~/.ssh/" + e.filename;
-#else
-    std::string key_path = "~/.ssh/" + e.filename;  // SSH on Windows still uses forward slashes here
-#endif
 
-    char snippet[1024];
-    snprintf(snippet, sizeof(snippet),
-             "Host %s\n"
-             "    HostName %s\n"
-             "    User %s\n"
-             "    IdentityFile %s\n"
-             "    IdentitiesOnly yes\n",
-             host_alias.c_str(), host_addr.c_str(),
-             remote_user.c_str(), key_path.c_str());
+    // ---- Helper: render a labelled code box and return its bottom y ----
+    // lines_in: array of (line_text, is_keyword) pairs, n lines
+    struct CLine { const char *text; bool keyword; };
 
-    // Render snippet in a code-style box
-    float box_h = 5 * (MFONT + 4) + PAD;
-    draw_rect(ox + PAD, y, pw - PAD * 2, box_h, 0.05f, 0.07f, 0.11f, 1.f);
-    draw_rect(ox + PAD, y, pw - PAD * 2, 1, 0.25f, 0.40f, 0.70f, 0.60f);
+    auto render_box = [&](float by_start, const char *label,
+                          const CLine *cls, int n,
+                          float copy_btn_x) -> float
+    {
+        dt(label, ox + PAD, by_start + MFONT * 0.85f, 0.55f, 0.65f, 0.85f, 1.f, ATTR_BOLD);
+        float box_y = by_start + MFONT + 4;
+        float box_h = n * (MFONT + 4) + PAD;
+        float box_w = pw - PAD * 2 - (BTN_W + 8);  // leave room for copy button
+        draw_rect(ox + PAD, box_y, box_w, box_h, 0.05f, 0.07f, 0.11f, 1.f);
+        draw_rect(ox + PAD, box_y, box_w, 1,     0.25f, 0.40f, 0.70f, 0.55f);
 
-    static const char *lines[] = {
-        nullptr, nullptr, nullptr, nullptr, nullptr
+        float ly = box_y + PAD / 2;
+        for (int i = 0; i < n; i++) {
+            float cr = cls[i].keyword ? 0.55f : 0.42f;
+            float cg = cls[i].keyword ? 0.82f : 0.68f;
+            float cb = cls[i].keyword ? 1.00f : 0.88f;
+            dt(cls[i].text, ox + PAD + 8, ly + MFONT * 0.85f, cr, cg, cb, 1.f,
+               cls[i].keyword ? ATTR_BOLD : 0);
+            ly += MFONT + 4;
+        }
+
+        // Copy button alongside the box, vertically centred
+        float btn_y = box_y + (box_h - BTN_H) * 0.5f;
+        draw_btn("Copy", copy_btn_x, btn_y, BTN_W, BTN_H, false, true);
+        return box_y + box_h;
     };
-    // Split snippet into lines for rendering
-    char tmp[1024];
-    strncpy(tmp, snippet, sizeof(tmp) - 1);
-    int li = 0;
-    static char rendered[5][256];
-    char *tok = tmp, *nl;
-    while (li < 5 && (nl = strchr(tok, '\n'))) {
-        *nl = '\0';
-        strncpy(rendered[li], tok, 255);
-        lines[li] = rendered[li];
-        tok = nl + 1;
-        li++;
-    }
 
-    float ly = y + PAD / 2;
-    for (int i = 0; i < 5 && lines[i]; i++) {
-        // Dim "Host" line differently from indented values
-        bool is_host = (i == 0);
-        dt(lines[i], ox + PAD + 8, ly + MFONT * 0.85f,
-           is_host ? 0.55f : 0.45f,
-           is_host ? 0.82f : 0.72f,
-           is_host ? 1.00f : 0.90f,
-           1.f, is_host ? ATTR_BOLD : 0);
-        ly += MFONT + 4;
-    }
-    y += box_h + PAD;
+    float copy_bx = ox + pw - BTN_W - PAD;
 
-    // Hint about editing
-    dt("Replace Host / HostName / User with your actual values before saving.",
-       ox + PAD, y + MFONT * 0.85f, 0.45f, 0.48f, 0.55f, 1.f);
-    y += MFONT + PAD / 2;
-    dt("IdentitiesOnly yes  prevents SSH from trying other keys first.",
-       ox + PAD, y + MFONT * 0.85f, 0.40f, 0.42f, 0.50f, 1.f);
+    // ---- Snippet 1: specific host ----
+    char s1l1[256], s1l2[256], s1l3[256], s1l4[256], s1l5[256];
+    snprintf(s1l1, sizeof(s1l1), "Host %s",                   host_alias.c_str());
+    snprintf(s1l2, sizeof(s1l2), "    HostName %s",            host_addr.c_str());
+    snprintf(s1l3, sizeof(s1l3), "    User %s",                remote_user.c_str());
+    snprintf(s1l4, sizeof(s1l4), "    IdentityFile %s",        key_path.c_str());
+    snprintf(s1l5, sizeof(s1l5), "    IdentitiesOnly yes");
+    CLine box1[] = { {s1l1,true},{s1l2,false},{s1l3,false},{s1l4,false},{s1l5,false} };
+    float box1_bottom = render_box(y, "Specific host:", box1, 5, copy_bx);
+    y = box1_bottom + PAD;
 
-    // Buttons
-    float bx = ox + PAD;
-    float by = oy + ph - BTN_H - PAD;
-    draw_btn("Copy Snippet", bx,             by, BTN_W, BTN_H, false, true);
-    draw_btn("← Back",      bx + BTN_W + 8, by, BTN_W, BTN_H, false);
+    // ---- Snippet 2: wildcard example ----
+    char s2l1[256], s2l2[256], s2l3[256], s2l4[256], s2l5[256], s2l6[256];
+    // Derive a wildcard domain from host_addr if it contains a dot, e.g. "*.example.com"
+    std::string wildcard = "*.example.com";
+    size_t dot = host_addr.find('.');
+    if (dot != std::string::npos)
+        wildcard = "*." + host_addr.substr(dot + 1);
+    snprintf(s2l1, sizeof(s2l1), "Host %s",                   wildcard.c_str());
+    snprintf(s2l2, sizeof(s2l2), "    # Matches any host on that domain");
+    snprintf(s2l3, sizeof(s2l3), "    User %s",                remote_user.c_str());
+    snprintf(s2l4, sizeof(s2l4), "    IdentityFile %s",        key_path.c_str());
+    snprintf(s2l5, sizeof(s2l5), "    IdentitiesOnly yes");
+    snprintf(s2l6, sizeof(s2l6), "    # ServerAliveInterval 60");
+    CLine box2[] = { {s2l1,true},{s2l2,false},{s2l3,false},{s2l4,false},{s2l5,false},{s2l6,false} };
+    float box2_bottom = render_box(y, "Wildcard  (matches multiple hosts on a domain):", box2, 6, copy_bx);
+    y = box2_bottom + PAD;
+
+    // ---- Footer hints ----
+    dt("Replace Host / HostName / User with your actual values.",
+       ox + PAD, y + MFONT * 0.85f, 0.42f, 0.45f, 0.52f, 1.f);
+    y += MFONT + 3;
+    dt("IdentitiesOnly yes  stops SSH trying other keys first.",
+       ox + PAD, y + MFONT * 0.85f, 0.38f, 0.40f, 0.48f, 1.f);
+
+    // ---- Back button ----
+    float btn_by = oy + ph - BTN_H - PAD;
+    draw_btn("← Back", ox + PAD, btn_by, BTN_W, BTN_H, false);
 }
 
 // ============================================================================
@@ -2076,31 +2093,7 @@ bool ssh_key_mgr_keydown(SDL_Keysym ks, const char *text_input)
         if (sym == SDLK_n) { m.pane = KeyMgrPane::LIST; m.remote_status[0] = '\0'; return true; }
     }
     else if (m.pane == KeyMgrPane::SHOW_CONFIG) {
-        // Enter / C copies snippet; any other key or Escape handled by the generic F8/Esc block above
-        if (sym == SDLK_RETURN || sym == SDLK_c) {
-            if (!m.keys.empty() && m.selected < (int)m.keys.size()) {
-                const SshKeyEntry &e = m.keys[m.selected];
-                std::string host_alias = "myserver", host_addr = "myserver.example.com", remote_user = "user";
-                if (!e.comment.empty()) {
-                    size_t at = e.comment.find('@');
-                    if (at != std::string::npos) {
-                        remote_user = e.comment.substr(0, at);
-                        host_alias  = e.comment.substr(at + 1);
-                        host_addr   = host_alias;
-                    }
-                }
-                char snippet[1024];
-                snprintf(snippet, sizeof(snippet),
-                         "Host %s\n    HostName %s\n    User %s\n"
-                         "    IdentityFile ~/.ssh/%s\n    IdentitiesOnly yes\n",
-                         host_alias.c_str(), host_addr.c_str(),
-                         remote_user.c_str(), e.filename.c_str());
-                SDL_SetClipboardText(snippet);
-                snprintf(m.status, sizeof(m.status), "Config snippet copied to clipboard.");
-                m.status_ok = true;
-            }
-            return true;
-        }
+        // Escape/F8 handled by generic block above; nothing else to do here
     }
 
     return true;
@@ -2257,18 +2250,27 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
             }
         }
 
-        // Local buttons
+        // Local buttons — same geometry as render
         float by = coy + local_ph - BTN_H - PAD;
         float bx = ox + PAD;
         bool has_key = !m.keys.empty();
 
-        Btn b_gen   = { bx,                   by, BTN_W, BTN_H };
-        Btn b_copy  = { bx + BTN_W + 8,        by, BTN_W, BTN_H };
-        Btn b_cpriv = { bx + (BTN_W + 8) * 2, by, BTN_W, BTN_H };
-        Btn b_auth  = { bx + (BTN_W + 8) * 3, by, BTN_W, BTN_H };
-        Btn b_cfg   = { bx + (BTN_W + 8) * 4, by, BTN_W, BTN_H };
-        Btn b_del   = { bx + (BTN_W + 8) * 5, by, BTN_W, BTN_H };
-        Btn b_close = { ox + pw - BTN_W - PAD, by, BTN_W, BTN_H };
+        float close_w = (float)BTN_W;
+        float avail   = pw - PAD * 2 - close_w - 8;
+        int   n_left  = has_key ? 6 : 1;
+        float gap     = 6;
+        float lbw     = (avail - gap * (n_left - 1)) / n_left;
+        if (lbw > BTN_W) lbw = BTN_W;
+
+        auto lbx = [&](int i) -> float { return bx + i * (lbw + gap); };
+
+        Btn b_gen   = { lbx(0), by, lbw, BTN_H };
+        Btn b_copy  = { lbx(1), by, lbw, BTN_H };
+        Btn b_cpriv = { lbx(2), by, lbw, BTN_H };
+        Btn b_auth  = { lbx(3), by, lbw, BTN_H };
+        Btn b_cfg   = { lbx(4), by, lbw, BTN_H };
+        Btn b_del   = { lbx(5), by, lbw, BTN_H };
+        Btn b_close = { ox + pw - close_w - PAD, by, close_w, BTN_H };
 
         if (btn_hit(b_gen, mx, my)) {
             m.pane = KeyMgrPane::GENERATE;
@@ -2354,33 +2356,69 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
         if (btn_hit(b_no,  mx, my)) { m.pane = KeyMgrPane::GENERATE; m.status[0] = '\0'; return true; }
     }
     else if (m.pane == KeyMgrPane::SHOW_CONFIG) {
-        float by = coy + cph - BTN_H - PAD;
-        float bx = ox + PAD;
-        Btn b_copy = { bx,             by, BTN_W, BTN_H };
-        Btn b_back = { bx + BTN_W + 8, by, BTN_W, BTN_H };
-        if (btn_hit(b_copy, mx, my)) {
-            // Rebuild snippet and copy — same logic as render
-            if (!m.keys.empty() && m.selected < (int)m.keys.size()) {
-                const SshKeyEntry &e = m.keys[m.selected];
-                std::string host_alias = "myserver", host_addr = "myserver.example.com", remote_user = "user";
-                if (!e.comment.empty()) {
-                    size_t at = e.comment.find('@');
-                    if (at != std::string::npos) {
-                        remote_user = e.comment.substr(0, at);
-                        host_alias  = e.comment.substr(at + 1);
-                        host_addr   = host_alias;
-                    }
-                }
-                char snippet[1024];
-                snprintf(snippet, sizeof(snippet),
-                         "Host %s\n    HostName %s\n    User %s\n"
-                         "    IdentityFile ~/.ssh/%s\n    IdentitiesOnly yes\n",
-                         host_alias.c_str(), host_addr.c_str(),
-                         remote_user.c_str(), e.filename.c_str());
-                SDL_SetClipboardText(snippet);
-                snprintf(m.status, sizeof(m.status), "Config snippet copied to clipboard.");
-                m.status_ok = true;
+        if (m.keys.empty() || m.selected >= (int)m.keys.size()) return true;
+        const SshKeyEntry &e = m.keys[m.selected];
+
+        // Derive the same values as in render
+        std::string host_alias = "myserver", host_addr = "myserver.example.com", remote_user = "user";
+        if (!e.comment.empty()) {
+            size_t at = e.comment.find('@');
+            if (at != std::string::npos) {
+                remote_user = e.comment.substr(0, at);
+                host_alias  = e.comment.substr(at + 1);
+                host_addr   = host_alias;
             }
+        }
+        std::string key_path = "~/.ssh/" + e.filename;
+        std::string wildcard = "*.example.com";
+        size_t dot = host_addr.find('.');
+        if (dot != std::string::npos) wildcard = "*." + host_addr.substr(dot + 1);
+
+        // Layout mirrors render: two boxes, copy button at right of each
+        float copy_bx = ox + pw - (float)BTN_W - PAD;
+
+        // Approximate box1 top — match render geometry
+        float y = coy + PAD + MFONT + PAD  // title
+                + MFONT * 2 + PAD + 8 + 4; // disclaimer box
+        // box1: label line + box (5 lines)
+        float box1_y   = y + MFONT + 4;
+        float box1_h   = 5 * (MFONT + 4) + PAD;
+        float btn1_y   = box1_y + (box1_h - BTN_H) * 0.5f;
+        Btn b_copy1 = { copy_bx, btn1_y, (float)BTN_W, BTN_H };
+
+        float y2       = box1_y + box1_h + PAD;
+        float box2_y   = y2 + MFONT + 4;
+        float box2_h   = 6 * (MFONT + 4) + PAD;
+        float btn2_y   = box2_y + (box2_h - BTN_H) * 0.5f;
+        Btn b_copy2 = { copy_bx, btn2_y, (float)BTN_W, BTN_H };
+
+        Btn b_back  = { ox + PAD, coy + cph - BTN_H - PAD, (float)BTN_W, BTN_H };
+
+        auto set_copied = [&](const char *msg) {
+            snprintf(m.status, sizeof(m.status), "%s", msg);
+            m.status_ok = true;
+        };
+
+        if (btn_hit(b_copy1, mx, my)) {
+            char snippet[1024];
+            snprintf(snippet, sizeof(snippet),
+                     "Host %s\n    HostName %s\n    User %s\n"
+                     "    IdentityFile %s\n    IdentitiesOnly yes\n",
+                     host_alias.c_str(), host_addr.c_str(),
+                     remote_user.c_str(), key_path.c_str());
+            SDL_SetClipboardText(snippet);
+            set_copied("Specific-host snippet copied to clipboard.");
+            return true;
+        }
+        if (btn_hit(b_copy2, mx, my)) {
+            char snippet[1024];
+            snprintf(snippet, sizeof(snippet),
+                     "Host %s\n    # Matches any host on that domain\n"
+                     "    User %s\n    IdentityFile %s\n"
+                     "    IdentitiesOnly yes\n    # ServerAliveInterval 60\n",
+                     wildcard.c_str(), remote_user.c_str(), key_path.c_str());
+            SDL_SetClipboardText(snippet);
+            set_copied("Wildcard snippet copied to clipboard.");
             return true;
         }
         if (btn_hit(b_back, mx, my)) { m.pane = KeyMgrPane::LIST; m.status[0] = '\0'; return true; }
