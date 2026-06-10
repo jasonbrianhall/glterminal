@@ -1179,7 +1179,6 @@ static const HelpRow HELP_ROWS[] = {
     { nullptr, "F1",              "Toggle this help screen",                             nullptr },
     { nullptr, "F5",              "Felix Chirp image/audio player (SSH or local)      ", nullptr },
     { nullptr, "F7",              "WOPR terminal",                                       nullptr },
-    { nullptr, "F8",              "SSH Key Manager (generate / copy / delete keys)",     nullptr },
     { nullptr, "F11",             "Toggle fullscreen",                                   nullptr },
     { nullptr, "Right-click",     "Open context menu",                                   nullptr },
     { nullptr, "Ctrl+A",          "Select all",                                          nullptr },
@@ -1192,13 +1191,11 @@ static const HelpRow HELP_ROWS[] = {
 
     { "── SSH ──",                nullptr, nullptr, nullptr },
     { nullptr, "--ssh [user@host]","Connect to a remote host via SSH (see CLI options)", nullptr },
-#ifdef USESSH
     { nullptr, "F2",              "SFTP upload overlay",                                 nullptr },
     { nullptr, "F3",              "SFTP download overlay",                               nullptr },
     { nullptr, "F4",              "Interactive SFTP console",                            nullptr },
     { nullptr, "F6",              "Port forwarding console console",                     nullptr },
-#endif
-
+    { nullptr, "F8",              "SSH Key Manager (generate / copy / delete keys)",     nullptr },
     { "── Appearance ──",         nullptr, nullptr, nullptr },
     { nullptr, "Render Mode",     "Post-process visual effects (right-click menu)",      nullptr },
     { nullptr, "Color Theme",     "Built-in color schemes (right-click menu)",          nullptr },

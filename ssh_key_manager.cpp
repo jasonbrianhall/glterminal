@@ -453,7 +453,7 @@ static bool sftp_write_file(LIBSSH2_SESSION *sess,
         SDL_Delay(2);
     } while (!sftp);
 
-    long flags = LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC;
+    unsigned long flags = LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC;
     LIBSSH2_SFTP_HANDLE *fh = nullptr;
     do {
         fh = libssh2_sftp_open(sftp, remote_path.c_str(), flags, 0600);
@@ -593,6 +593,9 @@ static void parse_authorized_keys(const std::string &content,
         rtrim(line);
         pos = (nl == std::string::npos) ? content.size() : nl + 1;
         if (line.empty() || line[0] == '#') continue;
+        // Remove any \r that survived (CRLF files or Windows-originated keys)
+        line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+        if (line.empty()) continue;
         RemoteAuthEntry e;
         e.line = line;
         parse_pub_line(line, e);
@@ -628,8 +631,12 @@ static void remote_reload(SshKeyMgr &m)
 static bool remote_save(SshKeyMgr &m)
 {
     std::string content;
-    for (auto &e : m.remote_auth)
-        content += e.line + "\n";
+    for (auto &e : m.remote_auth) {
+        // Ensure no \r sneaks into the remote file regardless of where the line came from
+        std::string line = e.line;
+        line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+        content += line + "\n";
+    }
     remote_lock();
     bool ok = sftp_write_file(remote_session(), ".ssh/authorized_keys", content);
     remote_unlock();
@@ -1408,7 +1415,7 @@ static void action_remote_add_auth(SshKeyMgr &m)
     if (m.keys.empty() || m.selected >= (int)m.keys.size()) return;
     const SshKeyEntry &e = m.keys[m.selected];
 
-    FILE *fp = fopen(e.pub_path.c_str(), "r");
+    FILE *fp = fopen(e.pub_path.c_str(), "rb");  // binary: we strip \r ourselves
     if (!fp) {
         snprintf(m.remote_status, sizeof(m.remote_status),
                  "Error: cannot open %s", e.pub_path.c_str());
@@ -1419,8 +1426,10 @@ static void action_remote_add_auth(SshKeyMgr &m)
     fread(pub_line, 1, sizeof(pub_line) - 1, fp);
     fclose(fp);
     size_t plen = strlen(pub_line);
-    while (plen > 0 && (pub_line[plen-1] == '\n' || pub_line[plen-1] == '\r'))
+    while (plen > 0 && (pub_line[plen-1] == '\n' || pub_line[plen-1] == '\r' || pub_line[plen-1] == ' '))
         pub_line[--plen] = '\0';
+    // Remove any embedded \r (Windows CRLF .pub files)
+    { char *w = pub_line; for (char *r2 = pub_line; *r2; r2++) if (*r2 != '\r') *w++ = *r2; *w = '\0'; plen = strlen(pub_line); }
     if (plen == 0) {
         snprintf(m.remote_status, sizeof(m.remote_status), "Error: pub key file empty.");
         m.remote_status_ok = false;
