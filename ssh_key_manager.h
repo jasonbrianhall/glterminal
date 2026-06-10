@@ -8,22 +8,24 @@
 // SSH KEY MANAGER OVERLAY  (F8)
 // ============================================================================
 // Lists ~/.ssh keys, shows fingerprint/type/comment, lets the user generate
-// new Ed25519 / RSA-4096 keys, copy the public key to clipboard, and delete
+// new Ed25519 / RSA keys, copy the public key to clipboard, and delete
 // key pairs — all without leaving the terminal.
 //
-// No libssh2 dependency; uses ssh-keygen via popen().
+// No libssh2 or ssh-keygen dependency; uses OpenSSL for key generation
+// and writes standard OpenSSH wire format directly.
 
 struct SshKeyEntry {
     std::string priv_path;   // e.g. /home/user/.ssh/id_ed25519
     std::string pub_path;    // priv_path + ".pub"
+    std::string filename;    // basename of priv_path, e.g. "id_ed25519"
     std::string type;        // "ED25519", "RSA", "ECDSA", …
     std::string comment;     // last token of pub key
     std::string fingerprint; // SHA256:…
     int         bits = 0;
 };
 
-enum class KeyMgrPane { LIST, GENERATE, CONFIRM_DELETE };
-enum class KeySortCol  { NONE, FINGERPRINT, COMMENT };
+enum class KeyMgrPane { LIST, GENERATE, CONFIRM_DELETE, CONFIRM_OVERWRITE };
+enum class KeySortCol  { NONE, FILENAME, FINGERPRINT, COMMENT };
 enum class KeySortDir  { ASC, DESC };
 
 struct SshKeyMgr {
