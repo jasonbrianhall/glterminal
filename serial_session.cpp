@@ -154,7 +154,7 @@ static std::string win_port_path(const std::string &port) {
     if (port.size() >= 4 &&
         (port[0] == '\\' && port[1] == '\\'))
         return port;  // already a device path
-    // Prefix any COMn with \\.\
+    // Prefix any COMn with \\.\\ so CreateFile works for ports > 9
     if (port.size() >= 3 &&
         (port[0] == 'C' || port[0] == 'c') &&
         (port[1] == 'O' || port[1] == 'o') &&
