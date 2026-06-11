@@ -1344,13 +1344,12 @@ void ssh_key_mgr_render(int win_w, int win_h)
     SshKeyMgr &m = g_ssh_key_mgr;
     if (!m.visible) return;
 
-    float pw = (float)std::max(win_w - 120, MIN_W);
-    float ph = (float)std::max(win_h - 120, MIN_H);
-    float ox = (float)((win_w - (int)pw) / 2);
-    float oy = (float)((win_h - (int)ph) / 2);
+    float pw = (float)win_w;
+    float ph = (float)win_h;
+    float ox = 0.f;
+    float oy = 0.f;
 
     draw_rect(0, 0, (float)win_w, (float)win_h, 0.f, 0.f, 0.f, 0.60f);
-    draw_rect(ox + 3, oy + 3, pw, ph, 0.f, 0.f, 0.f, 0.45f);
     draw_rect(ox, oy, pw, ph, 0.07f, 0.09f, 0.13f, 0.97f);
 
     draw_rect(ox,      oy,      pw, 1,  0.30f, 0.45f, 0.75f, 1.f);
@@ -2114,18 +2113,12 @@ bool ssh_key_mgr_mousedown(int mx, int my, int /*button*/)
 
     int win_w, win_h;
     SDL_GetWindowSize(SDL_GL_GetCurrentWindow(), &win_w, &win_h);
-    float pw = (float)std::max(win_w - 120, MIN_W);
-    float ph = (float)std::max(win_h - 120, MIN_H);
-    float ox = (float)((win_w - (int)pw) / 2);
-    float oy = (float)((win_h - (int)ph) / 2);
+    float pw  = (float)win_w;
+    float ph  = (float)win_h;
+    float ox  = 0.f;
+    float oy  = 0.f;
     float coy = content_oy_of(oy, ph);
     float cph = content_ph_of(ph);
-
-    if ((mx < ox || mx > ox + pw || my < oy || my > oy + ph) &&
-        m.pane == KeyMgrPane::LIST) {
-        ssh_key_mgr_close();
-        return true;
-    }
 
     if (m.pane == KeyMgrPane::LIST) {
         bool has_remote = remote_available();
@@ -2443,7 +2436,7 @@ bool ssh_key_mgr_mousemotion(int /*x*/, int y, bool lbutton)
 
     int win_w, win_h;
     SDL_GetWindowSize(SDL_GL_GetCurrentWindow(), &win_w, &win_h);
-    float ph = (float)std::max(win_h - 120, MIN_H) - TITLE_H - 1;
+    float ph = (float)win_h - TITLE_H - 1;
 
     int delta = m.remote_drag_start_y - y;
     int new_split = m.remote_drag_start_split + delta;

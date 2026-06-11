@@ -34,6 +34,7 @@
 #  include "pf_overlay.h"
 #endif
 #include "telnet_session.h"
+#include "serial_session.h"
 
 #include <SDL2/SDL.h>
 #include "icon.h"
@@ -73,14 +74,15 @@ int         g_basic_win_h = 480;
 // ============================================================================
 
 #ifdef USESSH
-static inline bool _term_read_dispatch(bool ssh, bool tnet, Terminal *t) {
+static inline bool _term_read_dispatch(bool ssh, bool tnet, bool ser, Terminal *t) {
     if (ssh)  return ssh_read(t);
     if (tnet) return telnet_read(t);
+    if (ser)  return serial_read(t);
     return term_read(t);
 }
-#  define TERM_READ()  _term_read_dispatch(use_ssh, use_telnet, &term)
+#  define TERM_READ()  _term_read_dispatch(use_ssh, use_telnet, use_serial, &term)
 #else
-#  define TERM_READ()  (use_telnet ? telnet_read(&term) : term_read(&term))
+#  define TERM_READ()  (use_serial ? serial_read(&term) : use_telnet ? telnet_read(&term) : term_read(&term))
 #endif
 #define TERM_WRITE(buf, n)  term_write(&term, (buf), (n))
 
@@ -104,8 +106,10 @@ int main(int argc, char **argv) {
 #endif
     bool use_ssh    = false;
     bool use_telnet = false;
+    bool use_serial = false;
     bool force_sdl  = false;
     TelnetConfig telnet_cfg;
+    SerialConfig serial_cfg;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -141,6 +145,18 @@ int main(int argc, char **argv) {
         }
         if (strcmp(arg, "--ssl") == 0 || strcmp(arg, "-ssl") == 0) {
             telnet_cfg.use_ssl = true;
+            continue;
+        }
+
+        // --serial [port]  — port defaults to empty (prompted in-window)
+        if (strcmp(arg, "--serial") == 0 || strcmp(arg, "-serial") == 0) {
+            use_serial = true;
+            if (i + 1 < argc && argv[i+1][0] != '-')
+                serial_cfg.port = argv[++i];
+            continue;
+        }
+        if ((strcmp(arg, "--serial-baud") == 0 || strcmp(arg, "-serial-baud") == 0) && i + 1 < argc) {
+            serial_cfg.baud = atoi(argv[++i]);
             continue;
         }
 
@@ -524,11 +540,42 @@ int main(int argc, char **argv) {
         }
     }
 
-    // ---- local shell (non-SSH, non-Telnet) -----------------------------------
+    // ---- Serial: in-window port/baud/settings prompt then connect -------------
+    // Prompts for port, baud rate, data bits, parity, stop bits, flow control.
+    // If port was supplied on the command line, skips straight to baud prompt.
+    enum class SerialPhase { IDLE, SETUP, ACTIVE, FAILED };
+    SerialPhase serial_phase = use_serial
+        ? SerialPhase::SETUP
+        : SerialPhase::IDLE;
+
+    // Which field are we currently collecting?
+    enum class SerialField { PORT, BAUD, DATA_BITS, PARITY, STOP_BITS, FLOW };
+    SerialField serial_field = serial_cfg.port.empty()
+        ? SerialField::PORT : SerialField::BAUD;
+    std::string serial_field_input;
+
+    auto serial_begin_prompt = [&](const char *text) {
+        term_feed(&term, text, (int)strlen(text));
+        serial_field_input.clear();
+    };
+
+    if (use_serial) {
+        SDL_StartTextInput();
+        term_feed(&term, "Serial connection setup\r\n", 24);
+        if (serial_field == SerialField::PORT) {
+            serial_begin_prompt("\r\nPort (e.g. /dev/ttyUSB0, COM3): ");
+        } else {
+            char p[64];
+            snprintf(p, sizeof(p), "\r\nBaud rate [%d]: ", serial_cfg.baud);
+            serial_begin_prompt(p);
+        }
+    }
+
+    // ---- local shell (non-SSH, non-Telnet, non-Serial) -----------------------
 #ifdef USESSH
     if (!use_ssh)
 #endif
-    if (!use_telnet)
+    if (!use_telnet && !use_serial)
     {
         if (!term_spawn(&term, shell)) {
             char msg[256];
@@ -545,7 +592,7 @@ int main(int argc, char **argv) {
 #  ifdef USESSH
     if (!use_ssh)
 #  endif
-    if (!use_telnet)
+    if (!use_telnet && !use_serial)
     {
         SDL_Delay(200);
         term_read(&term);
@@ -759,6 +806,11 @@ int main(int argc, char **argv) {
                            telnet_phase == TelnetPhase::FAILED))
             needs_render = true;
 
+        // Serial connection state machine
+        if (use_serial && (serial_phase == SerialPhase::SETUP ||
+                           serial_phase == SerialPhase::FAILED))
+            needs_render = true;
+
         // PTY / SSH / Telnet read.
         // For local PTY: loop up to 8ms to drain burst output without falling behind.
         // For SSH/Telnet: one call per frame — both loop internally until EAGAIN.
@@ -768,18 +820,19 @@ int main(int argc, char **argv) {
         constexpr bool ssh_ready = true;
 #endif
         bool telnet_ready = !use_telnet || telnet_phase == TelnetPhase::ACTIVE || telnet_phase == TelnetPhase::FAILED;
+        bool serial_ready = !use_serial || serial_phase == SerialPhase::ACTIVE || serial_phase == SerialPhase::FAILED;
         {
             bool had_sel = term.sel_exists || term.sel_active;
             int old_sb_count = term.sb_count;
             bool got_data = false;
 #ifdef USESSH
-            if (ssh_ready && telnet_ready) {
+            if (ssh_ready && telnet_ready && serial_ready) {
                 got_data = TERM_READ();
             }
 #else
             // Local PTY — drain in a tight loop up to 8ms budget
             uint32_t read_start = SDL_GetTicks();
-            while (TERM_READ()) {
+            while (serial_ready && TERM_READ()) {
                 got_data = true;
                 if (SDL_GetTicks() - read_start >= 8) break;
             }
@@ -821,6 +874,13 @@ int main(int argc, char **argv) {
                 const char *msg = "\r\n[Connection closed — press spacebar to exit or close window]\r\n";
                 term_feed(&term, msg, (int)strlen(msg));
                 telnet_phase = TelnetPhase::FAILED;
+            }
+        } else
+        if (use_serial) {
+            if (serial_phase == SerialPhase::ACTIVE && serial_channel_closed()) {
+                const char *msg = "\r\n[Serial port closed — press spacebar to exit or close window]\r\n";
+                term_feed(&term, msg, (int)strlen(msg));
+                serial_phase = SerialPhase::FAILED;
             }
         } else
         {
@@ -955,6 +1015,9 @@ int main(int argc, char **argv) {
                     if (use_telnet && telnet_phase == TelnetPhase::FAILED) {
                         settings_save(); running = false; break;
                     }
+                    if (use_serial && serial_phase == SerialPhase::FAILED) {
+                        settings_save(); running = false; break;
+                    }
                 }
                 // F7/WOPR checked before ssh_ready so it works in local sessions
                 if (ev.key.keysym.sym == SDLK_F7) {
@@ -1040,6 +1103,102 @@ int main(int argc, char **argv) {
                 }
                 // Still in Telnet setup — ignore normal key input
                 if (use_telnet && !telnet_ready) break;
+                // Serial SETUP: collecting port, baud, data bits, parity, stop bits, flow
+                if (use_serial && serial_phase == SerialPhase::SETUP) {
+                    SDL_Keycode sym = ev.key.keysym.sym;
+                    if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) {
+                        term_feed(&term, "\r\n", 2);
+                        switch (serial_field) {
+                        case SerialField::PORT:
+                            if (!serial_field_input.empty())
+                                serial_cfg.port = serial_field_input;
+                            if (serial_cfg.port.empty()) {
+                                serial_begin_prompt("Port cannot be empty.\r\nPort: ");
+                            } else {
+                                char p[64];
+                                snprintf(p, sizeof(p), "Baud rate [%d]: ", serial_cfg.baud);
+                                serial_field = SerialField::BAUD;
+                                serial_begin_prompt(p);
+                            }
+                            break;
+                        case SerialField::BAUD:
+                            if (!serial_field_input.empty()) {
+                                int b = atoi(serial_field_input.c_str());
+                                if (b > 0) serial_cfg.baud = b;
+                            }
+                            serial_field = SerialField::DATA_BITS;
+                            {
+                                char p[64];
+                                snprintf(p, sizeof(p), "Data bits [%d]: ", serial_cfg.data_bits);
+                                serial_begin_prompt(p);
+                            }
+                            break;
+                        case SerialField::DATA_BITS:
+                            if (!serial_field_input.empty()) {
+                                int d = atoi(serial_field_input.c_str());
+                                if (d >= 5 && d <= 8) serial_cfg.data_bits = d;
+                            }
+                            serial_field = SerialField::PARITY;
+                            serial_begin_prompt("Parity [N/o/e]: ");
+                            break;
+                        case SerialField::PARITY:
+                            if (!serial_field_input.empty()) {
+                                char c = serial_field_input[0];
+                                if (c == 'o' || c == 'O')      serial_cfg.parity = SerialParity::ODD;
+                                else if (c == 'e' || c == 'E') serial_cfg.parity = SerialParity::EVEN;
+                                else                           serial_cfg.parity = SerialParity::NONE;
+                            }
+                            serial_field = SerialField::STOP_BITS;
+                            serial_begin_prompt("Stop bits [1/2]: ");
+                            break;
+                        case SerialField::STOP_BITS:
+                            if (!serial_field_input.empty() && serial_field_input[0] == '2')
+                                serial_cfg.stop_bits = SerialStopBits::TWO;
+                            else
+                                serial_cfg.stop_bits = SerialStopBits::ONE;
+                            serial_field = SerialField::FLOW;
+                            serial_begin_prompt("Flow control [N/h/s] (none/hardware/software): ");
+                            break;
+                        case SerialField::FLOW:
+                            if (!serial_field_input.empty()) {
+                                char c = serial_field_input[0];
+                                if (c == 'h' || c == 'H')      serial_cfg.flow = SerialFlow::HARDWARE;
+                                else if (c == 's' || c == 'S') serial_cfg.flow = SerialFlow::SOFTWARE;
+                                else                           serial_cfg.flow = SerialFlow::NONE;
+                            }
+                            // All fields collected — connect now
+                            {
+                                char msg[256];
+                                const char *parity_str[] = {"N","O","E","M","S"};
+                                const char *stop_str[]   = {"1","1.5","2"};
+                                const char *flow_str[]   = {"none","hw","sw"};
+                                snprintf(msg, sizeof(msg),
+                                         "Opening %s @ %d %d%s%s flow=%s …\r\n",
+                                         serial_cfg.port.c_str(),
+                                         serial_cfg.baud,
+                                         serial_cfg.data_bits,
+                                         parity_str[(int)serial_cfg.parity],
+                                         stop_str[(int)serial_cfg.stop_bits],
+                                         flow_str[(int)serial_cfg.flow]);
+                                term_feed(&term, msg, (int)strlen(msg));
+                            }
+                            if (serial_connect(serial_cfg, &term)) {
+                                serial_phase = SerialPhase::ACTIVE;
+                            } else {
+                                serial_phase = SerialPhase::FAILED;
+                                const char *fail = "\r\nFailed to open port. Press any key to close.\r\n";
+                                term_feed(&term, fail, (int)strlen(fail));
+                            }
+                            break;
+                        }
+                    } else if (sym == SDLK_BACKSPACE && !serial_field_input.empty()) {
+                        serial_field_input.pop_back();
+                        term_feed(&term, "\b \b", 3);
+                    }
+                    break;
+                }
+                // Still in Serial setup — ignore normal key input
+                if (use_serial && !serial_ready) break;
                 // F11 fullscreen — checked before any overlay so it always works
                 if (ev.key.keysym.sym == SDLK_F11) {
                     bool is_full = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
@@ -1284,6 +1443,13 @@ int main(int argc, char **argv) {
                     break;
                 }
                 if (use_telnet && !telnet_ready) break;
+                if (use_serial && serial_phase == SerialPhase::SETUP) {
+                    // Visible echo for all serial fields
+                    serial_field_input += ev.text.text;
+                    term_feed(&term, ev.text.text, (int)strlen(ev.text.text));
+                    break;
+                }
+                if (use_serial && !serial_ready) break;
                 SDL_Keymod mod = SDL_GetModState();
                 if (!(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
                     TERM_WRITE(ev.text.text, (int)strlen(ev.text.text));
@@ -1943,6 +2109,7 @@ int main(int argc, char **argv) {
     }
 #endif
     if (use_telnet) telnet_disconnect();
+    if (use_serial) serial_disconnect();
     SDL_Quit();
     ft_shutdown();
 
