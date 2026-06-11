@@ -563,7 +563,11 @@ int main(int argc, char **argv) {
         SDL_StartTextInput();
         term_feed(&term, "Serial connection setup\r\n", 24);
         if (serial_field == SerialField::PORT) {
-            serial_begin_prompt("\r\nPort (e.g. /dev/ttyUSB0, COM3): ");
+#ifdef _WIN32
+            serial_begin_prompt("\r\nPort (e.g. COM1, COM3): ");
+#else
+            serial_begin_prompt("\r\nPort (e.g. /dev/ttyUSB0, /dev/ttyS0): ");
+#endif
         } else {
             char p[64];
             snprintf(p, sizeof(p), "\r\nBaud rate [%d]: ", serial_cfg.baud);

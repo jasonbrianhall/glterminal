@@ -33,7 +33,8 @@ enum class SerialStopBits { ONE, ONE5, TWO };
 enum class SerialFlow     { NONE, HARDWARE, SOFTWARE };  // SOFTWARE = XON/XOFF
 
 struct SerialConfig {
-    std::string   port;               // "/dev/ttyUSB0" or "COM3"
+    std::string   port;               // Linux: "/dev/ttyUSB0", "/dev/ttyS0"
+                                      // Windows: "COM1", "COM3", "COM10"
     int           baud      = 9600;
     int           data_bits = 8;      // 5, 6, 7, or 8
     SerialParity  parity    = SerialParity::NONE;
