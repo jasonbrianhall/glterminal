@@ -109,11 +109,11 @@ CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
                  $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
                  $(SSH_CFLAGS_LINUX) \
                  -Iwopr \
-                 -DLINUX $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
+                 -DLINUX $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto -DDONTUSEGMP
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                  $(SSH_LIBS_LINUX) \
-                 -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lgmp \
+                 -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) \
                  -lssl -lcrypto \
                  -s -Wl,--gc-sections -flto -lwebp
 
@@ -121,14 +121,14 @@ CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
                        $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
                        $(SSH_CFLAGS_LINUX) \
                        -Iwopr \
-                       -DLINUX $(SSH_DEFINE) -DDEBUG -g -O0
+                       -DLINUX $(SSH_DEFINE) -DDEBUG -g -O0 -DDONTUSEGMP
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                        $(SSH_LIBS_LINUX) \
-                       -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lgmp -lssl -lcrypto -lwebp
+                       -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lssl -lcrypto -lwebp
 
 # C flags for miniz .c files (no -std=c++17, no -Wextra pedantry on C)
-CFLAGS_LINUX       = $(CFLAGS_COMMON) -DLINUX -O2
+CFLAGS_LINUX       = $(CFLAGS_COMMON) -DLINUX -O2 
 CFLAGS_LINUX_DEBUG = $(CFLAGS_COMMON) -DLINUX -DDEBUG -g -O0
 
 # ============================================================================
@@ -139,12 +139,12 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
                $(SSH_CFLAGS_WIN) \
                -Iwopr \
                -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
-               $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -O2 -ffunction-sections -fdata-sections -flto
+               $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -O2 -ffunction-sections -fdata-sections -flto -DDONTUSEGMP
 
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
-               -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lgmp -lws2_32 \
+               -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lws2_32 \
                -s -Wl,--gc-sections -flto -lwebp
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
@@ -152,7 +152,7 @@ CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      $(SSH_CFLAGS_WIN) \
                      -Iwopr \
                      -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
-                     $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -DDEBUG -g -O0
+                     $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -DDEBUG -g -O0 -DDONTUSEGMP
 
 CFLAGS_WIN         = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -O2
 CFLAGS_WIN_DEBUG   = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -DDEBUG -g -O0
