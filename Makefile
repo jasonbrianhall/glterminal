@@ -172,7 +172,7 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               telnet_session.cpp                          \
               basic_graphics.cpp    mml_player.cpp        \
               glyph_atlas.cpp       sticky_prompt.cpp     \
-              ssh_key_manager.cpp
+              ssh_key_manager.cpp   serial_session.cpp
 
 SRCS_MINIZ = libtelnet.c miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
             wopr/zork/actors.c \

@@ -258,25 +258,33 @@ static void serial_write_bridge(Terminal *t, const char *buf, int n) {
 // Most serial devices (Cisco, modems) send \r\n already; some send bare \n.
 // The VT parser needs \r to reset the column — without it text staircases.
 static void serial_feed(Terminal *t, const char *buf, int n) {
-    if (!s_nl_crnl) {
-        term_feed(t, buf, n);
-        return;
-    }
-    // Scan for bare \n (not preceded by \r) and expand inline.
     const char *p   = buf;
     const char *end = buf + n;
     while (p < end) {
+        // Translate DEL (0x7f) → BS (0x08) — raw serial sends 0x7f for backspace
+        // but the VT parser only renders BS as a cursor movement; 0x7f has no glyph.
+        if ((unsigned char)*p == 0x7f) {
+            term_feed(t, "\x08 \x08", 3);
+            p++;
+            continue;
+        }
+        if (!s_nl_crnl) {
+            // No newline expansion — feed up to next DEL or end
+            const char *q = p;
+            while (q < end && (unsigned char)*q != 0x7f) q++;
+            if (q > p) term_feed(t, p, (int)(q - p));
+            p = q;
+            continue;
+        }
+        // Scan for bare \n (not preceded by \r) and expand to \r\n
         const char *nl = (const char *)memchr(p, '\n', end - p);
         if (!nl) {
             term_feed(t, p, (int)(end - p));
             break;
         }
-        // Feed everything up to (not including) the \n
         if (nl > p)
             term_feed(t, p, (int)(nl - p));
-        // If previous char was already \r, don't double-insert
-        bool already_cr = (nl > buf && nl[-1] == '\r') ||
-                          (nl == buf && p == buf);  // can't check previous chunk; safe to insert
+        bool already_cr = (nl > buf && nl[-1] == '\r');
         if (!already_cr)
             term_feed(t, "\r\n", 2);
         else
@@ -403,8 +411,11 @@ void serial_write(Terminal *t, const char *buf, int n) {
     }
 
 #ifndef _WIN32
+    // Expand bare \r to \r\n on send — serial devices expect both
     const char *ptr = buf;
     int rem = n;
+    char crnl[2] = { '\r', '\n' };
+    if (n == 1 && buf[0] == '\r') { ptr = crnl; rem = 2; }
     while (rem > 0) {
         ssize_t sent = write(s_fd, ptr, (size_t)rem);
         if (sent > 0) { ptr += sent; rem -= (int)sent; }
@@ -418,6 +429,8 @@ void serial_write(Terminal *t, const char *buf, int n) {
 
     const char *ptr = buf;
     int rem = n;
+    char crnl[2] = { '\r', '\n' };
+    if (n == 1 && buf[0] == '\r') { ptr = crnl; rem = 2; }
     while (rem > 0) {
         DWORD written = 0;
         BOOL ok = WriteFile(s_fd, ptr, (DWORD)rem, &written, &ov);
