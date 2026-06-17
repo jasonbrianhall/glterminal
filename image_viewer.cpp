@@ -1852,20 +1852,21 @@ void iv_render(int win_w, int win_h) {
 
     int rh = iv_row_h();
 
-    // Check if zoomed in — hide UI elements for immersive viewing
+    // Check if zoomed in OR in fullscreen mode — hide UI elements for immersive viewing
     bool is_zoomed = g_iv.zoom > 1.0f;
+    bool hide_ui = is_zoomed || g_iv.fullscreen;
 
     // ── Layout ─────────────────────────────────────────────────────────────
-    // Left: file browser panel (~30% width, hidden when zoomed)
+    // Left: file browser panel (~30% width, hidden when zoomed or fullscreen)
     // Right: image display area (~70% width)
-    // Bottom: status bar (1 row, hidden when zoomed)
-    int status_h = is_zoomed ? 0 : (rh + IV_PAD);
-    int panel_w  = is_zoomed ? 0 : (int)(win_w * 0.28f);
+    // Bottom: status bar (1 row, hidden when zoomed or fullscreen)
+    int status_h = hide_ui ? 0 : (rh + IV_PAD);
+    int panel_w  = hide_ui ? 0 : (int)(win_w * 0.28f);
     int panel_w_min = rh * 14;
     if (panel_w > 0 && panel_w < panel_w_min) panel_w = panel_w_min;
     if (panel_w > win_w / 2)   panel_w = win_w / 2;
 
-    int title_h  = is_zoomed ? 0 : (rh + IV_PAD);
+    int title_h  = hide_ui ? 0 : (rh + IV_PAD);
     int content_y = title_h;
     int content_h = win_h - title_h - status_h;
     int img_x    = panel_w + (panel_w > 0 ? 2 : 0);
@@ -1875,7 +1876,7 @@ void iv_render(int win_w, int win_h) {
     draw_rect(0, 0, (float)win_w, (float)win_h, 0.06f, 0.06f, 0.08f, 1.f);
 
     // ── Title bar ──────────────────────────────────────────────────────────
-    if (!is_zoomed) {
+    if (!hide_ui) {
         draw_rect(0, 0, (float)win_w, (float)title_h, 0.12f, 0.12f, 0.18f, 1.f);
         draw_rect(0, (float)(title_h-1), (float)win_w, 1, 0.25f, 0.35f, 0.60f, 1.f);
         const char *mode_str = g_iv.remote ? "Felix Chirp — Remote" : "Felix Chirp";
@@ -1887,7 +1888,7 @@ void iv_render(int win_w, int win_h) {
     }
 
     // ── File browser panel ──────────────────────────────────────────────────
-    if (!is_zoomed) {
+    if (!hide_ui) {
         float px = 0, py = (float)content_y, pw = (float)panel_w, ph = (float)content_h;
 
         // Panel background + border
@@ -2129,7 +2130,7 @@ void iv_render(int win_w, int win_h) {
                          bar_x + bar_w*0.5f - strlen(timebuf)*g_font_size*0.3f,
                          bar_y + 14.f, 0.55f, 0.65f, 0.75f, 1.f);
 
-            const char *ctrl = "Space: pause/resume   S: stop   ←→: prev/next   V: next viz";
+            const char *ctrl = "Space: pause/resume   S: stop   ←→: prev/next   V: next viz   DblClick: fullscreen";
             iv_draw_text(ctrl,
                          ix + iw*0.5f - strlen(ctrl)*g_font_size*0.3f,
                          bar_y + (float)rh + 4.f,
@@ -2357,7 +2358,7 @@ void iv_render(int win_w, int win_h) {
     }
 
     // ── Status bar ─────────────────────────────────────────────────────────
-    if (!is_zoomed) {
+    if (!hide_ui) {
         float st_y = (float)(win_h - status_h);
         draw_rect(0, st_y, (float)win_w, 1, 0.20f, 0.20f, 0.30f, 1.f);
         draw_rect(0, st_y+1, (float)win_w, (float)status_h-1, 0.09f, 0.09f, 0.13f, 1.f);
@@ -2433,6 +2434,11 @@ bool iv_keydown(SDL_Keycode sym) {
 
     switch (sym) {
     case SDLK_ESCAPE: case SDLK_F5:
+        // Exit fullscreen first if in fullscreen mode, otherwise close viewer
+        if (g_iv.fullscreen) {
+            g_iv.fullscreen = false;
+            return true;
+        }
         iv_close();
         return true;
 
@@ -2636,9 +2642,10 @@ static void iv_image_rect(int win_w, int win_h,
                           float &ix, float &iy, float &iw, float &ih) {
     int rh       = iv_row_h();
     bool is_zoomed = g_iv.zoom > 1.0f;
-    int status_h = is_zoomed ? 0 : (rh + IV_PAD);
-    int title_h  = is_zoomed ? 0 : (rh + IV_PAD);
-    int panel_w  = is_zoomed ? 0 : (int)(win_w * 0.28f);
+    bool hide_ui = is_zoomed || g_iv.fullscreen;
+    int status_h = hide_ui ? 0 : (rh + IV_PAD);
+    int title_h  = hide_ui ? 0 : (rh + IV_PAD);
+    int panel_w  = hide_ui ? 0 : (int)(win_w * 0.28f);
     int panel_w_min = rh * 14;
     if (panel_w > 0 && panel_w < panel_w_min) panel_w = panel_w_min;
     if (panel_w > win_w / 2)   panel_w = win_w / 2;
@@ -2652,7 +2659,8 @@ static void iv_image_rect(int win_w, int win_h,
 static int iv_panel_width(int win_w) {
     int rh = iv_row_h();
     bool is_zoomed = g_iv.zoom > 1.0f;
-    if (is_zoomed) return 0;  // No panel when zoomed
+    bool hide_ui = is_zoomed || g_iv.fullscreen;
+    if (hide_ui) return 0;  // No panel when zoomed or fullscreen
     int pw = (int)(win_w * 0.28f);
     int mn = rh * 14;
     if (pw < mn)        pw = mn;
@@ -2796,8 +2804,31 @@ bool iv_mousedown(int x, int y, int button, int win_w, int win_h) {
             }
         }
 
-        // Start pan drag in image area
+        // Double-click in image/audio/CDG area to toggle fullscreen
         bool has_image = g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex;
+        if ((has_image || g_iv.audio_playing || g_iv.audio_paused) && x >= panel_w) {
+            static uint32_t s_last_dbl_click_time = 0;
+            static int      s_last_dbl_click_x = -1;
+            static int      s_last_dbl_click_y = -1;
+            uint32_t now = SDL_GetTicks();
+            
+            // Check if this is a double-click (same area, within 400ms)
+            if ((now - s_last_dbl_click_time) < 400 &&
+                abs(x - s_last_dbl_click_x) < 20 &&
+                abs(y - s_last_dbl_click_y) < 20) {
+                // This is a double-click — toggle fullscreen
+                g_iv.fullscreen = !g_iv.fullscreen;
+                s_last_dbl_click_time = 0;  // Reset to avoid triple-click
+                return true;
+            }
+            
+            // Record this click for next double-click check
+            s_last_dbl_click_time = now;
+            s_last_dbl_click_x = x;
+            s_last_dbl_click_y = y;
+        }
+
+        // Start pan drag in image area
         if (has_image && x >= panel_w) {
             g_iv.drag_active  = true;
             g_iv.drag_start_x = x;

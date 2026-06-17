@@ -38,6 +38,7 @@ struct IVEntry {
 struct ImageViewer {
     bool visible  = false;
     bool remote   = false;
+    bool fullscreen = false;  // Fullscreen mode for CDG/audio (hides panel/title even when not zoomed)
 
     char path[4096]     = {};
     bool in_zip         = false;
