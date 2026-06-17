@@ -65,6 +65,8 @@ struct WoprChessState {
     int   anim_from_r, anim_from_c;
     int   anim_to_r, anim_to_c;
     ChessPiece anim_piece;         // piece being animated
+    ChessMove pending_move;        // move to apply when animation completes
+    bool  has_pending_move;        // whether there's a move waiting for animation
 
     // Pawn promotion
     bool  awaiting_promotion;
@@ -221,12 +223,48 @@ void wopr_chess_update(WoprState *w, double dt) {
     WoprChessState *s = cs(w);
     if (!s || s->screen != SCREEN_GAME) return;
 
-    // Update piece animation
+    // Piece animation - use frame counter for consistent duration
     if (s->is_animating) {
-        s->animation_progress += (float)dt * 3.0f;  // 3.0 = speed (completes in ~0.33 seconds)
+        // Target 30 frames of animation (~0.5s at 60fps)
+        const int ANIMATION_FRAMES = 30;
+        static int anim_frame_counter = 0;
+        anim_frame_counter++;
+        
+        s->animation_progress = std::min((float)anim_frame_counter / ANIMATION_FRAMES, 1.0f);
+        SDL_Log("[ANIM] frame %d/%d progress=%.3f", anim_frame_counter, ANIMATION_FRAMES, s->animation_progress);
+        
         if (s->animation_progress >= 1.0f) {
+            SDL_Log("[ANIM] COMPLETE at frame %d", anim_frame_counter);
             s->is_animating = false;
             s->animation_progress = 1.0f;
+            anim_frame_counter = 0;
+            
+            // Apply the pending move now that animation is done
+            if (s->has_pending_move) {
+                chess_make_move(&s->game, s->pending_move);
+                s->has_pending_move = false;
+                
+                // Now check game status after the move is applied
+                s->status = chess_check_game_status(&s->game);
+                ChessColor plr = s->player_color;
+                bool plr_wins = (plr == WHITE && s->status == CHESS_CHECKMATE_BLACK) ||
+                                (plr == BLACK && s->status == CHESS_CHECKMATE_WHITE);
+                
+                if (plr_wins) {
+                    strcpy(s->message, "CHECKMATE!  YOU WIN.");
+                    s->game_over = true;
+                } else if (s->status == CHESS_STALEMATE) {
+                    strcpy(s->message, "STALEMATE.  DRAW.");
+                    s->game_over = true;
+                } else if (!s->awaiting_promotion) {
+                    // Check if piece promoted (handled by attempt_move flag)
+                    if (chess_is_in_check(&s->game, s->game.turn)) {
+                        chess_sound_play(SFX_CHECK);
+                    }
+                    strcpy(s->message, "WOPR CALCULATING...");
+                    start_ai(s);
+                }
+            }
         }
     }
 
@@ -492,6 +530,13 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
             const ChessPiece &p = s->game.board[logical_row][logical_col];
             if (p.type == EMPTY) continue;
 
+            // Skip drawing this piece if it's currently being animated
+            if (s->is_animating &&
+                ((s->anim_from_r == logical_row && s->anim_from_c == logical_col) ||
+                 (s->anim_to_r == logical_row && s->anim_to_c == logical_col))) {
+                continue;
+            }
+
             float px = bx + col * cell_sz + pad;
             float py = by + row * cell_sz + pad;
 
@@ -505,6 +550,7 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
 
     // Draw animating piece on top
     if (s->is_animating && s->anim_piece.type != EMPTY) {
+        SDL_Log("[ANIM_RENDER] Drawing at progress=%.3f", s->animation_progress);
         // Calculate interpolated position
         int from_display_r = vrow(s->anim_from_r);
         int from_display_c = vcol(s->anim_from_c);
@@ -829,6 +875,10 @@ static void attempt_move(WoprChessState *s, int r, int c) {
     ChessColor plr = s->player_color;
     s->sel_r = r; s->sel_c = c;
 
+    if (s->is_animating) {
+        SDL_Log("[WARNING] attempt_move called while animation in progress! progress=%.3f", s->animation_progress);
+    }
+
     if (!s->has_from) {
         const ChessPiece &p = s->game.board[r][c];
         if (p.type != EMPTY && p.color == plr) {
@@ -867,6 +917,13 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             s->anim_to_c = c;
             s->anim_piece = s->game.board[s->from_r][s->from_c];
             
+            // Store the move to apply when animation completes
+            s->pending_move = {s->from_r, s->from_c, r, c, 0};
+            s->has_pending_move = true;
+            
+            SDL_Log("[ANIM_START] Player move from (%d,%d) to (%d,%d) piece_type=%d", 
+                    s->anim_from_r, s->anim_from_c, s->anim_to_r, s->anim_to_c, s->anim_piece.type);
+            
             // Play sound for player move
             if (s->game.board[r][c].type != EMPTY) {
                 chess_sound_play(SFX_CAPTURE);
@@ -877,44 +934,24 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             // Track capture before making move
             track_capture(s, r, c, s->player_color);
             
+            s->has_from = false;
+            
             // Check if moving a pawn to promotion rank BEFORE making the move
             ChessPiece moving_piece = s->game.board[s->from_r][s->from_c];
             bool is_pawn_promotion = (moving_piece.type == PAWN && 
                                       ((moving_piece.color == WHITE && r == 0) ||
                                        (moving_piece.color == BLACK && r == 7)));
             
-            ChessMove mv{s->from_r, s->from_c, r, c, 0};
-            chess_make_move(&s->game, mv);
-            s->has_from = false;
-            
-            // Check if pawn promotion
             if (is_pawn_promotion) {
-                // Pawn just promoted, ask player what they want
+                // Pawn will promote, ask player after animation completes
                 s->awaiting_promotion = true;
                 s->promotion_row = r;
                 s->promotion_col = c;
                 strcpy(s->message, "CHOOSE PROMOTION PIECE.");
-                return;
-            }
-            
-            s->status = chess_check_game_status(&s->game);
-            bool plr_wins = (plr == WHITE && s->status == CHESS_CHECKMATE_BLACK) ||
-                            (plr == BLACK && s->status == CHESS_CHECKMATE_WHITE);
-            if (plr_wins) {
-                strcpy(s->message, "CHECKMATE!  YOU WIN.");
-                s->game_over = true;
-            } else if (s->status == CHESS_STALEMATE) {
-                strcpy(s->message, "STALEMATE.  DRAW.");
-                s->game_over = true;
             } else {
-                // Play check sound if applicable
-                if (chess_is_in_check(&s->game, s->game.turn)) {
-                    chess_sound_play(SFX_CHECK);
-                }
-                
-                strcpy(s->message, "WOPR CALCULATING...");
-                start_ai(s);
+                strcpy(s->message, "MOVE ANIMATING...");
             }
+            return;
         } else {
             const ChessPiece &p = s->game.board[r][c];
             if (p.type != EMPTY && p.color == plr) {
