@@ -248,14 +248,14 @@ inline void chess_pieces_gl_init() {
     g_cpgl.tex[0][QUEEN]  = load_piece_tex(wQ_svg,  wQ_svg_len);
     g_cpgl.tex[0][ROOK]   = load_piece_tex(wR_svg,   wR_svg_len);
     g_cpgl.tex[0][BISHOP] = load_piece_tex(wB_svg, wB_svg_len);
-    g_cpgl.tex[0][KNIGHT] = load_piece_tex(wK_svg, wK_svg_len);
+    g_cpgl.tex[0][KNIGHT] = load_piece_tex(wN_svg, wN_svg_len);
     g_cpgl.tex[0][PAWN]   = load_piece_tex(wP_svg,   wP_svg_len);
 
     g_cpgl.tex[1][KING]   = load_piece_tex(bK_svg,   bK_svg_len);
     g_cpgl.tex[1][QUEEN]  = load_piece_tex(bQ_svg,  bQ_svg_len);
     g_cpgl.tex[1][ROOK]   = load_piece_tex(bR_svg,   bR_svg_len);
     g_cpgl.tex[1][BISHOP] = load_piece_tex(bB_svg, bB_svg_len);
-    g_cpgl.tex[1][KNIGHT] = load_piece_tex(bK_svg, bK_svg_len);
+    g_cpgl.tex[1][KNIGHT] = load_piece_tex(bN_svg, bN_svg_len);
     g_cpgl.tex[1][PAWN]   = load_piece_tex(bP_svg,   bP_svg_len);
 
     g_cpgl.ready = true;

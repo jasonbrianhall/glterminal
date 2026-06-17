@@ -249,7 +249,7 @@ void wopr_chess_update(WoprState *w, double dt) {
                                 (plr == BLACK && s->status == CHESS_CHECKMATE_WHITE);
                 
                 if (plr_wins) {
-                    strcpy(s->message, "CHECKMATE!  YOU WIN.");
+                    strcpy(s->message, "CHECKMATE!");
                     s->game_over = true;
                 } else if (s->status == CHESS_STALEMATE) {
                     strcpy(s->message, "STALEMATE.  DRAW.");
