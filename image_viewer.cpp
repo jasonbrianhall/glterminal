@@ -1852,37 +1852,42 @@ void iv_render(int win_w, int win_h) {
 
     int rh = iv_row_h();
 
+    // Check if zoomed in — hide UI elements for immersive viewing
+    bool is_zoomed = g_iv.zoom > 1.0f;
+
     // ── Layout ─────────────────────────────────────────────────────────────
-    // Left: file browser panel (~30% width)
+    // Left: file browser panel (~30% width, hidden when zoomed)
     // Right: image display area (~70% width)
-    // Bottom: status bar (1 row)
-    int status_h = rh + IV_PAD;
-    int panel_w  = (int)(win_w * 0.28f);
+    // Bottom: status bar (1 row, hidden when zoomed)
+    int status_h = is_zoomed ? 0 : (rh + IV_PAD);
+    int panel_w  = is_zoomed ? 0 : (int)(win_w * 0.28f);
     int panel_w_min = rh * 14;
-    if (panel_w < panel_w_min) panel_w = panel_w_min;
+    if (panel_w > 0 && panel_w < panel_w_min) panel_w = panel_w_min;
     if (panel_w > win_w / 2)   panel_w = win_w / 2;
 
-    int title_h  = rh + IV_PAD;
+    int title_h  = is_zoomed ? 0 : (rh + IV_PAD);
     int content_y = title_h;
     int content_h = win_h - title_h - status_h;
-    int img_x    = panel_w + 2;
+    int img_x    = panel_w + (panel_w > 0 ? 2 : 0);
     int img_w    = win_w - img_x;
 
     // ── Background ─────────────────────────────────────────────────────────
     draw_rect(0, 0, (float)win_w, (float)win_h, 0.06f, 0.06f, 0.08f, 1.f);
 
     // ── Title bar ──────────────────────────────────────────────────────────
-    draw_rect(0, 0, (float)win_w, (float)title_h, 0.12f, 0.12f, 0.18f, 1.f);
-    draw_rect(0, (float)(title_h-1), (float)win_w, 1, 0.25f, 0.35f, 0.60f, 1.f);
-    const char *mode_str = g_iv.remote ? "Felix Chirp — Remote" : "Felix Chirp";
-    char title[256];
-    snprintf(title, sizeof(title),
-             "%s (F5)   ↑↓: navigate   ←→: prev/next   Shift+←→: ±5s   Shift+↑↓: ±30s   Enter/DblClick: open   Space: pause   R: rotate   0: reset zoom   Esc: close",
-             mode_str);
-    iv_draw_text(title, (float)IV_PAD, (float)title_h * 0.72f, 0.75f, 0.88f, 1.0f, 1.f);
+    if (!is_zoomed) {
+        draw_rect(0, 0, (float)win_w, (float)title_h, 0.12f, 0.12f, 0.18f, 1.f);
+        draw_rect(0, (float)(title_h-1), (float)win_w, 1, 0.25f, 0.35f, 0.60f, 1.f);
+        const char *mode_str = g_iv.remote ? "Felix Chirp — Remote" : "Felix Chirp";
+        char title[256];
+        snprintf(title, sizeof(title),
+                 "%s (F5)   ↑↓: navigate   ←→: prev/next   Shift+←→: ±5s   Shift+↑↓: ±30s   Enter/DblClick: open   Space: pause   R: rotate   0: reset zoom   Esc: close",
+                 mode_str);
+        iv_draw_text(title, (float)IV_PAD, (float)title_h * 0.72f, 0.75f, 0.88f, 1.0f, 1.f);
+    }
 
     // ── File browser panel ──────────────────────────────────────────────────
-    {
+    if (!is_zoomed) {
         float px = 0, py = (float)content_y, pw = (float)panel_w, ph = (float)content_h;
 
         // Panel background + border
@@ -2002,10 +2007,10 @@ void iv_render(int win_w, int win_h) {
             draw_rect(px+pw-5, list_y, 5, lh, 0.12f, 0.12f, 0.20f, 1.f);
             draw_rect(px+pw-5, ty2,    5, th, 0.35f, 0.50f, 0.90f, 1.f);
         }
-    }
 
-    // Divider
-    draw_rect((float)panel_w, (float)content_y, 2, (float)content_h, 0.20f, 0.20f, 0.30f, 1.f);
+        // Divider
+        draw_rect((float)panel_w, (float)content_y, 2, (float)content_h, 0.20f, 0.20f, 0.30f, 1.f);
+    }
 
     // ── Display area (image / CDG / audio) ─────────────────────────────────
     {
@@ -2352,7 +2357,7 @@ void iv_render(int win_w, int win_h) {
     }
 
     // ── Status bar ─────────────────────────────────────────────────────────
-    {
+    if (!is_zoomed) {
         float st_y = (float)(win_h - status_h);
         draw_rect(0, st_y, (float)win_w, 1, 0.20f, 0.20f, 0.30f, 1.f);
         draw_rect(0, st_y+1, (float)win_w, (float)status_h-1, 0.09f, 0.09f, 0.13f, 1.f);
@@ -2630,21 +2635,24 @@ bool iv_keydown(SDL_Keycode sym) {
 static void iv_image_rect(int win_w, int win_h,
                           float &ix, float &iy, float &iw, float &ih) {
     int rh       = iv_row_h();
-    int status_h = rh + IV_PAD;
-    int title_h  = rh + IV_PAD;
-    int panel_w  = (int)(win_w * 0.28f);
+    bool is_zoomed = g_iv.zoom > 1.0f;
+    int status_h = is_zoomed ? 0 : (rh + IV_PAD);
+    int title_h  = is_zoomed ? 0 : (rh + IV_PAD);
+    int panel_w  = is_zoomed ? 0 : (int)(win_w * 0.28f);
     int panel_w_min = rh * 14;
-    if (panel_w < panel_w_min) panel_w = panel_w_min;
+    if (panel_w > 0 && panel_w < panel_w_min) panel_w = panel_w_min;
     if (panel_w > win_w / 2)   panel_w = win_w / 2;
-    ix = (float)(panel_w + 2);
+    ix = (float)(panel_w + (panel_w > 0 ? 2 : 0));
     iy = (float)title_h;
-    iw = (float)(win_w - (panel_w + 2));
+    iw = (float)(win_w - ix);
     ih = (float)(win_h - title_h - status_h);
 }
 
 // Returns the panel width for hit-testing the file list.
 static int iv_panel_width(int win_w) {
     int rh = iv_row_h();
+    bool is_zoomed = g_iv.zoom > 1.0f;
+    if (is_zoomed) return 0;  // No panel when zoomed
     int pw = (int)(win_w * 0.28f);
     int mn = rh * 14;
     if (pw < mn)        pw = mn;
