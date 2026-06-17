@@ -2762,6 +2762,40 @@ bool iv_mousedown(int x, int y, int button, int win_w, int win_h) {
             }
         }
 
+        // Check progress bar click for audio seek
+        if (x >= panel_w && (g_iv.audio_playing || g_iv.audio_paused)) {
+            float ix2, iy2, iw2, ih2;
+            iv_image_rect(win_w, win_h, ix2, iy2, iw2, ih2);
+            int rh2 = iv_row_h();
+            float bar_y  = iy2 + ih2 - (float)rh2 * 2.5f;
+            float bar_x  = ix2 + iw2 * 0.05f;
+            float bar_w  = iw2 * 0.90f;
+            float bar_h  = 6.f;
+            
+            // Check if click is within progress bar bounds (expand clickable area slightly)
+            if ((float)y >= bar_y - 4.f && (float)y <= bar_y + bar_h + 4.f &&
+                (float)x >= bar_x && (float)x <= bar_x + bar_w) {
+                // Calculate seek position based on click position
+                double total = g_iv.music ? Mix_MusicDuration(g_iv.music) : 0.0;
+                if (total > 0.0) {
+                    float click_ratio = ((float)x - bar_x) / bar_w;
+                    if (click_ratio < 0.f) click_ratio = 0.f;
+                    if (click_ratio > 1.f) click_ratio = 1.f;
+                    double newpos = total * click_ratio;
+                    
+                    if (Mix_SetMusicPosition(newpos) == 0) {
+                        g_iv.audio_position    = newpos;
+                        g_iv.audio_start_ticks = (double)SDL_GetTicks() - newpos * 1000.0;
+                        // CDG must replay from start to catch up to new position
+                        if (g_iv.cdg_display != nullptr) {
+                            cdg_reset(g_iv.cdg_display);
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+
         // Start pan drag in image area
         bool has_image = g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex;
         if (has_image && x >= panel_w) {
