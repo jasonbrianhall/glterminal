@@ -1392,6 +1392,10 @@ int main(int argc, char **argv) {
             }
 
             case SDL_TEXTINPUT: {
+                // Block text input when image viewer is visible
+                if (g_iv.visible) {
+                    break;
+                }
                 // Handle custom shell dialog input first
                 if (g_custom_shell_dialog_open) {
                     custom_shell_dialog_keydown(SDLK_UNKNOWN, ev.text.text);
