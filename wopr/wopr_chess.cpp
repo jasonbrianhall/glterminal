@@ -231,10 +231,8 @@ void wopr_chess_update(WoprState *w, double dt) {
         anim_frame_counter++;
         
         s->animation_progress = std::min((float)anim_frame_counter / ANIMATION_FRAMES, 1.0f);
-        SDL_Log("[ANIM] frame %d/%d progress=%.3f", anim_frame_counter, ANIMATION_FRAMES, s->animation_progress);
         
         if (s->animation_progress >= 1.0f) {
-            SDL_Log("[ANIM] COMPLETE at frame %d", anim_frame_counter);
             s->is_animating = false;
             s->animation_progress = 1.0f;
             anim_frame_counter = 0;
@@ -550,7 +548,6 @@ void wopr_chess_render(WoprState *w, int ox, int oy, int cw, int ch, int cols) {
 
     // Draw animating piece on top
     if (s->is_animating && s->anim_piece.type != EMPTY) {
-        SDL_Log("[ANIM_RENDER] Drawing at progress=%.3f", s->animation_progress);
         // Calculate interpolated position
         int from_display_r = vrow(s->anim_from_r);
         int from_display_c = vcol(s->anim_from_c);
@@ -875,10 +872,6 @@ static void attempt_move(WoprChessState *s, int r, int c) {
     ChessColor plr = s->player_color;
     s->sel_r = r; s->sel_c = c;
 
-    if (s->is_animating) {
-        SDL_Log("[WARNING] attempt_move called while animation in progress! progress=%.3f", s->animation_progress);
-    }
-
     if (!s->has_from) {
         const ChessPiece &p = s->game.board[r][c];
         if (p.type != EMPTY && p.color == plr) {
@@ -920,10 +913,7 @@ static void attempt_move(WoprChessState *s, int r, int c) {
             // Store the move to apply when animation completes
             s->pending_move = {s->from_r, s->from_c, r, c, 0};
             s->has_pending_move = true;
-            
-            SDL_Log("[ANIM_START] Player move from (%d,%d) to (%d,%d) piece_type=%d", 
-                    s->anim_from_r, s->anim_from_c, s->anim_to_r, s->anim_to_c, s->anim_piece.type);
-            
+                        
             // Play sound for player move
             if (s->game.board[r][c].type != EMPTY) {
                 chess_sound_play(SFX_CAPTURE);

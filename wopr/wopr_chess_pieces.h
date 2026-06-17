@@ -16,7 +16,63 @@
 
 #include <GL/glew.h>
 #include "beatchess.h"   // PieceType, ChessColor, WHITE, BLACK, KING…
-#include "chess_pieces.h"
+#include "chess_pieces_svg.h"
+
+/* NanoSVG — define implementations exactly once here */
+#define NANOSVG_IMPLEMENTATION
+#define NANOSVG_ALL_COLOR_KEYWORDS
+#include "nanosvg.h"
+#define NANOSVGRAST_IMPLEMENTATION
+#include "nanosvgrast.h"
+
+static unsigned char *svg_to_rgba(const unsigned char *data, unsigned int len,
+                                  int *out_w, int *out_h)
+{
+    // Ensure null-terminated string for NanoSVG
+    char *svg = (char*)malloc(len + 1);
+    if (!svg) return nullptr;
+    memcpy(svg, data, len);
+    svg[len] = '\0';
+
+    // Parse SVG
+    NSVGimage *img = nsvgParse(svg, "px", 96.0f);
+    free(svg);
+    if (!img) return nullptr;
+
+    int w = (int)img->width;
+    int h = (int)img->height;
+
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) {
+        nsvgDelete(img);
+        return nullptr;
+    }
+
+    // Allocate RGBA buffer
+    unsigned char *rgba = (unsigned char*)malloc(w * h * 4);
+    if (!rgba) {
+        nsvgDelete(img);
+        return nullptr;
+    }
+
+    // Rasterize
+    NSVGrasterizer *rast = nsvgCreateRasterizer();
+    if (!rast) {
+        free(rgba);
+        nsvgDelete(img);
+        return nullptr;
+    }
+
+    nsvgRasterize(rast, img, 0, 0, 1.0f, rgba, w, h, w * 4);
+
+    nsvgDeleteRasterizer(rast);
+    nsvgDelete(img);
+
+    *out_w = w;
+    *out_h = h;
+    return rgba;
+}
+
+
 
 // ─── BMP decode ──────────────────────────────────────────────────────────────
 
@@ -132,7 +188,7 @@ static GLuint compile_shader(GLenum type, const char *src) {
 
 static GLuint load_piece_tex(const unsigned char *bmp, unsigned int len) {
     int w, h;
-    unsigned char *rgba = bmp_to_rgba(bmp, len, &w, &h);
+    unsigned char *rgba = svg_to_rgba(bmp, len, &w, &h);
     if (!rgba) return 0;
 
     GLuint tex;
@@ -188,19 +244,19 @@ inline void chess_pieces_gl_init() {
 
     // Upload all 12 piece textures
     // Index: [0=WHITE][KING..PAWN], [1=BLACK][KING..PAWN]
-    g_cpgl.tex[0][KING]   = load_piece_tex(white_king_bmp,   white_king_bmp_len);
-    g_cpgl.tex[0][QUEEN]  = load_piece_tex(white_queen_bmp,  white_queen_bmp_len);
-    g_cpgl.tex[0][ROOK]   = load_piece_tex(white_rook_bmp,   white_rook_bmp_len);
-    g_cpgl.tex[0][BISHOP] = load_piece_tex(white_bishop_bmp, white_bishop_bmp_len);
-    g_cpgl.tex[0][KNIGHT] = load_piece_tex(white_knight_bmp, white_knight_bmp_len);
-    g_cpgl.tex[0][PAWN]   = load_piece_tex(white_pawn_bmp,   white_pawn_bmp_len);
+    g_cpgl.tex[0][KING]   = load_piece_tex(wK_svg,   wK_svg_len);
+    g_cpgl.tex[0][QUEEN]  = load_piece_tex(wQ_svg,  wQ_svg_len);
+    g_cpgl.tex[0][ROOK]   = load_piece_tex(wR_svg,   wR_svg_len);
+    g_cpgl.tex[0][BISHOP] = load_piece_tex(wB_svg, wB_svg_len);
+    g_cpgl.tex[0][KNIGHT] = load_piece_tex(wK_svg, wK_svg_len);
+    g_cpgl.tex[0][PAWN]   = load_piece_tex(wP_svg,   wP_svg_len);
 
-    g_cpgl.tex[1][KING]   = load_piece_tex(black_king_bmp,   black_king_bmp_len);
-    g_cpgl.tex[1][QUEEN]  = load_piece_tex(black_queen_bmp,  black_queen_bmp_len);
-    g_cpgl.tex[1][ROOK]   = load_piece_tex(black_rook_bmp,   black_rook_bmp_len);
-    g_cpgl.tex[1][BISHOP] = load_piece_tex(black_bishop_bmp, black_bishop_bmp_len);
-    g_cpgl.tex[1][KNIGHT] = load_piece_tex(black_knight_bmp, black_knight_bmp_len);
-    g_cpgl.tex[1][PAWN]   = load_piece_tex(black_pawn_bmp,   black_pawn_bmp_len);
+    g_cpgl.tex[1][KING]   = load_piece_tex(bK_svg,   bK_svg_len);
+    g_cpgl.tex[1][QUEEN]  = load_piece_tex(bQ_svg,  bQ_svg_len);
+    g_cpgl.tex[1][ROOK]   = load_piece_tex(bR_svg,   bR_svg_len);
+    g_cpgl.tex[1][BISHOP] = load_piece_tex(bB_svg, bB_svg_len);
+    g_cpgl.tex[1][KNIGHT] = load_piece_tex(bK_svg, bK_svg_len);
+    g_cpgl.tex[1][PAWN]   = load_piece_tex(bP_svg,   bP_svg_len);
 
     g_cpgl.ready = true;
 }
