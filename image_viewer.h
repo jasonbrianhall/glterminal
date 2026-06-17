@@ -79,6 +79,13 @@ struct ImageViewer {
     char       audio_label[512]   = {};
     double     audio_start_ticks  = 0.0;
     double     audio_position     = 0.0;
+    
+    // Playback controls
+    int        repeat_mode        = 0;        // 0=off, 1=one song, 2=all songs
+    float      volume             = 1.0f;     // 0.0 to 1.0
+    bool       slideshow_active   = false;
+    double     slideshow_delay    = 3.0;      // seconds between image advances
+    double     slideshow_start    = 0.0;      // when current image started showing
 
     // CD+G — uses your CDGDisplay from cdg.h/cdg.cpp
     CDGDisplay  *cdg_display      = nullptr;  // non-null when CDG is active

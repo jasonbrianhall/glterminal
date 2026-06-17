@@ -1150,6 +1150,10 @@ void iv_close() {
 // NAVIGATE
 // ============================================================================
 
+// Forward declarations for use in iv_tick
+static void iv_enter_selected();
+static void iv_load_local(const char *filepath, const char *label);
+
 // ============================================================================
 // TICK  (call every frame)
 // ============================================================================
@@ -1164,8 +1168,22 @@ void iv_tick(double /*dt*/) {
         bool finished = g_iv.music  ? !Mix_PlayingMusic() :
                         g_iv.chunk  ? !Mix_Playing(g_iv.chunk_channel) : true;
         if (finished) {
-            g_iv.audio_playing  = false;
-            g_iv.audio_position = 0.0;
+            // Handle repeat mode
+            if (g_iv.repeat_mode == 1) {
+                // Repeat one: replay current song
+                iv_enter_selected();
+            } else if (g_iv.repeat_mode == 2) {
+                // Repeat all: advance to next song and play
+                int n = (int)g_iv.entries.size();
+                if (n > 0) {
+                    g_iv.selected = (g_iv.selected + 1) % n;
+                    iv_enter_selected();
+                }
+            } else {
+                // No repeat: just stop
+                g_iv.audio_playing  = false;
+                g_iv.audio_position = 0.0;
+            }
         }
     }
 
@@ -1173,6 +1191,47 @@ void iv_tick(double /*dt*/) {
     if (g_iv.cdg_display) {
         cdg_update(g_iv.cdg_display, g_iv.audio_position);
         iv_cdg_upload_texture();
+    }
+
+    // Handle slideshow auto-advance for images
+    if (g_iv.slideshow_active && !(g_iv.audio_playing || g_iv.audio_paused)) {
+        double now = (double)SDL_GetTicks() / 1000.0;  // Convert to seconds
+        if (g_iv.slideshow_start == 0.0) {
+            g_iv.slideshow_start = now;  // Initialize timer on first check
+        } else if (now - g_iv.slideshow_start >= g_iv.slideshow_delay) {
+            // Time to advance to next image
+            int n = (int)g_iv.entries.size();
+            if (n > 0) {
+                // Find next image file (skip directories)
+                int start_idx = g_iv.selected;
+                int next_idx = (start_idx + 1) % n;
+                int attempts = 0;
+                while (attempts < n && g_iv.entries[next_idx].is_dir) {
+                    next_idx = (next_idx + 1) % n;
+                    attempts++;
+                }
+                if (attempts < n) {
+                    g_iv.selected = next_idx;
+                    // Reload the selected image
+                    const IVEntry &e = g_iv.entries[g_iv.selected];
+                    if (!e.is_dir && !e.is_audio && !e.is_cdg) {
+                        // Load as image for slideshow
+                        char full_path[5000];
+                        if (g_iv.in_zip) {
+                            snprintf(full_path, sizeof(full_path), "%s|%s", g_iv.zip_file, e.name);
+                        } else {
+                            snprintf(full_path, sizeof(full_path), "%s/%s", g_iv.path, e.name);
+                        }
+                        if (!g_iv.in_zip) {
+                            iv_load_local(full_path, e.name);
+                        }
+                    }
+                    g_iv.slideshow_start = now;  // Reset timer
+                } else {
+                    g_iv.slideshow_active = false;  // No more images
+                }
+            }
+        }
     }
 }
 
@@ -2130,7 +2189,26 @@ void iv_render(int win_w, int win_h) {
                          bar_x + bar_w*0.5f - strlen(timebuf)*g_font_size*0.3f,
                          bar_y + 14.f, 0.55f, 0.65f, 0.75f, 1.f);
 
-            const char *ctrl = "Space: pause/resume   S: stop   ←→: prev/next   V: next viz   DblClick: fullscreen";
+            // Status indicators (volume, repeat)
+            char status_indicators[256] = "";
+            if (g_iv.repeat_mode == 1) {
+                strcat(status_indicators, "🔁① ");
+            } else if (g_iv.repeat_mode == 2) {
+                strcat(status_indicators, "🔁 ");
+            }
+            // Volume display
+            int vol_pct = (int)(g_iv.volume * 100.f);
+            char vol_str[32];
+            snprintf(vol_str, sizeof(vol_str), "Vol: %d%%", vol_pct);
+            strcat(status_indicators, vol_str);
+            
+            if (strlen(status_indicators) > 0) {
+                iv_draw_text(status_indicators,
+                             bar_x + bar_w * 0.05f,
+                             bar_y + 14.f, 0.50f, 0.70f, 0.85f, 1.f);
+            }
+
+            const char *ctrl = "Space: pause/resume   S: stop   ←→: prev/next   V: next viz   DblClick: fullscreen   +/-: vol   .: repeat";
             iv_draw_text(ctrl,
                          ix + iw*0.5f - strlen(ctrl)*g_font_size*0.3f,
                          bar_y + (float)rh + 4.f,
@@ -2344,6 +2422,15 @@ void iv_render(int win_w, int win_h) {
                              iy + ih - rh,
                              0.80f, 0.85f, 1.00f, 0.75f);
             }
+            
+            // Slideshow indicator
+            if (g_iv.slideshow_active) {
+                const char *slide = "Slideshow";
+                iv_draw_text(slide,
+                             ix + iw*0.5f - strlen(slide)*g_font_size*0.3f,
+                             iy + IV_PAD,
+                             0.40f, 0.85f, 1.00f, 0.8f);
+            }
 
         } else if (g_iv.error[0]) {
             iv_draw_text(g_iv.error,
@@ -2514,6 +2601,41 @@ bool iv_keydown(SDL_Keycode sym) {
         // Cycle visualizer mode (only when audio is playing/paused, else letter-jump)
         if (g_iv.audio_playing || g_iv.audio_paused) {
             g_iv.vis_mode = (g_iv.vis_mode + 1) % 4;
+            return true;
+        }
+        goto first_letter_jump;
+
+    case SDLK_EQUALS: case SDLK_PLUS:
+        // Increase volume
+        g_iv.volume += 0.05f;
+        if (g_iv.volume > 1.0f) g_iv.volume = 1.0f;
+        if (g_iv.music) Mix_VolumeMusic((int)(g_iv.volume * 128.0f));
+        if (g_iv.chunk_channel >= 0) Mix_Volume(g_iv.chunk_channel, (int)(g_iv.volume * 128.0f));
+        return true;
+
+    case SDLK_MINUS:
+        // Decrease volume
+        g_iv.volume -= 0.05f;
+        if (g_iv.volume < 0.0f) g_iv.volume = 0.0f;
+        if (g_iv.music) Mix_VolumeMusic((int)(g_iv.volume * 128.0f));
+        if (g_iv.chunk_channel >= 0) Mix_Volume(g_iv.chunk_channel, (int)(g_iv.volume * 128.0f));
+        return true;
+
+    case SDLK_PERIOD:
+        // Cycle repeat mode: OFF -> ONE -> ALL -> OFF
+        if (g_iv.audio_playing || g_iv.audio_paused) {
+            g_iv.repeat_mode = (g_iv.repeat_mode + 1) % 3;
+            return true;
+        }
+        goto first_letter_jump;
+
+    case SDLK_l:
+        // Toggle slideshow mode (only for images)
+        if (!(g_iv.audio_playing || g_iv.audio_paused)) {
+            g_iv.slideshow_active = !g_iv.slideshow_active;
+            if (g_iv.slideshow_active) {
+                g_iv.slideshow_start = 0.0;  // Reset timer
+            }
             return true;
         }
         goto first_letter_jump;

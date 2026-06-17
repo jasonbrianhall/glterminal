@@ -1477,5 +1477,6 @@ bool custom_shell_dialog_keydown(SDL_Keycode sym, const char *text) {
         return true;
     }
     
-    return false;
+    // When dialog is open, consume all other keys too (don't let them reach terminal)
+    return true;
 }
