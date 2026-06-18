@@ -155,4 +155,5 @@ TextDocument iv_parse_text_document(const unsigned char *data, size_t len, TextF
 void iv_render_text_document(const TextDocument &doc, int viewport_x, int viewport_y, int viewport_w, int viewport_h);
 void iv_text_keyboard(TextDocument &doc, SDL_Keycode sym);
 void iv_text_scroll(TextDocument &doc, int delta_y);
+void iv_truncate_name(const char *name, int max_chars, char *out, int out_sz);
 

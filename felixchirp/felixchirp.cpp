@@ -1746,36 +1746,6 @@ static void iv_draw_image_rotated(float cx, float cy, float w, float h, int angl
     glUseProgram(prev_prog);
 }
 
-// Truncate a filename so it fits within max_chars, preserving the extension.
-// Result is written into out (must be at least max_chars+1 bytes).
-// Uses a UTF-8-safe approach by working in bytes (filenames are usually ASCII).
-static void iv_truncate_name(const char *name, int max_chars, char *out, int out_sz) {
-    int len = (int)strlen(name);
-    if (len <= max_chars) {
-        strncpy(out, name, out_sz - 1);
-        out[out_sz - 1] = '\0';
-        return;
-    }
-    // Find extension (last dot)
-    const char *dot = strrchr(name, '.');
-    int ext_len = dot ? (int)strlen(dot) : 0;  // includes the dot
-    // We need: stem... + ellipsis(1 char '…' = 3 bytes) + ext
-    // Keep at least "A…ext" = 1 stem char + ellipsis + ext
-    int keep_stem = max_chars - 1 - ext_len;  // chars for stem before ellipsis
-    if (keep_stem < 1) keep_stem = 1;
-    // Build truncated string
-    int pos = 0;
-    for (int i = 0; i < keep_stem && i < len && pos < out_sz - 1; i++)
-        out[pos++] = name[i];
-    // UTF-8 ellipsis: 0xE2 0x80 0xA6
-    if (pos + 3 < out_sz) { out[pos++]='\xe2'; out[pos++]='\x80'; out[pos++]='\xa6'; }
-    if (dot && ext_len > 0 && pos + ext_len < out_sz) {
-        strncpy(out + pos, dot, out_sz - pos - 1);
-        pos += ext_len;
-    }
-    out[pos] = '\0';
-}
-
 void iv_render(int win_w, int win_h) {
     if (!g_iv.visible) return;
 
