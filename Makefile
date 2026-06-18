@@ -57,6 +57,15 @@ SSH2_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libssh2 2>/dev/null ||
 SSH2_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags libssh2 2>/dev/null || echo "")
 SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || echo "-lssh2")
 
+# ============================================================================
+# GSTREAMER  (for video playback)
+# ============================================================================
+GSTREAMER_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags gstreamer-1.0 gstreamer-app-1.0 2>/dev/null || echo "")
+GSTREAMER_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   gstreamer-1.0 gstreamer-app-1.0 2>/dev/null || echo "-lgstreamer-1.0 -lgstapp-1.0")
+
+GSTREAMER_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags gstreamer-1.0 gstreamer-app-1.0 2>/dev/null || echo "")
+GSTREAMER_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   gstreamer-1.0 gstreamer-app-1.0 2>/dev/null || echo "-lgstreamer-1.0 -lgstapp-1.0")
+
   SSH_SRCS         = ssh_session.cpp port_forward.cpp pf_overlay.cpp
   SSH_DEFINE       = -DUSESSH
   SSH_CFLAGS_LINUX = $(SSH2_CFLAGS_LINUX)
@@ -107,11 +116,13 @@ endif
 # ============================================================================
 CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
                  $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
+                 $(GSTREAMER_CFLAGS_LINUX) \
                  $(SSH_CFLAGS_LINUX) \
                  -Iwopr \
                  -DLINUX $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto -DDONTUSEGMP
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
+                 $(GSTREAMER_LIBS_LINUX) \
                  $(SSH_LIBS_LINUX) \
                  -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) \
                  -lssl -lcrypto \
@@ -119,11 +130,13 @@ LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
 
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
                        $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
+                       $(GSTREAMER_CFLAGS_LINUX) \
                        $(SSH_CFLAGS_LINUX) \
                        -Iwopr \
                        -DLINUX $(SSH_DEFINE) -DDEBUG -g -O0 -DDONTUSEGMP
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
+                       $(GSTREAMER_LIBS_LINUX) \
                        $(SSH_LIBS_LINUX) \
                        -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lssl -lcrypto -lwebp
 
@@ -136,6 +149,7 @@ CFLAGS_LINUX_DEBUG = $(CFLAGS_COMMON) -DLINUX -DDEBUG -g -O0
 # ============================================================================
 CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
                $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
+               $(GSTREAMER_CFLAGS_WIN) \
                $(SSH_CFLAGS_WIN) \
                -Iwopr \
                -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
@@ -143,12 +157,14 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
 
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
+               $(GSTREAMER_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
                -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lws2_32 \
                -s -Wl,--gc-sections -flto -lwebp
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
+                     $(GSTREAMER_CFLAGS_WIN) \
                      $(SSH_CFLAGS_WIN) \
                      -Iwopr \
                      -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 \
@@ -482,11 +498,13 @@ check-deps:
 	@$(PKG_CONFIG_LINUX) --exists freetype2 && echo "✓ freetype2" || echo "✗ freetype2"
 	@$(PKG_CONFIG_LINUX) --exists sdl2      && echo "✓ sdl2"      || echo "✗ sdl2"
 	@$(PKG_CONFIG_LINUX) --exists glew      && echo "✓ glew"      || echo "✗ glew"
+	@$(PKG_CONFIG_LINUX) --exists gstreamer-1.0 && echo "✓ gstreamer-1.0" || echo "✗ gstreamer-1.0 (video playback)"
 	@$(PKG_CONFIG_LINUX) --exists libssh2   && echo "✓ libssh2"   || echo "✗ libssh2 (optional, needed for SSH=1)"
 	@echo "=== Windows (mingw64) ==="
 	@$(PKG_CONFIG_WIN) --exists freetype2 && echo "✓ freetype2" || echo "✗ freetype2"
 	@$(PKG_CONFIG_WIN) --exists sdl2      && echo "✓ sdl2"      || echo "✗ sdl2"
 	@$(PKG_CONFIG_WIN) --exists glew      && echo "✓ glew"      || echo "✗ glew"
+	@$(PKG_CONFIG_WIN) --exists gstreamer-1.0 && echo "✓ gstreamer-1.0" || echo "✗ gstreamer-1.0 (video playback)"
 	@$(PKG_CONFIG_WIN) --exists libssh2   && echo "✓ libssh2"   || echo "✗ libssh2 (optional, needed for SSH=1)"
 
 clean:

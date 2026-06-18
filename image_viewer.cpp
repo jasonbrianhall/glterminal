@@ -511,6 +511,16 @@ static bool is_markdown_ext(const char *name) {
     return false;
 }
 
+static bool is_video_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return false;
+    char ext[16] = {};
+    for (int i = 0; i < 15 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
+    const char *exts[] = IV_VIDEO_EXTS;
+    for (auto *e : exts) if (strcmp(ext, e) == 0) return true;
+    return false;
+}
+
 // Given an audio filename, check if a matching .cdg exists in the same directory
 static bool has_paired_cdg(const char *dir, const char *audio_name) {
     // Strip extension, append .cdg
@@ -700,10 +710,12 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
         bool md    = is_markdown_ext(e.name);
         bool zip   = is_zip_ext(e.name);
         bool audio = is_audio_ext(e.name);
+        bool video = is_video_ext(e.name);
         bool cdg   = is_cdg_ext(e.name);
-        if (e.is_dir || img || txt || md || zip || audio || cdg) {
+        if (e.is_dir || img || txt || md || zip || audio || video || cdg) {
             if (zip)   { e.is_zip = true; e.has_cdg_pair = zip_contains_cdg_pair(full); }
             if (audio) { e.is_audio = true; e.has_cdg_pair = has_paired_cdg(path, e.name); }
+            if (video) { e.is_video = true; }
             if (cdg)   e.is_cdg = true;
             out.push_back(e);
         }
@@ -725,7 +737,7 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
         e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         e.size   = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
         if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name) ||
-            is_audio_ext(e.name) || is_cdg_ext(e.name)) {
+            is_audio_ext(e.name) || is_video_ext(e.name) || is_cdg_ext(e.name)) {
             if (is_zip_ext(e.name)) {
                 e.is_zip = true;
                 char full[4096]; snprintf(full, sizeof(full), "%s\\%s", path, e.name);
@@ -733,6 +745,7 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
             }
             if (is_audio_ext(e.name)) { e.is_audio = true;
                 e.has_cdg_pair = has_paired_cdg(path, e.name); }
+            if (is_video_ext(e.name)) { e.is_video = true; }
             if (is_cdg_ext(e.name))   e.is_cdg = true;
             out.push_back(e);
         }
@@ -888,6 +901,103 @@ static void iv_cdg_free() {
         if (g_iv.cdg_tex) { glDeleteTextures(1, (GLuint*)&g_iv.cdg_tex); g_iv.cdg_tex = 0; }
     }
     if (g_iv.cdg_display) { cdg_display_free(g_iv.cdg_display); g_iv.cdg_display = nullptr; }
+}
+
+static void iv_video_stop() {
+    if (g_iv.video_pipeline) {
+        gst_element_set_state(g_iv.video_pipeline, GST_STATE_NULL);
+        gst_object_unref(g_iv.video_pipeline);
+        g_iv.video_pipeline = nullptr;
+        g_iv.video_appsink  = nullptr;
+    }
+    
+    // Clean up textures (created in iv_tick)
+    if (g_use_sdl_renderer) {
+        if (g_iv.sdl_tex) SDL_DestroyTexture(g_iv.sdl_tex);
+        g_iv.sdl_tex = nullptr;
+    } else {
+        if (g_iv.tex) glDeleteTextures(1, &g_iv.tex);
+        g_iv.tex = 0;
+    }
+    
+    g_iv.tex_w = 0;
+    g_iv.tex_h = 0;
+    g_iv.video_playing  = false;
+    g_iv.video_paused   = false;
+    g_iv.video_position = 0.0;
+    g_iv.video_duration = 0.0;
+    g_iv.video_label[0] = '\0';
+}
+
+static bool iv_video_play(const char *file_path) {
+    iv_video_stop();
+    
+    // Build pipeline with video and audio output
+    char pipeline_str[4096];
+    snprintf(pipeline_str, sizeof(pipeline_str),
+        "filesrc location=\"%s\" ! decodebin name=demux "
+        "demux. ! videoconvert ! video/x-raw,format=RGB ! appsink name=sink sync=false "
+        "demux. ! audioconvert ! audio/x-raw,format=S16LE ! autoaudiosink",
+        file_path);
+    
+    fprintf(stderr, "[VIDEO] Pipeline: %s\n", pipeline_str);
+    
+    GError *err = nullptr;
+    GstElement *pipeline = gst_parse_launch(pipeline_str, &err);
+    
+    if (!pipeline) {
+        if (err) {
+            snprintf(g_iv.error, sizeof(g_iv.error), "Pipeline error: %s", err->message);
+            fprintf(stderr, "[VIDEO] %s\n", g_iv.error);
+            g_error_free(err);
+        } else {
+            snprintf(g_iv.error, sizeof(g_iv.error), "Failed to create pipeline");
+            fprintf(stderr, "[VIDEO] Failed to create pipeline\n");
+        }
+        return false;
+    }
+    
+    // Get the appsink (for video only, audio goes to autoaudiosink)
+    GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "sink");
+    if (!appsink) {
+        gst_object_unref(pipeline);
+        snprintf(g_iv.error, sizeof(g_iv.error), "Failed to get appsink");
+        fprintf(stderr, "[VIDEO] Failed to get appsink\n");
+        return false;
+    }
+    
+    // Configure appsink with sync enabled to throttle to real-time playback
+    g_object_set(appsink, "sync", TRUE, "emit-signals", FALSE, "drop", FALSE, nullptr);
+    
+    g_iv.video_pipeline = pipeline;
+    g_iv.video_appsink  = appsink;
+    
+    // Transition to PLAYING
+    GstStateChangeReturn ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    fprintf(stderr, "[VIDEO] State change return: %d\n", ret);
+    
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+        gst_object_unref(pipeline);
+        snprintf(g_iv.error, sizeof(g_iv.error), "Failed to start playback");
+        fprintf(stderr, "[VIDEO] Failed to start playback\n");
+        g_iv.video_pipeline = nullptr;
+        g_iv.video_appsink = nullptr;
+        return false;
+    }
+    
+    // Wait briefly for state change to complete
+    gst_element_get_state(pipeline, nullptr, nullptr, 1 * GST_SECOND);
+    
+    g_iv.video_playing = true;
+    g_iv.video_paused  = false;
+    g_iv.video_start_ticks = (double)SDL_GetTicks();
+    
+    snprintf(g_iv.video_label, sizeof(g_iv.video_label), "%s", 
+             file_path[0] ? (strrchr(file_path, '/') ? strrchr(file_path, '/')+1 : file_path) : "");
+    
+    g_iv.error[0] = '\0';
+    fprintf(stderr, "[VIDEO] Playback started: %s\n", g_iv.video_label);
+    return true;
 }
 
 static void iv_cdg_upload_texture();  // forward declaration
@@ -1111,6 +1221,13 @@ static void iv_load_local(const char *filepath, const char *label) {
 // ============================================================================
 
 void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
+    // Initialize GStreamer
+    static bool gst_initialized = false;
+    if (!gst_initialized) {
+        gst_init(nullptr, nullptr);
+        gst_initialized = true;
+    }
+
     g_iv = ImageViewer{};
     g_iv.visible = true;
     g_iv.remote  = remote;
@@ -1135,6 +1252,7 @@ void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
 
 void iv_close() {
     iv_stop_audio();
+    iv_video_stop();
     iv_cdg_free();
     iv_free_tex();
     
@@ -1185,6 +1303,125 @@ void iv_tick(double /*dt*/) {
                 g_iv.audio_position = 0.0;
             }
         }
+    }
+
+    // Update video playback and pull frames
+    if (g_iv.video_playing && !g_iv.video_paused && g_iv.video_pipeline) {
+        g_iv.video_position = ((double)SDL_GetTicks() - g_iv.video_start_ticks) / 1000.0;
+        
+        // Pull available samples from appsink (with timeout to allow sync to work)
+        GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(g_iv.video_appsink), 50 * GST_MSECOND);
+        if (sample) {
+            GstBuffer *buffer = gst_sample_get_buffer(sample);
+            GstCaps *caps = gst_sample_get_caps(sample);
+            
+            if (buffer && caps) {
+                GstStructure *s = gst_caps_get_structure(caps, 0);
+                gint w = 0, h = 0;
+                if (gst_structure_get_int(s, "width", &w) && gst_structure_get_int(s, "height", &h)) {
+                    // Get the presentation time of this frame for proper sync
+                    GstClockTime pts = GST_BUFFER_PTS(buffer);
+                    if (GST_CLOCK_TIME_IS_VALID(pts)) {
+                        // Update position based on buffer timestamp
+                        g_iv.video_position = (double)pts / GST_SECOND;
+                    }
+                    
+                    GstMapInfo map;
+                    if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                        // Create/update texture (handle both OpenGL and SDL renderer modes)
+                        if (!g_iv.tex || g_iv.tex_w != w || g_iv.tex_h != h) {
+                            // Need to create new texture or size changed
+                            g_iv.tex_w = w;
+                            g_iv.tex_h = h;
+                            
+                            if (g_use_sdl_renderer) {
+                                // SDL Renderer mode
+                                if (g_iv.sdl_tex) SDL_DestroyTexture(g_iv.sdl_tex);
+                                g_iv.sdl_tex = SDL_CreateTexture(g_sdl_renderer,
+                                    SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, w, h);
+                                if (g_iv.sdl_tex) {
+                                    fprintf(stderr, "[VIDEO] Created SDL texture: %dx%d\n", w, h);
+                                } else {
+                                    fprintf(stderr, "[VIDEO] ERROR: SDL_CreateTexture failed: %s\n", SDL_GetError());
+                                }
+                            } else {
+                                // OpenGL mode - convert RGB24 to RGBA32
+                                unsigned char *rgba = (unsigned char*)malloc(w * h * 4);
+                                if (rgba) {
+                                    // Convert RGB24 to RGBA32 (add alpha channel)
+                                    for (int i = 0, j = 0; i < w * h * 3; i += 3, j += 4) {
+                                        rgba[j+0] = map.data[i+0];  // R
+                                        rgba[j+1] = map.data[i+1];  // G
+                                        rgba[j+2] = map.data[i+2];  // B
+                                        rgba[j+3] = 255;            // A
+                                    }
+                                    
+                                    if (g_iv.tex) glDeleteTextures(1, &g_iv.tex);
+                                    
+                                    glGenTextures(1, &g_iv.tex);
+                                    glBindTexture(GL_TEXTURE_2D, g_iv.tex);
+                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+                                    glBindTexture(GL_TEXTURE_2D, 0);
+                                    fprintf(stderr, "[VIDEO] Created OpenGL texture: %dx%d\n", w, h);
+                                    free(rgba);
+                                } else {
+                                    fprintf(stderr, "[VIDEO] ERROR: Failed to allocate RGBA buffer\n");
+                                    g_iv.tex = 0;
+                                }
+                            }
+                        } else if (g_iv.tex || g_iv.sdl_tex) {
+                            // Update existing texture with new frame
+                            if (g_use_sdl_renderer && g_iv.sdl_tex) {
+                                SDL_UpdateTexture(g_iv.sdl_tex, nullptr, map.data, w * 3);
+                            } else if (!g_use_sdl_renderer && g_iv.tex) {
+                                // For OpenGL, convert and update using glTexSubImage2D
+                                unsigned char *rgba = (unsigned char*)malloc(w * h * 4);
+                                if (rgba) {
+                                    for (int i = 0, j = 0; i < w * h * 3; i += 3, j += 4) {
+                                        rgba[j+0] = map.data[i+0];
+                                        rgba[j+1] = map.data[i+1];
+                                        rgba[j+2] = map.data[i+2];
+                                        rgba[j+3] = 255;
+                                    }
+                                    glBindTexture(GL_TEXTURE_2D, g_iv.tex);
+                                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+                                    glBindTexture(GL_TEXTURE_2D, 0);
+                                    free(rgba);
+                                }
+                            }
+                        }
+                        
+                        gst_buffer_unmap(buffer, &map);
+                    }
+                }
+            }
+            gst_sample_unref(sample);
+        }
+        
+        // Check for EOS (end of stream)
+        GstBus *bus = gst_element_get_bus(g_iv.video_pipeline);
+        GstMessage *msg = gst_bus_pop_filtered(bus, (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
+        if (msg) {
+            if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_EOS) {
+                fprintf(stderr, "[VIDEO] End of stream\n");
+                iv_video_stop();
+            } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+                GError *err = nullptr;
+                gchar *debug = nullptr;
+                gst_message_parse_error(msg, &err, &debug);
+                fprintf(stderr, "[VIDEO] Error: %s\n", err->message);
+                if (debug) fprintf(stderr, "[VIDEO] Debug: %s\n", debug);
+                g_error_free(err);
+                g_free(debug);
+                iv_video_stop();
+            }
+            gst_message_unref(msg);
+        }
+        gst_object_unref(bus);
     }
 
     // Advance CDG to current position using your cdg_update()
@@ -1524,6 +1761,36 @@ static void iv_enter_selected() {
 #endif
             } else {
                 iv_play_audio(fullpath, e.name, e.has_cdg_pair);
+            }
+
+        } else if (e.is_video) {
+            // Video playback
+            iv_free_tex();
+            iv_stop_audio();
+            iv_cdg_free();
+            s_viewing_text = false;
+            
+            if (g_iv.remote) {
+#ifdef USESSH
+                // Download to temp file — GStreamer can't read from SSH paths
+                size_t sz = 0;
+                unsigned char *buf = iv_download_remote(fullpath, sz);
+                if (buf) {
+                    const char *dot = strrchr(e.name, '.');
+                    std::string tmp = iv_write_tempfile(buf, sz, dot ? dot : ".tmp");
+                    free(buf);
+                    if (!tmp.empty()) {
+                        iv_video_play(tmp.c_str());
+                        iv_delete_tempfile(tmp.c_str());
+                    } else {
+                        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
+                    }
+                } else {
+                    snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+                }
+#endif
+            } else {
+                iv_video_play(fullpath);
             }
 
         } else if (is_text_ext(e.name) || is_markdown_ext(e.name)) {
@@ -2065,6 +2332,9 @@ void iv_render(int win_w, int win_h) {
         float iw = (float)img_w,  ih = (float)content_h;
 
         draw_rect(ix, iy, iw, ih, 0.04f, 0.04f, 0.06f, 1.f);
+        
+        fprintf(stderr, "[RENDER] cdg=%d audio=%d video=%d tex=%p\n", 
+                (int)(g_iv.cdg_display != nullptr), (int)g_iv.audio_playing, (int)g_iv.video_playing, g_iv.tex);
 
         if (g_iv.cdg_display && (g_use_sdl_renderer ? (bool)g_iv.sdl_cdg_tex : (bool)g_iv.cdg_tex)) {
             // CD+G display — render palette texture directly
@@ -2359,6 +2629,84 @@ void iv_render(int win_w, int win_h) {
                              0.30f, 0.35f, 0.50f, 0.5f);
             }
 
+        } else if (g_iv.video_playing && g_iv.tex) {
+            // ── Video display (like CD+G) ──────────────────────────────────
+            float scale = std::min(iw / (float)g_iv.tex_w, ih / (float)g_iv.tex_h);
+            float dw = g_iv.tex_w * scale, dh = g_iv.tex_h * scale;
+            float dx = ix + (iw - dw) * 0.5f;
+            float dy = iy + (ih - dh) * 0.5f;
+            
+            draw_rect(dx, dy, dw, dh, 0.f, 0.f, 0.f, 1.f);
+            iv_draw_image_tex(g_iv.sdl_tex, g_iv.tex, dx, dy, dw, dh);
+            
+            fprintf(stderr, "[RENDER] Video displayed: %.0fx%.0f at %.0f,%.0f\n", dw, dh, dx, dy);
+            
+            // Playback progress bar at bottom of video area
+            {
+                float bar_y  = dy + dh + 4.f;
+                float bar_w  = dw;
+                float prog   = 0.f;  // TODO: get video duration/position from GStreamer
+                if (prog > 1.f) prog = 1.f;
+                
+                // Show time
+                int mins = (int)(g_iv.video_position / 60.0);
+                int secs = (int)fmod(g_iv.video_position, 60.0);
+                char time_str[32];
+                snprintf(time_str, sizeof(time_str), "%d:%02d", mins, secs);
+                
+                iv_draw_text(time_str, dx + dw - IV_PAD - 60, bar_y - 18,
+                             0.40f, 0.70f, 1.00f, 0.9f);
+                
+                // Progress bar
+                draw_rect(dx, bar_y, bar_w, 6.f, 0.15f, 0.15f, 0.20f, 1.f);
+                if (prog > 0) draw_rect(dx, bar_y, bar_w * prog, 6.f, 0.30f, 0.80f, 0.40f, 1.f);
+            }
+
+            // Rotation info
+            if (g_iv.img_rot != 0) {
+                char rot_buf[16];
+                snprintf(rot_buf, sizeof(rot_buf), "%d°", g_iv.img_rot);
+                iv_draw_text(rot_buf,
+                             ix + IV_PAD,
+                             iy + ih - rh,
+                             0.80f, 0.85f, 1.00f, 0.75f);
+            }
+
+            // Progress bar for video
+            double total = g_iv.video_duration > 0 ? g_iv.video_duration : 1.0;
+            float prog = (float)(g_iv.video_position / total);
+            if (prog > 1.f) prog = 1.f;
+            if (prog < 0.f) prog = 0.f;
+            
+            float bar_y  = iy + ih - (float)rh * 2.5f;
+            float bar_x  = ix + iw * 0.05f;
+            float bar_w  = iw * 0.90f;
+
+            draw_rect(bar_x, bar_y, bar_w, 6.f, 0.15f, 0.15f, 0.20f, 1.f);
+            if (prog > 0.f)
+                draw_rect(bar_x, bar_y, bar_w * prog, 6.f, 0.30f, 0.80f, 0.40f, 1.f);
+
+            // Time display
+            int cur_s = (int)g_iv.video_position;
+            int tot_s = (int)total;
+            char timebuf[32];
+            snprintf(timebuf, sizeof(timebuf), "%d:%02d / %d:%02d",
+                     cur_s/60, cur_s%60, tot_s/60, tot_s%60);
+            iv_draw_text(timebuf,
+                         bar_x + bar_w*0.5f - strlen(timebuf)*g_font_size*0.3f,
+                         bar_y + 14.f, 0.55f, 0.65f, 0.75f, 1.f);
+
+            // Video label
+            iv_draw_text(g_iv.video_label,
+                         ix + iw*0.5f - strlen(g_iv.video_label)*g_font_size*0.3f,
+                         iy + IV_PAD + rh, 0.90f, 0.95f, 1.00f, 1.f);
+
+            // Status
+            const char *status = g_iv.video_paused ? "█ PAUSED" : "▶ PLAYING";
+            iv_draw_text(status,
+                         ix + iw*0.5f - strlen(status)*g_font_size*0.3f,
+                         iy + IV_PAD + rh*2.5f, 1.00f, 0.85f, 0.30f, 1.f);
+
         } else if (s_viewing_text) {
             // ── Text/Markdown display ──────────────────────────────────────
             iv_render_text_document(s_text_doc, (int)ix, (int)iy, (int)iw, (int)ih);
@@ -2545,7 +2893,7 @@ bool iv_keydown(SDL_Keycode sym) {
         return true;
 
     case SDLK_SPACE:
-        // If audio is playing/paused, toggle pause; otherwise open selected
+        // If audio/video is playing/paused, toggle pause; otherwise open selected
         if (g_iv.audio_playing) {
             if (g_iv.music)                       Mix_PauseMusic();
             else if (g_iv.chunk_channel >= 0)     Mix_Pause(g_iv.chunk_channel);
@@ -2558,6 +2906,18 @@ bool iv_keydown(SDL_Keycode sym) {
             g_iv.audio_paused  = false;
             // Adjust start_ticks to account for paused time
             g_iv.audio_start_ticks = (double)SDL_GetTicks() - g_iv.audio_position * 1000.0;
+        } else if (g_iv.video_playing && g_iv.video_pipeline) {
+            // Toggle video pause
+            if (!g_iv.video_paused) {
+                gst_element_set_state(g_iv.video_pipeline, GST_STATE_PAUSED);
+                g_iv.video_paused = true;
+                g_iv.video_playing = false;
+            } else {
+                gst_element_set_state(g_iv.video_pipeline, GST_STATE_PLAYING);
+                g_iv.video_paused = false;
+                g_iv.video_playing = true;
+                g_iv.video_start_ticks = (double)SDL_GetTicks() - g_iv.video_position * 1000.0;
+            }
         } else {
             iv_enter_selected();
         }
@@ -2569,13 +2929,18 @@ bool iv_keydown(SDL_Keycode sym) {
             iv_cdg_free();
             return true;
         }
-        // No audio active — fall through to first-letter jump
+        if (g_iv.video_playing || g_iv.video_paused) {
+            iv_video_stop();
+            return true;
+        }
+        // No audio/video active — fall through to first-letter jump
         goto first_letter_jump;
 
     case SDLK_r: {
-        // Rotate image 90° clockwise (only when an image is displayed)
+        // Rotate image/video 90° clockwise
         bool has_image = g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex;
-        if (has_image) {
+        bool has_video = (bool)g_iv.video_tex;
+        if (has_image || has_video) {
             // Cycle through 0 -> 90 -> 180 -> 270 -> 0
             switch (g_iv.img_rot) {
                 case 0:   g_iv.img_rot = 90;  break;
@@ -2649,7 +3014,7 @@ bool iv_keydown(SDL_Keycode sym) {
     case SDLK_LEFT:
     case SDLK_RIGHT: {
         SDL_Keymod mod = SDL_GetModState();
-        // Shift+Left/Right = seek ±5 seconds when audio is playing
+        // Shift+Left/Right = seek ±5 seconds when audio/video is playing
         if ((mod & KMOD_SHIFT) && (g_iv.audio_playing || g_iv.audio_paused)) {
             double delta = (sym == SDLK_RIGHT) ? 5.0 : -5.0;
             double newpos = g_iv.audio_position + delta;
@@ -2661,6 +3026,18 @@ bool iv_keydown(SDL_Keycode sym) {
                 if (g_iv.cdg_display != nullptr) {
                     cdg_reset(g_iv.cdg_display);
                 }
+            }
+            return true;
+        }
+        if ((mod & KMOD_SHIFT) && (g_iv.video_playing || g_iv.video_paused)) {
+            double delta = (sym == SDLK_RIGHT) ? 5.0 : -5.0;
+            double newpos = g_iv.video_position + delta;
+            if (newpos < 0.0) newpos = 0.0;
+            if (g_iv.video_pipeline) {
+                gst_element_seek_simple(g_iv.video_pipeline, GST_FORMAT_TIME,
+                    GST_SEEK_FLAG_FLUSH, (gint64)(newpos * GST_SECOND));
+                g_iv.video_position = newpos;
+                g_iv.video_start_ticks = (double)SDL_GetTicks() - newpos * 1000.0;
             }
             return true;
         }
@@ -2693,7 +3070,7 @@ bool iv_keydown(SDL_Keycode sym) {
     case SDLK_UP:
     case SDLK_DOWN: {
         SDL_Keymod mod = SDL_GetModState();
-        // Shift+Up/Down = seek ±30 seconds when audio is playing
+        // Shift+Up/Down = seek ±30 seconds when audio/video is playing
         if ((mod & KMOD_SHIFT) && (g_iv.audio_playing || g_iv.audio_paused)) {
             double delta = (sym == SDLK_UP) ? 30.0 : -30.0;
             double newpos = g_iv.audio_position + delta;
@@ -2704,6 +3081,18 @@ bool iv_keydown(SDL_Keycode sym) {
                 if (g_iv.cdg_display != nullptr) {
                     cdg_reset(g_iv.cdg_display);
                 }
+            }
+            return true;
+        }
+        if ((mod & KMOD_SHIFT) && (g_iv.video_playing || g_iv.video_paused)) {
+            double delta = (sym == SDLK_UP) ? 30.0 : -30.0;
+            double newpos = g_iv.video_position + delta;
+            if (newpos < 0.0) newpos = 0.0;
+            if (g_iv.video_pipeline) {
+                gst_element_seek_simple(g_iv.video_pipeline, GST_FORMAT_TIME,
+                    GST_SEEK_FLAG_FLUSH, (gint64)(newpos * GST_SECOND));
+                g_iv.video_position = newpos;
+                g_iv.video_start_ticks = (double)SDL_GetTicks() - newpos * 1000.0;
             }
             return true;
         }
@@ -2718,6 +3107,8 @@ bool iv_keydown(SDL_Keycode sym) {
     case SDLK_BACKSPACE:
         if (g_iv.audio_playing || g_iv.audio_paused) {
             iv_stop_audio(); iv_cdg_free();
+        } else if (g_iv.video_playing || g_iv.video_paused) {
+            iv_video_stop();
         } else if (n > 0) {
             for (int i = 0; i < n; i++) {
                 if (strcmp(g_iv.entries[i].name, "..") == 0) {

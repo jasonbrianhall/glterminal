@@ -1,6 +1,8 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
+#include <gst/gst.h>
+#include <gst/app/gstappsink.h>
 #include "cdg.h"
 #include <string>
 #include <vector>
@@ -13,14 +15,16 @@
 // Audio formats : MP3, OGG, FLAC, OPUS, WAV, AIFF, VOC          (via SDL_mixer)
 //                 MOD, XM, IT, S3M, 669, MED, MTM  (tracker, via SDL_mixer/libxmp)
 //                 MID/MIDI                           (via SDL_mixer + timidity/fluidsynth)
+// Video formats : MP4, MKV, WebM, AVI, MOV, FLV    (via GStreamer)
 // CD+G karaoke  : .cdg paired with any supported audio file
-// ZIP browsing  : peek inside zip files for images/audio/cdg
+// ZIP browsing  : peek inside zip files for images/audio/video/cdg
 // ============================================================================
 
 #define IV_SUPPORTED_EXTS  { ".jpg",".jpeg",".png",".bmp",".gif",".webp",".tiff",".tif" }
 #define IV_AUDIO_EXTS      { ".mp3",".ogg",".flac",".opus",".wav",".mid",".midi", \
                              ".aiff",".aif",".voc", \
                              ".mod",".xm",".it",".s3m",".669",".med",".mtm" }
+#define IV_VIDEO_EXTS      { ".mp4",".mkv",".webm",".avi",".mov",".flv",".m4v",".wmv",".3gp" }
 
 struct IVEntry {
     char     name[512]      = {};
@@ -28,6 +32,7 @@ struct IVEntry {
     bool     is_zip         = false;
     bool     is_zip_entry   = false;
     bool     is_audio       = false;
+    bool     is_video       = false;
     bool     is_cdg         = false;
     bool     has_cdg_pair   = false;
     char     zip_path[4096] = {};
@@ -91,6 +96,19 @@ struct ImageViewer {
     CDGDisplay  *cdg_display      = nullptr;  // non-null when CDG is active
     unsigned int cdg_tex          = 0;        // GL texture 300x216, updated each frame
     SDL_Texture *sdl_cdg_tex      = nullptr;  // SDL renderer path (replaces cdg_tex)
+
+    // Video playback (GStreamer)
+    bool       video_playing      = false;
+    bool       video_paused       = false;
+    GstElement *video_pipeline    = nullptr;  // GStreamer pipeline for video
+    GstElement *video_appsink     = nullptr;  // Sink to get decoded frames
+    SDL_Texture *video_tex        = nullptr;  // Current video frame texture
+    int        video_w            = 0;
+    int        video_h            = 0;
+    char       video_label[512]   = {};
+    double     video_duration     = 0.0;
+    double     video_position     = 0.0;
+    double     video_start_ticks  = 0.0;
 };
 
 extern ImageViewer g_iv;
