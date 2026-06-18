@@ -330,3 +330,14 @@ void iv_text_scroll(TextDocument &doc, int delta_y) {
     doc.scroll_line = std::max(0, std::min(doc.scroll_line + step, max_scroll));
 }
 
+// ============================================================================
+// SIZE HELPER
+// ============================================================================
+
+void fmt_size_iv(uint64_t sz, char *buf, int n) {
+    if      (sz >= 1024*1024*1024) snprintf(buf, n, "%.1fG", sz/(1024.0*1024*1024));
+    else if (sz >= 1024*1024)      snprintf(buf, n, "%.1fM", sz/(1024.0*1024));
+    else if (sz >= 1024)           snprintf(buf, n, "%.1fK", sz/1024.0);
+    else                           snprintf(buf, n, "%lluB", (unsigned long long)sz);
+}
+
