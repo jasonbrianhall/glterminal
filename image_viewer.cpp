@@ -2088,7 +2088,7 @@ void iv_render(int win_w, int win_h) {
 
         } else if (g_iv.audio_playing || g_iv.audio_paused) {
             // ── Audio-only display: multi-mode visualizer ─────────────────
-            const int NUM_BANDS = 48;
+            const int NUM_BANDS = 128;
             double bands[NUM_BANDS];
             double t = g_iv.audio_position;
             float  alpha_mul = g_iv.audio_paused ? 0.35f : 1.0f;
