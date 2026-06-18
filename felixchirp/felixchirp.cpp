@@ -7,7 +7,7 @@
 #include <GL/gl.h>
 
 // image_viewer.h must come before stb/miniz so its types are visible everywhere
-#include "image_viewer.h"
+#include "felixchirp.h"
 
 // ---- stb_image (header-only, embedded) ------------------------------------
 #define STB_IMAGE_IMPLEMENTATION
@@ -28,10 +28,10 @@
 #include "miniz_zip.h"
 // ---------------------------------------------------------------------------
 
-#include "gl_renderer.h"
-#include "sdl_renderer.h"
-#include "ft_font.h"
-#include "term_color.h"
+#include "../gl_renderer.h"
+#include "../sdl_renderer.h"
+#include "../ft_font.h"
+#include "../term_color.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
@@ -43,11 +43,9 @@
 #include <algorithm>
 #include <ctype.h>
 
-#ifdef USESSH
-#  include "ssh_session.h"
-#  include "sftp_overlay.h"
+#  include "../ssh_session.h"
+#  include "../sftp_overlay.h"
 #  include <libssh2_sftp.h>
-#endif
 
 #ifndef _WIN32
 #  include <dirent.h>

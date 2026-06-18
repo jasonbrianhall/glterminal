@@ -183,14 +183,14 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               fight_mode.cpp        crt_audio.cpp         \
               felix_settings.cpp    kitty_graphics.cpp    \
               font_manager.cpp      sftp_overlay.cpp      \
-              sftp_console.cpp      image_viewer.cpp      \
-              cdg.cpp               $(SSH_SRCS)           \
+              sftp_console.cpp      felixchirp/felixchirp.cpp      \
+              felixchirp/cdg.cpp               $(SSH_SRCS)           \
               telnet_session.cpp                          \
               basic_graphics.cpp    mml_player.cpp        \
               glyph_atlas.cpp       sticky_prompt.cpp     \
               ssh_key_manager.cpp   serial_session.cpp
 
-SRCS_MINIZ = libtelnet.c miniz.c miniz_tdef.c miniz_tinfl.c miniz_zip.c \
+SRCS_MINIZ = libtelnet.c felixchirp/miniz.c felixchirp/miniz_tdef.c felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c \
             wopr/zork/actors.c \
             wopr/zork/ballop.c \
             wopr/zork/clockr.c \

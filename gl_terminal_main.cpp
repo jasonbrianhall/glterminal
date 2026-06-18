@@ -24,7 +24,7 @@
 #include "kitty_graphics.h"
 #include "basic_graphics.h"
 #include "font_manager.h"
-#include "image_viewer.h"
+#include "felixchirp/felixchirp.h"
 #include "wopr/wopr.h"
 #ifdef USESSH
 #  include "ssh_session.h"

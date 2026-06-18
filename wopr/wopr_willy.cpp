@@ -12,7 +12,7 @@
 #include "wopr.h"
 #include "wopr_render.h"
 #include <SDL2/SDL.h>
-#include "../miniz.h"
+#include "../felixchirp/miniz.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
