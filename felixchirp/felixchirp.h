@@ -161,3 +161,6 @@ void iv_stop_audio();
 void iv_cdg_free();
 void iv_video_stop();
 int iv_row_h();
+std::string iv_home();
+bool zip_contains_cdg_pair(const char *zip_path);
+bool is_audio_ext(const char *name);

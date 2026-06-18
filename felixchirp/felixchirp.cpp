@@ -91,7 +91,7 @@ static bool is_zip_ext(const char *name) {
     return strcmp(ext, ".zip") == 0;
 }
 
-static bool is_audio_ext(const char *name) {
+bool is_audio_ext(const char *name) {
     const char *dot = strrchr(name, '.');
     if (!dot) return false;
     char ext[16] = {};
@@ -252,17 +252,6 @@ static unsigned char *iv_extract_zip_entry(const char *zip_filepath,
     return (unsigned char *)buf;
 }
 
-static std::string iv_home() {
-#ifdef _WIN32
-    char buf[MAX_PATH] = {};
-    SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, buf);
-    return buf[0] ? buf : "C:\\Users";
-#else
-    const char *h = getenv("HOME");
-    return h ? h : "/home";
-#endif
-}
-
 static void iv_draw_text(const char *t, float x, float y, float r, float g, float b, float a) {
     draw_text(t, x, y, g_font_size, g_font_size, r, g, b, a, 0);
 }
@@ -270,39 +259,6 @@ static void iv_draw_text(const char *t, float x, float y, float r, float g, floa
 int iv_row_h() { 
 	return (int)(g_font_size * 1.8f);
 }
-
-// Returns true if the zip at zip_path contains a CDG+audio pair
-static bool zip_contains_cdg_pair(const char *zip_path) {
-    mz_zip_archive zip;
-    mz_zip_zero_struct(&zip);
-    if (!mz_zip_reader_init_file(&zip, zip_path, 0)) return false;
-    mz_uint n = mz_zip_reader_get_num_files(&zip);
-    std::vector<std::string> names;
-    for (mz_uint i = 0; i < n; i++) {
-        char fname[512] = {};
-        mz_zip_reader_get_filename(&zip, i, fname, sizeof(fname));
-        names.push_back(fname);
-    }
-    mz_zip_reader_end(&zip);
-    for (auto &nm : names) {
-        if (!is_audio_ext(nm.c_str())) continue;
-        char base[512]; strncpy(base, nm.c_str(), sizeof(base)-1);
-        char *dot = strrchr(base, '.'); if (!dot) continue; *dot = '\0';
-        for (auto &nm2 : names) {
-            const char *d2 = strrchr(nm2.c_str(), '.');
-            if (!d2) continue;
-            char e2[8] = {};
-            for (int i = 0; i < 7 && d2[i]; i++) e2[i] = tolower((unsigned char)d2[i]);
-            if (strcmp(e2, ".cdg") != 0) continue;
-            // Check base names match
-            size_t blen = strlen(base);
-            if (nm2.size() >= blen + 4 && strncasecmp(nm2.c_str(), base, blen) == 0)
-                return true;
-        }
-    }
-    return false;
-}
-
 // ============================================================================
 // DIRECTORY LISTING
 // ============================================================================

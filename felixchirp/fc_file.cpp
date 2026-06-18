@@ -85,3 +85,15 @@ void iv_truncate_name(const char *name, int max_chars, char *out, int out_sz) {
     }
     out[pos] = '\0';
 }
+
+std::string iv_home() {
+#ifdef _WIN32
+    char buf[MAX_PATH] = {};
+    SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, buf);
+    return buf[0] ? buf : "C:\\Users";
+#else
+    const char *h = getenv("HOME");
+    return h ? h : "/home";
+#endif
+}
+
