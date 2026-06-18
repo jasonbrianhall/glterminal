@@ -148,3 +148,6 @@ bool iv_mousewheel(int x, int y, int delta_y, int win_w, int win_h);
 bool iv_mousedown(int x, int y, int button, int win_w, int win_h);
 bool iv_mousemotion(int x, int y, int win_w, int win_h);
 bool iv_mouseup(int x, int y, int button);
+std::string iv_write_tempfile(const unsigned char *data, size_t len, const char *ext);
+void iv_delete_tempfile(const char *path);
+
