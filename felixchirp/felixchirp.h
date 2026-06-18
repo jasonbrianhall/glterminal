@@ -150,4 +150,9 @@ bool iv_mousemotion(int x, int y, int win_w, int win_h);
 bool iv_mouseup(int x, int y, int button);
 std::string iv_write_tempfile(const unsigned char *data, size_t len, const char *ext);
 void iv_delete_tempfile(const char *path);
+TextLine iv_parse_markdown_line(const std::string &raw_line);
+TextDocument iv_parse_text_document(const unsigned char *data, size_t len, TextFormatType format);
+void iv_render_text_document(const TextDocument &doc, int viewport_x, int viewport_y, int viewport_w, int viewport_h);
+void iv_text_keyboard(TextDocument &doc, SDL_Keycode sym);
+void iv_text_scroll(TextDocument &doc, int delta_y);
 
