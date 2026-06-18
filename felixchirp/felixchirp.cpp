@@ -938,8 +938,6 @@ static bool iv_video_play(const char *file_path) {
         "demux. ! audioconvert ! audio/x-raw,format=S16LE ! autoaudiosink",
         file_path);
     
-    fprintf(stderr, "[VIDEO] Pipeline: %s\n", pipeline_str);
-    
     GError *err = nullptr;
     GstElement *pipeline = gst_parse_launch(pipeline_str, &err);
     
@@ -972,7 +970,6 @@ static bool iv_video_play(const char *file_path) {
     
     // Transition to PLAYING
     GstStateChangeReturn ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    fprintf(stderr, "[VIDEO] State change return: %d\n", ret);
     
     if (ret == GST_STATE_CHANGE_FAILURE) {
         gst_object_unref(pipeline);
@@ -994,7 +991,6 @@ static bool iv_video_play(const char *file_path) {
              file_path[0] ? (strrchr(file_path, '/') ? strrchr(file_path, '/')+1 : file_path) : "");
     
     g_iv.error[0] = '\0';
-    fprintf(stderr, "[VIDEO] Playback started: %s\n", g_iv.video_label);
     return true;
 }
 
@@ -2331,9 +2327,6 @@ void iv_render(int win_w, int win_h) {
 
         draw_rect(ix, iy, iw, ih, 0.04f, 0.04f, 0.06f, 1.f);
         
-        fprintf(stderr, "[RENDER] cdg=%d audio=%d video=%d tex=%p\n", 
-                (int)(g_iv.cdg_display != nullptr), (int)g_iv.audio_playing, (int)g_iv.video_playing, g_iv.tex);
-
         if (g_iv.cdg_display && (g_use_sdl_renderer ? (bool)g_iv.sdl_cdg_tex : (bool)g_iv.cdg_tex)) {
             // CD+G display — render palette texture directly
             float scale = std::min(iw / (float)CDG_WIDTH, ih / (float)CDG_HEIGHT);
@@ -2636,8 +2629,6 @@ void iv_render(int win_w, int win_h) {
             
             draw_rect(dx, dy, dw, dh, 0.f, 0.f, 0.f, 1.f);
             iv_draw_image_tex(g_iv.sdl_tex, g_iv.tex, dx, dy, dw, dh);
-            
-            fprintf(stderr, "[RENDER] Video displayed: %.0fx%.0f at %.0f,%.0f\n", dw, dh, dx, dy);
             
             // Playback progress bar at bottom of video area
             {
