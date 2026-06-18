@@ -262,7 +262,6 @@ static void iv_list_local(const char *path, std::vector<IVEntry> &out) {
     });
 }
 
-#ifdef USESSH
 // Reuse the SFTP subsystem from sftp_overlay (s_sftp is extern there).
 // We call the public sftp_panel helpers indirectly by duplicating the
 // list logic here so we don't need to expose s_sftp directly.
@@ -361,7 +360,6 @@ static unsigned char *iv_download_remote(const char *path, size_t &out_size) {
     ssh_session_unlock();
     return buf;
 }
-#endif // USESSH
 
 // ============================================================================
 // TEXTURE LOADING
@@ -736,17 +734,11 @@ void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
         strncpy(g_iv.path, iv_home().c_str(), sizeof(g_iv.path)-1);
         iv_list_local(g_iv.path, g_iv.entries);
     } else {
-#ifdef USESSH
         // Start at remote filesystem root — getenv("HOME") is the *local*
         // home directory and is wrong when connecting from Windows.
         // The user can navigate to their home via the listing.
         strncpy(g_iv.path, "/", sizeof(g_iv.path)-1);
         iv_list_remote(g_iv.path, g_iv.entries);
-#else
-        g_iv.remote = false;
-        strncpy(g_iv.path, iv_home().c_str(), sizeof(g_iv.path)-1);
-        iv_list_local(g_iv.path, g_iv.entries);
-#endif
     }
 }
 
@@ -977,9 +969,7 @@ static void iv_refresh() {
     if (g_iv.in_zip) {
         iv_list_zip(g_iv.zip_file, g_iv.entries);
     } else if (g_iv.remote) {
-#ifdef USESSH
         iv_list_remote(g_iv.path, g_iv.entries);
-#endif
     } else {
         iv_list_local(g_iv.path, g_iv.entries);
     }
@@ -1107,7 +1097,6 @@ void iv_enter_selected() {
         std::string tmp_zip_path;
         const char *zip_to_open = fullpath;
         if (g_iv.remote) {
-#ifdef USESSH
             size_t zsz = 0;
             unsigned char *zbuf = iv_download_remote(fullpath, zsz);
             if (!zbuf) {
@@ -1121,7 +1110,6 @@ void iv_enter_selected() {
                 return;
             }
             zip_to_open = tmp_zip_path.c_str();
-#endif
         }
 
         // Peek inside the zip — if it contains a CDG+audio pair, auto-play it
@@ -1207,7 +1195,6 @@ void iv_enter_selected() {
         if (!auto_played) {
             // No CDG pair — browse mode (re-download if remote, or use local path)
             if (g_iv.remote) {
-#ifdef USESSH
                 // Re-download for browsing (or keep temp — but we deleted it above)
                 size_t zsz = 0;
                 unsigned char *zbuf = iv_download_remote(fullpath, zsz);
@@ -1221,7 +1208,6 @@ void iv_enter_selected() {
                         // keep temp alive for zip entry extraction
                     }
                 }
-#endif
             } else {
                 strncpy(g_iv.zip_file, fullpath, sizeof(g_iv.zip_file)-1);
                 g_iv.in_zip = true; g_iv.selected = 0; g_iv.scroll_top = 0;
@@ -1240,7 +1226,6 @@ void iv_enter_selected() {
 
         if (e.is_audio) {
             if (g_iv.remote) {
-#ifdef USESSH
                 // Download to temp file — SDL_mixer can't read from SSH paths
                 size_t sz = 0;
                 unsigned char *buf = iv_download_remote(fullpath, sz);
@@ -1257,7 +1242,6 @@ void iv_enter_selected() {
                 } else {
                     snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
                 }
-#endif
             } else {
                 iv_play_audio(fullpath, e.name, e.has_cdg_pair);
             }
@@ -1270,7 +1254,6 @@ void iv_enter_selected() {
             s_viewing_text = false;
             
             if (g_iv.remote) {
-#ifdef USESSH
                 // Download to temp file — GStreamer can't read from SSH paths
                 size_t sz = 0;
                 unsigned char *buf = iv_download_remote(fullpath, sz);
@@ -1287,7 +1270,6 @@ void iv_enter_selected() {
                 } else {
                     snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
                 }
-#endif
             } else {
                 iv_video_play(fullpath);
             }
@@ -1308,16 +1290,12 @@ void iv_enter_selected() {
             bool success = false;
             
             if (g_iv.remote) {
-#ifdef USESSH
                 buf = iv_download_remote(fullpath, sz);
                 if (!buf) {
                     snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
                 } else {
                     success = true;
                 }
-#else
-                snprintf(g_iv.error, sizeof(g_iv.error), "SSH not compiled in");
-#endif
             } else {
                 // Read local file
                 FILE *f = fopen(fullpath, "rb");
@@ -1384,12 +1362,10 @@ void iv_enter_selected() {
             s_viewing_text = false;  // Switch back to image mode
             s_text_doc.lines.clear();  // Clear previous text document
             if (g_iv.remote) {
-#ifdef USESSH
                 size_t sz = 0;
                 unsigned char *buf = iv_download_remote(fullpath, sz);
                 if (buf) { iv_load_image_from_mem(buf, sz, e.name); free(buf); }
                 else snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
-#endif
             } else {
                 iv_load_local(fullpath, e.name);
             }
