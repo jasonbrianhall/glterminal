@@ -1761,24 +1761,11 @@ static void iv_draw_image_rotated(float cx, float cy, float w, float h, int angl
         py[i] = cy + lx[i] * sinA + ly[i] * cosA;
     }
 
-    // UV coords for each corner (TL, TR, BR, BL) after clockwise rotation.
-    // At 0°:   TL=(0,0) TR=(1,0) BR=(1,1) BL=(0,1)
-    // At 90°CW: the top of the image goes to the right, so:
-    //   TL=(0,1) TR=(0,0) BR=(1,0) BL=(1,1)
-    // At 180°: TL=(1,1) TR=(0,1) BR=(0,0) BL=(1,0)
-    // At 270°CW: TL=(1,0) TR=(1,1) BR=(0,1) BL=(0,0)
-    static const float uv_table[4][4][2] = {
-        { {0,0},{1,0},{1,1},{0,1} },   //   0°
-        { {0,1},{0,0},{1,0},{1,1} },   //  90° CW
-        { {1,1},{0,1},{0,0},{1,0} },   // 180°
-        { {1,0},{1,1},{0,1},{0,0} },   // 270° CW
-    };
-    int rot_idx = ((angle_deg / 90) % 4 + 4) % 4;
-    float u[4], v[4];
-    for (int i = 0; i < 4; i++) {
-        u[i] = uv_table[rot_idx][i][0];
-        v[i] = uv_table[rot_idx][i][1];
-    }
+    // UV coords for each corner (TL, TR, BR, BL)
+    // NOTE: The quad geometry is already rotated via cosA/sinA above.
+    // We keep UVs normal - don't rotate them too (that would double-rotate).
+    float u[4] = {0, 1, 1, 0};
+    float v[4] = {0, 0, 1, 1};
 
     if (g_use_sdl_renderer) {
         if (!g_iv.sdl_tex) return;
@@ -2379,8 +2366,16 @@ void iv_render(int win_w, int win_h) {
         } else if (g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex) {
             // ── Image display with zoom / pan / rotation ──────────────────
             // tw/th = texture dimensions in the rotated orientation (for fit calc)
-            float tw = (float)(g_iv.img_rot % 180 == 0 ? g_iv.tex_w : g_iv.tex_h);
-            float th = (float)(g_iv.img_rot % 180 == 0 ? g_iv.tex_h : g_iv.tex_w);
+            float tw, th;
+            if (g_iv.img_rot == 0 || g_iv.img_rot == 180) {
+                // No rotation or 180°: dimensions stay the same
+                tw = (float)g_iv.tex_w;
+                th = (float)g_iv.tex_h;
+            } else {
+                // 90° or 270°: dimensions swap
+                tw = (float)g_iv.tex_h;
+                th = (float)g_iv.tex_w;
+            }
             float base_scale = std::min(iw / tw, ih / th);
             float effective  = base_scale * g_iv.zoom;
 
@@ -2577,15 +2572,26 @@ bool iv_keydown(SDL_Keycode sym) {
         // No audio active — fall through to first-letter jump
         goto first_letter_jump;
 
-    case SDLK_r:
+    case SDLK_r: {
         // Rotate image 90° clockwise (only when an image is displayed)
-        if (g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex) {
-            g_iv.img_rot = (g_iv.img_rot + 90) % 360;
+        bool has_image = g_use_sdl_renderer ? (bool)g_iv.sdl_tex : (bool)g_iv.tex;
+        if (has_image) {
+            // Cycle through 0 -> 90 -> 180 -> 270 -> 0
+            switch (g_iv.img_rot) {
+                case 0:   g_iv.img_rot = 90;  break;
+                case 90:  g_iv.img_rot = 180; break;
+                case 180: g_iv.img_rot = 270; break;
+                case 270: g_iv.img_rot = 0;   break;
+                default:  g_iv.img_rot = 0;   break;  // Reset any invalid state
+            }
             // Swap pan axes to keep image centred after rotation
-            float tmp = g_iv.pan_x; g_iv.pan_x = -g_iv.pan_y; g_iv.pan_y = tmp;
+            float tmp = g_iv.pan_x;
+            g_iv.pan_x = -g_iv.pan_y;
+            g_iv.pan_y = tmp;
             return true;
         }
         goto first_letter_jump;
+    }
 
     case SDLK_0: case SDLK_KP_0:
         // Reset zoom and pan
