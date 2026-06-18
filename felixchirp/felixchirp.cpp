@@ -1,4 +1,4 @@
-// image_viewer.cpp — F5 image viewer overlay for Felix Terminal
+// felixchrip.cpp — F5 image viewer overlay for Felix Terminal
 // Supports local filesystem and (when USESSH) remote SFTP browsing.
 // Image decoding via stb_image (no extra library dependency).
 
@@ -58,32 +58,6 @@
 #  include <io.h>
 #  include <fcntl.h>
 #endif
-
-// ============================================================================
-// TEXT & MARKDOWN SUPPORT STRUCTURES
-// ============================================================================
-
-enum TextFormatType { TEXT_PLAIN, TEXT_MARKDOWN };
-
-struct TextLine {
-    std::string text;
-    bool is_header;
-    int header_level;
-    bool is_code_block;
-    bool is_list_item;
-    
-    // For links and images
-    std::string image_url;     // If non-empty, this line has an image to display
-    std::string image_alt;     // Alt text for image
-    std::string link_url;      // If non-empty, text is a clickable link
-    bool is_link;              // True if this line contains a link
-};
-
-struct TextDocument {
-    std::vector<TextLine> lines;
-    TextFormatType format;
-    int scroll_line;
-};
 
 // ============================================================================
 // CROSS-PLATFORM TEMP FILE

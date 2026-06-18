@@ -26,6 +26,32 @@
                              ".mod",".xm",".it",".s3m",".669",".med",".mtm" }
 #define IV_VIDEO_EXTS      { ".mp4",".mkv",".webm",".avi",".mov",".flv",".m4v",".wmv",".3gp" }
 
+// ============================================================================
+// TEXT & MARKDOWN SUPPORT STRUCTURES
+// ============================================================================
+
+enum TextFormatType { TEXT_PLAIN, TEXT_MARKDOWN };
+
+struct TextLine {
+    std::string text;
+    bool is_header;
+    int header_level;
+    bool is_code_block;
+    bool is_list_item;
+    
+    // For links and images
+    std::string image_url;     // If non-empty, this line has an image to display
+    std::string image_alt;     // Alt text for image
+    std::string link_url;      // If non-empty, text is a clickable link
+    bool is_link;              // True if this line contains a link
+};
+
+struct TextDocument {
+    std::vector<TextLine> lines;
+    TextFormatType format;
+    int scroll_line;
+};
+
 struct IVEntry {
     char     name[512]      = {};
     bool     is_dir         = false;
