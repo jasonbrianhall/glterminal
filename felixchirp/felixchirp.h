@@ -171,3 +171,4 @@ bool is_cdg_ext(const char *name);
 bool is_text_ext(const char *name);
 bool is_markdown_ext(const char *name);
 bool is_video_ext(const char *name);
+void fmt_size_iv(uint64_t sz, char *buf, int n);
