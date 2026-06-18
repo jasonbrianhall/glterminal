@@ -156,4 +156,8 @@ void iv_render_text_document(const TextDocument &doc, int viewport_x, int viewpo
 void iv_text_keyboard(TextDocument &doc, SDL_Keycode sym);
 void iv_text_scroll(TextDocument &doc, int delta_y);
 void iv_truncate_name(const char *name, int max_chars, char *out, int out_sz);
-
+void iv_enter_selected();
+void iv_stop_audio();
+void iv_cdg_free();
+void iv_video_stop();
+int iv_row_h();
