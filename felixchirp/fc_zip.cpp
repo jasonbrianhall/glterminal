@@ -105,8 +105,9 @@ void iv_list_zip(const char *zip_filepath, std::vector<IVEntry> &out) {
         bool txt   = is_text_ext(fname);
         bool md    = is_markdown_ext(fname);
         bool audio = is_audio_ext(fname);
+        bool video = is_video_ext(fname) && g_video_capable;
         bool cdg   = is_cdg_ext(fname);
-        if (!img && !txt && !md && !audio && !cdg) continue;
+        if (!img && !txt && !md && !audio && !video && !cdg) continue;
 
         mz_zip_archive_file_stat st;
         mz_zip_reader_file_stat(&zip, i, &st);
@@ -119,6 +120,7 @@ void iv_list_zip(const char *zip_filepath, std::vector<IVEntry> &out) {
         e.is_zip_entry = true;
         e.size         = st.m_uncomp_size;
         if (audio) { e.is_audio = true; e.has_cdg_pair = zip_has_cdg_pair(fname); }
+        if (video) { e.is_video = true; }
         if (cdg)   { e.is_cdg   = true; }
         out.push_back(e);
     }

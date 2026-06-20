@@ -31,6 +31,8 @@
 extern ImageViewer g_iv;
 extern TextDocument s_text_doc;
 extern bool s_viewing_text;
+bool g_video_capable = false;  // Will be set during iv_open()
+
 // ============================================================================
 // CROSS-PLATFORM TEMP FILE
 // ============================================================================
@@ -140,11 +142,16 @@ void iv_load_local(const char *filepath, const char *label) {
 // ============================================================================
 
 void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
-    // Initialize GStreamer
+    // Initialize GStreamer and detect video capability
     static bool gst_initialized = false;
     if (!gst_initialized) {
         gst_init(nullptr, nullptr);
         gst_initialized = true;
+        
+        // Test if basic GStreamer elements are available
+        GstElement *test = gst_element_factory_make("filesrc", nullptr);
+        g_video_capable = (test != nullptr);
+        if (test) gst_object_unref(test);
     }
 
     g_iv = ImageViewer{};
@@ -243,7 +250,7 @@ void iv_list_local(const char *path, std::vector<IVEntry> &out) {
         bool md    = is_markdown_ext(e.name);
         bool zip   = is_zip_ext(e.name);
         bool audio = is_audio_ext(e.name);
-        bool video = is_video_ext(e.name);
+        bool video = is_video_ext(e.name) && g_video_capable;
         bool cdg   = is_cdg_ext(e.name);
         if (e.is_dir || img || txt || md || zip || audio || video || cdg) {
             if (zip)   { e.is_zip = true; e.has_cdg_pair = zip_contains_cdg_pair(full); }
@@ -270,7 +277,7 @@ void iv_list_local(const char *path, std::vector<IVEntry> &out) {
         e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         e.size   = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
         if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name) ||
-            is_audio_ext(e.name) || is_video_ext(e.name) || is_cdg_ext(e.name)) {
+            is_audio_ext(e.name) || (is_video_ext(e.name) && g_video_capable) || is_cdg_ext(e.name)) {
             if (is_zip_ext(e.name)) {
                 e.is_zip = true;
                 char full[4096]; snprintf(full, sizeof(full), "%s\\%s", path, e.name);
@@ -278,7 +285,7 @@ void iv_list_local(const char *path, std::vector<IVEntry> &out) {
             }
             if (is_audio_ext(e.name)) { e.is_audio = true;
                 e.has_cdg_pair = has_paired_cdg(path, e.name); }
-            if (is_video_ext(e.name)) { e.is_video = true; }
+            if (is_video_ext(e.name) && g_video_capable) { e.is_video = true; }
             if (is_cdg_ext(e.name))   e.is_cdg = true;
             out.push_back(e);
         }
@@ -329,14 +336,16 @@ void iv_list_remote(const char *path, std::vector<IVEntry> &out) {
             bool md    = is_markdown_ext(name);
             bool audio = is_audio_ext(name);
             bool zip   = is_zip_ext(name);
+            bool video = is_video_ext(name) && g_video_capable;
             bool cdg   = is_cdg_ext(name);
-            if (!is_dir && !img && !txt && !md && !audio && !zip && !cdg) continue;
+            if (!is_dir && !img && !txt && !md && !audio && !zip && !video && !cdg) continue;
             IVEntry e{};
             strncpy(e.name, name, sizeof(e.name)-1);
             e.is_dir = is_dir;
             e.size   = (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) ? attrs.filesize : 0;
             if (audio) e.is_audio = true;
             if (zip)   e.is_zip   = true;
+            if (video) e.is_video = true;
             if (cdg)   e.is_cdg   = true;
             // Note: has_cdg_pair and zip CDG peek not done for remote listings
             // (would require extra SFTP round-trips per file)

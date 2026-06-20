@@ -138,6 +138,7 @@ struct ImageViewer {
 };
 
 extern ImageViewer g_iv;
+extern bool g_video_capable;  // true if GStreamer video playback is available
 
 void iv_open(bool remote, int win_w, int win_h);
 void iv_close();
