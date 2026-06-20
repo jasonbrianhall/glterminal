@@ -141,6 +141,18 @@ bool is_video_ext(const char *name) {
     return false;
 }
 
+// Returns true if the file extension is a PCM chunk format that must be
+// loaded with Mix_LoadWAV rather than Mix_LoadMUS.
+bool is_chunk_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return false;
+    char ext[16] = {};
+    for (int i = 0; i < 15 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
+    return strcmp(ext, ".voc")  == 0 ||
+           strcmp(ext, ".aiff") == 0 ||
+           strcmp(ext, ".aif")  == 0;
+}
+
 // Given an audio filename, check if a matching .cdg exists in the same directory
 bool has_paired_cdg(const char *dir, const char *audio_name) {
     // Strip extension, append .cdg
@@ -165,20 +177,7 @@ bool has_paired_cdg(const char *dir, const char *audio_name) {
     return false;
 }
 
-// Extract one image from a local zip into a heap buffer. Caller must free().
-static unsigned char *iv_extract_zip_entry(const char *zip_filepath,
-                                            const char *entry_name,
-                                            size_t &out_size) {
-    mz_zip_archive zip;
-    mz_zip_zero_struct(&zip);
-    out_size = 0;
-    if (!mz_zip_reader_init_file(&zip, zip_filepath, 0)) return nullptr;
-    void *buf = mz_zip_reader_extract_file_to_heap(&zip, entry_name, &out_size, 0);
-    mz_zip_reader_end(&zip);
-    return (unsigned char *)buf;
-}
-
-static void iv_draw_text(const char *t, float x, float y, float r, float g, float b, float a) {
+void iv_draw_text(const char *t, float x, float y, float r, float g, float b, float a) {
     draw_text(t, x, y, g_font_size, g_font_size, r, g, b, a, 0);
 }
 
@@ -187,7 +186,7 @@ int iv_row_h() {
 }
 
 // Download a remote file into a heap buffer. Returns nullptr on failure.
-static unsigned char *iv_download_remote(const char *path, size_t &out_size) {
+unsigned char *iv_download_remote(const char *path, size_t &out_size) {
     LIBSSH2_SESSION *sess = ssh_get_session();
     if (!sess) return nullptr;
 
@@ -292,7 +291,7 @@ void iv_video_stop() {
     g_iv.video_label[0] = '\0';
 }
 
-static bool iv_video_play(const char *file_path) {
+bool iv_video_play(const char *file_path) {
     iv_video_stop();
     
     // Build pipeline with video and audio output
@@ -359,9 +358,7 @@ static bool iv_video_play(const char *file_path) {
     return true;
 }
 
-static void iv_cdg_upload_texture();  // forward declaration
-
-static bool iv_cdg_load(const char *cdg_path) {
+bool iv_cdg_load(const char *cdg_path) {
     iv_cdg_free();
     g_iv.cdg_display = cdg_display_new();
     if (!g_iv.cdg_display) return false;
@@ -377,7 +374,7 @@ static bool iv_cdg_load(const char *cdg_path) {
     return true;
 }
 
-static void iv_cdg_upload_texture() {
+void iv_cdg_upload_texture() {
     CDGDisplay *cdg = g_iv.cdg_display;
     if (!cdg) return;
     static uint8_t rgba[CDG_HEIGHT * CDG_WIDTH * 4];
@@ -424,7 +421,7 @@ static void iv_cdg_upload_texture() {
 
 static bool s_mixer_ready = false;
 
-static void iv_ensure_mixer() {
+void iv_ensure_mixer() {
     if (s_mixer_ready) return;
     // Call Mix_Init before Mix_OpenAudio so SDL_mixer uses whichever codec
     // libs are linked in at build time rather than trying to dlopen them.
@@ -435,19 +432,7 @@ static void iv_ensure_mixer() {
     s_mixer_ready = true;
 }
 
-// Returns true if the file extension is a PCM chunk format that must be
-// loaded with Mix_LoadWAV rather than Mix_LoadMUS.
-static bool is_chunk_ext(const char *name) {
-    const char *dot = strrchr(name, '.');
-    if (!dot) return false;
-    char ext[16] = {};
-    for (int i = 0; i < 15 && dot[i]; i++) ext[i] = (char)tolower((unsigned char)dot[i]);
-    return strcmp(ext, ".voc")  == 0 ||
-           strcmp(ext, ".aiff") == 0 ||
-           strcmp(ext, ".aif")  == 0;
-}
-
-static void iv_play_audio(const char *audio_path, const char *label, bool load_cdg) {
+void iv_play_audio(const char *audio_path, const char *label, bool load_cdg) {
     iv_stop_audio();
     iv_cdg_free();
     iv_free_tex();
@@ -1131,8 +1116,7 @@ void iv_enter_selected() {
 // RENDER
 // ============================================================================
 
-static void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex,
-                               float x, float y, float w, float h) {
+void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex, float x, float y, float w, float h) {
     if (g_use_sdl_renderer) {
         if (!sdl_tex) return;
         gl_flush_verts();
@@ -1223,14 +1207,14 @@ static void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex,
     glUseProgram(prev_prog);
 }
 
-static void iv_draw_image(float x, float y, float w, float h) {
+void iv_draw_image(float x, float y, float w, float h) {
     iv_draw_image_tex(g_iv.sdl_tex, g_iv.tex, x, y, w, h);
 }
 
 // Draw a texture as a rotated quad. cx/cy = centre in pixels, w/h = display
 // dimensions before rotation, angle_deg = clockwise degrees (0/90/180/270).
 // UV assignment rotates the texture coords to match so the image actually turns.
-static void iv_draw_image_rotated(float cx, float cy, float w, float h, int angle_deg) {
+void iv_draw_image_rotated(float cx, float cy, float w, float h, int angle_deg) {
     // Build 4 corners in pixel space, rotated around centre
     float rad  = (float)(angle_deg * M_PI / 180.0);
     float cosA = cosf(rad), sinA = sinf(rad);

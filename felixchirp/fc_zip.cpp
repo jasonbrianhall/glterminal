@@ -128,3 +128,14 @@ void iv_list_zip(const char *zip_filepath, std::vector<IVEntry> &out) {
         return strcmp(a.zip_entry, b.zip_entry) < 0;
     });
 }
+
+// Extract one image from a local zip into a heap buffer. Caller must free().
+unsigned char *iv_extract_zip_entry(const char *zip_filepath, const char *entry_name, size_t &out_size) {
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    out_size = 0;
+    if (!mz_zip_reader_init_file(&zip, zip_filepath, 0)) return nullptr;
+    void *buf = mz_zip_reader_extract_file_to_heap(&zip, entry_name, &out_size, 0);
+    mz_zip_reader_end(&zip);
+    return (unsigned char *)buf;
+}
