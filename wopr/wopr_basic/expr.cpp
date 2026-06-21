@@ -1,9 +1,13 @@
 /*
  * expr.c — Utility helpers, string/numeric expression evaluators, DEF FN.
  */
+/* POSIX compatibility for DOS */
+#ifdef MSDOS_BUILD
+#include "posix_compat.h"
+#endif
+
 #include "basic.h"
 #include <time.h>
-#include <setjmp.h>
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
@@ -18,8 +22,6 @@ BASIC_NS_BEGIN
  * Global state
  * ================================================================ */
 int         g_option_base = 0;
-jmp_buf     g_parse_error_jmp;
-int         g_parse_error_active = 0;
 
 #if !defined(WOPR) && !defined(FELIX_BASIC)
 /* Standalone: g_break lives in the namespace */
@@ -79,14 +81,7 @@ static ConstEntry *const_find(char *name) {
  * ================================================================ */
 char *str_dup(char *s) {
     char *d = (char *) malloc(strlen(s) + 1);
-    if (!d) {
-        basic_stderr("OOM\n");
-        if (g_parse_error_active) {
-            longjmp(g_parse_error_jmp, 1);
-        } else {
-            exit(1);
-        }
-    }
+    if (!d) { basic_stderr("OOM\n"); exit(1); }
     strcpy(d, s);
     return d;
 }
@@ -844,14 +839,7 @@ static void parse_term_p(Parser *ps, mpf_t result) {
                             parse_unary_p(ps, tmp);
                             if (op == '*') mpf_mul(result, result, tmp);
                             else {
-                                if (mpf_sgn(tmp) == 0) {
-                                    basic_stderr("Division by zero\n");
-                                    if (g_parse_error_active) {
-                                        longjmp(g_parse_error_jmp, 1);
-                                    } else {
-                                        exit(1);
-                                    }
-                                }
+                                if (mpf_sgn(tmp) == 0) { basic_stderr("Division by zero\n"); exit(1); }
                                 mpf_div(result, result, tmp);
                             }
                             skip_ws_p(ps); continue; }
@@ -859,14 +847,7 @@ static void parse_term_p(Parser *ps, mpf_t result) {
         parse_unary_p(ps, tmp);
         long lv = (long)mpf_get_d(result);
         long rv = (long)mpf_get_d(tmp);
-        if (rv == 0) {
-            basic_stderr("Division by zero\n");
-            if (g_parse_error_active) {
-                longjmp(g_parse_error_jmp, 1);
-            } else {
-                exit(1);
-            }
-        }
+        if (rv == 0) { basic_stderr("Division by zero\n"); exit(1); }
         mpf_set_si(result, is_mod ? (lv % rv) : (lv / rv));
         skip_ws_p(ps);
     }
@@ -1756,11 +1737,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     }
 
     basic_stderr("Parse error near: \"%.20s\"\n", ps->p);
-    if (g_parse_error_active) {
-        longjmp(g_parse_error_jmp, 1);
-    } else {
-        exit(1);
-    }
+    exit(1);
 }
 
 char *eval_expr(char *s, mpf_t result) {

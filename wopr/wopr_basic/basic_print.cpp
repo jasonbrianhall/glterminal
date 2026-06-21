@@ -1,11 +1,20 @@
 /* supp.c -- support routines for dungeon */
 /* Modified for WOPR overlay */
 
+/* POSIX compatibility for DOS */
+#ifdef MSDOS_BUILD
+#include "posix_compat.h"
+#endif
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <setjmp.h>
+
+#if !defined(MSDOS_BUILD)
 #include <SDL2/SDL.h>
+#endif
+
 #include "basic_print.h"
 #ifdef USE_SDL_WINDOW
 #include "display.h"

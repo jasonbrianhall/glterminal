@@ -2,7 +2,23 @@
 #define BASIC_SUPP_H
 
 #include <setjmp.h>
+
+/* SDL2 is optional — only include if available or explicitly needed */
+#if !defined(DISABLE_SDL) && !defined(MSDOS_BUILD)
 #include <SDL2/SDL.h>
+#else
+/* SDL2 stub for DOS/text-only builds */
+typedef void SDL_sem;
+typedef unsigned int Uint32;
+#define SDL_QUIT 12
+#define SDL_CreateSemaphore(v) NULL
+#define SDL_DestroySemaphore(s) ((void)0)
+#define SDL_SemWait(s) ((void)0)
+#define SDL_SemPost(s) ((void)0)
+#define SDL_GetTicks() 0
+#define SDL_Delay(ms) ((void)0)
+#define SDL_Log(fmt, ...) ((void)0)
+#endif
 
 #include "basic_ns.h"
 #include "basic.h"

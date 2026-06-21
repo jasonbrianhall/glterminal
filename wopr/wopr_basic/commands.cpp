@@ -2,6 +2,11 @@
  * commands.c All BASIC command handlers, command registration table,
  *              statement splitter, and dispatcher.
  */
+/* POSIX compatibility for DOS */
+#ifdef MSDOS_BUILD
+#include "posix_compat.h"
+#endif
+
 #include "basic.h"
 #include <stdarg.h>
 #include "basic_print.h"
@@ -92,6 +97,7 @@ static void basic_stacktrace(const char *reason) {
         }
         if (shown >= 32) { basic_stderr("  ... (truncated)\n"); break; }
     }
+    exit(1);
 }
 
 static void print_using(char *fmt, double val) {
@@ -137,6 +143,8 @@ static void felix_draw(char *)  {}
 static void felix_drawf(char *, ...) {}
 
 #else
+
+#ifndef MSDOS_BUILD
 /*  OSC 666 escape-code path (original Felix terminal protocol)  */
 #include <unistd.h>
 
@@ -169,6 +177,15 @@ static void felix_drawf(char *fmt, ...) {
     va_end(ap);
     felix_draw(buf);
 }
+
+#else
+/* DOS: no graphics support, use stubs */
+static void felix_send(char *)  {}
+static void felix_sendf(char *, ...) {}
+static void felix_draw(char *)  {}
+static void felix_drawf(char *, ...) {}
+#endif /* !MSDOS_BUILD */
+
 #endif /* USE_SDL_WINDOW */
  
 static void ega_to_rgb(int ega6, int *r, int *g, int *b) {
@@ -428,6 +445,7 @@ static int cmd_qtitle(Interp *ip, char *args) {
 }
 
 /* _LIMIT fps — QB64 frame rate limiter */
+#ifndef MSDOS_BUILD
 static int cmd_qlimit(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);
@@ -451,6 +469,9 @@ static int cmd_qlimit(Interp *ip, char *args) {
     }
     return 0;
 }
+#else
+int cmd_qlimit(Interp *ip, char *args) { return 0; }
+#endif
 
 static int cmd_beep(Interp *ip, char *args) {
     (void)ip; (void)args;
@@ -3127,14 +3148,8 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
              * Handles: tan(5), sin(3.14), sqr(2), (3+4)*2, etc. */
             {
                 mpf_t result; mpf_init2(result, g_prec);
-                extern jmp_buf g_parse_error_jmp;
-                extern int g_parse_error_active;
-                g_parse_error_active = 1;
-                if (setjmp(g_parse_error_jmp) == 0) {
-                    eval_expr(p, result);
-                    print_mpf(result);
-                }
-                g_parse_error_active = 0;
+                eval_expr(p, result);
+                print_mpf(result);
                 mpf_clear(result);
                 return 0;
             }
@@ -3146,14 +3161,8 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
     /* Bare numeric expression starting with unary sign, digit, or paren */
     if (*p == '-' || *p == '+' || *p == '(' || isdigit((unsigned char)*p)) {
         mpf_t result; mpf_init2(result, g_prec);
-        extern jmp_buf g_parse_error_jmp;
-        extern int g_parse_error_active;
-        g_parse_error_active = 1;
-        if (setjmp(g_parse_error_jmp) == 0) {
-            eval_expr(p, result);
-            print_mpf(result);
-        }
-        g_parse_error_active = 0;
+        eval_expr(p, result);
+        print_mpf(result);
         mpf_clear(result);
         return 0;
     }

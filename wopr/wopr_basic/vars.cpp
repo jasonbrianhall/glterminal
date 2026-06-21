@@ -1,8 +1,13 @@
 /*
  * vars.c — Variable store: scalar and array, numeric (mpf) and string.
  */
+
+/* POSIX compatibility for DOS — include FIRST */
+#ifdef MSDOS_BUILD
+#include "posix_compat.h"
+#endif
+
 #include "basic.h"
-#include <setjmp.h>
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
@@ -59,16 +64,8 @@ FileHandle g_files[MAX_FILE_HANDLES + 1];  /* 1-based */
  * File handle
  * ================================================================ */
 FileHandle *fh_get(int n) {
-    extern jmp_buf g_parse_error_jmp;
-    extern int g_parse_error_active;
-    
     if (n < 1 || n > MAX_FILE_HANDLES) {
-        basic_stderr("Bad file number: %d\n", n);
-        if (g_parse_error_active) {
-            longjmp(g_parse_error_jmp, 1);
-        } else {
-            exit(1);
-        }
+        basic_stderr("Bad file number: %d\n", n); exit(1);
     }
     return &g_files[n];
 }
@@ -87,17 +84,7 @@ Var *var_find(char *name) {
 }
 
 Var *var_create(char *name) {
-    extern jmp_buf g_parse_error_jmp;
-    extern int g_parse_error_active;
-    
-    if (g_nvar >= MAX_VARS) {
-        basic_stderr("Too many variables %i/%i\n", g_nvar, MAX_VARS);
-        if (g_parse_error_active) {
-            longjmp(g_parse_error_jmp, 1);
-        } else {
-            exit(1);
-        }
-    }
+    if (g_nvar >= MAX_VARS) { basic_stderr("Too many variables %i/%i\n", g_nvar, MAX_VARS); exit(1); }
     Var *v = &g_vars[g_nvar++];
     memset(v, 0, sizeof(*v));
     strncpy(v->name, name, MAX_VARNAME - 1);

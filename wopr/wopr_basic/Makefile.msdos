@@ -1,0 +1,173 @@
+# Makefile for Felix BASIC DOS with DJGPP and DPMI support
+# Build with: make -f Makefile.msdos dos
+
+VERSION = 1.0
+
+# Output files
+DOS_TARGET = felixbas.exe
+DOS_COFF = felixbas
+
+# Build directories
+BUILD_DIR = build/dos
+OBJ_DIR = $(BUILD_DIR)/obj
+
+# Docker image for DJGPP
+DJGPP_IMAGE = djfdyuruiry/djgpp
+
+# CSDPMI URL and paths (DPMI stub for DOS)
+CSDPMI_URL = http://na.mirror.garr.it/mirrors/djgpp/current/v2misc/csdpmi7b.zip
+CSDPMI_DIR = $(BUILD_DIR)/csdpmi
+
+# Get current user and group IDs for Docker
+USER_ID = $(shell id -u)
+GROUP_ID = $(shell id -g)
+
+# Compiler flags for DOS target
+# -march=i586: Pentium-class processor (runs on 386+)
+# -fomit-frame-pointer: Smaller code
+# -ffast-math: Faster math at cost of precision (acceptable for DOS)
+# -s: Strip symbols for smaller executable
+# -DMSDOS_BUILD: Disable SDL and use text-only mode
+# -D_GNU_SOURCE: Enable GNU extensions (strcasecmp, strncasecmp, etc.)
+# -D_POSIX_SOURCE: Enable POSIX (sigaction, dirent, etc.)
+CFLAGS = -O3 -march=i586 -fomit-frame-pointer -ffast-math -funroll-loops \
+         -fpermissive -w -std=c++11 -DDONTUSEGMP -DMSDOS_BUILD \
+         -D_GNU_SOURCE -D_POSIX_SOURCE -s
+
+# Source files (text-only, no SDL, no GMP)
+SRCS = main.cpp vars.cpp expr.cpp program.cpp commands.cpp \
+       display_ansi.cpp basic_print.cpp sound_null.cpp
+
+# Default target
+all: dos
+
+# Help target
+help:
+	@echo ""
+	@echo "Felix BASIC DOS Makefile"
+	@echo "======================="
+	@echo ""
+	@echo "Targets:"
+	@echo "  make -f Makefile.msdos dos       - Full DOS build"
+	@echo "  make -f Makefile.msdos setup     - Setup DJGPP environment and CSDPMI"
+	@echo "  make -f Makefile.msdos compile   - Quick compile (assumes setup done)"
+	@echo "  make -f Makefile.msdos run       - Run in DOSBox"
+	@echo "  make -f Makefile.msdos clean     - Clean all build files"
+	@echo "  make -f Makefile.msdos status    - Show build status"
+	@echo ""
+	@echo "Requirements:"
+	@echo "  • Docker (for DJGPP toolchain)"
+	@echo "  • DOSBox (optional, for running)"
+	@echo "  • ~500MB disk space for DJGPP"
+	@echo ""
+
+# Setup DJGPP environment
+setup: pull-djgpp get-csdpmi
+	@echo "✅ Setup complete"
+
+# Pull DJGPP Docker image
+pull-djgpp:
+	@echo "Pulling DJGPP Docker image..."
+	docker pull $(DJGPP_IMAGE)
+
+# Download and extract CSDPMI
+get-csdpmi:
+	@if [ ! -d "$(CSDPMI_DIR)" ]; then \
+		echo "Downloading CSDPMI..."; \
+		mkdir -p $(BUILD_DIR); \
+		cd $(BUILD_DIR) && \
+		curl -L -o csdpmi7b.zip $(CSDPMI_URL) && \
+		unzip -o -q csdpmi7b.zip -d csdpmi && \
+		rm csdpmi7b.zip && \
+		cd ../..; \
+	else \
+		echo "✅ CSDPMI already downloaded"; \
+	fi
+
+# Quick compile (assumes setup is done)
+compile: get-csdpmi pull-djgpp
+	@echo "Compiling Felix BASIC with DJGPP..."
+	@mkdir -p $(OBJ_DIR)
+	@docker run --rm \
+		-v $(PWD):/src:z \
+		-u $(USER_ID):$(GROUP_ID) \
+		$(DJGPP_IMAGE) \
+		/bin/sh -c " \
+			cd /src && \
+			mkdir -p $(OBJ_DIR) && \
+			echo 'Compiling source files...' && \
+			g++ $(CFLAGS) -c main.cpp -o $(OBJ_DIR)/main.o && \
+			g++ $(CFLAGS) -c vars.cpp -o $(OBJ_DIR)/vars.o && \
+			g++ $(CFLAGS) -c expr.cpp -o $(OBJ_DIR)/expr.o && \
+			g++ $(CFLAGS) -c program.cpp -o $(OBJ_DIR)/program.o && \
+			g++ $(CFLAGS) -c commands.cpp -o $(OBJ_DIR)/commands.o && \
+			g++ $(CFLAGS) -c display_ansi.cpp -o $(OBJ_DIR)/display_ansi.o && \
+			g++ $(CFLAGS) -c basic_print.cpp -o $(OBJ_DIR)/basic_print.o && \
+			g++ $(CFLAGS) -c sound_null.cpp -o $(OBJ_DIR)/sound_null.o && \
+			echo 'Linking executable...' && \
+			g++ $(CFLAGS) -o $(BUILD_DIR)/$(DOS_COFF) \
+				$(OBJ_DIR)/*.o -lm && \
+			echo 'Converting to COFF format...' && \
+			exe2coff $(BUILD_DIR)/$(DOS_COFF) && \
+			echo 'Adding DPMI stub...' && \
+			cat $(CSDPMI_DIR)/bin/CWSDSTUB.EXE $(BUILD_DIR)/$(DOS_COFF) > $(BUILD_DIR)/$(DOS_TARGET) && \
+			echo 'DOS build complete!' && \
+			rm $(BUILD_DIR)/$(DOS_COFF) \
+		"
+	@echo "✅ Build successful!"
+	@echo "📁 Output: $(BUILD_DIR)/$(DOS_TARGET)"
+	@ls -lh $(BUILD_DIR)/$(DOS_TARGET)
+
+# Full DOS build
+dos: compile
+
+# Run in DOSBox
+run: dos
+	@echo "Running Felix BASIC in DOSBox..."
+	@if [ -f "$(BUILD_DIR)/$(DOS_TARGET)" ]; then \
+		if command -v dosbox >/dev/null 2>&1; then \
+			cd $(BUILD_DIR) && dosbox $(DOS_TARGET); \
+		else \
+			echo "❌ DOSBox not found. Install with:"; \
+			echo "   sudo apt-get install dosbox"; \
+			echo "   or download from: https://www.dosbox.com/"; \
+			exit 1; \
+		fi \
+	else \
+		echo "❌ ERROR: $(BUILD_DIR)/$(DOS_TARGET) not found"; \
+		echo "Build first with: make -f Makefile.msdos dos"; \
+		exit 1; \
+	fi
+
+# Clean all build files
+clean:
+	@echo "Cleaning build files..."
+	@rm -rf $(BUILD_DIR)
+	@echo "✅ Clean complete"
+
+# Clean only object files
+clean-obj:
+	@echo "Cleaning object files..."
+	@rm -rf $(OBJ_DIR)
+	@echo "✅ Object files cleaned"
+
+# Status target - show build status
+status:
+	@echo ""
+	@echo "Felix BASIC DOS Build Status:"
+	@echo "============================="
+	@echo ""
+	@if [ -d "$(CSDPMI_DIR)" ]; then \
+		echo "✅ CSDPMI: Downloaded"; \
+	else \
+		echo "❌ CSDPMI: Not downloaded (run 'make -f Makefile.msdos setup')"; \
+	fi
+	@if [ -f "$(BUILD_DIR)/$(DOS_TARGET)" ]; then \
+		echo "✅ Executable: $(BUILD_DIR)/$(DOS_TARGET)"; \
+		echo "   Size: $$(ls -lh $(BUILD_DIR)/$(DOS_TARGET) 2>/dev/null | awk '{print $$5}')"; \
+	else \
+		echo "❌ Executable: Not built"; \
+	fi
+	@echo ""
+
+.PHONY: all help setup pull-djgpp get-csdpmi compile dos run clean clean-obj status

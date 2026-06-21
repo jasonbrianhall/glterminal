@@ -2,8 +2,13 @@
  * main.c Main interpreter loop, SIGINT handler, interactive REPL,
  *           and program entry point.
  */
+
+/* POSIX compatibility for DOS/non-standard systems — include FIRST */
+#ifdef MSDOS_BUILD
+#include "posix_compat.h"
+#endif
+
 #include "basic.h"
-#include <setjmp.h>
 
 #ifdef USE_SDL_WINDOW
 #include "basic_gfx.h"
@@ -65,14 +70,18 @@ static void sigint_handler(int sig) {
 }
 
 static void install_sigint(void) {
-#ifndef _WIN32
+#ifdef MSDOS_BUILD
+    /* DOS: use simple signal() instead of sigaction */
+    signal(SIGINT, sigint_handler);
+#elif defined(_WIN32)
+    signal(SIGINT, sigint_handler);
+#else
+    /* POSIX systems: use sigaction for better control */
     struct sigaction sa;
     sa.sa_handler = sigint_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
-#else
-    signal(SIGINT, sigint_handler);
 #endif
 }
 
@@ -326,7 +335,9 @@ return 0;
             clear_program();
             display_print("\nOk\n");
 
-        } else if (strncasecmp(p,"PWD",3)==0 && !isalnum((unsigned char)p[3])) {
+        
+#ifndef MSDOS_BUILD
+        else if (strncasecmp(p,"PWD",3)==0 && !isalnum((unsigned char)p[3])) {
             char cwd[DEFAULT_BUFFER];
             if (getcwd(cwd, sizeof cwd)) { char out[DEFAULT_BUFFER+2]; snprintf(out, sizeof out, "%s\n", cwd); display_print(out); }
             else perror("getcwd");
@@ -413,6 +424,7 @@ return 0;
         } else if (strncasecmp(p,"RMDIR",5)==0 && !isalnum((unsigned char)p[5])) {
             p += 5; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
             if (rmdir(name)!=0) perror(name); else printf("Removed %s\n", name);
+#endif /* !MSDOS_BUILD */
 
         } else if (strncasecmp(p,"LOAD",4)==0 && !isalnum((unsigned char)p[4])) {
             p += 4; char name[DEFAULT_BUFFER]; PARSE_FILENAME(name, p); EXPAND_TILDE(name);
@@ -568,13 +580,7 @@ return 0;
                                  *scan == '=' || *scan == '<' || *scan == '>');
                 if (is_expr) {
                     Interp ip2 = { .pc=0, .running=1 };
-                    extern jmp_buf g_parse_error_jmp;
-                    extern int g_parse_error_active;
-                    g_parse_error_active = 1;
-                    if (setjmp(g_parse_error_jmp) == 0) {
-                        dispatch_one(&ip2, p, p);
-                    }
-                    g_parse_error_active = 0;
+                    dispatch_one(&ip2, p, p);
                     continue;
                 }
             }
@@ -601,13 +607,7 @@ return 0;
         } else {
             /* Immediate execution */
             Interp ip = { .pc=0, .running=1 };
-            extern jmp_buf g_parse_error_jmp;
-            extern int g_parse_error_active;
-            g_parse_error_active = 1;
-            if (setjmp(g_parse_error_jmp) == 0) {
-                dispatch_one(&ip, p, p);
-            }
-            g_parse_error_active = 0;
+            dispatch_one(&ip, p, p);
             continue;
         }
     }
