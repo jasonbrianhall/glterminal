@@ -3,6 +3,7 @@
  *           and program entry point.
  */
 #include "basic.h"
+#include <setjmp.h>
 
 #ifdef USE_SDL_WINDOW
 #include "basic_gfx.h"
@@ -567,7 +568,13 @@ return 0;
                                  *scan == '=' || *scan == '<' || *scan == '>');
                 if (is_expr) {
                     Interp ip2 = { .pc=0, .running=1 };
-                    dispatch_one(&ip2, p, p);
+                    extern jmp_buf g_parse_error_jmp;
+                    extern int g_parse_error_active;
+                    g_parse_error_active = 1;
+                    if (setjmp(g_parse_error_jmp) == 0) {
+                        dispatch_one(&ip2, p, p);
+                    }
+                    g_parse_error_active = 0;
                     continue;
                 }
             }
@@ -594,7 +601,13 @@ return 0;
         } else {
             /* Immediate execution */
             Interp ip = { .pc=0, .running=1 };
-            dispatch_one(&ip, p, p);
+            extern jmp_buf g_parse_error_jmp;
+            extern int g_parse_error_active;
+            g_parse_error_active = 1;
+            if (setjmp(g_parse_error_jmp) == 0) {
+                dispatch_one(&ip, p, p);
+            }
+            g_parse_error_active = 0;
             continue;
         }
     }
