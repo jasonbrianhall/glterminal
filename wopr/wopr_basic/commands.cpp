@@ -3128,8 +3128,14 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
              * Handles: tan(5), sin(3.14), sqr(2), (3+4)*2, etc. */
             {
                 mpf_t result; mpf_init2(result, g_prec);
-                eval_expr(p, result);
-                print_mpf(result);
+                extern jmp_buf g_parse_error_jmp;
+                extern int g_parse_error_active;
+                g_parse_error_active = 1;
+                if (setjmp(g_parse_error_jmp) == 0) {
+                    eval_expr(p, result);
+                    print_mpf(result);
+                }
+                g_parse_error_active = 0;
                 mpf_clear(result);
                 return 0;
             }
@@ -3141,8 +3147,14 @@ int dispatch_one(Interp *ip, char *stmt, char *full_line) {
     /* Bare numeric expression starting with unary sign, digit, or paren */
     if (*p == '-' || *p == '+' || *p == '(' || isdigit((unsigned char)*p)) {
         mpf_t result; mpf_init2(result, g_prec);
-        eval_expr(p, result);
-        print_mpf(result);
+        extern jmp_buf g_parse_error_jmp;
+        extern int g_parse_error_active;
+        g_parse_error_active = 1;
+        if (setjmp(g_parse_error_jmp) == 0) {
+            eval_expr(p, result);
+            print_mpf(result);
+        }
+        g_parse_error_active = 0;
         mpf_clear(result);
         return 0;
     }

@@ -3,6 +3,7 @@
  */
 #include "basic.h"
 #include <time.h>
+#include <setjmp.h>
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
@@ -17,6 +18,8 @@ BASIC_NS_BEGIN
  * Global state
  * ================================================================ */
 int         g_option_base = 0;
+jmp_buf     g_parse_error_jmp;
+int         g_parse_error_active = 0;
 
 #if !defined(WOPR) && !defined(FELIX_BASIC)
 /* Standalone: g_break lives in the namespace */
@@ -1732,7 +1735,11 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
     }
 
     basic_stderr("Parse error near: \"%.20s\"\n", ps->p);
-    exit(1);
+    if (g_parse_error_active) {
+        longjmp(g_parse_error_jmp, 1);
+    } else {
+        exit(1);
+    }
 }
 
 char *eval_expr(char *s, mpf_t result) {
