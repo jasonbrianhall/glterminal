@@ -3,6 +3,7 @@
  *             DATA prescan, and clear_program.
  */
 #include "basic.h"
+#include <setjmp.h>
 
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
@@ -298,7 +299,16 @@ void load(char *filename) {
             }
 
             #define STORE_SEG(lnum, sp) do { \
-                if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
+                if (g_nlines >= MAX_LINES) { \
+                    basic_stderr("Too many lines\n"); \
+                    extern jmp_buf g_parse_error_jmp; \
+                    extern int g_parse_error_active; \
+                    if (g_parse_error_active) { \
+                        longjmp(g_parse_error_jmp, 1); \
+                    } else { \
+                        exit(1); \
+                    } \
+                } \
                 g_lines[g_nlines].linenum = (lnum); \
                 char *_sp = (sp); \
                 while (isspace((unsigned char)*_sp)) _sp++; \
@@ -509,7 +519,16 @@ void load(char *filename) {
 
         /* Helper: store one statement and assign/register its pseudo-number. */
         #define STORE_FREE(sp) do { \
-            if (g_nlines >= MAX_LINES) { basic_stderr("Too many lines\n"); exit(1); } \
+            if (g_nlines >= MAX_LINES) { \
+                basic_stderr("Too many lines\n"); \
+                extern jmp_buf g_parse_error_jmp; \
+                extern int g_parse_error_active; \
+                if (g_parse_error_active) { \
+                    longjmp(g_parse_error_jmp, 1); \
+                } else { \
+                    exit(1); \
+                } \
+            } \
             pseudo++; \
             /* flush any pending labels to point here */ \
             for (int _li = 0; _li < pending_count; _li++) \

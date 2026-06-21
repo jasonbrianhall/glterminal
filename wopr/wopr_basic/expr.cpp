@@ -79,7 +79,14 @@ static ConstEntry *const_find(char *name) {
  * ================================================================ */
 char *str_dup(char *s) {
     char *d = (char *) malloc(strlen(s) + 1);
-    if (!d) { basic_stderr("OOM\n"); exit(1); }
+    if (!d) {
+        basic_stderr("OOM\n");
+        if (g_parse_error_active) {
+            longjmp(g_parse_error_jmp, 1);
+        } else {
+            exit(1);
+        }
+    }
     strcpy(d, s);
     return d;
 }
