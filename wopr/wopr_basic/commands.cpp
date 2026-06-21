@@ -92,7 +92,6 @@ static void basic_stacktrace(const char *reason) {
         }
         if (shown >= 32) { basic_stderr("  ... (truncated)\n"); break; }
     }
-    exit(1);
 }
 
 static void print_using(char *fmt, double val) {

@@ -837,7 +837,14 @@ static void parse_term_p(Parser *ps, mpf_t result) {
                             parse_unary_p(ps, tmp);
                             if (op == '*') mpf_mul(result, result, tmp);
                             else {
-                                if (mpf_sgn(tmp) == 0) { basic_stderr("Division by zero\n"); exit(1); }
+                                if (mpf_sgn(tmp) == 0) {
+                                    basic_stderr("Division by zero\n");
+                                    if (g_parse_error_active) {
+                                        longjmp(g_parse_error_jmp, 1);
+                                    } else {
+                                        exit(1);
+                                    }
+                                }
                                 mpf_div(result, result, tmp);
                             }
                             skip_ws_p(ps); continue; }
@@ -845,7 +852,14 @@ static void parse_term_p(Parser *ps, mpf_t result) {
         parse_unary_p(ps, tmp);
         long lv = (long)mpf_get_d(result);
         long rv = (long)mpf_get_d(tmp);
-        if (rv == 0) { basic_stderr("Division by zero\n"); exit(1); }
+        if (rv == 0) {
+            basic_stderr("Division by zero\n");
+            if (g_parse_error_active) {
+                longjmp(g_parse_error_jmp, 1);
+            } else {
+                exit(1);
+            }
+        }
         mpf_set_si(result, is_mod ? (lv % rv) : (lv / rv));
         skip_ws_p(ps);
     }
