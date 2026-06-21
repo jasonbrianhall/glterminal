@@ -104,19 +104,19 @@ compile: get-csdpmi pull-djgpp
 			g++ $(CFLAGS) -c display_ansi.cpp -o $(OBJ_DIR)/display_ansi.o && \
 			g++ $(CFLAGS) -c basic_print.cpp -o $(OBJ_DIR)/basic_print.o && \
 			g++ $(CFLAGS) -c sound_null.cpp -o $(OBJ_DIR)/sound_null.o && \
-			echo 'Linking executable...' && \
-			g++ $(CFLAGS) -o $(BUILD_DIR)/$(DOS_COFF) \
+			echo 'Linking to COFF format...' && \
+			g++ -Wl,--oformat,coff-go32 $(CFLAGS) -o $(BUILD_DIR)/$(DOS_COFF) \
 				$(OBJ_DIR)/*.o -lm && \
-			echo 'Converting to COFF format...' && \
+			echo 'Converting COFF to executable...' && \
 			exe2coff $(BUILD_DIR)/$(DOS_COFF) && \
 			echo 'Adding DPMI stub...' && \
 			cat $(CSDPMI_DIR)/bin/CWSDSTUB.EXE $(BUILD_DIR)/$(DOS_COFF) > $(BUILD_DIR)/$(DOS_TARGET) && \
 			echo 'DOS build complete!' && \
+			ls -lh $(BUILD_DIR)/$(DOS_TARGET) && \
 			rm $(BUILD_DIR)/$(DOS_COFF) \
 		"
 	@echo "✅ Build successful!"
 	@echo "📁 Output: $(BUILD_DIR)/$(DOS_TARGET)"
-	@ls -lh $(BUILD_DIR)/$(DOS_TARGET)
 
 # Full DOS build
 dos: compile
