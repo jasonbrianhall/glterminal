@@ -15,6 +15,7 @@
 #include "ssh_session.h"
 #include "gl_renderer.h"
 #include "ft_font.h"
+#include "sftp_webserver.h"
 
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -1174,6 +1175,9 @@ void sftp_console_open(int /*win_w*/, int /*win_h*/) {
 
 void sftp_console_close() {
     g_sftp_console_visible = false;
+    if (sftp_webserver_is_running()) {
+        sftp_webserver_stop();
+    }
 }
 
 void sftp_console_join() {
@@ -1192,6 +1196,18 @@ bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
 
     // Global hotkeys always pass through to the main loop
     if (sym == SDLK_F11) return false;
+
+    // F12 — toggle web server
+    if (sym == SDLK_F12) {
+        if (sftp_webserver_is_running()) {
+            sftp_webserver_stop();
+            SDL_Log("Web server stopped.");
+        } else {
+            sftp_webserver_start();
+            SDL_Log("Web server started on localhost:53716");
+        }
+        return true;
+    }
 
     // Esc — close
     if (sym == SDLK_ESCAPE) { sftp_console_close(); return true; }
