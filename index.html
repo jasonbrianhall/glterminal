@@ -3,9 +3,131 @@
 <head>
     <meta charset="UTF-8">
     <title>Felix Web UI</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        th { background-color: #f0f0f0; cursor: pointer; }
+        th.sort-asc::after { content: " ▲"; }
+        th.sort-desc::after { content: " ▼"; }
+    </style>
 </head>
 <body>
-    <h1>Hello World</h1>
+    <h1>File Listing</h1>
+
+    <table id="fileTable">
+        <thead>
+            <tr>
+                <th data-col="name">Name</th>
+                <th data-col="type">Type</th>
+                <th data-col="size">Size</th>
+                <th data-col="modified">Modified</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        let fileData = [];
+        let sortState = { col: null, dir: 1 };
+        let hasParentDir = false;
+
+        async function loadFiles() {
+            const dir = window.location.pathname;
+
+            const response = await fetch('/api/listfiles', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dir })
+            });
+
+            const data = await response.json();
+            fileData = data.entries;
+            renderTable(fileData);
+        }
+
+        function renderTable(entries) {
+            const tbody = document.querySelector('#fileTable tbody');
+            tbody.innerHTML = '';
+
+            // Add parent directory link if not root
+            const currentPath = window.location.pathname;
+            hasParentDir = currentPath !== '/' && currentPath !== '';
+            
+            if (hasParentDir) {
+                const row = document.createElement('tr');
+                row.classList.add('parent-dir');
+                const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+                row.innerHTML = `
+                    <td><a href="${parentPath}">..</a></td>
+                    <td>directory</td>
+                    <td>-</td>
+                    <td>-</td>
+                `;
+                tbody.appendChild(row);
+            }
+
+            entries.forEach(entry => {
+                const row = document.createElement('tr');
+                const entryPath = currentPath.endsWith('/') 
+                    ? `${currentPath}${entry.name}`
+                    : `${currentPath}/${entry.name}`;
+
+                let nameCell;
+                if (entry.type === 'directory') {
+                    nameCell = `<a href="${entryPath}">${entry.name}</a>`;
+                } else {
+                    nameCell = `<a href="${entryPath}">${entry.name}</a>`;
+                }
+
+                row.innerHTML = `
+                    <td>${nameCell}</td>
+                    <td>${entry.type}</td>
+                    <td>${entry.size}</td>
+                    <td>${new Date(entry.modified * 1000).toLocaleString()}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function sortByColumn(col) {
+            if (sortState.col === col) {
+                sortState.dir *= -1;
+            } else {
+                sortState.col = col;
+                sortState.dir = 1;
+            }
+
+            const sorted = [...fileData].sort((a, b) => {
+                let x = a[col];
+                let y = b[col];
+
+                if (col === 'size' || col === 'modified') {
+                    return (x - y) * sortState.dir;
+                }
+
+                return x.localeCompare(y) * sortState.dir;
+            });
+
+            updateSortIndicators(col);
+            renderTable(sorted);
+        }
+
+        function updateSortIndicators(col) {
+            document.querySelectorAll('th').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.col === col) {
+                    th.classList.add(sortState.dir === 1 ? 'sort-asc' : 'sort-desc');
+                }
+            });
+        }
+
+        document.querySelectorAll('th').forEach(th => {
+            th.addEventListener('click', () => sortByColumn(th.dataset.col));
+        });
+
+        loadFiles();
+    </script>
 </body>
 </html>
 
