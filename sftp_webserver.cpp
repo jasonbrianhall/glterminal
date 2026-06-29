@@ -72,6 +72,11 @@ static bool sftp_list_directory(LIBSSH2_SFTP *sftp, const char *path,
         rc = libssh2_sftp_readdir(dir, name, sizeof(name) - 1, &attrs);
         
         if (rc > 0) {
+            // Skip . and .. entries
+            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+                continue;
+            }
+            
             // Got an entry
             RemoteFile entry;
             strncpy(entry.name, name, sizeof(entry.name) - 1);
@@ -170,22 +175,70 @@ static std::string build_directory_json(const std::vector<RemoteFile> &entries) 
     return json;
 }
 
-static std::string read_file_from_disk(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return "";
-    std::string content;
-    char buf[8192];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        content.append(buf, n);
-    }
-    fclose(f);
-    return content;
-}
-
 // Get embedded index.html
 static std::string get_index_html() {
     return std::string((const char *)index_html, index_html_len);
+}
+
+// Determine MIME type from file extension
+static const char* get_mime_type(const char *filename) {
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return "application/octet-stream";
+    
+    // Images
+    if (strcmp(ext, ".png") == 0) return "image/png";
+    if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
+    if (strcmp(ext, ".gif") == 0) return "image/gif";
+    if (strcmp(ext, ".webp") == 0) return "image/webp";
+    if (strcmp(ext, ".svg") == 0) return "image/svg+xml";
+    if (strcmp(ext, ".bmp") == 0) return "image/bmp";
+    if (strcmp(ext, ".ico") == 0) return "image/x-icon";
+    
+    // Documents
+    if (strcmp(ext, ".pdf") == 0) return "application/pdf";
+    if (strcmp(ext, ".txt") == 0) return "text/plain";
+    if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0) return "text/html";
+    if (strcmp(ext, ".xml") == 0) return "application/xml";
+    if (strcmp(ext, ".json") == 0) return "application/json";
+    if (strcmp(ext, ".csv") == 0) return "text/csv";
+    if (strcmp(ext, ".md") == 0) return "text/markdown";
+    
+    // Code
+    if (strcmp(ext, ".js") == 0) return "application/javascript";
+    if (strcmp(ext, ".css") == 0) return "text/css";
+    if (strcmp(ext, ".py") == 0) return "text/x-python";
+    if (strcmp(ext, ".cpp") == 0 || strcmp(ext, ".cc") == 0) return "text/x-c++src";
+    if (strcmp(ext, ".c") == 0) return "text/x-csrc";
+    if (strcmp(ext, ".h") == 0 || strcmp(ext, ".hpp") == 0) return "text/x-chdr";
+    if (strcmp(ext, ".java") == 0) return "text/x-java";
+    if (strcmp(ext, ".rb") == 0) return "text/x-ruby";
+    if (strcmp(ext, ".go") == 0) return "text/x-go";
+    if (strcmp(ext, ".rs") == 0) return "text/x-rust";
+    
+    // Video
+    if (strcmp(ext, ".mp4") == 0) return "video/mp4";
+    if (strcmp(ext, ".webm") == 0) return "video/webm";
+    if (strcmp(ext, ".ogg") == 0) return "video/ogg";
+    if (strcmp(ext, ".mov") == 0) return "video/quicktime";
+    if (strcmp(ext, ".mkv") == 0) return "video/x-matroska";
+    if (strcmp(ext, ".avi") == 0) return "video/x-msvideo";
+    
+    // Audio
+    if (strcmp(ext, ".mp3") == 0) return "audio/mpeg";
+    if (strcmp(ext, ".wav") == 0) return "audio/wav";
+    if (strcmp(ext, ".m4a") == 0) return "audio/mp4";
+    if (strcmp(ext, ".flac") == 0) return "audio/flac";
+    if (strcmp(ext, ".aac") == 0) return "audio/aac";
+    if (strcmp(ext, ".ogg") == 0) return "audio/ogg";
+    
+    // Archives
+    if (strcmp(ext, ".zip") == 0) return "application/zip";
+    if (strcmp(ext, ".tar") == 0) return "application/x-tar";
+    if (strcmp(ext, ".gz") == 0 || strcmp(ext, ".gzip") == 0) return "application/gzip";
+    if (strcmp(ext, ".7z") == 0) return "application/x-7z-compressed";
+    if (strcmp(ext, ".rar") == 0) return "application/x-rar-compressed";
+    
+    return "application/octet-stream";
 }
 
 // ============================================================================
@@ -334,19 +387,16 @@ static void handle_http_request(int client_socket, int tunnel_id) {
             // File: download it
             std::vector<uint8_t> file_data;
             if (sftp_get_file(sftp, decoded_path.c_str(), file_data)) {
-                // Determine content type
-                const char *content_type = "application/octet-stream";
-                if (strstr(decoded_path.c_str(), ".txt")) content_type = "text/plain";
-                else if (strstr(decoded_path.c_str(), ".html")) content_type = "text/html";
-                else if (strstr(decoded_path.c_str(), ".json")) content_type = "application/json";
+                // Determine content type based on file extension
+                const char *content_type = get_mime_type(decoded_path.c_str());
 
                 std::string response = http_response_headers(200, content_type, file_data.size());
                 send(client_socket, response.c_str(), response.length(), 0);
                 if (!file_data.empty()) {
                     send(client_socket, (const char *)file_data.data(), file_data.size(), 0);
                 }
-                SDL_Log("[Tunnel %d] Downloaded file: %s (%zu bytes)", tunnel_id, 
-                         decoded_path.c_str(), file_data.size());
+                SDL_Log("[Tunnel %d] Downloaded file: %s (%zu bytes, type=%s)", tunnel_id, 
+                         decoded_path.c_str(), file_data.size(), content_type);
             } else {
                 std::string response = http_response_headers(500, "text/plain", 14);
                 response += "Download error";

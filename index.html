@@ -272,6 +272,19 @@
             return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
         }
 
+        // Determine if file should open in browser or download
+        function getFileTarget(filename) {
+            const viewableExtensions = [
+                '.txt', '.md', '.html', '.htm', '.xml', '.json', '.csv', '.log',
+                '.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.bmp', '.ico',
+                '.pdf', '.mp4', '.webm', '.ogg', '.mp3', '.wav', '.m4a',
+                '.js', '.css', '.py', '.cpp', '.c', '.h', '.java', '.rb', '.go', '.rs'
+            ];
+            
+            const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+            return viewableExtensions.includes(ext) ? '_blank' : null;
+        }
+
         function renderTable(entries) {
             const tbody = document.querySelector('#fileTable tbody');
             tbody.innerHTML = '';
@@ -304,9 +317,11 @@
                 if (entry.type === 'directory') {
                     nameCell = `<a href="${entryPath}">${entry.name}</a>`;
                 } else if (entry.type === 'link') {
-                    nameCell = `<a href="${entryPath}">${entry.name}</a>`;
+                    nameCell = `<a href="${entryPath}" target="${getFileTarget(entry.name) || '_self'}">${entry.name}</a>`;
                 } else {
-                    nameCell = `<a href="${entryPath}">${entry.name}</a>`;
+                    // Regular file - check if it should open in browser
+                    const target = getFileTarget(entry.name);
+                    nameCell = `<a href="${entryPath}" target="${target || '_self'}">${entry.name}</a>`;
                 }
 
                 const typeClass = entry.type === 'directory' ? 'type-directory' : 
