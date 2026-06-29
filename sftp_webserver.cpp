@@ -25,6 +25,7 @@
     #include <arpa/inet.h>
     #include <unistd.h>
     #include <errno.h>
+    #include <signal.h>
     #define SOCKET int
     #define INVALID_SOCKET -1
     #define SOCKET_ERROR -1
@@ -41,6 +42,24 @@ static std::atomic<bool> s_server_running(false);
 static std::atomic<bool> s_server_stop_requested(false);
 static std::thread *s_server_thread = nullptr;
 static std::mutex s_server_mutex;
+static SOCKET s_listen_socket_global = INVALID_SOCKET;
+
+#ifndef _WIN32
+// Signal handler for CTRL+C
+static void sigint_handler(int sig) {
+    (void)sig;
+    fprintf(stderr, "\nSFTP webserver: SIGINT received, forcing shutdown\n");
+    s_server_stop_requested.store(true, std::memory_order_release);
+    
+    // Force close the listen socket to interrupt select()
+    if (s_listen_socket_global != INVALID_SOCKET) {
+        close(s_listen_socket_global);
+        s_listen_socket_global = INVALID_SOCKET;
+    }
+    
+    exit(0);
+}
+#endif
 
 #define WEBSERVER_PORT 53716
 #define BACKLOG 5
@@ -141,33 +160,32 @@ static bool json_get_string(const char *json, const char *key, char *value, int 
 // REMOTE SFTP OPERATIONS
 // ============================================================================
 
-// Global static SFTP handle — initialized lazily on first web request
-static LIBSSH2_SFTP *s_sftp_handle = nullptr;
+// Thread-local SFTP handle
+static thread_local LIBSSH2_SFTP *tls_sftp_handle = nullptr;
 
-// Initialize SFTP if needed
-static bool ensure_sftp_init() {
-    if (s_sftp_handle) return true;
+// Initialize SFTP for this thread if needed
+static bool ensure_sftp_init_thread() {
+    if (tls_sftp_handle) return true;
     
     LIBSSH2_SESSION *sess = ssh_get_session();
     if (!sess) return false;
     
-    ssh_session_lock();
     libssh2_session_set_blocking(sess, 1);
-    s_sftp_handle = libssh2_sftp_init(sess);
+    tls_sftp_handle = libssh2_sftp_init(sess);
     libssh2_session_set_blocking(sess, 0);
-    ssh_session_unlock();
     
-    return s_sftp_handle != nullptr;
+    return tls_sftp_handle != nullptr;
 }
 
 // List remote directory via SFTP and return JSON
 static void list_directory_sftp_json(SOCKET client, const char *dir_path) {
-    if (!ensure_sftp_init()) {
+    fprintf(stderr, "SFTP webserver: POST /api/listfiles dir=%s\n", dir_path);
+    
+    if (!ensure_sftp_init_thread()) {
+        fprintf(stderr, "SFTP webserver: SFTP not initialized\n");
         send_error(client, "500 Internal Server Error", "SFTP not initialized");
         return;
     }
-    
-    ssh_session_lock();
     
     LIBSSH2_SESSION *sess = ssh_get_session();
     int sock = ssh_get_socket();
@@ -176,15 +194,17 @@ static void list_directory_sftp_json(SOCKET client, const char *dir_path) {
     
     LIBSSH2_SFTP_HANDLE *dirh = nullptr;
     int rc;
-    while (!dirh) {
-        dirh = libssh2_sftp_opendir(s_sftp_handle, dir_path);
+    int retries = 0;
+    while (!dirh && retries < 100) {
+        dirh = libssh2_sftp_opendir(tls_sftp_handle, dir_path);
         if (!dirh) {
             if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN) {
                 waitsocket_sftp(sock, sess);
+                retries++;
                 continue;
             }
+            fprintf(stderr, "SFTP webserver: cannot open directory %s (errno=%d)\n", dir_path, libssh2_session_last_errno(sess));
             libssh2_session_set_blocking(sess, 1);
-            ssh_session_unlock();
             send_error(client, "404 Not Found", "Directory not found or not accessible");
             return;
         }
@@ -234,36 +254,52 @@ static void list_directory_sftp_json(SOCKET client, const char *dir_path) {
     pos += snprintf(buffer + pos, sizeof(buffer) - pos, "]}");
     
     libssh2_session_set_blocking(sess, 1);
-    ssh_session_unlock();
 
+    fprintf(stderr, "SFTP webserver: listed %s, response length %d\n", dir_path, pos);
     send_response(client, "200 OK", "application/json", (uint8_t *)buffer, pos);
 }
 
 // Serve remote file content via SFTP
 static void serve_file_sftp(SOCKET client, const char *file_path) {
-    if (!ensure_sftp_init()) {
+    fprintf(stderr, "SFTP webserver: GET %s\n", file_path);
+    
+    if (!ensure_sftp_init_thread()) {
+        fprintf(stderr, "SFTP webserver: SFTP not initialized\n");
         send_error(client, "500 Internal Server Error", "SFTP not initialized");
         return;
     }
-    
-    ssh_session_lock();
     
     LIBSSH2_SESSION *sess = ssh_get_session();
     int sock = ssh_get_socket();
     
     libssh2_session_set_blocking(sess, 0);
     
-    // Stat the file to get size
+    // Stat the path to see if it's a file or directory
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     int rc;
-    while ((rc = libssh2_sftp_stat(s_sftp_handle, file_path, &attrs)) == LIBSSH2_ERROR_EAGAIN) {
+    while ((rc = libssh2_sftp_stat(tls_sftp_handle, file_path, &attrs)) == LIBSSH2_ERROR_EAGAIN) {
         waitsocket_sftp(sock, sess);
     }
     
-    if (rc < 0 || !LIBSSH2_SFTP_S_ISREG(attrs.permissions)) {
+    if (rc < 0) {
+        fprintf(stderr, "SFTP webserver: stat failed for %s (rc=%d)\n", file_path, rc);
         libssh2_session_set_blocking(sess, 1);
-        ssh_session_unlock();
-        send_error(client, "404 Not Found", "File not found or not a regular file");
+        send_error(client, "404 Not Found", "Path not found");
+        return;
+    }
+    
+    // If it's a directory, return index.html so JS can handle it
+    if (LIBSSH2_SFTP_S_ISDIR(attrs.permissions)) {
+        fprintf(stderr, "SFTP webserver: %s is a directory, returning index.html\n", file_path);
+        libssh2_session_set_blocking(sess, 1);
+        send_response(client, "200 OK", "text/html", index_html, index_html_len);
+        return;
+    }
+    
+    if (!LIBSSH2_SFTP_S_ISREG(attrs.permissions)) {
+        fprintf(stderr, "SFTP webserver: %s is not a regular file\n", file_path);
+        libssh2_session_set_blocking(sess, 1);
+        send_error(client, "403 Forbidden", "Not a regular file");
         return;
     }
     
@@ -272,14 +308,13 @@ static void serve_file_sftp(SOCKET client, const char *file_path) {
     // Open file
     LIBSSH2_SFTP_HANDLE *fh = nullptr;
     while (!fh) {
-        fh = libssh2_sftp_open(s_sftp_handle, file_path, LIBSSH2_FXF_READ, 0);
+        fh = libssh2_sftp_open(tls_sftp_handle, file_path, LIBSSH2_FXF_READ, 0);
         if (!fh) {
             if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN) {
                 waitsocket_sftp(sock, sess);
                 continue;
             }
             libssh2_session_set_blocking(sess, 1);
-            ssh_session_unlock();
             send_error(client, "403 Forbidden", "Cannot read file");
             return;
         }
@@ -292,7 +327,6 @@ static void serve_file_sftp(SOCKET client, const char *file_path) {
             waitsocket_sftp(sock, sess);
         }
         libssh2_session_set_blocking(sess, 1);
-        ssh_session_unlock();
         send_error(client, "413 Payload Too Large", "File too large to serve");
         return;
     }
@@ -303,7 +337,6 @@ static void serve_file_sftp(SOCKET client, const char *file_path) {
             waitsocket_sftp(sock, sess);
         }
         libssh2_session_set_blocking(sess, 1);
-        ssh_session_unlock();
         send_error(client, "500 Internal Server Error", "Memory allocation failed");
         return;
     }
@@ -331,7 +364,6 @@ static void serve_file_sftp(SOCKET client, const char *file_path) {
     }
 
     libssh2_session_set_blocking(sess, 1);
-    ssh_session_unlock();
 
     if (!read_ok || total_read != file_size) {
         free(file_content);
@@ -374,6 +406,8 @@ static void handle_client(SOCKET client) {
     char method[32], path[256], body[1024];
     parse_http_request(request, method, path, sizeof(path), body, sizeof(body));
 
+    fprintf(stderr, "SFTP webserver: %s %s\n", method, path);
+
     if (strcmp(method, "POST") == 0 && strcmp(path, "/api/listfiles") == 0) {
         char dir_path[512];
         if (json_get_string(body, "dir", dir_path, sizeof(dir_path))) {
@@ -393,6 +427,7 @@ static void handle_client(SOCKET client) {
     }
     else {
         // Root path and all other requests return index.html
+        fprintf(stderr, "SFTP webserver: serving index.html\n");
         send_response(client, "200 OK", "text/html", index_html, index_html_len);
     }
 
@@ -410,6 +445,9 @@ static void server_main() {
         fprintf(stderr, "SFTP webserver: WSAStartup failed\n");
         return;
     }
+#else
+    // Set up signal handler for CTRL+C
+    signal(SIGINT, sigint_handler);
 #endif
 
     SOCKET listen_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -420,6 +458,8 @@ static void server_main() {
 #endif
         return;
     }
+    
+    s_listen_socket_global = listen_socket;
 
     int reuse = 1;
     if (setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse)) < 0) {
@@ -460,8 +500,8 @@ static void server_main() {
 
     while (!s_server_stop_requested.load(std::memory_order_acquire)) {
         struct timeval tv;
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;  // 100ms timeout for faster shutdown detection
 
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -493,6 +533,7 @@ static void server_main() {
     }
 
     close(listen_socket);
+    s_listen_socket_global = INVALID_SOCKET;
     s_server_running.store(false, std::memory_order_release);
 
 #ifdef _WIN32
@@ -534,10 +575,14 @@ void sftp_webserver_stop(void) {
     s_server_stop_requested.store(true, std::memory_order_release);
 
     if (s_server_thread) {
+        fprintf(stderr, "SFTP webserver: waiting for thread to exit...\n");
         s_server_thread->join();
+        fprintf(stderr, "SFTP webserver: thread exited\n");
         delete s_server_thread;
         s_server_thread = nullptr;
     }
+    
+    s_server_running.store(false, std::memory_order_release);
 }
 
 bool sftp_webserver_is_running(void) {
