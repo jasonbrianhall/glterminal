@@ -13,6 +13,7 @@
 #include "sftp_console.h"
 #include "sftp_overlay.h"   // sftp_init(), sftp_local_home_dir(), sftp_local_download_dir()
 #include "ssh_session.h"
+#include "sftp_webserver.h"  // F12 web server
 #include "gl_renderer.h"
 #include "ft_font.h"
 
@@ -1173,6 +1174,9 @@ void sftp_console_open(int /*win_w*/, int /*win_h*/) {
 }
 
 void sftp_console_close() {
+    if (sftp_webserver_running()) {
+        sftp_webserver_stop();
+    }
     g_sftp_console_visible = false;
 }
 
@@ -1193,7 +1197,20 @@ bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
     // Global hotkeys always pass through to the main loop
     if (sym == SDLK_F11) return false;
 
-    // Esc — close
+    // F12 — toggle web server
+    if (sym == SDLK_F12) {
+        if (sftp_webserver_running()) {
+            sftp_webserver_stop();
+            push_line_direct("Web server stopped.", 0.82f, 0.88f, 0.96f);
+        } else {
+            if (sftp_webserver_start()) {
+                push_line_direct("Web server started on http://localhost:53716", 0.6f, 0.9f, 0.6f);
+            } else {
+                push_line_direct("Failed to start web server", 0.9f, 0.6f, 0.6f);
+            }
+        }
+        return true;
+    }
     if (sym == SDLK_ESCAPE) { sftp_console_close(); return true; }
 
     // Return — execute
