@@ -15,4 +15,7 @@ void sftp_webserver_stop();
 // Check if web server is running
 bool sftp_webserver_running();
 
+// Get the actual port the web server is listening on (only valid if running)
+int sftp_webserver_get_port();
+
 #endif // USESSH

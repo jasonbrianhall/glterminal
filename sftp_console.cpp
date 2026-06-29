@@ -577,7 +577,7 @@ static void cmd_help() {
     push_info("  exit / quit / bye       Close console");
     push_info("");
     push_info("Hotkeys:");
-    push_info("  F12                     Toggle web file browser (http://localhost:53716)");
+    push_info("  F12                     Toggle web file browser (http://localhost:53716+)");
 }
 
 // Executed synchronously (no blocking I/O)
@@ -740,7 +740,7 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
                                          e.is_dir ? 0.90f : 0.82f,
                                          e.is_dir ? 0.50f : 0.96f);
                     } else {
-                        std::string disp = e.is_dir ? ("[" + e.name + "]") : e.name;
+                        std::string disp = e.is_dir ? (e.name + "/") : e.name;
                         push_line(disp.c_str(), e.is_dir ? 0.90f : 0.82f,
                                                 e.is_dir ? 0.90f : 0.82f,
                                                 e.is_dir ? 0.50f : 0.96f);
@@ -772,7 +772,7 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
                                      e.is_dir ? 0.90f : 0.82f,
                                      e.is_dir ? 0.50f : 0.96f);
                 } else {
-                    std::string disp = e.is_dir ? ("[" + e.name + "]") : e.name;
+                    std::string disp = e.is_dir ? (e.name + "/") : e.name;
                     push_line(disp.c_str(), e.is_dir ? 0.90f : 0.82f,
                                             e.is_dir ? 0.90f : 0.82f,
                                             e.is_dir ? 0.50f : 0.96f);
@@ -1159,7 +1159,7 @@ void sftp_console_open(int /*win_w*/, int /*win_h*/) {
     refresh_local_cwd();
 
     if (s_lines.empty()) {
-        push_info("SFTP Console — type 'help' for commands, 'exit' to close, F12 for web browser");
+        push_info("SFTP Console — type 'help' for commands, 'exit' to close, F12 for web browser (read-only)");
     }
 
     // Populate remote CWD from active session if we can
@@ -1207,7 +1207,10 @@ bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
             push_line_direct("Web server stopped.", 0.82f, 0.88f, 0.96f);
         } else {
             if (sftp_webserver_start()) {
-                push_line_direct("Web server started on http://localhost:53716", 0.6f, 0.9f, 0.6f);
+                int port = sftp_webserver_get_port();
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Web server started on http://localhost:%d", port);
+                push_line_direct(msg, 0.6f, 0.9f, 0.6f);
             } else {
                 push_line_direct("Failed to start web server", 0.9f, 0.6f, 0.6f);
             }

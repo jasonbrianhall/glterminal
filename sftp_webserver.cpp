@@ -15,6 +15,7 @@
 #include <memory>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <cerrno>
 #include <vector>
 
@@ -44,6 +45,7 @@ static std::thread *g_webserver_thread = nullptr;
 static int g_listen_socket = INVALID_SOCKET;
 static int g_tunnel_counter = 0;
 static SDL_mutex *g_tunnel_mutex = nullptr;
+static int g_webserver_port = 53716;  // Track which port we're actually using
 
 // ============================================================================
 // SFTP File Operations
@@ -151,20 +153,32 @@ static bool sftp_list_directory(LIBSSH2_SFTP *sftp, const char *path,
 // ============================================================================
 
 static std::string http_response_headers(int status_code, const char *content_type,
-                                        size_t content_length) {
-    char buf[512];
+                                        size_t content_length, const char *filename = nullptr) {
+    char buf[768];
     const char *status_text = "OK";
     if (status_code == 400) status_text = "Bad Request";
     else if (status_code == 404) status_text = "Not Found";
+    else if (status_code == 405) status_text = "Method Not Allowed";
     else if (status_code == 500) status_text = "Internal Server Error";
 
-    snprintf(buf, sizeof(buf),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %zu\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        status_code, status_text, content_type, content_length);
+    if (filename) {
+        snprintf(buf, sizeof(buf),
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %zu\r\n"
+            "Content-Disposition: attachment; filename=\"%s\"\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            status_code, status_text, content_type, content_length, filename);
+    } else {
+        snprintf(buf, sizeof(buf),
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %zu\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            status_code, status_text, content_type, content_length);
+    }
     return buf;
 }
 
@@ -238,6 +252,24 @@ static const char* get_mime_type(const char *filename) {
     return "application/octet-stream";
 }
 
+// URL decode helper (convert %20 -> space, etc)
+static std::string url_decode(const char *encoded) {
+    std::string decoded;
+    for (const char *p = encoded; *p; ++p) {
+        if (*p == '%' && *(p+1) && *(p+2)) {
+            char hex_str[3] = {*(p+1), *(p+2), '\0'};
+            int hex = strtol(hex_str, nullptr, 16);
+            decoded += (char)hex;
+            p += 2;
+        } else if (*p == '+') {
+            decoded += ' ';
+        } else {
+            decoded += *p;
+        }
+    }
+    return decoded;
+}
+
 // ============================================================================
 // Request Handler
 // ============================================================================
@@ -292,7 +324,8 @@ static void handle_http_request(int client_socket, int tunnel_id) {
     }
 
     if (strcmp(method, "GET") == 0) {
-        std::string decoded_path = path;
+        std::string decoded_path = url_decode(path);
+        SDL_Log("[Tunnel %d] GET: encoded='%s' decoded='%s'", tunnel_id, path, decoded_path.c_str());
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         int rc = libssh2_sftp_stat(sftp, decoded_path.c_str(), &attrs);
 
@@ -315,8 +348,15 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         else {
             std::vector<uint8_t> file_data;
             if (sftp_get_file(sftp, decoded_path.c_str(), file_data)) {
+                // Extract filename from path
+                const char *filename = decoded_path.c_str();
+                const char *last_slash = strrchr(decoded_path.c_str(), '/');
+                if (last_slash) {
+                    filename = last_slash + 1;
+                }
+                
                 const char *content_type = get_mime_type(decoded_path.c_str());
-                std::string response = http_response_headers(200, content_type, file_data.size());
+                std::string response = http_response_headers(200, content_type, file_data.size(), filename);
                 send(client_socket, response.c_str(), response.length(), 0);
                 if (!file_data.empty()) {
                     send(client_socket, (const char *)file_data.data(), file_data.size(), 0);
@@ -564,15 +604,19 @@ static void handle_http_request(int client_socket, int tunnel_id) {
             dir_path[i] = '\0';
         }
 
+        // URL decode the path
+        std::string decoded_dir = url_decode(dir_path);
+        
         std::vector<RemoteFile> entries;
-        sftp_list_directory(sftp, dir_path, entries);
+        sftp_list_directory(sftp, decoded_dir.c_str(), entries);
+
+        SDL_Log("[Tunnel %d] Listed directory: encoded='%s' decoded='%s' (%zu entries)", tunnel_id, dir_path, decoded_dir.c_str(), entries.size());
 
         std::string json = build_directory_json(entries);
         std::string response = http_response_headers(200, "application/json", json.length());
         response += json;
 
         send(client_socket, response.c_str(), response.length(), 0);
-        SDL_Log("[Tunnel %d] Listed directory: %s (%zu entries)", tunnel_id, dir_path, entries.size());
     }
     else {
         std::string response = http_response_headers(400, "text/plain", 18);
@@ -594,8 +638,6 @@ static void handle_http_request(int client_socket, int tunnel_id) {
 // ============================================================================
 
 static void webserver_thread_func() {
-    SDL_Log("[WebServer] Starting on port 53716");
-
 #ifdef _WIN32
     WSADATA wsa_data;
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
@@ -616,11 +658,24 @@ static void webserver_thread_func() {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(53716);
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    if (bind(g_listen_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        SDL_Log("[WebServer] bind() failed: %s", strerror(errno));
+    // Try to bind to a port, starting at 53716 and incrementing up to 100 times
+    int port = 53716;
+    int bind_result = -1;
+    for (int attempt = 0; attempt < 100; attempt++) {
+        addr.sin_port = htons(port);
+        bind_result = bind(g_listen_socket, (struct sockaddr *)&addr, sizeof(addr));
+        if (bind_result == 0) {
+            g_webserver_port = port;  // Store the port we're using
+            SDL_Log("[WebServer] Starting on port %d", port);
+            break;
+        }
+        port++;
+    }
+
+    if (bind_result < 0) {
+        SDL_Log("[WebServer] bind() failed on all ports 53716-53815: %s", strerror(errno));
         closesocket(g_listen_socket);
         return;
     }
@@ -640,7 +695,7 @@ static void webserver_thread_func() {
 #endif
 
     g_webserver_running.store(true);
-    SDL_Log("[WebServer] Listening on localhost:53716");
+    SDL_Log("[WebServer] Listening on localhost:%d", g_webserver_port);
 
     while (!g_webserver_should_exit.load()) {
         struct sockaddr_in client_addr;
@@ -716,6 +771,10 @@ void sftp_webserver_stop() {
 
 bool sftp_webserver_running() {
     return g_webserver_running.load();
+}
+
+int sftp_webserver_get_port() {
+    return g_webserver_port;
 }
 
 #endif // USESSH
