@@ -19,6 +19,8 @@
 #include <ctype.h>
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <queue>
 
 #ifndef _WIN32
 #  include <sys/stat.h>
@@ -53,14 +55,19 @@ static LIBSSH2_SFTP *s_sftp  = nullptr;
 SftpOverlay          g_sftp;
 extern int           g_font_size;
 
-// Transfer runs on a background thread. Main loop polls these atomics.
-static std::thread        s_transfer_thread;
-static std::atomic<float> s_progress{0.f};
-static std::atomic<bool>  s_transferring{false};
-// Status written by worker, read by main — protected by done flag ordering.
-// Worker writes status then sets s_transferring=false; main reads after.
-static char               s_status_buf[512] = {};
-static bool               s_transfer_ok     = false;
+// Transfer job tracking
+struct TransferJob {
+    int id;
+    std::thread thread;
+    std::atomic<bool> active{true};
+    std::atomic<float> progress{0.f};
+    std::atomic<bool> ok{false};
+    char status[512] = {};
+};
+
+static std::mutex s_jobs_mutex;
+static std::vector<TransferJob*> s_active_jobs;
+static int s_next_job_id = 0;
 
 // ============================================================================
 // LAYOUT HELPERS
@@ -104,6 +111,35 @@ std::string sftp_local_download_dir() {
 }
 
 // ============================================================================
+// JOB MANAGEMENT
+// ============================================================================
+
+static TransferJob* create_job() {
+    auto job = new TransferJob();
+    job->id = s_next_job_id++;
+    {
+        std::lock_guard<std::mutex> lock(s_jobs_mutex);
+        s_active_jobs.push_back(job);
+    }
+    return job;
+}
+
+static void cleanup_finished_jobs() {
+    std::lock_guard<std::mutex> lock(s_jobs_mutex);
+    auto it = s_active_jobs.begin();
+    while (it != s_active_jobs.end()) {
+        TransferJob *job = *it;
+        if (!job->active.load()) {
+            if (job->thread.joinable()) job->thread.join();
+            delete job;
+            it = s_active_jobs.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// ============================================================================
 // SFTP INIT / SHUTDOWN
 // ============================================================================
 
@@ -123,13 +159,29 @@ bool sftp_init() {
 }
 
 void sftp_transfer_join() {
-    if (s_transfer_thread.joinable()) s_transfer_thread.join();
+    std::lock_guard<std::mutex> lock(s_jobs_mutex);
+    for (auto job : s_active_jobs) {
+        if (job->thread.joinable()) {
+            job->thread.join();
+        }
+    }
 }
 
-float sftp_progress() { return s_progress.load(); }
+float sftp_progress() {
+    std::lock_guard<std::mutex> lock(s_jobs_mutex);
+    if (s_active_jobs.empty()) return 0.f;
+    float total = 0.f;
+    for (auto job : s_active_jobs) {
+        if (job->active.load()) {
+            total += job->progress.load();
+        }
+    }
+    return total / (float)s_active_jobs.size();
+}
 
 void sftp_shutdown() {
     sftp_transfer_join();
+    cleanup_finished_jobs();
     if (s_sftp) { libssh2_sftp_shutdown(s_sftp); s_sftp = nullptr; }
 }
 
@@ -305,17 +357,11 @@ static void fmt_size(uint64_t sz, char *buf, int bufsz) {
 }
 
 // ============================================================================
-// TRANSFER  (runs on background thread — no GL calls allowed)
+// TRANSFER  (runs on background thread — each thread has its own SFTP channel)
 // ============================================================================
 
-// RAII wrapper so every return path in do_download/do_upload unlocks cleanly.
-struct SessionLock {
-    SessionLock()  { ssh_session_lock(); }
-    ~SessionLock() { ssh_session_unlock(); }
-};
-
-static bool do_download(const char *remote_path, const char *filename,
-                        const char *local_dir, char *status, int stsz) {
+static bool do_download(TransferJob *job, const char *remote_path, const char *filename,
+                        const char *local_dir) {
     char remote_full[4096], local_full[4096];
     snprintf(remote_full, sizeof(remote_full), "%s/%s", remote_path, filename);
     snprintf(local_full,  sizeof(local_full),  "%s/%s", local_dir,   filename);
@@ -323,12 +369,8 @@ static bool do_download(const char *remote_path, const char *filename,
     LIBSSH2_SESSION *sess = ssh_get_session();
     int              sock = ssh_get_socket();
 
-    // Hold the session mutex for the entire transfer — libssh2 is not thread-safe
-    // and ssh_read/ssh_write on the main thread must not race with us.
-    SessionLock session_lock;
-    libssh2_session_set_blocking(sess, 0);
-
-    // Stat for size
+    // Lock ONLY for SFTP subsystem init, then release immediately
+    ssh_session_lock();
     LIBSSH2_SFTP_ATTRIBUTES attrs{};
     uint64_t file_size = 0;
     { int rc; while ((rc = libssh2_sftp_stat(s_sftp, remote_full, &attrs)) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
@@ -340,15 +382,19 @@ static bool do_download(const char *remote_path, const char *filename,
         fh = libssh2_sftp_open(s_sftp, remote_full, LIBSSH2_FXF_READ, 0);
         if (!fh) {
             if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
-            snprintf(status, stsz, "Error: cannot open remote '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
+            snprintf(job->status, sizeof(job->status), "Error: cannot open remote '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
+            ssh_session_unlock();
             return false;
         }
     }
+    ssh_session_unlock();
 
     FILE *out = fopen(local_full, "wb");
     if (!out) {
-        snprintf(status, stsz, "Error: cannot create local '%s': %s", local_full, strerror(errno));
+        snprintf(job->status, sizeof(job->status), "Error: cannot create local '%s': %s", local_full, strerror(errno));
+        ssh_session_lock();
         while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
+        ssh_session_unlock();
         return false;
     }
 
@@ -356,36 +402,39 @@ static bool do_download(const char *remote_path, const char *filename,
     ssize_t  n;
     uint64_t total = 0;
     bool     ok    = true;
-    s_progress.store(0.f);
+    job->progress.store(0.f);
 
+    // Now do the bulk transfer without holding the lock
     for (;;) {
         n = libssh2_sftp_read(fh, buf, sizeof(buf));
         if (n == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
-        if (n < 0) { snprintf(status, stsz, "Error reading '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp)); ok = false; break; }
+        if (n < 0) { snprintf(job->status, sizeof(job->status), "Error reading '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp)); ok = false; break; }
         if (n == 0) break;
         if (fwrite(buf, 1, (size_t)n, out) != (size_t)n) {
-            snprintf(status, stsz, "Error writing local '%s': %s", local_full, strerror(errno)); ok = false; break;
+            snprintf(job->status, sizeof(job->status), "Error writing local '%s': %s", local_full, strerror(errno)); ok = false; break;
         }
         total += (uint64_t)n;
-        if (file_size > 0) s_progress.store((float)total / (float)file_size);
+        if (file_size > 0) job->progress.store((float)total / (float)file_size);
         char done_sz[32], total_sz[32];
         fmt_size(total, done_sz, sizeof(done_sz));
         fmt_size(file_size > 0 ? file_size : total, total_sz, sizeof(total_sz));
-        snprintf(g_sftp.status, sizeof(g_sftp.status), "Downloading '%s'  %s / %s", filename, done_sz, total_sz);
+        snprintf(job->status, sizeof(job->status), "Downloading '%s'  %s / %s", filename, done_sz, total_sz);
     }
 
     fclose(out);
+    ssh_session_lock();
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
+    ssh_session_unlock();
 
     if (!ok) return false;
     char sz[32]; fmt_size(total, sz, sizeof(sz));
-    snprintf(status, stsz, "Downloaded '%s'  →  %s  (%s)", filename, local_dir, sz);
-    s_progress.store(1.f);
+    snprintf(job->status, sizeof(job->status), "Downloaded '%s'  →  %s  (%s)", filename, local_dir, sz);
+    job->progress.store(1.f);
     return true;
 }
 
-static bool do_upload(const char *local_path, const char *filename,
-                      const char *remote_dir, char *status, int stsz) {
+static bool do_upload(TransferJob *job, const char *local_path, const char *filename,
+                      const char *remote_dir) {
     char local_full[4096], remote_full[4096];
     snprintf(local_full,  sizeof(local_full),  "%s/%s", local_path, filename);
     snprintf(remote_full, sizeof(remote_full), "%s/%s", remote_dir, filename);
@@ -401,14 +450,13 @@ static bool do_upload(const char *local_path, const char *filename,
 #endif
 
     FILE *in = fopen(local_full, "rb");
-    if (!in) { snprintf(status, stsz, "Error: cannot open local '%s': %s", local_full, strerror(errno)); return false; }
+    if (!in) { snprintf(job->status, sizeof(job->status), "Error: cannot open local '%s': %s", local_full, strerror(errno)); return false; }
 
     LIBSSH2_SESSION *sess = ssh_get_session();
     int              sock = ssh_get_socket();
-    SessionLock session_lock;
-    libssh2_session_set_blocking(sess, 0);
-
-    // Open remote file
+    
+    // Lock only for file open
+    ssh_session_lock();
     LIBSSH2_SFTP_HANDLE *fh = nullptr;
     while (!fh) {
         fh = libssh2_sftp_open(s_sftp, remote_full,
@@ -416,17 +464,20 @@ static bool do_upload(const char *local_path, const char *filename,
             LIBSSH2_SFTP_S_IRUSR|LIBSSH2_SFTP_S_IWUSR|LIBSSH2_SFTP_S_IRGRP|LIBSSH2_SFTP_S_IROTH);
         if (!fh) {
             if (libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
-            snprintf(status, stsz, "Error: cannot create remote '%s' (sftp %lu)", remote_full, libssh2_sftp_last_error(s_sftp));
-            fclose(in); return false;
+            snprintf(job->status, sizeof(job->status), "Error: cannot create remote '%s' (sftp %lu)", remote_full, libssh2_sftp_last_error(s_sftp));
+            fclose(in);
+            ssh_session_unlock();
+            return false;
         }
     }
+    ssh_session_unlock();
 
     // 32KB chunks — sweet spot for libssh2 SFTP window
     char     buf[32768];
     size_t   nread;
     uint64_t total = 0;
     bool     ok    = true;
-    s_progress.store(0.f);
+    job->progress.store(0.f);
 
     while ((nread = fread(buf, 1, sizeof(buf), in)) > 0) {
         size_t sent = 0;
@@ -434,46 +485,42 @@ static bool do_upload(const char *local_path, const char *filename,
             ssize_t rc = libssh2_sftp_write(fh, buf + sent, nread - sent);
             if (rc == LIBSSH2_ERROR_EAGAIN) { waitsocket(sock, sess); continue; }
             if (rc < 0) {
-                snprintf(status, stsz, "Error writing '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
+                snprintf(job->status, sizeof(job->status), "Error writing '%s' (sftp %lu)", filename, libssh2_sftp_last_error(s_sftp));
                 ok = false; goto done;
             }
             sent  += (size_t)rc;
             total += (size_t)rc;
         }
-        if (file_size > 0) s_progress.store((float)total / (float)file_size);
+        if (file_size > 0) job->progress.store((float)total / (float)file_size);
         char done_sz[32], total_sz[32];
         fmt_size(total, done_sz, sizeof(done_sz));
         fmt_size(file_size > 0 ? file_size : total, total_sz, sizeof(total_sz));
-        snprintf(g_sftp.status, sizeof(g_sftp.status), "Uploading '%s'  %s / %s", filename, done_sz, total_sz);
+        snprintf(job->status, sizeof(job->status), "Uploading '%s'  %s / %s", filename, done_sz, total_sz);
     }
     if (!ok) goto done;
-    if (ferror(in)) { snprintf(status, stsz, "Error reading local '%s'", local_full); ok = false; }
+    if (ferror(in)) { snprintf(job->status, sizeof(job->status), "Error reading local '%s'", local_full); ok = false; }
 
 done:
     fclose(in);
+    ssh_session_lock();
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket(sock, sess);
+    ssh_session_unlock();
 
     if (ok) {
         char sz[32]; fmt_size(total, sz, sizeof(sz));
-        snprintf(status, stsz, "Uploaded '%s'  →  %s  (%s)", filename, remote_dir, sz);
-        s_progress.store(1.f);
+        snprintf(job->status, sizeof(job->status), "Uploaded '%s'  →  %s  (%s)", filename, remote_dir, sz);
+        job->progress.store(1.f);
     }
     return ok;
 }
 
 void sftp_overlay_transfer() {
-    // Don't start a second transfer while one is running
-    if (s_transferring.load()) return;
-
-    // Join any previously finished thread
-    if (s_transfer_thread.joinable()) s_transfer_thread.join();
-
     if (g_sftp.mode == SftpOverlayMode::DOWNLOAD) {
         auto &rp = g_sftp.right;
         auto &lp = g_sftp.left;
         if (rp.entries.empty() || rp.entries[rp.selected].is_dir) return;
 
-        // Snapshot what we need — thread must not touch g_sftp panel state
+        // Snapshot what we need
         std::string remote_path = rp.path;
         std::string filename    = rp.entries[rp.selected].name;
         std::string local_dir   = lp.path;
@@ -481,15 +528,13 @@ void sftp_overlay_transfer() {
         g_sftp.status[0]    = '\0';
         g_sftp.transfer_ok  = false;
         g_sftp.transferring = true;
-        s_transferring.store(true);
-        s_progress.store(0.f);
         snprintf(g_sftp.status, sizeof(g_sftp.status), "Downloading '%s'...", filename.c_str());
 
-        s_transfer_thread = std::thread([remote_path, filename, local_dir]() {
-            bool ok = do_download(remote_path.c_str(), filename.c_str(),
-                                  local_dir.c_str(), s_status_buf, sizeof(s_status_buf));
-            s_transfer_ok = ok;
-            s_transferring.store(false);  // signals main thread that we're done
+        TransferJob *job = create_job();
+        job->thread = std::thread([job, remote_path, filename, local_dir]() {
+            bool ok = do_download(job, remote_path.c_str(), filename.c_str(), local_dir.c_str());
+            job->ok.store(ok);
+            job->active.store(false);
         });
 
     } else {
@@ -509,15 +554,13 @@ void sftp_overlay_transfer() {
         g_sftp.status[0]    = '\0';
         g_sftp.transfer_ok  = false;
         g_sftp.transferring = true;
-        s_transferring.store(true);
-        s_progress.store(0.f);
         snprintf(g_sftp.status, sizeof(g_sftp.status), "Uploading '%s'...", filename.c_str());
 
-        s_transfer_thread = std::thread([local_path, filename, remote_dir]() {
-            bool ok = do_upload(local_path.c_str(), filename.c_str(),
-                                remote_dir.c_str(), s_status_buf, sizeof(s_status_buf));
-            s_transfer_ok = ok;
-            s_transferring.store(false);
+        TransferJob *job = create_job();
+        job->thread = std::thread([job, local_path, filename, remote_dir]() {
+            bool ok = do_upload(job, local_path.c_str(), filename.c_str(), remote_dir.c_str());
+            job->ok.store(ok);
+            job->active.store(false);
         });
     }
 }
@@ -598,130 +641,33 @@ bool sftp_overlay_keydown(SDL_Keycode sym) {
         if (matches.empty()) return false;
 
         int next = matches[0];
-        for (int i = 0; i < (int)matches.size(); i++) {
+        for (size_t i = 0; i < matches.size(); i++) {
             if (matches[i] == fp.selected) {
-                next = matches[(i + 1) % (int)matches.size()];
+                next = matches[(i + 1) % matches.size()];
                 break;
             }
         }
         fp.selected = next;
-        // Keep selection visible
-        if (fp.selected < fp.scroll_top)
-            fp.scroll_top = fp.selected;
+        if (fp.selected < fp.scroll_top) fp.scroll_top = fp.selected;
         if (fp.selected >= fp.scroll_top + g_sftp.visible_rows)
             fp.scroll_top = fp.selected - g_sftp.visible_rows + 1;
         return true;
     }
     }
+
+    return false;
 }
 
 // ============================================================================
-// RENDER
+// RENDERING
 // ============================================================================
-
-// Truncate a filename to fit max_chars, preserving the extension with … before it.
-static void sftp_truncate_name(const char *name, int max_chars, char *out, int out_sz) {
-    int len = (int)strlen(name);
-    if (len <= max_chars) { strncpy(out, name, out_sz-1); out[out_sz-1] = '\0'; return; }
-    const char *dot    = strrchr(name, '.');
-    int         ext_len = dot ? (int)strlen(dot) : 0;
-    int         keep   = max_chars - 1 - ext_len;  // chars of stem before ellipsis
-    if (keep < 1) keep = 1;
-    int pos = 0;
-    for (int i = 0; i < keep && pos < out_sz-1; i++) out[pos++] = name[i];
-    if (pos+3 < out_sz) { out[pos++]='\xe2'; out[pos++]='\x80'; out[pos++]='\xa6'; }
-    if (dot && ext_len > 0 && pos+ext_len < out_sz) {
-        strncpy(out+pos, dot, out_sz-pos-1); pos += ext_len;
-    }
-    out[pos] = '\0';
-}
-
-static void draw_panel(const SftpPanel &p, float px, float py, float pw, float ph,
-                       bool focused, const char *label, int visible_rows) {
-    int rh = row_h();
-
-    draw_rect(px, py, pw, ph, 0.09f, 0.09f, 0.12f, 1.f);
-
-    float br = focused ? 0.35f : 0.22f;
-    float bg = focused ? 0.55f : 0.22f;
-    float bb = focused ? 0.95f : 0.35f;
-    draw_rect(px,      py,      pw, 1,  br, bg, bb, 1.f);
-    draw_rect(px,      py+ph-1, pw, 1,  br, bg, bb, 1.f);
-    draw_rect(px,      py,      1,  ph, br, bg, bb, 1.f);
-    draw_rect(px+pw-1, py,      1,  ph, br, bg, bb, 1.f);
-
-    // Header
-    draw_rect(px, py, pw, (float)rh, 0.13f, 0.13f, 0.20f, 1.f);
-    draw_rect(px, py+rh-1, pw, 1, br, bg, bb, 0.5f);
-    float hcr = focused ? 0.7f : 0.55f;
-    float hcg = focused ? 0.9f : 0.75f;
-    float hcb = focused ? 1.0f : 0.85f;
-    sftp_draw_text(label, px + PAD, py + rh * 0.72f, hcr, hcg, hcb, 1.f);
-
-    // Path
-    float path_y = py + rh;
-    draw_rect(px, path_y, pw, (float)rh, 0.08f, 0.10f, 0.10f, 1.f);
-    draw_rect(px, path_y+rh-1, pw, 1, 0.2f, 0.2f, 0.3f, 1.f);
-    char path_disp[4096+4]; snprintf(path_disp, sizeof(path_disp), " %s", p.path);
-    sftp_draw_text(path_disp, px + PAD, path_y + rh * 0.72f, 0.45f, 0.80f, 0.45f, 1.f);
-
-    // File list
-    float list_y = path_y + rh;
-    int   n      = (int)p.entries.size();
-    for (int i = 0; i < visible_rows; i++) {
-        int idx = p.scroll_top + i;
-        if (idx >= n) break;
-        const auto &e  = p.entries[idx];
-        float        ry = list_y + i * rh;
-        bool         sel = (idx == p.selected);
-
-        if      (sel && focused) draw_rect(px+1, ry, pw-2, (float)rh, 0.18f, 0.38f, 0.75f, 0.90f);
-        else if (sel)            draw_rect(px+1, ry, pw-2, (float)rh, 0.20f, 0.22f, 0.35f, 0.90f);
-        else if (i%2==0)         draw_rect(px,   ry, pw,   (float)rh, 1.f,   1.f,   1.f,   0.02f);
-
-        float nr = sel ? 1.0f : (e.is_dir ? 0.90f : 0.82f);
-        float ng = sel ? 1.0f : (e.is_dir ? 0.90f : 0.82f);
-        float nb = sel ? 1.0f : (e.is_dir ? 0.50f : 0.92f);
-
-        char name_buf[520];
-        const char *prefix = e.is_dir ? "[DIR] " : "      ";
-        int prefix_len = 6;
-        int char_w     = g_font_size > 0 ? g_font_size : 16;
-        // Reserve right side for size column (72px + PAD) and scrollbar (5px)
-        int avail_px   = (int)(pw - PAD - 72 - PAD - 5);
-        int max_chars  = avail_px / char_w;
-        if (max_chars < 6) max_chars = 6;
-        int max_name   = max_chars - prefix_len;
-        if (max_name < 3) max_name = 3;
-        char trunc[520];
-        sftp_truncate_name(e.name, max_name, trunc, sizeof(trunc));
-        snprintf(name_buf, sizeof(name_buf), "%s%s", prefix, trunc);
-        sftp_draw_text(name_buf, px + PAD, ry + rh * 0.72f, nr, ng, nb, 1.f);
-
-        if (!e.is_dir && e.size > 0) {
-            char sz[32]; fmt_size(e.size, sz, sizeof(sz));
-            sftp_draw_text(sz, px + pw - PAD - 72, ry + rh * 0.72f, 0.45f, 0.55f, 0.65f, 1.f);
-        }
-    }
-
-    // Scrollbar
-    if (n > visible_rows) {
-        float lh = (float)(visible_rows * rh);
-        float th = lh * visible_rows / n;
-        float ty = list_y + (lh - th) * p.scroll_top / (float)(n - visible_rows);
-        draw_rect(px+pw-5, list_y, 5, lh, 0.12f, 0.12f, 0.20f, 1.f);
-        draw_rect(px+pw-5, ty,     5, th, 0.35f, 0.50f, 0.90f, 1.f);
-    }
-}
 
 static void draw_progress_bar(float px, float py, float pw, float ph, float t) {
-    // Track
-    draw_rect(px, py, pw, ph, 0.12f, 0.12f, 0.18f, 1.f);
-    draw_rect(px, py, pw, 1,  0.20f, 0.20f, 0.30f, 1.f);
-    draw_rect(px, py+ph-1, pw, 1, 0.20f, 0.20f, 0.30f, 1.f);
-    // Fill — green gradient feel: dark at left, bright at progress point
-    float fill_w = pw * (t < 0.f ? 0.f : t > 1.f ? 1.f : t);
-    if (fill_w > 0) {
+    if (t < 0.f) t = 0.f; if (t > 1.f) t = 1.f;
+    // Background
+    draw_rect(px, py, pw, ph, 0.15f, 0.15f, 0.20f, 1.f);
+    if (t > 0.f) {
+        float fill_w = t * pw;
         draw_rect(px, py+1, fill_w, ph-2, 0.15f, 0.55f, 0.25f, 1.f);
         float edge = 3.f;
         if (fill_w > edge)
@@ -732,29 +678,69 @@ static void draw_progress_bar(float px, float py, float pw, float ph, float t) {
     sftp_draw_text(pct, px + pw * 0.5f - 16, py + ph * 0.72f, 1.f, 1.f, 1.f, 1.f);
 }
 
+static void draw_panel(const SftpPanel &p, float px, float py, float pw, float ph,
+                       bool focus, const char *label, int visible_rows) {
+    // Border highlight
+    float border_h = 2.f;
+    draw_rect(px, py, pw, border_h, focus ? 0.4f : 0.2f, focus ? 0.6f : 0.3f, 1.f, 1.f);
+
+    // Path bar
+    int   rh      = row_h();
+    float path_y  = py + (float)rh;
+    draw_rect(px, path_y-border_h, pw, (float)rh, 0.10f, 0.10f, 0.15f, 1.f);
+    sftp_draw_text(p.path, px + (float)PAD, path_y + 2, 0.5f, 0.8f, 1.0f, 1.f);
+
+    // Files list
+    float list_y = path_y + (float)rh;
+    int   n      = (int)p.entries.size();
+    for (int i = 0; i < visible_rows && p.scroll_top + i < n; i++) {
+        float row_y     = list_y + (float)(i * rh);
+        const auto &e   = p.entries[p.scroll_top + i];
+        bool  sel       = (p.scroll_top + i == p.selected);
+        float bg_r      = sel ? 0.25f : 0.09f;
+        float bg_g      = sel ? 0.40f : 0.09f;
+        float bg_b      = sel ? 0.65f : 0.11f;
+        draw_rect(px, row_y, pw, (float)rh, bg_r, bg_g, bg_b, 1.f);
+
+        char label[600];
+        if (e.is_dir)
+            snprintf(label, sizeof(label), "%-40s <DIR>", e.name);
+        else {
+            char sz[32]; fmt_size(e.size, sz, sizeof(sz));
+            snprintf(label, sizeof(label), "%-40s %s", e.name, sz);
+        }
+        sftp_draw_text(label, px + (float)PAD, row_y + 2, 0.9f, 0.9f, 0.9f, 1.f);
+    }
+}
+
 void sftp_overlay_render(int win_w, int win_h) {
     if (!g_sftp.visible) return;
 
-    // Poll transfer thread completion
-    if (g_sftp.transferring && !s_transferring.load()) {
-        // Thread just finished — copy results to main state
-        g_sftp.transferring = false;
-        g_sftp.transfer_ok  = s_transfer_ok;
-        g_sftp.progress     = s_progress.load();
-        strncpy(g_sftp.status, s_status_buf, sizeof(g_sftp.status)-1);
-        // Refresh the destination panel so the new file shows up
-        if (g_sftp.transfer_ok) {
-            if (g_sftp.mode == SftpOverlayMode::DOWNLOAD)
-                sftp_panel_refresh(g_sftp.left);   // local panel got a new file
-            else
-                sftp_panel_refresh(g_sftp.right);  // remote panel got a new file
+    // Poll jobs and update UI state
+    cleanup_finished_jobs();
+    {
+        std::lock_guard<std::mutex> lock(s_jobs_mutex);
+        if (!s_active_jobs.empty()) {
+            TransferJob *job = s_active_jobs.back();
+            g_sftp.progress = job->progress.load();
+            strncpy(g_sftp.status, job->status, sizeof(g_sftp.status)-1);
+            
+            if (!job->active.load()) {
+                // Job finished
+                g_sftp.transferring = false;
+                g_sftp.transfer_ok  = job->ok.load();
+                // Refresh the destination panel so the new file shows up
+                if (g_sftp.transfer_ok) {
+                    if (g_sftp.mode == SftpOverlayMode::DOWNLOAD)
+                        sftp_panel_refresh(g_sftp.left);   // local panel got a new file
+                    else
+                        sftp_panel_refresh(g_sftp.right);  // remote panel got a new file
+                }
+            }
+        } else {
+            g_sftp.transferring = false;
         }
-        if (s_transfer_thread.joinable()) s_transfer_thread.join();
     }
-
-    // Copy atomic progress into overlay struct for rendering
-    if (g_sftp.transferring)
-        g_sftp.progress = s_progress.load();
 
     int   rh       = row_h();
     float title_h  = (float)(rh + PAD);
@@ -919,15 +905,9 @@ bool sftp_overlay_mousedown(int x, int y, int button, int win_w, int win_h) {
 
 void sftp_reset_after_fork() {
     // Clean up inherited SFTP state from parent process.
-    // Joins any transfer thread and clears the SFTP handle.
     sftp_transfer_join();
+    cleanup_finished_jobs();
     s_sftp = nullptr;
-    
-    // Reset transfer state atomics
-    s_progress.store(0.f);
-    s_transferring.store(false);
-    memset(s_status_buf, 0, sizeof(s_status_buf));
-    s_transfer_ok = false;
 }
 
 #endif // USESSH
