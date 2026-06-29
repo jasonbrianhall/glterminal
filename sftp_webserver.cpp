@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <vector>
+#include <signal.h>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -46,6 +47,106 @@ static int g_listen_socket = INVALID_SOCKET;
 static int g_tunnel_counter = 0;
 static SDL_mutex *g_tunnel_mutex = nullptr;
 static int g_webserver_port = 53716;  // Track which port we're actually using
+
+// ============================================================================
+// Signal Handler Setup
+// ============================================================================
+
+static void setup_signal_handlers() {
+#ifndef _WIN32
+    // Ignore SIGPIPE — when client closes socket, don't kill the process
+    signal(SIGPIPE, SIG_IGN);
+    SDL_Log("[WebServer] SIGPIPE handler installed");
+#endif
+}
+
+// ============================================================================
+// Socket Utility Functions
+// ============================================================================
+
+// Check if a socket is still connected using SO_ERROR
+// This is more reliable than send(sock, nullptr, 0, 0)
+static bool socket_is_valid(int sock) {
+    if (sock == INVALID_SOCKET || sock < 0) {
+        return false;
+    }
+    
+    int error = 0;
+    socklen_t len = sizeof(error);
+    
+    if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&error, &len) < 0) {
+        return false;
+    }
+    
+    return error == 0;
+}
+
+// Safe send with full error checking
+// Returns: number of bytes sent (>0), 0 if connection closed gracefully, -1 on error
+static int socket_send_safe(int sock, const char *data, int len) {
+    if (!socket_is_valid(sock)) {
+        return -1;
+    }
+    
+    if (len <= 0) {
+        return 0;
+    }
+    
+    // Use MSG_NOSIGNAL on Linux to prevent SIGPIPE
+#ifdef MSG_NOSIGNAL
+    int result = send(sock, data, len, MSG_NOSIGNAL);
+#else
+    int result = send(sock, data, len, 0);
+#endif
+    
+    if (result < 0) {
+        // Error codes that indicate connection problems
+        int err = errno;
+        if (err == EPIPE || err == ECONNRESET || err == ENOTCONN || 
+            err == EBADF || err == EINVAL) {
+            return -1;  // Connection closed or bad
+        }
+        // Other errors (EAGAIN, EWOULDBLOCK, etc.) might be recoverable
+        return -1;
+    }
+    
+    if (result == 0) {
+        // Socket closed
+        return -1;
+    }
+    
+    return result;
+}
+
+// Receive with timeout awareness
+// Returns: number of bytes received (>0), 0 if connection closed, -1 on error
+static int socket_recv_safe(int sock, char *buffer, int len) {
+    if (!socket_is_valid(sock)) {
+        return -1;
+    }
+    
+    if (len <= 0) {
+        return 0;
+    }
+    
+    int result = recv(sock, buffer, len, 0);
+    
+    if (result < 0) {
+        int err = errno;
+        // EAGAIN/EWOULDBLOCK = timeout (non-blocking), otherwise it's an error
+        if (err != EAGAIN && err != EWOULDBLOCK) {
+            return -1;
+        }
+        return 0;  // No data available yet, not necessarily closed
+    }
+    
+    if (result == 0) {
+        // Connection closed by peer
+        return 0;
+    }
+    
+    return result;
+}
 
 // ============================================================================
 // SFTP File Operations
@@ -228,96 +329,88 @@ static const char* get_mime_type(const char *filename) {
     if (strcmp(ext, ".bmp") == 0) return "image/bmp";
     if (strcmp(ext, ".ico") == 0) return "image/x-icon";
     if (strcmp(ext, ".pdf") == 0) return "application/pdf";
-    if (strcmp(ext, ".txt") == 0) return "text/plain; charset=utf-8";
-    if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0) return "text/html; charset=utf-8";
-    if (strcmp(ext, ".xml") == 0) return "application/xml; charset=utf-8";
-    if (strcmp(ext, ".json") == 0) return "application/json; charset=utf-8";
-    if (strcmp(ext, ".csv") == 0) return "text/csv; charset=utf-8";
-    if (strcmp(ext, ".md") == 0) return "text/markdown; charset=utf-8";
-    if (strcmp(ext, ".js") == 0) return "application/javascript; charset=utf-8";
-    if (strcmp(ext, ".css") == 0) return "text/css; charset=utf-8";
-    if (strcmp(ext, ".py") == 0) return "text/x-python; charset=utf-8";
-    if (strcmp(ext, ".cpp") == 0 || strcmp(ext, ".cc") == 0) return "text/x-c++src; charset=utf-8";
-    if (strcmp(ext, ".c") == 0) return "text/x-csrc; charset=utf-8";
-    if (strcmp(ext, ".h") == 0 || strcmp(ext, ".hpp") == 0) return "text/x-chdr; charset=utf-8";
-    if (strcmp(ext, ".java") == 0) return "text/x-java; charset=utf-8";
-    if (strcmp(ext, ".rb") == 0) return "text/x-ruby; charset=utf-8";
-    if (strcmp(ext, ".go") == 0) return "text/x-go; charset=utf-8";
-    if (strcmp(ext, ".rs") == 0) return "text/x-rust; charset=utf-8";
+    if (strcmp(ext, ".txt") == 0) return "text/plain";
+    if (strcmp(ext, ".html") == 0) return "text/html";
+    if (strcmp(ext, ".css") == 0) return "text/css";
+    if (strcmp(ext, ".js") == 0) return "application/javascript";
+    if (strcmp(ext, ".json") == 0) return "application/json";
+    if (strcmp(ext, ".xml") == 0) return "application/xml";
+    if (strcmp(ext, ".zip") == 0) return "application/zip";
+    if (strcmp(ext, ".gz") == 0) return "application/gzip";
+    if (strcmp(ext, ".tar") == 0) return "application/x-tar";
+    if (strcmp(ext, ".mp3") == 0) return "audio/mpeg";
     if (strcmp(ext, ".mp4") == 0) return "video/mp4";
     if (strcmp(ext, ".webm") == 0) return "video/webm";
-    if (strcmp(ext, ".mp3") == 0) return "audio/mpeg";
     if (strcmp(ext, ".wav") == 0) return "audio/wav";
+    if (strcmp(ext, ".flac") == 0) return "audio/flac";
+    if (strcmp(ext, ".m4a") == 0) return "audio/mp4";
     
     return "application/octet-stream";
 }
 
-// URL decode helper (convert %20 -> space, etc)
-static std::string url_decode(const char *encoded) {
+static std::string url_decode(const std::string &str) {
     std::string decoded;
-    for (const char *p = encoded; *p; ++p) {
-        if (*p == '%' && *(p+1) && *(p+2)) {
-            char hex_str[3] = {*(p+1), *(p+2), '\0'};
-            int hex = strtol(hex_str, nullptr, 16);
-            decoded += (char)hex;
-            p += 2;
-        } else if (*p == '+') {
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == '%' && i + 2 < str.length()) {
+            int value = 0;
+            sscanf(str.c_str() + i + 1, "%2x", &value);
+            decoded += static_cast<char>(value);
+            i += 2;
+        } else if (str[i] == '+') {
             decoded += ' ';
         } else {
-            decoded += *p;
+            decoded += str[i];
         }
     }
     return decoded;
 }
 
 // ============================================================================
-// Request Handler
+// HTTP Request Handler
 // ============================================================================
 
 static void handle_http_request(int client_socket, int tunnel_id) {
-    char buffer[65536];
-    int bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
-    if (bytes_received <= 0) {
+    bool transfer_was_cancelled = false;
+    
+    // Read HTTP request (first 16KB max)
+    char buffer[16384];
+    memset(buffer, 0, sizeof(buffer));
+    
+    int bytes_read = socket_recv_safe(client_socket, buffer, sizeof(buffer) - 1);
+    if (bytes_read <= 0) {
         closesocket(client_socket);
-        SDL_Log("[Tunnel %d] Connection closed immediately", tunnel_id);
+        SDL_Log("[Tunnel %d] recv() failed or empty request", tunnel_id);
         return;
     }
+    
+    // Parse request line
+    char method[16] = {};
+    char path[1024] = {};
+    sscanf(buffer, "%15s %1023s", method, path);
 
-    buffer[bytes_received] = '\0';
-
-    char method[32], path[1024], version[32];
-    if (sscanf(buffer, "%31s %1023s %31s", method, path, version) != 3) {
-        std::string response = http_response_headers(400, "text/plain", 11);
-        response += "Bad Request";
-        send(client_socket, response.c_str(), response.length(), 0);
-        closesocket(client_socket);
-        SDL_Log("[Tunnel %d] Malformed request", tunnel_id);
-        return;
-    }
-
-    SDL_Log("[Tunnel %d] Request: %s %s", tunnel_id, method, path);
-
+    // Get SSH session
     ssh_session_lock();
     LIBSSH2_SESSION *sess = ssh_get_session();
+    
     if (!sess) {
         ssh_session_unlock();
-        std::string response = http_response_headers(500, "text/plain", 22);
-        response += "SSH session not active";
-        send(client_socket, response.c_str(), response.length(), 0);
+        std::string response = http_response_headers(500, "text/plain", 25);
+        response += "SSH session not established";
+        socket_send_safe(client_socket, response.c_str(), response.length());
         closesocket(client_socket);
-        SDL_Log("[Tunnel %d] No SSH session", tunnel_id);
+        SDL_Log("[Tunnel %d] No SSH session available", tunnel_id);
         return;
     }
 
     libssh2_session_set_blocking(sess, 1);
     LIBSSH2_SFTP *sftp = libssh2_sftp_init(sess);
-
+    
     if (!sftp) {
         libssh2_session_set_blocking(sess, 0);
         ssh_session_unlock();
-        std::string response = http_response_headers(500, "text/plain", 22);
-        response += "SFTP init failed";
-        send(client_socket, response.c_str(), response.length(), 0);
+        std::string response = http_response_headers(500, "text/plain", 24);
+        response += "SFTP initialization failed";
+        socket_send_safe(client_socket, response.c_str(), response.length());
         closesocket(client_socket);
         SDL_Log("[Tunnel %d] SFTP init failed", tunnel_id);
         return;
@@ -335,14 +428,14 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         if (rc != 0 && decoded_path != "/") {
             std::string response = http_response_headers(404, "text/plain", 9);
             response += "Not found";
-            send(client_socket, response.c_str(), response.length(), 0);
+            socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] File not found: %s", tunnel_id, decoded_path.c_str());
         }
         else if (is_directory || decoded_path == "/") {
             std::string html = get_index_html();
             std::string response = http_response_headers(200, "text/html", html.length());
             response += html;
-            send(client_socket, response.c_str(), response.length(), 0);
+            socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] Served directory listing HTML: %s", tunnel_id, decoded_path.c_str());
         }
         else {
@@ -368,84 +461,61 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                 
                 const char *content_type = get_mime_type(decoded_path.c_str());
                 std::string response = http_response_headers(200, content_type, file_size, filename);
-                send(client_socket, response.c_str(), response.length(), 0);
+                int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
                 
-                // Stream file in chunks
-                char buffer[262144];  // 256KB chunks
-                uint64_t total_sent = 0;
-                while (total_sent < file_size) {
-                    int bytes_read = libssh2_sftp_read(file_handle, buffer, sizeof(buffer));
-                    if (bytes_read <= 0) break;
+                if (header_sent > 0) {
+                    // Stream file in 256KB chunks
+                    const int BUFFER_SIZE = 262144;  // 256KB
+                    char *fbuffer = new char[BUFFER_SIZE];
+                    uint64_t total_sent = 0;
                     
-                    int bytes_sent = send(client_socket, buffer, bytes_read, 0);
-                    if (bytes_sent <= 0) break;
+                    while (total_sent < file_size) {
+                        // CRITICAL: Check if socket is still valid BEFORE reading
+                        if (!socket_is_valid(client_socket)) {
+                            SDL_Log("[Tunnel %d] Socket invalid during download: %s (sent %llu/%llu bytes)", 
+                                    tunnel_id, decoded_path.c_str(), total_sent, file_size);
+                            transfer_was_cancelled = true;
+                            break;
+                        }
+                        
+                        int bytes_to_read = (file_size - total_sent > BUFFER_SIZE) 
+                                          ? BUFFER_SIZE 
+                                          : (int)(file_size - total_sent);
+                        
+                        int bytes_read = libssh2_sftp_read(file_handle, fbuffer, bytes_to_read);
+                        if (bytes_read <= 0) {
+                            SDL_Log("[Tunnel %d] SFTP read ended: %d", tunnel_id, bytes_read);
+                            break;
+                        }
+                        
+                        int bytes_sent = socket_send_safe(client_socket, fbuffer, bytes_read);
+                        if (bytes_sent <= 0) {
+                            SDL_Log("[Tunnel %d] Download cancelled by client: %s (sent %llu/%llu bytes)", 
+                                    tunnel_id, decoded_path.c_str(), total_sent, file_size);
+                            transfer_was_cancelled = true;
+                            break;
+                        }
+                        
+                        total_sent += bytes_sent;
+                    }
                     
-                    total_sent += bytes_sent;
+                    if (!transfer_was_cancelled) {
+                        SDL_Log("[Tunnel %d] Downloaded file successfully: %s (%llu bytes)", 
+                                tunnel_id, decoded_path.c_str(), total_sent);
+                    }
+                    
+                    delete[] fbuffer;
+                } else {
+                    SDL_Log("[Tunnel %d] Failed to send headers for: %s", tunnel_id, decoded_path.c_str());
                 }
                 
                 libssh2_sftp_close_handle(file_handle);
-                SDL_Log("[Tunnel %d] Downloaded file: %s (%llu bytes)", tunnel_id, decoded_path.c_str(), total_sent);
             } else {
                 std::string response = http_response_headers(500, "text/plain", 14);
                 response += "Download error";
-                send(client_socket, response.c_str(), response.length(), 0);
+                socket_send_safe(client_socket, response.c_str(), response.length());
                 SDL_Log("[Tunnel %d] Failed to download: %s", tunnel_id, decoded_path.c_str());
             }
-        }
-    }
-    else if (strcmp(method, "PUT") == 0) {
-        // Simple PUT upload: just read the body as file data
-        char *body_start = strchr(buffer, '\n');
-        if (!body_start) {
-            std::string response = http_response_headers(400, "text/plain", 18);
-            response += "Invalid request";
-            send(client_socket, response.c_str(), response.length(), 0);
-            closesocket(client_socket);
-            libssh2_sftp_shutdown(sftp);
-            libssh2_session_set_blocking(sess, 0);
-            ssh_session_unlock();
-            SDL_Log("[Tunnel %d] PUT: no headers", tunnel_id);
-            return;
-        }
-
-        // Find end of headers (blank line)
-        char *file_data_start = strstr(body_start, "\r\n\r\n");
-        if (!file_data_start) {
-            file_data_start = strstr(body_start, "\n\n");
-            if (!file_data_start) {
-                std::string response = http_response_headers(400, "text/plain", 18);
-                response += "Invalid request";
-                send(client_socket, response.c_str(), response.length(), 0);
-                closesocket(client_socket);
-                libssh2_sftp_shutdown(sftp);
-                libssh2_session_set_blocking(sess, 0);
-                ssh_session_unlock();
-                SDL_Log("[Tunnel %d] PUT: no body separator", tunnel_id);
-                return;
-            }
-            file_data_start += 2;
-        } else {
-            file_data_start += 4;
-        }
-
-        size_t file_size = (buffer + bytes_received) - file_data_start;
-
-        if (sftp_put_file(sftp, path, (const uint8_t *)file_data_start, file_size)) {
-            char response_body[256];
-            snprintf(response_body, sizeof(response_body), 
-                     "{\"success\":true,\"size\":%zu}", file_size);
-            std::string response = http_response_headers(200, "application/json", strlen(response_body));
-            response += response_body;
-            send(client_socket, response.c_str(), response.length(), 0);
-            SDL_Log("[Tunnel %d] PUT: uploaded %s (%zu bytes)", tunnel_id, path, file_size);
-        } else {
-            char response_body[256];
-            snprintf(response_body, sizeof(response_body), 
-                     "{\"success\":false,\"error\":\"Upload failed\"}");
-            std::string response = http_response_headers(500, "application/json", strlen(response_body));
-            response += response_body;
-            send(client_socket, response.c_str(), response.length(), 0);
-            SDL_Log("[Tunnel %d] PUT: failed to upload %s", tunnel_id, path);
         }
     }
     else if (strcmp(method, "DELETE") == 0) {
@@ -479,7 +549,7 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         snprintf(response_body, sizeof(response_body), "{\"deleted\":%d,\"failed\":%d}", deleted, failed);
         std::string response = http_response_headers(200, "application/json", strlen(response_body));
         response += response_body;
-        send(client_socket, response.c_str(), response.length(), 0);
+        socket_send_safe(client_socket, response.c_str(), response.length());
         SDL_Log("[Tunnel %d] Delete: %d ok, %d failed", tunnel_id, deleted, failed);
     }
     else if (strcmp(method, "PUT") == 0) {
@@ -495,14 +565,14 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         if (content_length == 0) {
             std::string response = http_response_headers(411, "text/plain", 15);
             response += "Length Required";
-            send(client_socket, response.c_str(), response.length(), 0);
+            socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] PUT: no Content-Length header", tunnel_id);
         } else {
             char *body_start = strchr(buffer, '\n');
             if (!body_start) {
                 std::string response = http_response_headers(400, "text/plain", 18);
                 response += "Invalid request";
-                send(client_socket, response.c_str(), response.length(), 0);
+                socket_send_safe(client_socket, response.c_str(), response.length());
                 SDL_Log("[Tunnel %d] PUT: no headers", tunnel_id);
             } else {
                 // Find end of headers (blank line)
@@ -514,7 +584,7 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                     } else {
                         std::string response = http_response_headers(400, "text/plain", 18);
                         response += "Invalid request";
-                        send(client_socket, response.c_str(), response.length(), 0);
+                        socket_send_safe(client_socket, response.c_str(), response.length());
                         SDL_Log("[Tunnel %d] PUT: no body separator", tunnel_id);
                         file_data_start = nullptr;
                     }
@@ -523,85 +593,89 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                 }
 
                 if (file_data_start) {
-                    // Open file for writing on remote
-                    LIBSSH2_SFTP_HANDLE *handle = libssh2_sftp_open(sftp, path,
-                        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC,
-                        LIBSSH2_SFTP_S_IRUSR | LIBSSH2_SFTP_S_IWUSR | LIBSSH2_SFTP_S_IRGRP | LIBSSH2_SFTP_S_IROTH);
-                    
-                    if (!handle) {
-                        std::string response = http_response_headers(500, "text/plain", 17);
-                        response += "Cannot open file";
-                        send(client_socket, response.c_str(), response.length(), 0);
-                        SDL_Log("[Tunnel %d] PUT: cannot open %s for writing", tunnel_id, path);
-                    } else {
-                        size_t total_received = 0;
-                        bool write_error = false;
+                    // Extract remote file path from the request line
+                    char remote_path[1024] = {};
+                    sscanf(buffer, "%*s %1023s", remote_path);
+                    std::string decoded_remote = url_decode(remote_path);
 
-                        // Write data from initial buffer
-                        size_t already_have = (buffer + bytes_received) - file_data_start;
-                        if (already_have > 0) {
-                            size_t to_write = (already_have > content_length) ? content_length : already_have;
-                            ssize_t offset = 0;
-                            while (offset < (ssize_t)to_write && !write_error) {
-                                ssize_t n = libssh2_sftp_write(handle, (const char *)file_data_start + offset, to_write - offset);
-                                if (n < 0) {
-                                    write_error = true;
-                                    SDL_Log("[Tunnel %d] PUT: write error on %s", tunnel_id, path);
-                                    break;
-                                }
-                                offset += n;
-                                total_received += n;
+                    // Calculate how much file data we have in the first buffer
+                    size_t initial_size = bytes_read - (file_data_start - buffer);
+                    
+                    LIBSSH2_SFTP_HANDLE *handle = libssh2_sftp_open(sftp, decoded_remote.c_str(),
+                                                                     LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC,
+                                                                     LIBSSH2_SFTP_S_IRUSR | LIBSSH2_SFTP_S_IWUSR | 
+                                                                     LIBSSH2_SFTP_S_IRGRP | LIBSSH2_SFTP_S_IROTH);
+                    if (handle) {
+                        bool write_error = false;
+                        size_t total_received = 0;
+
+                        // Write the data we already have
+                        if (initial_size > 0) {
+                            int rc = libssh2_sftp_write(handle, file_data_start, initial_size);
+                            if (rc < 0) {
+                                write_error = true;
+                                SDL_Log("[Tunnel %d] PUT: write error on initial data", tunnel_id);
+                            } else {
+                                total_received += rc;
                             }
                         }
 
-                        // Keep looping until we receive all content_length bytes
-                        char recv_buf[262144];  // 256KB buffer
-                        while (!write_error && total_received < content_length) {
-                            size_t to_recv = content_length - total_received;
-                            if (to_recv > sizeof(recv_buf)) to_recv = sizeof(recv_buf);
+                        // Continue reading remaining data
+                        const int BUFFER_SIZE = 262144;  // 256KB buffer
+                        char *ubuffer = new char[BUFFER_SIZE];
 
-                            int n = recv(client_socket, recv_buf, to_recv, 0);
-                            if (n <= 0) {
-                                write_error = true;
-                                SDL_Log("[Tunnel %d] PUT: connection closed, got %zu of %zu bytes", tunnel_id, total_received, content_length);
+                        while (total_received < content_length && !write_error) {
+                            // CRITICAL: Check socket is valid BEFORE calling recv
+                            if (!socket_is_valid(client_socket)) {
+                                SDL_Log("[Tunnel %d] Socket invalid during upload: received %zu/%zu bytes", 
+                                        tunnel_id, total_received, content_length);
+                                transfer_was_cancelled = true;
                                 break;
                             }
 
-                            // Write all received bytes, handling partial writes
-                            ssize_t offset = 0;
-                            while (offset < n && !write_error) {
-                                ssize_t written = libssh2_sftp_write(handle, recv_buf + offset, n - offset);
-                                if (written < 0) {
-                                    write_error = true;
-                                    SDL_Log("[Tunnel %d] PUT: write error on %s", tunnel_id, path);
-                                    break;
-                                }
-                                offset += written;
-                                total_received += written;
+                            size_t to_read = (content_length - total_received > BUFFER_SIZE) 
+                                           ? BUFFER_SIZE 
+                                           : (content_length - total_received);
+                            
+                            int bytes_from_socket = socket_recv_safe(client_socket, ubuffer, to_read);
+                            if (bytes_from_socket <= 0) {
+                                SDL_Log("[Tunnel %d] Upload cancelled by client: received %zu/%zu bytes", 
+                                        tunnel_id, total_received, content_length);
+                                transfer_was_cancelled = true;
+                                break;
                             }
+
+                            int rc = libssh2_sftp_write(handle, ubuffer, bytes_from_socket);
+                            if (rc < 0) {
+                                write_error = true;
+                                SDL_Log("[Tunnel %d] PUT: write error during transfer", tunnel_id);
+                                break;
+                            }
+                            total_received += rc;
                         }
 
+                        delete[] ubuffer;
                         libssh2_sftp_close_handle(handle);
 
-                        if (write_error || total_received < content_length) {
+                        if (write_error || (total_received < content_length && !transfer_was_cancelled)) {
                             char response_body[256];
                             snprintf(response_body, sizeof(response_body), 
                                      "{\"success\":false,\"error\":\"Incomplete upload\",\"received\":%zu,\"expected\":%zu}",
                                      total_received, content_length);
                             std::string response = http_response_headers(400, "application/json", strlen(response_body));
                             response += response_body;
-                            send(client_socket, response.c_str(), response.length(), 0);
-                            SDL_Log("[Tunnel %d] PUT: incomplete upload for %s (%zu of %zu bytes)", tunnel_id, path, total_received, content_length);
+                            socket_send_safe(client_socket, response.c_str(), response.length());
+                            SDL_Log("[Tunnel %d] PUT: incomplete upload for %s (%zu of %zu bytes)", tunnel_id, decoded_remote.c_str(), total_received, content_length);
                             // Try to delete the incomplete file
-                            libssh2_sftp_unlink(sftp, path);
-                        } else {
+                            libssh2_sftp_unlink(sftp, decoded_remote.c_str());
+                        } else if (!transfer_was_cancelled) {
                             char response_body[256];
                             snprintf(response_body, sizeof(response_body), 
                                      "{\"success\":true,\"size\":%zu}", total_received);
                             std::string response = http_response_headers(200, "application/json", strlen(response_body));
                             response += response_body;
-                            send(client_socket, response.c_str(), response.length(), 0);
-                            SDL_Log("[Tunnel %d] PUT: uploaded %s (%zu bytes)", tunnel_id, path, total_received);
+                            socket_send_safe(client_socket, response.c_str(), response.length());
+                            SDL_Log("[Tunnel %d] PUT: uploaded %s (%zu bytes)", tunnel_id, decoded_remote.c_str(), total_received);
                         }
                     }
                 }
@@ -639,16 +713,21 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         std::string response = http_response_headers(200, "application/json", json.length());
         response += json;
 
-        send(client_socket, response.c_str(), response.length(), 0);
+        socket_send_safe(client_socket, response.c_str(), response.length());
     }
     else {
         std::string response = http_response_headers(400, "text/plain", 18);
         response += "Method not allowed";
-        send(client_socket, response.c_str(), response.length(), 0);
+        socket_send_safe(client_socket, response.c_str(), response.length());
         SDL_Log("[Tunnel %d] Method not allowed: %s", tunnel_id, method);
     }
 
-    libssh2_sftp_shutdown(sftp);
+    // Close SFTP and session
+    // If transfer was cancelled, skip sftp_shutdown as the connection may be in a bad state
+    if (sftp && !transfer_was_cancelled) {
+        libssh2_sftp_shutdown(sftp);
+    }
+    
     libssh2_session_set_blocking(sess, 0);
     ssh_session_unlock();
 
@@ -768,6 +847,8 @@ bool sftp_webserver_start() {
         return true;
     }
 
+    setup_signal_handlers();  // Install SIGPIPE handler
+    
     if (!g_tunnel_mutex) {
         g_tunnel_mutex = SDL_CreateMutex();
     }
