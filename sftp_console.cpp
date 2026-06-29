@@ -575,6 +575,9 @@ static void cmd_help() {
     push_info("  progress                Show last transfer progress");
     push_info("  clear                   Clear screen");
     push_info("  exit / quit / bye       Close console");
+    push_info("");
+    push_info("Hotkeys:");
+    push_info("  F12                     Toggle web file browser (http://localhost:53716)");
 }
 
 // Executed synchronously (no blocking I/O)
@@ -1156,7 +1159,7 @@ void sftp_console_open(int /*win_w*/, int /*win_h*/) {
     refresh_local_cwd();
 
     if (s_lines.empty()) {
-        push_info("SFTP Console — type 'help' for commands, 'exit' to close");
+        push_info("SFTP Console — type 'help' for commands, 'exit' to close, F12 for web browser");
     }
 
     // Populate remote CWD from active session if we can
@@ -1515,7 +1518,7 @@ void sftp_console_render(int win_w, int win_h) {
         char title[1024];
         snprintf(title, sizeof(title),
                  "SFTP Console (F4)   remote: %s   local: %s   "
-                 "PgUp/PgDn: scroll   Up/Down: history   Esc: close",
+                 "F12: web browser   PgUp/PgDn: scroll   Up/Down: history   Esc: close",
                  s_remote_cwd, s_local_cwd);
         con_text(title, (float)PAD, title_h * 0.72f, 0.65f, 0.82f, 1.0f);
     }
