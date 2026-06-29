@@ -39,10 +39,7 @@
         }
 
         .header .breadcrumb {
-            font-size: 14px;
-            color: #666;
-            font-family: 'Monaco', 'Courier New', monospace;
-            word-break: break-all;
+            display: none;
         }
 
         table {
@@ -140,88 +137,21 @@
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             overflow: hidden;
         }
-
-        .upload-section {
-            background: white;
-            padding: 20px;
-            display: flex;
-            gap: 15px;
-            align-items: center;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-        }
-
-        #uploadForm {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            flex: 1;
-        }
-
-        #fileInput {
-            padding: 8px 12px;
-            border: 1px solid #e9ecef;
-            border-radius: 6px;
-            font-size: 14px;
-            flex: 1;
-        }
-
-        button[type="submit"], #deleteBtn {
-            padding: 10px 20px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        button[type="submit"]:hover {
-            background: #764ba2;
-        }
-
-        #deleteBtn {
-            background: #e74c3c;
-        }
-
-        #deleteBtn:hover:not(:disabled) {
-            background: #c0392b;
-        }
-
-        #deleteBtn:disabled {
-            background: #bdc3c7;
-            cursor: not-allowed;
-        }
-
-        input[type="checkbox"] {
-            cursor: pointer;
-            width: 18px;
-            height: 18px;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1 id="title">File Browser</h1>
-            <div class="breadcrumb" id="breadcrumb">/</div>
-        </div>
-        <div class="upload-section">
-            <form id="uploadForm">
-                <input type="file" id="fileInput" multiple>
-                <button type="submit">Upload Files</button>
-            </form>
-            <button id="deleteBtn" disabled>Delete Selected</button>
         </div>
         <div class="table-wrapper">
             <table id="fileTable">
                 <thead>
                     <tr>
-                        <th style="width: 5%;"><input type="checkbox" id="selectAll"></th>
                         <th data-col="name" style="width: 45%;">Name</th>
                         <th data-col="type" style="width: 15%;">Type</th>
                         <th data-col="size" style="width: 15%;">Size</th>
-                        <th data-col="modified" style="width: 20%;">Modified</th>
+                        <th data-col="modified" style="width: 25%;">Modified</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -232,17 +162,14 @@
     <script>
         let fileData = [];
         let sortState = { col: null, dir: 1 };
-        let hasParentDir = false;
-        let selectedFiles = new Set();
 
         async function loadFiles() {
             const dir = window.location.pathname;
             
-            // Update title and breadcrumb
-            const displayDir = dir || '/';
+            // Decode the path for display
+            const displayDir = decodeURIComponent(dir) || '/';
             document.title = `File Browser - ${displayDir}`;
             document.getElementById('title').textContent = displayDir;
-            document.getElementById('breadcrumb').textContent = displayDir;
 
             const response = await fetch('/api/listfiles', {
                 method: 'POST',
@@ -252,7 +179,6 @@
 
             const data = await response.json();
             fileData = data.entries;
-            selectedFiles.clear();
             
             // Sort by name by default
             sortState.col = 'name';
@@ -261,7 +187,6 @@
             
             updateSortIndicators('name');
             renderTable(sorted);
-            updateDeleteButton();
         }
 
         function formatFileSize(bytes) {
@@ -291,14 +216,13 @@
 
             // Add parent directory link if not root
             const currentPath = window.location.pathname;
-            hasParentDir = currentPath !== '/' && currentPath !== '';
+            const hasParentDir = currentPath !== '/' && currentPath !== '';
             
             if (hasParentDir) {
                 const row = document.createElement('tr');
                 row.classList.add('parent-dir');
                 const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
                 row.innerHTML = `
-                    <td><input type="checkbox" disabled style="visibility:hidden;"></td>
                     <td><a href="${parentPath}">..</a></td>
                     <td class="type-directory">directory</td>
                     <td class="size-placeholder">-</td>
@@ -307,7 +231,7 @@
                 tbody.appendChild(row);
             }
 
-            entries.forEach((entry, idx) => {
+            entries.forEach((entry) => {
                 const row = document.createElement('tr');
                 const entryPath = currentPath.endsWith('/') 
                     ? `${currentPath}${entry.name}`
@@ -328,120 +252,15 @@
                 const sizeDisplay = entry.type === 'file' ? formatFileSize(entry.size) : '-';
                 const sizeClass = entry.type === 'file' ? '' : 'size-placeholder';
 
-                // Only allow checkboxes for files, not directories
-                let checkbox;
-                if (entry.type === 'directory') {
-                    checkbox = `<input type="checkbox" disabled style="visibility:hidden;">`;
-                } else {
-                    checkbox = `<input type="checkbox" class="file-checkbox" data-idx="${idx}" data-name="${entry.name}">`;
-                }
-
                 row.innerHTML = `
-                    <td>${checkbox}</td>
                     <td>${nameCell}</td>
                     <td class="${typeClass}">${entry.type}</td>
                     <td class="${sizeClass}">${sizeDisplay}</td>
                     <td class="size-placeholder">${new Date(entry.modified * 1000).toLocaleString()}</td>
                 `;
                 tbody.appendChild(row);
-
-                // Add event listener to checkbox only for files
-                if (entry.type !== 'directory') {
-                    row.querySelector('.file-checkbox').addEventListener('change', (e) => {
-                        if (e.target.checked) {
-                            selectedFiles.add(`${entryPath}`);
-                        } else {
-                            selectedFiles.delete(`${entryPath}`);
-                        }
-                        updateDeleteButton();
-                        updateSelectAll();
-                    });
-                }
             });
         }
-
-        function updateDeleteButton() {
-            const deleteBtn = document.getElementById('deleteBtn');
-            deleteBtn.disabled = selectedFiles.size === 0;
-        }
-
-        function updateSelectAll() {
-            const checkboxes = document.querySelectorAll('.file-checkbox');
-            const allChecked = checkboxes.length > 0 && Array.from(checkboxes).every(cb => cb.checked);
-            document.getElementById('selectAll').checked = allChecked;
-        }
-
-        document.getElementById('selectAll').addEventListener('change', (e) => {
-            document.querySelectorAll('.file-checkbox').forEach(cb => {
-                cb.checked = e.target.checked;
-                cb.dispatchEvent(new Event('change'));
-            });
-        });
-
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const files = document.getElementById('fileInput').files;
-            if (files.length === 0) return;
-
-            const currentPath = window.location.pathname;
-            let succeeded = 0, failed = 0;
-
-            for (let file of files) {
-                try {
-                    // Build the remote path
-                    let remotePath = currentPath;
-                    if (!remotePath.endsWith('/')) remotePath += '/';
-                    remotePath += file.name;
-
-                    // Read file and upload with PUT
-                    const fileData = await file.arrayBuffer();
-                    const response = await fetch(remotePath, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/octet-stream' },
-                        body: fileData
-                    });
-
-                    if (response.ok) {
-                        succeeded++;
-                    } else {
-                        failed++;
-                    }
-                } catch (err) {
-                    failed++;
-                    console.error(`Upload error for ${file.name}:`, err.message);
-                }
-            }
-
-            if (succeeded > 0) {
-                document.getElementById('fileInput').value = '';
-                loadFiles();
-            }
-            if (failed > 0) {
-                alert(`Upload: ${succeeded} ok, ${failed} failed`);
-            }
-        });
-
-        document.getElementById('deleteBtn').addEventListener('click', async () => {
-            if (selectedFiles.size === 0) return;
-
-            if (!confirm(`Delete ${selectedFiles.size} file(s)?`)) return;
-
-            try {
-                const response = await fetch(window.location.pathname, {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ files: Array.from(selectedFiles) })
-                });
-
-                if (response.ok) {
-                    loadFiles();
-                } else {
-                    alert('Delete failed');
-                }
-            } catch (err) {
-                alert('Delete error: ' + err.message);
-            }
-        });
 
         function sortByColumn(col) {
             if (sortState.col === col) {
@@ -483,4 +302,3 @@
     </script>
 </body>
 </html>
-
