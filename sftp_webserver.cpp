@@ -346,8 +346,19 @@ static void handle_http_request(int client_socket, int tunnel_id) {
             SDL_Log("[Tunnel %d] Served directory listing HTML: %s", tunnel_id, decoded_path.c_str());
         }
         else {
-            std::vector<uint8_t> file_data;
-            if (sftp_get_file(sftp, decoded_path.c_str(), file_data)) {
+            // Get file size first using stat
+            LIBSSH2_SFTP_ATTRIBUTES file_attrs;
+            int stat_rc = libssh2_sftp_stat(sftp, decoded_path.c_str(), &file_attrs);
+            uint64_t file_size = 0;
+            if (stat_rc == 0 && (file_attrs.flags & LIBSSH2_SFTP_ATTR_SIZE)) {
+                file_size = file_attrs.filesize;
+            }
+            
+            // Open file for reading
+            LIBSSH2_SFTP_HANDLE *file_handle = libssh2_sftp_open(sftp, decoded_path.c_str(),
+                                                                   LIBSSH2_FXF_READ,
+                                                                   LIBSSH2_SFTP_S_IRUSR);
+            if (file_handle) {
                 // Extract filename from path
                 const char *filename = decoded_path.c_str();
                 const char *last_slash = strrchr(decoded_path.c_str(), '/');
@@ -356,12 +367,24 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                 }
                 
                 const char *content_type = get_mime_type(decoded_path.c_str());
-                std::string response = http_response_headers(200, content_type, file_data.size(), filename);
+                std::string response = http_response_headers(200, content_type, file_size, filename);
                 send(client_socket, response.c_str(), response.length(), 0);
-                if (!file_data.empty()) {
-                    send(client_socket, (const char *)file_data.data(), file_data.size(), 0);
+                
+                // Stream file in chunks
+                char buffer[262144];  // 256KB chunks
+                uint64_t total_sent = 0;
+                while (total_sent < file_size) {
+                    int bytes_read = libssh2_sftp_read(file_handle, buffer, sizeof(buffer));
+                    if (bytes_read <= 0) break;
+                    
+                    int bytes_sent = send(client_socket, buffer, bytes_read, 0);
+                    if (bytes_sent <= 0) break;
+                    
+                    total_sent += bytes_sent;
                 }
-                SDL_Log("[Tunnel %d] Downloaded file: %s (%zu bytes)", tunnel_id, decoded_path.c_str(), file_data.size());
+                
+                libssh2_sftp_close_handle(file_handle);
+                SDL_Log("[Tunnel %d] Downloaded file: %s (%llu bytes)", tunnel_id, decoded_path.c_str(), total_sent);
             } else {
                 std::string response = http_response_headers(500, "text/plain", 14);
                 response += "Download error";
@@ -714,7 +737,12 @@ static void webserver_thread_func() {
         SDL_UnlockMutex(g_tunnel_mutex);
 
         SDL_Log("[Tunnel %d] Opened", tunnel_id);
-        handle_http_request(client_socket, tunnel_id);
+        
+        // Spawn a thread to handle this request so we don't block the accept loop
+        std::thread request_handler([client_socket, tunnel_id]() {
+            handle_http_request(client_socket, tunnel_id);
+        });
+        request_handler.detach();  // Let it run independently
     }
 
     if (g_listen_socket != INVALID_SOCKET) {
