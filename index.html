@@ -2,38 +2,247 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Felix Web UI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Browser</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-        th { background-color: #f0f0f0; cursor: pointer; }
-        th.sort-asc::after { content: " ▲"; }
-        th.sort-desc::after { content: " ▼"; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            border-radius: 12px 12px 0 0;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border-bottom: 3px solid #667eea;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .header .breadcrumb {
+            font-size: 14px;
+            color: #666;
+            font-family: 'Monaco', 'Courier New', monospace;
+            word-break: break-all;
+        }
+
+        table {
+            width: 100%;
+            background: white;
+            border-collapse: collapse;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        thead {
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        th {
+            padding: 16px;
+            text-align: left;
+            font-weight: 600;
+            color: #495057;
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 0.2s;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        th:hover {
+            background: #e9ecef;
+        }
+
+        th.sort-asc::after {
+            content: " ▲";
+            color: #667eea;
+        }
+
+        th.sort-desc::after {
+            content: " ▼";
+            color: #667eea;
+        }
+
+        td {
+            padding: 14px 16px;
+            border-bottom: 1px solid #e9ecef;
+            font-size: 14px;
+            color: #333;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        tr.parent-dir:hover {
+            background: #f0f4ff;
+        }
+
+        a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+
+        a:hover {
+            color: #764ba2;
+            text-decoration: underline;
+        }
+
+        tr.parent-dir a {
+            color: #764ba2;
+            font-weight: 600;
+        }
+
+        .type-directory {
+            color: #764ba2;
+            font-weight: 500;
+        }
+
+        .type-link {
+            color: #e67e22;
+            font-weight: 500;
+        }
+
+        .size-placeholder {
+            color: #adb5bd;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .table-wrapper {
+            background: white;
+            border-radius: 0 0 12px 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .upload-section {
+            background: white;
+            padding: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        #uploadForm {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex: 1;
+        }
+
+        #fileInput {
+            padding: 8px 12px;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 14px;
+            flex: 1;
+        }
+
+        button[type="submit"], #deleteBtn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button[type="submit"]:hover {
+            background: #764ba2;
+        }
+
+        #deleteBtn {
+            background: #e74c3c;
+        }
+
+        #deleteBtn:hover:not(:disabled) {
+            background: #c0392b;
+        }
+
+        #deleteBtn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        input[type="checkbox"] {
+            cursor: pointer;
+            width: 18px;
+            height: 18px;
+        }
     </style>
 </head>
 <body>
-    <h1>File Listing</h1>
-
-    <table id="fileTable">
-        <thead>
-            <tr>
-                <th data-col="name">Name</th>
-                <th data-col="type">Type</th>
-                <th data-col="size">Size</th>
-                <th data-col="modified">Modified</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
+    <div class="container">
+        <div class="header">
+            <h1 id="title">File Browser</h1>
+            <div class="breadcrumb" id="breadcrumb">/</div>
+        </div>
+        <div class="upload-section">
+            <form id="uploadForm" enctype="multipart/form-data">
+                <input type="file" id="fileInput" multiple>
+                <button type="submit">Upload Files</button>
+            </form>
+            <button id="deleteBtn" disabled>Delete Selected</button>
+        </div>
+        <div class="table-wrapper">
+            <table id="fileTable">
+                <thead>
+                    <tr>
+                        <th style="width: 5%;"><input type="checkbox" id="selectAll"></th>
+                        <th data-col="name" style="width: 45%;">Name</th>
+                        <th data-col="type" style="width: 15%;">Type</th>
+                        <th data-col="size" style="width: 15%;">Size</th>
+                        <th data-col="modified" style="width: 20%;">Modified</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
 
     <script>
         let fileData = [];
         let sortState = { col: null, dir: 1 };
         let hasParentDir = false;
+        let selectedFiles = new Set();
 
         async function loadFiles() {
             const dir = window.location.pathname;
+            
+            // Update title and breadcrumb
+            const displayDir = dir || '/';
+            document.title = `File Browser - ${displayDir}`;
+            document.getElementById('title').textContent = displayDir;
+            document.getElementById('breadcrumb').textContent = displayDir;
 
             const response = await fetch('/api/listfiles', {
                 method: 'POST',
@@ -43,7 +252,24 @@
 
             const data = await response.json();
             fileData = data.entries;
-            renderTable(fileData);
+            selectedFiles.clear();
+            
+            // Sort by name by default
+            sortState.col = 'name';
+            sortState.dir = 1;
+            const sorted = [...fileData].sort((a, b) => a.name.localeCompare(b.name));
+            
+            updateSortIndicators('name');
+            renderTable(sorted);
+            updateDeleteButton();
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
         }
 
         function renderTable(entries) {
@@ -59,15 +285,16 @@
                 row.classList.add('parent-dir');
                 const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
                 row.innerHTML = `
+                    <td><input type="checkbox" disabled></td>
                     <td><a href="${parentPath}">..</a></td>
-                    <td>directory</td>
-                    <td>-</td>
-                    <td>-</td>
+                    <td class="type-directory">directory</td>
+                    <td class="size-placeholder">-</td>
+                    <td class="size-placeholder">-</td>
                 `;
                 tbody.appendChild(row);
             }
 
-            entries.forEach(entry => {
+            entries.forEach((entry, idx) => {
                 const row = document.createElement('tr');
                 const entryPath = currentPath.endsWith('/') 
                     ? `${currentPath}${entry.name}`
@@ -76,19 +303,107 @@
                 let nameCell;
                 if (entry.type === 'directory') {
                     nameCell = `<a href="${entryPath}">${entry.name}</a>`;
+                } else if (entry.type === 'link') {
+                    nameCell = `<a href="${entryPath}">${entry.name}</a>`;
                 } else {
                     nameCell = `<a href="${entryPath}">${entry.name}</a>`;
                 }
 
+                const typeClass = entry.type === 'directory' ? 'type-directory' : 
+                                 entry.type === 'link' ? 'type-link' : '';
+                const sizeDisplay = entry.type === 'file' ? formatFileSize(entry.size) : '-';
+                const sizeClass = entry.type === 'file' ? '' : 'size-placeholder';
+
+                const checkbox = `<input type="checkbox" class="file-checkbox" data-idx="${idx}" data-name="${entry.name}">`;
+
                 row.innerHTML = `
+                    <td>${checkbox}</td>
                     <td>${nameCell}</td>
-                    <td>${entry.type}</td>
-                    <td>${entry.size}</td>
-                    <td>${new Date(entry.modified * 1000).toLocaleString()}</td>
+                    <td class="${typeClass}">${entry.type}</td>
+                    <td class="${sizeClass}">${sizeDisplay}</td>
+                    <td class="size-placeholder">${new Date(entry.modified * 1000).toLocaleString()}</td>
                 `;
                 tbody.appendChild(row);
+
+                // Add event listener to checkbox
+                row.querySelector('.file-checkbox').addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        selectedFiles.add(`${entryPath}`);
+                    } else {
+                        selectedFiles.delete(`${entryPath}`);
+                    }
+                    updateDeleteButton();
+                    updateSelectAll();
+                });
             });
         }
+
+        function updateDeleteButton() {
+            const deleteBtn = document.getElementById('deleteBtn');
+            deleteBtn.disabled = selectedFiles.size === 0;
+        }
+
+        function updateSelectAll() {
+            const checkboxes = document.querySelectorAll('.file-checkbox');
+            const allChecked = checkboxes.length > 0 && Array.from(checkboxes).every(cb => cb.checked);
+            document.getElementById('selectAll').checked = allChecked;
+        }
+
+        document.getElementById('selectAll').addEventListener('change', (e) => {
+            document.querySelectorAll('.file-checkbox').forEach(cb => {
+                cb.checked = e.target.checked;
+                cb.dispatchEvent(new Event('change'));
+            });
+        });
+
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const files = document.getElementById('fileInput').files;
+            if (files.length === 0) return;
+
+            const formData = new FormData();
+            for (let file of files) {
+                formData.append('files', file);
+            }
+
+            try {
+                const response = await fetch(window.location.pathname, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    document.getElementById('fileInput').value = '';
+                    loadFiles();
+                } else {
+                    alert('Upload failed');
+                }
+            } catch (err) {
+                alert('Upload error: ' + err.message);
+            }
+        });
+
+        document.getElementById('deleteBtn').addEventListener('click', async () => {
+            if (selectedFiles.size === 0) return;
+
+            if (!confirm(`Delete ${selectedFiles.size} file(s)?`)) return;
+
+            try {
+                const response = await fetch(window.location.pathname, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ files: Array.from(selectedFiles) })
+                });
+
+                if (response.ok) {
+                    loadFiles();
+                } else {
+                    alert('Delete failed');
+                }
+            } catch (err) {
+                alert('Delete error: ' + err.message);
+            }
+        });
 
         function sortByColumn(col) {
             if (sortState.col === col) {
@@ -122,7 +437,7 @@
             });
         }
 
-        document.querySelectorAll('th').forEach(th => {
+        document.querySelectorAll('th[data-col]').forEach(th => {
             th.addEventListener('click', () => sortByColumn(th.dataset.col));
         });
 

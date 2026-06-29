@@ -1638,4 +1638,28 @@ void sftp_console_reset_after_fork() {
     s_pending.clear();
 }
 
+// ============================================================================
+// SFTP ACCESSORS (for sftp_webserver.cpp)
+// ============================================================================
+
+LIBSSH2_SFTP *sftp_console_get_handle() {
+    return s_sftp;
+}
+
+LIBSSH2_SESSION *sftp_console_get_session() {
+    return ssh_get_session();
+}
+
+int sftp_console_get_socket() {
+    return ssh_get_socket();
+}
+
+void sftp_console_session_lock() {
+    ssh_session_lock();
+}
+
+void sftp_console_session_unlock() {
+    ssh_session_unlock();
+}
+
 #endif // USESSH
