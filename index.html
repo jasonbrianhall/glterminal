@@ -207,7 +207,7 @@
             <div class="breadcrumb" id="breadcrumb">/</div>
         </div>
         <div class="upload-section">
-            <form id="uploadForm" enctype="multipart/form-data">
+            <form id="uploadForm">
                 <input type="file" id="fileInput" multiple>
                 <button type="submit">Upload Files</button>
             </form>
@@ -298,7 +298,7 @@
                 row.classList.add('parent-dir');
                 const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
                 row.innerHTML = `
-                    <td><input type="checkbox" disabled></td>
+                    <td><input type="checkbox" disabled style="visibility:hidden;"></td>
                     <td><a href="${parentPath}">..</a></td>
                     <td class="type-directory">directory</td>
                     <td class="size-placeholder">-</td>
@@ -319,7 +319,6 @@
                 } else if (entry.type === 'link') {
                     nameCell = `<a href="${entryPath}" target="${getFileTarget(entry.name) || '_self'}">${entry.name}</a>`;
                 } else {
-                    // Regular file - check if it should open in browser
                     const target = getFileTarget(entry.name);
                     nameCell = `<a href="${entryPath}" target="${target || '_self'}">${entry.name}</a>`;
                 }
@@ -329,7 +328,13 @@
                 const sizeDisplay = entry.type === 'file' ? formatFileSize(entry.size) : '-';
                 const sizeClass = entry.type === 'file' ? '' : 'size-placeholder';
 
-                const checkbox = `<input type="checkbox" class="file-checkbox" data-idx="${idx}" data-name="${entry.name}">`;
+                // Only allow checkboxes for files, not directories
+                let checkbox;
+                if (entry.type === 'directory') {
+                    checkbox = `<input type="checkbox" disabled style="visibility:hidden;">`;
+                } else {
+                    checkbox = `<input type="checkbox" class="file-checkbox" data-idx="${idx}" data-name="${entry.name}">`;
+                }
 
                 row.innerHTML = `
                     <td>${checkbox}</td>
@@ -340,16 +345,18 @@
                 `;
                 tbody.appendChild(row);
 
-                // Add event listener to checkbox
-                row.querySelector('.file-checkbox').addEventListener('change', (e) => {
-                    if (e.target.checked) {
-                        selectedFiles.add(`${entryPath}`);
-                    } else {
-                        selectedFiles.delete(`${entryPath}`);
-                    }
-                    updateDeleteButton();
-                    updateSelectAll();
-                });
+                // Add event listener to checkbox only for files
+                if (entry.type !== 'directory') {
+                    row.querySelector('.file-checkbox').addEventListener('change', (e) => {
+                        if (e.target.checked) {
+                            selectedFiles.add(`${entryPath}`);
+                        } else {
+                            selectedFiles.delete(`${entryPath}`);
+                        }
+                        updateDeleteButton();
+                        updateSelectAll();
+                    });
+                }
             });
         }
 
@@ -376,25 +383,41 @@
             const files = document.getElementById('fileInput').files;
             if (files.length === 0) return;
 
-            const formData = new FormData();
+            const currentPath = window.location.pathname;
+            let succeeded = 0, failed = 0;
+
             for (let file of files) {
-                formData.append('files', file);
+                try {
+                    // Build the remote path
+                    let remotePath = currentPath;
+                    if (!remotePath.endsWith('/')) remotePath += '/';
+                    remotePath += file.name;
+
+                    // Read file and upload with PUT
+                    const fileData = await file.arrayBuffer();
+                    const response = await fetch(remotePath, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/octet-stream' },
+                        body: fileData
+                    });
+
+                    if (response.ok) {
+                        succeeded++;
+                    } else {
+                        failed++;
+                    }
+                } catch (err) {
+                    failed++;
+                    console.error(`Upload error for ${file.name}:`, err.message);
+                }
             }
 
-            try {
-                const response = await fetch(window.location.pathname, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (response.ok) {
-                    document.getElementById('fileInput').value = '';
-                    loadFiles();
-                } else {
-                    alert('Upload failed');
-                }
-            } catch (err) {
-                alert('Upload error: ' + err.message);
+            if (succeeded > 0) {
+                document.getElementById('fileInput').value = '';
+                loadFiles();
+            }
+            if (failed > 0) {
+                alert(`Upload: ${succeeded} ok, ${failed} failed`);
             }
         });
 
