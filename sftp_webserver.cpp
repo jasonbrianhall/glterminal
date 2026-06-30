@@ -84,15 +84,12 @@ static bool socket_is_valid(int sock) {
 // Safe send with full error checking
 // Returns: number of bytes sent (>0), 0 if connection closed gracefully, -1 on error
 static int socket_send_safe(int sock, const char *data, int len) {
-    SDL_Log("[send_safe] ENTER: sock=%d len=%d", sock, len);
 
     if (!socket_is_valid(sock)) {
-        SDL_Log("[send_safe] socket_is_valid() = FALSE");
         return -1;
     }
 
     if (len <= 0) {
-        SDL_Log("[send_safe] len <= 0 (nothing to send)");
         return 0;
     }
 
@@ -101,8 +98,6 @@ static int socket_send_safe(int sock, const char *data, int len) {
     while (total_sent < len) {
         int result = send(sock, data + total_sent, len - total_sent, 0);
 
-        SDL_Log("[send_safe] send() returned %d (wanted %d)", 
-                result, len - total_sent);
 
         if (result > 0) {
             total_sent += result;
@@ -111,42 +106,33 @@ static int socket_send_safe(int sock, const char *data, int len) {
 
 #ifdef _WIN32
         int err = WSAGetLastError();
-        SDL_Log("[send_safe] WINDOWS send error: %d", err);
 
         if (err == WSAEWOULDBLOCK) {
-            SDL_Log("[send_safe] WSAEWOULDBLOCK: throttling 1ms...");
             SDL_Delay(1);
             continue;
         }
 
-        SDL_Log("[send_safe] REAL WINDOWS ERROR: %d", err);
         return -1;
 #else
         int err = errno;
-        SDL_Log("[send_safe] LINUX send error: %d", err);
 
         if (err == EAGAIN || err == EWOULDBLOCK) {
-            SDL_Log("[send_safe] EAGAIN/EWOULDBLOCK: throttling 1ms...");
             SDL_Delay(1);
             continue;
         }
 
-        SDL_Log("[send_safe] REAL LINUX ERROR: %d", err);
         return -1;
 #endif
     }
 
-    SDL_Log("[send_safe] SUCCESS: sent %d bytes", total_sent);
     return total_sent;
 }
 
 // Receive with timeout awareness
 // Returns: number of bytes received (>0), 0 if connection closed, -1 on error
 static int socket_recv_safe(int sock, char *buffer, int len) {
-    SDL_Log("[recv_safe] ENTER: sock=%d len=%d", sock, len);
 
     if (sock == INVALID_SOCKET || len <= 0) {
-        SDL_Log("[recv_safe] INVALID SOCKET OR LEN <= 0");
         return -1;
     }
 
@@ -155,37 +141,29 @@ static int socket_recv_safe(int sock, char *buffer, int len) {
 #ifdef _WIN32
     if (result < 0) {
         int err = WSAGetLastError();
-        SDL_Log("[recv_safe] WINDOWS recv < 0  result=%d  WSAError=%d", result, err);
 
         if (err == WSAEWOULDBLOCK) {
-            SDL_Log("[recv_safe] WINDOWS WSAEWOULDBLOCK (no data yet)");
             return 0;   // no data yet
         }
 
-        SDL_Log("[recv_safe] WINDOWS REAL ERROR (return -1)");
         return -1;      // real error
     }
 #else
     if (result < 0) {
         int err = errno;
-        SDL_Log("[recv_safe] LINUX recv < 0  result=%d  errno=%d", result, err);
 
         if (err == EAGAIN || err == EWOULDBLOCK) {
-            SDL_Log("[recv_safe] LINUX EAGAIN/EWOULDBLOCK (no data yet)");
             return 0;   // no data yet
         }
 
-        SDL_Log("[recv_safe] LINUX REAL ERROR (return -1)");
         return -1;      // real error
     }
 #endif
 
     if (result == 0) {
-        SDL_Log("[recv_safe] EOF: recv() returned 0 (peer closed)");
         return 0;       // EOF
     }
 
-    SDL_Log("[recv_safe] SUCCESS: recv() returned %d bytes", result);
     return result;      // bytes read
 }
 
