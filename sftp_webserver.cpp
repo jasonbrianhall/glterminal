@@ -317,35 +317,95 @@ static std::string get_index_html() {
     return std::string((const char *)index_html, index_html_len);
 }
 
+// Case-insensitive string comparison for extensions
+static int strcasecmp_ext(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return ca - cb;
+        a++;
+        b++;
+    }
+    return *a - *b;
+}
+
 static const char* get_mime_type(const char *filename) {
+    if (!filename) return "application/octet-stream";
+    
     const char *ext = strrchr(filename, '.');
     if (!ext) return "application/octet-stream";
     
-    if (strcmp(ext, ".png") == 0) return "image/png";
-    if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
-    if (strcmp(ext, ".gif") == 0) return "image/gif";
-    if (strcmp(ext, ".webp") == 0) return "image/webp";
-    if (strcmp(ext, ".svg") == 0) return "image/svg+xml";
-    if (strcmp(ext, ".bmp") == 0) return "image/bmp";
-    if (strcmp(ext, ".ico") == 0) return "image/x-icon";
-    if (strcmp(ext, ".pdf") == 0) return "application/pdf";
-    if (strcmp(ext, ".txt") == 0) return "text/plain";
-    if (strcmp(ext, ".html") == 0) return "text/html";
-    if (strcmp(ext, ".css") == 0) return "text/css";
-    if (strcmp(ext, ".js") == 0) return "application/javascript";
-    if (strcmp(ext, ".json") == 0) return "application/json";
-    if (strcmp(ext, ".xml") == 0) return "application/xml";
-    if (strcmp(ext, ".zip") == 0) return "application/zip";
-    if (strcmp(ext, ".gz") == 0) return "application/gzip";
-    if (strcmp(ext, ".tar") == 0) return "application/x-tar";
-    if (strcmp(ext, ".mp3") == 0) return "audio/mpeg";
-    if (strcmp(ext, ".mp4") == 0) return "video/mp4";
-    if (strcmp(ext, ".webm") == 0) return "video/webm";
-    if (strcmp(ext, ".wav") == 0) return "audio/wav";
-    if (strcmp(ext, ".flac") == 0) return "audio/flac";
-    if (strcmp(ext, ".m4a") == 0) return "audio/mp4";
+    // Check for compound extensions first (e.g., .tar.gz)
+    if (strcasecmp_ext(ext, ".tar.gz") == 0 || strcasecmp_ext(ext, ".tgz") == 0) 
+        return "application/gzip";
+    
+    // Image formats
+    if (strcasecmp_ext(ext, ".png") == 0) return "image/png";
+    if (strcasecmp_ext(ext, ".jpg") == 0 || strcasecmp_ext(ext, ".jpeg") == 0) return "image/jpeg";
+    if (strcasecmp_ext(ext, ".gif") == 0) return "image/gif";
+    if (strcasecmp_ext(ext, ".webp") == 0) return "image/webp";
+    if (strcasecmp_ext(ext, ".svg") == 0) return "image/svg+xml";
+    if (strcasecmp_ext(ext, ".bmp") == 0) return "image/bmp";
+    if (strcasecmp_ext(ext, ".ico") == 0) return "image/x-icon";
+    
+    // Document formats
+    if (strcasecmp_ext(ext, ".pdf") == 0) return "application/pdf";
+    if (strcasecmp_ext(ext, ".txt") == 0) return "text/plain";
+    if (strcasecmp_ext(ext, ".html") == 0 || strcasecmp_ext(ext, ".htm") == 0) return "text/html";
+    if (strcasecmp_ext(ext, ".css") == 0) return "text/css";
+    if (strcasecmp_ext(ext, ".js") == 0) return "application/javascript";
+    if (strcasecmp_ext(ext, ".json") == 0) return "application/json";
+    if (strcasecmp_ext(ext, ".xml") == 0) return "application/xml";
+    
+    // Archive formats
+    if (strcasecmp_ext(ext, ".zip") == 0) return "application/zip";
+    if (strcasecmp_ext(ext, ".gz") == 0) return "application/gzip";
+    if (strcasecmp_ext(ext, ".tar") == 0) return "application/x-tar";
+    if (strcasecmp_ext(ext, ".rar") == 0) return "application/x-rar-compressed";
+    if (strcasecmp_ext(ext, ".7z") == 0) return "application/x-7z-compressed";
+    
+    // Audio formats
+    if (strcasecmp_ext(ext, ".mp3") == 0) return "audio/mpeg";
+    if (strcasecmp_ext(ext, ".wav") == 0) return "audio/wav";
+    if (strcasecmp_ext(ext, ".flac") == 0) return "audio/flac";
+    if (strcasecmp_ext(ext, ".m4a") == 0) return "audio/mp4";
+    if (strcasecmp_ext(ext, ".aac") == 0) return "audio/aac";
+    if (strcasecmp_ext(ext, ".ogg") == 0 || strcasecmp_ext(ext, ".oga") == 0) return "audio/ogg";
+    
+    // Video formats
+    if (strcasecmp_ext(ext, ".mp4") == 0) return "video/mp4";
+    if (strcasecmp_ext(ext, ".webm") == 0) return "video/webm";
+    if (strcasecmp_ext(ext, ".mkv") == 0) return "video/x-matroska";
+    if (strcasecmp_ext(ext, ".avi") == 0) return "video/x-msvideo";
+    if (strcasecmp_ext(ext, ".mov") == 0) return "video/quicktime";
+    if (strcasecmp_ext(ext, ".flv") == 0) return "video/x-flv";
+    if (strcasecmp_ext(ext, ".ogv") == 0) return "video/ogg";
     
     return "application/octet-stream";
+}
+
+static std::string url_encode(const std::string &str) {
+    std::string encoded;
+    for (char c : str) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+            // Unreserved characters — don't encode
+            encoded += c;
+        } else if (c == ' ') {
+            encoded += '+';
+        } else if (c == '(' || c == ')') {
+            // Encode parentheses as %28 and %29
+            encoded += (c == '(') ? "%28" : "%29";
+        } else {
+            // Encode everything else as %XX
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%%%02X", (unsigned char)c);
+            encoded += buf;
+        }
+    }
+    return encoded;
 }
 
 static std::string url_decode(const std::string &str) {
