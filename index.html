@@ -163,8 +163,14 @@
         let fileData = [];
         let sortState = { col: null, dir: 1 };
 
+        // Encode parentheses and square brackets in paths: ( -> %28, ) -> %29, [ -> %5B, ] -> %5D
+        function encodeParens(path) {
+            return path.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\[/g, '%5B').replace(/\]/g, '%5D');
+        }
+
         async function loadFiles() {
             const dir = window.location.pathname;
+            const encodedDir = encodeParens(dir);
             
             // Decode the path for display
             const displayDir = decodeURIComponent(dir) || '/';
@@ -174,7 +180,7 @@
             const response = await fetch('/api/listfiles', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dir })
+                body: JSON.stringify({ dir: encodedDir })
             });
 
             const data = await response.json();
@@ -236,15 +242,16 @@
                 const entryPath = currentPath.endsWith('/') 
                     ? `${currentPath}${entry.name}`
                     : `${currentPath}/${entry.name}`;
+                const encodedEntryPath = encodeParens(entryPath);
 
                 let nameCell;
                 if (entry.type === 'directory') {
-                    nameCell = `<a href="${entryPath}">${entry.name}</a>`;
+                    nameCell = `<a href="${encodedEntryPath}">${entry.name}</a>`;
                 } else if (entry.type === 'link') {
-                    nameCell = `<a href="${entryPath}" target="${getFileTarget(entry.name) || '_self'}">${entry.name}</a>`;
+                    nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget(entry.name) || '_self'}">${entry.name}</a>`;
                 } else {
                     const target = getFileTarget(entry.name);
-                    nameCell = `<a href="${entryPath}" target="${target || '_self'}">${entry.name}</a>`;
+                    nameCell = `<a href="${encodedEntryPath}" target="${target || '_self'}">${entry.name}</a>`;
                 }
 
                 const typeClass = entry.type === 'directory' ? 'type-directory' : 
