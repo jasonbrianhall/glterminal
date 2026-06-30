@@ -262,24 +262,15 @@ static std::string http_response_headers(int status_code, const char *content_ty
     else if (status_code == 405) status_text = "Method Not Allowed";
     else if (status_code == 500) status_text = "Internal Server Error";
 
-    if (filename) {
-        snprintf(buf, sizeof(buf),
-            "HTTP/1.1 %d %s\r\n"
-            "Content-Type: %s\r\n"
-            "Content-Length: %zu\r\n"
-            "Content-Disposition: attachment; filename=\"%s\"\r\n"
-            "Connection: close\r\n"
-            "\r\n",
-            status_code, status_text, content_type, content_length, filename);
-    } else {
-        snprintf(buf, sizeof(buf),
-            "HTTP/1.1 %d %s\r\n"
-            "Content-Type: %s\r\n"
-            "Content-Length: %zu\r\n"
-            "Connection: close\r\n"
-            "\r\n",
-            status_code, status_text, content_type, content_length);
-    }
+    // Always use inline disposition to let browser try to open/view the file
+    snprintf(buf, sizeof(buf),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %zu\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        status_code, status_text, content_type, content_length);
+    
     return buf;
 }
 
