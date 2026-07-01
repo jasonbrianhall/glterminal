@@ -2,6 +2,18 @@
 
 [![Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://get.microsoft.com/installer/download/9ns1cjk9vt7q?referrer=appbadge)
 
+### Install
+
+**Windows (winget):**
+```
+winget install "Felix Terminal"
+```
+This installs directly from the Microsoft Store listing above via winget's `msstore` source, so it stays up to date the same way Store installs do.
+
+**Windows (manual):** download the `.msi` from the [Releases](../../releases) page. Same code as the Store/winget version, but installed this way it won't auto-update — you'll need to grab new releases manually. *(The `.msix` in Releases is unsigned and won't install directly outside the Store — use the MSI instead for manual installs.)*
+
+**Linux:** build from source — see [Building](#building) below.
+
 
 ![Felix the Lovebird](icon.png)
 
@@ -62,6 +74,16 @@ A standalone OpenGL terminal emulator for Linux and MS Windows with SDL fallback
 - Remote working directory auto-detected via `pwd` on session open
 - Downloads saved to user-chosen local directory (defaults to `~/Downloads/FelixTerminal`)
 - SFTP subsystem shares the existing SSH session — no second connection or re-authentication
+
+### SFTP Web Browser (F12)
+
+- **F12** — starts a local web server exposing the remote filesystem as a browsable file listing at `http://localhost:53716`
+- Binds to `127.0.0.1` only — it's reachable from the local machine, not other devices on the network, so there's nothing to expose or firewall
+- If port `53716` is already in use, it automatically tries the next port up (to `53815`) — check the terminal log output for the actual port if it had to fall back
+- Browse directories, sort by name/type/size/modified, and upload/download files straight from a browser tab — handy for quick access without opening the F2/F3 panels, or for dragging files in from outside the terminal window
+- Each browser request runs on its own thread against its own SFTP subsystem, so a large transfer through the web browser won't block the terminal or the F4 console
+- "Open in new window" checkbox in the browser UI controls whether clicking a file opens a new tab or navigates the current one — persisted as a cookie
+- Stop the web server the same way it was started, or it shuts down automatically when the SSH session ends
 
 ## GL Render Modes
 
@@ -148,6 +170,7 @@ SSH session (opens connection dialog if host/user not specified):
 | `Shift+PageUp / Shift+PageDown` | Scroll scrollback buffer |
 | `F2` | Open SFTP upload browser *(SSH sessions only)* |
 | `F3` | Open SFTP download browser *(SSH sessions only)* |
+| `F12` | Start SFTP web browser at `localhost:53716` *(SSH sessions only)* |
 | `F11` | Toggle full screen |
 
 
