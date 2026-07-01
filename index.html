@@ -29,6 +29,10 @@
             padding: 30px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             border-bottom: 3px solid #667eea;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
         }
 
         .header h1 {
@@ -40,6 +44,24 @@
 
         .header .breadcrumb {
             display: none;
+        }
+
+        .new-window-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: #495057;
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .new-window-toggle input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #667eea;
+            cursor: pointer;
         }
 
         table {
@@ -143,6 +165,10 @@
     <div class="container">
         <div class="header">
             <h1 id="title">File Browser</h1>
+            <label class="new-window-toggle">
+                <input type="checkbox" id="newWindowToggle">
+                Open in new window
+            </label>
         </div>
         <div class="table-wrapper">
             <table id="fileTable">
@@ -162,6 +188,31 @@
     <script>
         let fileData = [];
         let sortState = { col: null, dir: 1 };
+
+        // ---- "open in new window" preference, persisted as a cookie ----
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+            return match ? decodeURIComponent(match[1]) : null;
+        }
+
+        function setCookie(name, value, days) {
+            const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString();
+            document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`;
+        }
+
+        const storedPref = getCookie('openInNewWindow');
+        let openInNewWindow = storedPref === null ? true : storedPref === 'true';
+
+        const newWindowToggle = document.getElementById('newWindowToggle');
+        newWindowToggle.checked = openInNewWindow;
+        newWindowToggle.addEventListener('change', () => {
+            openInNewWindow = newWindowToggle.checked;
+            setCookie('openInNewWindow', openInNewWindow, 400);
+            // Re-render with the current sort so links pick up the new target immediately
+            renderTable(currentSorted);
+        });
+
+        let currentSorted = [];
 
         // Encode parentheses and square brackets in paths: ( -> %28, ) -> %29, [ -> %5B, ] -> %5D
         function encodeParens(path) {
@@ -190,7 +241,8 @@
             sortState.col = 'name';
             sortState.dir = 1;
             const sorted = [...fileData].sort((a, b) => a.name.localeCompare(b.name));
-            
+            currentSorted = sorted;
+
             updateSortIndicators('name');
             renderTable(sorted);
         }
@@ -203,17 +255,10 @@
             return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
         }
 
-        // Determine if file should open in browser or download
-        function getFileTarget(filename) {
-            const viewableExtensions = [
-                '.txt', '.md', '.html', '.htm', '.xml', '.json', '.csv', '.log',
-                '.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.bmp', '.ico',
-                '.pdf', '.mp4', '.webm', '.ogg', '.mp3', '.wav', '.m4a',
-                '.js', '.css', '.py', '.cpp', '.c', '.h', '.java', '.rb', '.go', '.rs'
-            ];
-            
-            const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
-            return viewableExtensions.includes(ext) ? '_blank' : null;
+        // Target window for file/link entries — driven by the "Open in new
+        // window" toggle rather than a fixed file-type whitelist.
+        function getFileTarget() {
+            return openInNewWindow ? '_blank' : '_self';
         }
 
         function renderTable(entries) {
@@ -247,11 +292,8 @@
                 let nameCell;
                 if (entry.type === 'directory') {
                     nameCell = `<a href="${encodedEntryPath}">${entry.name}</a>`;
-                } else if (entry.type === 'link') {
-                    nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget(entry.name) || '_self'}">${entry.name}</a>`;
                 } else {
-                    const target = getFileTarget(entry.name);
-                    nameCell = `<a href="${encodedEntryPath}" target="${target || '_self'}">${entry.name}</a>`;
+                    nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}">${entry.name}</a>`;
                 }
 
                 const typeClass = entry.type === 'directory' ? 'type-directory' : 
@@ -288,6 +330,7 @@
                 return x.localeCompare(y) * sortState.dir;
             });
 
+            currentSorted = sorted;
             updateSortIndicators(col);
             renderTable(sorted);
         }
