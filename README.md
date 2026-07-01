@@ -62,7 +62,7 @@ A standalone OpenGL terminal emulator for Linux and MS Windows with SDL fallback
 
 ## SFTP File Transfer
 
-- Integrated graphical SFTP browser — no separate client needed
+- Integrated graphical SFTP browser — no separate client needed, old-school dual-pane "Norton Commander"-style file copy screen (no drag-and-drop — you navigate each pane and select what to transfer)
 - **F2** — Upload: left panel browses local files, right panel browses remote destination
 - **F3** — Download: right panel browses remote files, left panel selects local destination
 - **F4** — SFTP Console
@@ -75,15 +75,16 @@ A standalone OpenGL terminal emulator for Linux and MS Windows with SDL fallback
 - Downloads saved to user-chosen local directory (defaults to `~/Downloads/FelixTerminal`)
 - SFTP subsystem shares the existing SSH session — no second connection or re-authentication
 
-### SFTP Web Browser (F12)
+### SFTP Web Browser (F12, from within the F4 console)
 
-- **F12** — starts a local web server exposing the remote filesystem as a browsable file listing at `http://localhost:53716`
+- **F12** — while inside the **F4** SFTP Console, starts a local web server exposing the remote filesystem as a browsable file listing at `http://localhost:53716`. F12 does nothing outside of the F4 console.
+- Port `53716` spells **FELIX**: F→5, E→3, L→7 (upside-down L), I→1, X→6
 - Binds to `127.0.0.1` only — it's reachable from the local machine, not other devices on the network, so there's nothing to expose or firewall
 - If port `53716` is already in use, it automatically tries the next port up (to `53815`) — check the terminal log output for the actual port if it had to fall back
-- Browse directories, sort by name/type/size/modified, and upload/download files straight from a browser tab — handy for quick access without opening the F2/F3 panels, or for dragging files in from outside the terminal window
+- Browse directories, sort by name/type/size/modified, and upload/download files straight from a browser tab — handy for quick access without opening the F2/F3 panels
 - Each browser request runs on its own thread against its own SFTP subsystem, so a large transfer through the web browser won't block the terminal or the F4 console
 - "Open in new window" checkbox in the browser UI controls whether clicking a file opens a new tab or navigates the current one — persisted as a cookie
-- Stop the web server the same way it was started, or it shuts down automatically when the SSH session ends
+- Shuts down automatically when the SSH session ends or the F4 console is closed
 
 ## GL Render Modes
 
@@ -170,7 +171,7 @@ SSH session (opens connection dialog if host/user not specified):
 | `Shift+PageUp / Shift+PageDown` | Scroll scrollback buffer |
 | `F2` | Open SFTP upload browser *(SSH sessions only)* |
 | `F3` | Open SFTP download browser *(SSH sessions only)* |
-| `F12` | Start SFTP web browser at `localhost:53716` *(SSH sessions only)* |
+| `F12` | Start SFTP web browser at `localhost:53716` *(inside F4 SFTP Console only)* |
 | `F11` | Toggle full screen |
 
 
