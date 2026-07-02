@@ -9,6 +9,10 @@
 
 #include <libssh2.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+#include <openssl/ec.h>
+#include <openssl/objects.h>
 
 #include <SDL2/SDL.h>
 #include <string.h>
@@ -158,29 +162,121 @@ static bool auth_agent(const std::string &user) {
     return ok;
 }
 
+// Decrypts priv_path with passphrase via OpenSSL and writes an OpenSSH-format
+// .pub next to it. Only succeeds if the passphrase is actually correct.
+static bool generate_pubkey_file(const std::string &priv_path, const std::string &passphrase,
+                                  std::string &out_pub_path) {
+    FILE *fp = fopen(priv_path.c_str(), "r");
+    if (!fp) return false;
+    EVP_PKEY *pkey = PEM_read_PrivateKey(fp, nullptr, nullptr,
+                                          (void *)(passphrase.empty() ? nullptr : passphrase.c_str()));
+    fclose(fp);
+    if (!pkey) return false;
+
+    std::string blob;
+    auto put_u32 = [&](uint32_t v) {
+        char b[4] = { (char)(v >> 24), (char)(v >> 16), (char)(v >> 8), (char)v };
+        blob.append(b, 4);
+    };
+    auto put_str = [&](const std::string &s) { put_u32((uint32_t)s.size()); blob += s; };
+    auto put_mpint = [&](const BIGNUM *bn) {
+        int len = BN_num_bytes(bn);
+        std::vector<unsigned char> buf(len);
+        BN_bn2bin(bn, buf.data());
+        bool pad = len > 0 && (buf[0] & 0x80);
+        put_u32((uint32_t)(len + (pad ? 1 : 0)));
+        if (pad) blob += '\0';
+        blob.append((char *)buf.data(), len);
+    };
+
+    std::string type_name;
+    int keytype = EVP_PKEY_id(pkey);
+    if (keytype == EVP_PKEY_RSA) {
+        type_name = "ssh-rsa";
+        const RSA *rsa = EVP_PKEY_get0_RSA(pkey);
+        const BIGNUM *n = nullptr, *e = nullptr;
+        RSA_get0_key(rsa, &n, &e, nullptr);
+        put_str(type_name);
+        put_mpint(e);
+        put_mpint(n);
+    } else if (keytype == EVP_PKEY_ED25519) {
+        type_name = "ssh-ed25519";
+        unsigned char raw[32];
+        size_t raw_len = sizeof(raw);
+        if (EVP_PKEY_get_raw_public_key(pkey, raw, &raw_len) != 1) {
+            EVP_PKEY_free(pkey);
+            return false;
+        }
+        put_str(type_name);
+        put_str(std::string((char *)raw, raw_len));
+    } else if (keytype == EVP_PKEY_EC) {
+        const EC_KEY *ec = EVP_PKEY_get0_EC_KEY(pkey);
+        const EC_GROUP *grp = EC_KEY_get0_group(ec);
+        int nid = EC_GROUP_get_curve_name(grp);
+        const char *curve = nid == NID_X9_62_prime256v1 ? "nistp256"
+                           : nid == NID_secp384r1        ? "nistp384"
+                           : nid == NID_secp521r1         ? "nistp521" : nullptr;
+        if (!curve) { EVP_PKEY_free(pkey); return false; }
+        type_name = std::string("ecdsa-sha2-") + curve;
+        const EC_POINT *pt = EC_KEY_get0_public_key(ec);
+        unsigned char pub[256];
+        size_t pub_len = EC_POINT_point2oct(grp, pt, POINT_CONVERSION_UNCOMPRESSED,
+                                             pub, sizeof(pub), nullptr);
+        put_str(type_name);
+        put_str(curve);
+        put_str(std::string((char *)pub, pub_len));
+    } else {
+        EVP_PKEY_free(pkey);
+        return false;
+    }
+    EVP_PKEY_free(pkey);
+
+    std::vector<unsigned char> b64(4 * ((blob.size() + 2) / 3) + 1);
+    int outlen = EVP_EncodeBlock(b64.data(), (const unsigned char *)blob.data(), (int)blob.size());
+
+    std::string pub_path = priv_path + ".pub";
+    FILE *out = fopen(pub_path.c_str(), "w");
+    if (!out) return false;
+    fprintf(out, "%s %.*s\n", type_name.c_str(), outlen, (char *)b64.data());
+    fclose(out);
+    chmod(pub_path.c_str(), 0644);
+
+    out_pub_path = pub_path;
+    return true;
+}
+
 // Attempt public-key file authentication.
 static bool auth_key(const std::string &user,
                      const std::string &priv_path,
                      const std::string &pub_path_in,
                      const std::string &passphrase) {
     std::string pub_path = pub_path_in.empty() ? priv_path + ".pub" : pub_path_in;
+    bool have_pub = access(pub_path.c_str(), R_OK) == 0;
 
-    // Check files are accessible before handing off to libssh2
     if (access(priv_path.c_str(), R_OK) != 0)
         SDL_Log("[SSH] key auth: cannot read private key '%s': %s\n",
                 priv_path.c_str(), strerror(errno));
-    if (access(pub_path.c_str(), R_OK) != 0)
-        SDL_Log("[SSH] key auth: cannot read public key '%s': %s\n",
-                pub_path.c_str(), strerror(errno));
+
+    if (!have_pub) {
+        std::string generated;
+        if (generate_pubkey_file(priv_path, passphrase, generated)) {
+            SDL_Log("[SSH] key auth: generated public key '%s'\n", generated.c_str());
+            pub_path = generated;
+            have_pub = true;
+        } else {
+            SDL_Log("[SSH] key auth: no public key at '%s', deriving from private key\n",
+                    pub_path.c_str());
+        }
+    }
 
     SDL_Log("[SSH] attempting key auth: user='%s' pub='%s' priv='%s'\n",
-            user.c_str(), pub_path.c_str(), priv_path.c_str());
+            user.c_str(), have_pub ? pub_path.c_str() : "(derived)", priv_path.c_str());
 
     int rc;
     while ((rc = libssh2_userauth_publickey_fromfile(
                 s_session,
                 user.c_str(),
-                pub_path.c_str(),
+                have_pub ? pub_path.c_str() : nullptr,
                 priv_path.c_str(),
                 passphrase.empty() ? nullptr : passphrase.c_str())) ==
            LIBSSH2_ERROR_EAGAIN)
