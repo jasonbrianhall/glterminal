@@ -88,6 +88,11 @@ void ssh_disconnect();
 // Returns true if an SSH session is currently active.
 bool ssh_active();
 
+// Returns true if the current channel has an allocated PTY.
+// False for servers that refuse PTY allocation (e.g. git@github.com) —
+// callers can use this to skip resize calls / hide PTY-only UI.
+bool ssh_has_pty();
+
 // Returns the raw libssh2 session pointer (used by sftp_overlay).
 LIBSSH2_SESSION *ssh_get_session();
 int              ssh_get_socket();

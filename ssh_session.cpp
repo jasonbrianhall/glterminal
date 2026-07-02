@@ -37,6 +37,7 @@ static LIBSSH2_SESSION *s_session  = nullptr;
 static LIBSSH2_CHANNEL *s_channel  = nullptr;
 static int              s_sock     = -1;   // TCP socket fd
 static bool             s_active   = false;
+static bool             s_have_pty = false;
 
 // All libssh2 calls on this session must hold this mutex.
 // The SFTP transfer thread acquires it for the duration of a transfer;
@@ -451,7 +452,8 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
         return false;
     }
 
-    // Request PTY
+    // Request PTY. Servers like git@github.com refuse PTY allocation but
+    // still open the channel and send a message before closing — non-fatal.
     while ((rc = libssh2_channel_request_pty_ex(
                 s_channel,
                 "xterm-256color", (unsigned int)strlen("xterm-256color"),
@@ -459,10 +461,9 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
                 (int)t->cols, (int)t->rows,
                 0, 0)) == LIBSSH2_ERROR_EAGAIN)
         SDL_Delay(5);
-    if (rc != 0) {
-        SDL_Log("%s\n", last_ssh2_error("pty request failed").c_str());
-        return false;
-    }
+    s_have_pty = (rc == 0);
+    if (!s_have_pty)
+        SDL_Log("%s (continuing without PTY)\n", last_ssh2_error("pty request failed").c_str());
 
     // Start shell
     while ((rc = libssh2_channel_shell(s_channel)) == LIBSSH2_ERROR_EAGAIN)
@@ -497,7 +498,27 @@ bool ssh_read(Terminal *t) {
         if (n > 0) {
             term_feed(t, buf, (int)n);
             got_data = true;
-        } else if (n == LIBSSH2_ERROR_EAGAIN) {
+            continue;
+        } else if (n != LIBSSH2_ERROR_EAGAIN && n < 0) {
+            SDL_Log("%s\n", last_ssh2_error("channel read error").c_str());
+            s_active = false;
+            break;
+        }
+
+        // Also drain stderr — servers that reject a shell (e.g. git@github.com)
+        // send their message here before closing the channel.
+        ssize_t ne = libssh2_channel_read_stderr(s_channel, buf, sizeof(buf));
+        if (ne > 0) {
+            term_feed(t, buf, (int)ne);
+            got_data = true;
+            continue;
+        } else if (ne != LIBSSH2_ERROR_EAGAIN && ne < 0) {
+            SDL_Log("%s\n", last_ssh2_error("stderr read error").c_str());
+            s_active = false;
+            break;
+        }
+
+        if (n == LIBSSH2_ERROR_EAGAIN && ne == LIBSSH2_ERROR_EAGAIN) {
             static uint32_t s_last_keepalive = 0;
             uint32_t now = SDL_GetTicks();
             if (now - s_last_keepalive >= 1000) {
@@ -506,9 +527,9 @@ bool ssh_read(Terminal *t) {
                 s_last_keepalive = now;
             }
             break;
-        } else {
-            if (n < 0)
-                SDL_Log("%s\n", last_ssh2_error("channel read error").c_str());
+        }
+
+        if (libssh2_channel_eof(s_channel)) {
             s_active = false;
             break;
         }
@@ -536,7 +557,7 @@ void ssh_write(Terminal *t, const char *buf, int n) {
 }
 
 void ssh_pty_resize(int cols, int rows) {
-    if (!s_active || !s_channel) return;
+    if (!s_active || !s_channel || !s_have_pty) return;
     libssh2_channel_request_pty_size(s_channel, cols, rows);
 }
 
@@ -571,13 +592,15 @@ void ssh_disconnect() {
         s_sock = -1;
     }
     s_active = false;
+    s_have_pty = false;
     libssh2_exit();
 #ifdef _WIN32
     WSACleanup();
 #endif
 }
 
-bool ssh_active() { return s_active; }
+bool ssh_active()  { return s_active; }
+bool ssh_has_pty() { return s_have_pty; }
 
 LIBSSH2_SESSION *ssh_get_session() { return s_session; }
 int              ssh_get_socket()  { return s_sock; }
@@ -596,6 +619,7 @@ void ssh_reset_after_fork() {
     s_channel = nullptr;
     s_sock    = -1;
     s_active  = false;
+    s_have_pty = false;
     
     // Re-initialize libssh2 for the child process
     if (libssh2_init(0) != 0) {
