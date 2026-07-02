@@ -18,6 +18,12 @@
 #include <ctype.h>
 #include <string>
 #include <mutex>
+#include <thread>
+#include <vector>
+
+#ifndef _WIN32
+#  include <sys/un.h>
+#endif
 
 #ifndef _WIN32
 #  include <sys/socket.h>
@@ -403,6 +409,191 @@ static bool verify_host_key(const SshConfig &cfg) {
     return trusted;
 }
 
+#ifndef _WIN32
+// ============================================================================
+// X11 FORWARDING — always requested; forwards the remote DISPLAY back to the
+// local X server, substituting libssh2's fake auth cookie with the real
+// local Xauthority cookie so remote GUI apps authenticate correctly.
+// ============================================================================
+
+static std::string x11_local_display() {
+    const char *d = getenv("DISPLAY");
+    return d ? d : ":0";
+}
+
+// Connects to the local X server for `display` (unix socket or TCP).
+static int x11_local_connect(const std::string &display) {
+    std::string d = display;
+    size_t dot = d.find_last_of('.');
+    if (dot != std::string::npos) d = d.substr(0, dot);
+    size_t colon = d.find_last_of(':');
+    std::string host = (colon == std::string::npos) ? "" : d.substr(0, colon);
+    int num = (colon == std::string::npos) ? 0 : atoi(d.c_str() + colon + 1);
+
+    if (host.empty() || host == "unix") {
+        struct sockaddr_un addr = {};
+        addr.sun_family = AF_UNIX;
+        snprintf(addr.sun_path, sizeof(addr.sun_path), "/tmp/.X11-unix/X%d", num);
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) return -1;
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+            close(fd);
+            return -1;
+        }
+        return fd;
+    }
+    return tcp_connect(host, 6000 + num);
+}
+
+static bool hex_to_bytes(const std::string &hex, std::vector<unsigned char> &out) {
+    out.clear();
+    auto hv = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+        int hi = hv(hex[i]), lo = hv(hex[i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out.push_back((unsigned char)((hi << 4) | lo));
+    }
+    return !out.empty();
+}
+
+// Real local Xauthority cookie for `display`, via `xauth list`.
+static bool x11_local_cookie(const std::string &display, std::vector<unsigned char> &cookie) {
+    std::string cmd = "xauth list " + display + " 2>/dev/null";
+    FILE *fp = popen(cmd.c_str(), "r");
+    if (!fp) return false;
+    char line[512] = {};
+    bool ok = false;
+    if (fgets(line, sizeof(line), fp)) {
+        std::string last;
+        char *tok = strtok(line, " \t\n");
+        while (tok) { last = tok; tok = strtok(nullptr, " \t\n"); }
+        ok = hex_to_bytes(last, cookie);
+    }
+    pclose(fp);
+    return ok;
+}
+
+// Pumps one forwarded X11 channel to/from the local X server, patching the
+// connection-setup packet's auth cookie on the way in.
+static void x11_forward_worker(LIBSSH2_CHANNEL *xchan) {
+    std::string display = x11_local_display();
+    int xfd = x11_local_connect(display);
+    if (xfd < 0) {
+        SDL_Log("[SSH][X11] could not reach local X server (DISPLAY=%s)\n", display.c_str());
+        std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
+        libssh2_channel_free(xchan);
+        return;
+    }
+
+    std::vector<unsigned char> cookie;
+    bool have_cookie = x11_local_cookie(display, cookie);
+
+    // Read the connection-setup request (12-byte header + padded proto name
+    // + padded auth data) so the fake cookie can be swapped for the real one.
+    unsigned char buf[4096];
+    int got = 0, total = 12;
+    bool header_parsed = false;
+    for (;;) {
+        ssize_t n;
+        {
+            std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
+            n = libssh2_channel_read(xchan, (char *)buf + got, sizeof(buf) - got);
+        }
+        if (n > 0) {
+            got += (int)n;
+            if (!header_parsed && got >= 12) {
+                bool msb = (buf[0] == 'B');
+                auto rd16 = [&](int off) { return msb ? (buf[off] << 8 | buf[off + 1])
+                                                       : (buf[off] | buf[off + 1] << 8); };
+                int proto_len = rd16(6), data_len = rd16(8);
+                total = 12 + ((proto_len + 3) & ~3) + ((data_len + 3) & ~3);
+                header_parsed = true;
+            }
+        } else if (n != LIBSSH2_ERROR_EAGAIN) {
+            close(xfd);
+            std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
+            libssh2_channel_free(xchan);
+            return;
+        }
+        if ((header_parsed && got >= total) || got >= (int)sizeof(buf)) break;
+        SDL_Delay(5);
+    }
+
+    if (have_cookie && header_parsed) {
+        bool msb = (buf[0] == 'B');
+        auto rd16 = [&](int off) { return msb ? (buf[off] << 8 | buf[off + 1])
+                                               : (buf[off] | buf[off + 1] << 8); };
+        int proto_len = rd16(6), data_len = rd16(8);
+        int data_off = 12 + ((proto_len + 3) & ~3);
+        if (data_len == (int)cookie.size() && data_off + data_len <= got)
+            memcpy(buf + data_off, cookie.data(), cookie.size());
+    }
+
+    ssize_t wn = write(xfd, buf, got);
+    (void)wn;
+
+    std::thread pump_out([xchan, xfd]() {
+        char b[4096];
+        for (;;) {
+            ssize_t n;
+            {
+                std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
+                n = libssh2_channel_read(xchan, b, sizeof(b));
+            }
+            if (n > 0) {
+                if (write(xfd, b, n) != n) break;
+            } else if (n == LIBSSH2_ERROR_EAGAIN) {
+                bool eof;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
+                    eof = libssh2_channel_eof(xchan) != 0;
+                }
+                if (eof) break;
+                SDL_Delay(5);
+            } else break;
+        }
+        shutdown(xfd, SHUT_RD);
+    });
+
+    char b[4096];
+    for (;;) {
+        ssize_t n = read(xfd, b, sizeof(b));
+        if (n <= 0) break;
+        int sent = 0;
+        bool err = false;
+        while (sent < n) {
+            ssize_t rc;
+            {
+                std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
+                rc = libssh2_channel_write(xchan, b + sent, n - sent);
+            }
+            if (rc > 0) sent += (int)rc;
+            else if (rc == LIBSSH2_ERROR_EAGAIN) SDL_Delay(1);
+            else { err = true; break; }
+        }
+        if (err) break;
+    }
+
+    pump_out.join();
+    close(xfd);
+    std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
+    libssh2_channel_send_eof(xchan);
+    libssh2_channel_close(xchan);
+    libssh2_channel_free(xchan);
+}
+
+static void x11_open_callback(LIBSSH2_SESSION *session, LIBSSH2_CHANNEL *channel,
+                               char *shost, int sport, void **abstract) {
+    (void)session; (void)shost; (void)sport; (void)abstract;
+    std::thread(x11_forward_worker, channel).detach();
+}
+#endif // !_WIN32
+
 // Bridge called by term_write() for all output (handle_key, term_paste, etc.)
 static void ssh_write_bridge(Terminal *t, const char *s, int n) {
     ssh_write(t, s, n);
@@ -475,14 +666,31 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     } while (true);
     SDL_Log("[SSH] server auth methods: %s\n", auth_methods ? auth_methods : "(none/error)");
 
+    // An explicitly-given key (-i) is tried first. Some servers (GitHub among
+    // them) cap the number of auth attempts; if the agent is tried first and
+    // offers unrelated identities, it can burn through that limit before the
+    // key the user actually asked for ever gets a turn.
+    if (!authed && !cfg.key_path.empty()) {
+        authed = auth_key(cfg.user, cfg.key_path, cfg.key_path_pub, cfg.password);
+
+        if (!authed && cfg.prompt_password) {
+            const int MAX_ATTEMPTS = 3;
+            for (int attempt = 1; attempt <= MAX_ATTEMPTS && !authed; attempt++) {
+                char prompt[256];
+                snprintf(prompt, sizeof(prompt), "Enter passphrase for key '%s': ",
+                         cfg.key_path.c_str());
+                std::string passphrase = cfg.prompt_password(prompt);
+                if (passphrase.empty()) break;
+                authed = auth_key(cfg.user, cfg.key_path, cfg.key_path_pub, passphrase);
+            }
+        }
+    }
+
     if (!authed) {
         SDL_Log("[SSH] trying agent auth for user '%s'\n", cfg.user.c_str());
         authed = auth_agent(cfg.user);
         if (!authed) SDL_Log("[SSH] agent auth failed or no agent\n");
     }
-
-    if (!authed && !cfg.key_path.empty())
-        authed = auth_key(cfg.user, cfg.key_path, cfg.key_path_pub, cfg.password);
 
     if (!authed) {
         bool server_allows_password = !auth_methods ||
@@ -537,6 +745,9 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     }
 
     // Open channel
+#ifndef _WIN32
+    libssh2_session_callback_set(s_session, LIBSSH2_CALLBACK_X11, (void *)x11_open_callback);
+#endif
     while (!(s_channel = libssh2_channel_open_session(s_session)))
         if (libssh2_session_last_errno(s_session) != LIBSSH2_ERROR_EAGAIN)
             break;
@@ -557,6 +768,17 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     s_have_pty = (rc == 0);
     if (!s_have_pty)
         SDL_Log("%s (continuing without PTY)\n", last_ssh2_error("pty request failed").c_str());
+
+    // X11 forwarding — always on. Non-fatal if the server refuses it.
+#ifndef _WIN32
+    while ((rc = libssh2_channel_x11_req_ex(s_channel, 0, nullptr, nullptr, 0)) ==
+           LIBSSH2_ERROR_EAGAIN)
+        SDL_Delay(5);
+    if (rc == 0)
+        SDL_Log("[SSH] X11 forwarding enabled\n");
+    else
+        SDL_Log("%s (continuing without X11 forwarding)\n", last_ssh2_error("x11 forwarding request failed").c_str());
+#endif
 
     // Start shell
     while ((rc = libssh2_channel_shell(s_channel)) == LIBSSH2_ERROR_EAGAIN)
