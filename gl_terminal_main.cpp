@@ -689,6 +689,7 @@ int main(int argc, char **argv) {
 
     uint32_t last_ticks = SDL_GetTicks();
     bool running = true;
+    bool local_dead = false;  // set when the local child process has exited
     // Tracks whether the term FBO needs a full clear before the next draw.
     // Only set on layout changes (resize, theme, font) — NOT on PTY scroll.
     bool fbo_needs_clear = true;
@@ -908,16 +909,20 @@ int main(int argc, char **argv) {
         } else
         {
 #ifdef _WIN32
-            if (term_child_exited()) {
-                settings_save();
-                running = false;
+            if (!local_dead && term_child_exited()) {
+                const char *msg = "\r\n[Process exited — press spacebar to exit or close window]\r\n";
+                term_feed(&term, msg, (int)strlen(msg));
+                local_dead = true;
             }
 #else
-            int status;
-            pid_t wp = (term.child > 0) ? waitpid(term.child, &status, WNOHANG) : 0;
-            if (wp > 0) {
-                settings_save();
-                running = false;
+            if (!local_dead) {
+                int status;
+                pid_t wp = (term.child > 0) ? waitpid(term.child, &status, WNOHANG) : 0;
+                if (wp > 0) {
+                    const char *msg = "\r\n[Process exited — press spacebar to exit or close window]\r\n";
+                    term_feed(&term, msg, (int)strlen(msg));
+                    local_dead = true;
+                }
             }
 #endif
         }
@@ -1057,6 +1062,9 @@ int main(int argc, char **argv) {
                         settings_save(); running = false; break;
                     }
                     if (use_serial && serial_phase == SerialPhase::FAILED) {
+                        settings_save(); running = false; break;
+                    }
+                    if (local_dead) {
                         settings_save(); running = false; break;
                     }
                 }
