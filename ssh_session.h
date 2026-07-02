@@ -66,6 +66,7 @@ struct SshConfig {
     // to known_hosts_path; anything else aborts the connection.
     // If nullptr, unknown host keys are rejected outright (fails closed).
     std::function<std::string(const char *prompt)> prompt_host_key;
+    bool x11_forward = true;  // forward $DISPLAY to the remote session
 };
 
 // Connect, authenticate, and open a PTY channel.

@@ -17,6 +17,8 @@
 #include <math.h>
 #include <string>
 #include <vector>
+#include <deque>
+#include <mutex>
 #include <functional>
 #include <algorithm>
 #ifdef _WIN32
@@ -1203,6 +1205,7 @@ static const HelpRow HELP_ROWS[] = {
     { nullptr, "F5",              "Felix Chirp image/audio player (SSH or local)      ", nullptr },
     { nullptr, "F7",              "WOPR terminal",                                       nullptr },
     { nullptr, "F11",             "Toggle fullscreen",                                   nullptr },
+    { nullptr, "F12",             "Debug log (mirrors console output)",                  nullptr },
     { nullptr, "Right-click",     "Open context menu",                                   nullptr },
     { nullptr, "Ctrl+A",          "Select all",                                          nullptr },
     { nullptr, "Ctrl+C",          "Copy selection",                                      nullptr },
@@ -1387,6 +1390,111 @@ bool help_mousemotion(int x, int y) {
         }
     }
     return s_help_hovered_link != prev;
+}
+
+// ============================================================================
+// DEBUG LOG OVERLAY (F12) — mirrors everything SDL_Log() prints to console
+// ============================================================================
+
+bool g_debuglog_visible = false;
+
+#define DEBUGLOG_MAX_LINES 2000
+
+static std::deque<std::string> s_debuglog_lines;
+static std::mutex              s_debuglog_mutex;
+static SDL_LogOutputFunction   s_debuglog_prev_fn = nullptr;
+static void                   *s_debuglog_prev_ud  = nullptr;
+static int                     s_debuglog_scroll   = 0;  // lines back from bottom
+
+static void debuglog_capture(void *userdata, int category, SDL_LogPriority priority,
+                              const char *message) {
+    if (s_debuglog_prev_fn)
+        s_debuglog_prev_fn(s_debuglog_prev_ud, category, priority, message);
+
+    std::lock_guard<std::mutex> lock(s_debuglog_mutex);
+    s_debuglog_lines.emplace_back(message);
+    while (s_debuglog_lines.size() > DEBUGLOG_MAX_LINES)
+        s_debuglog_lines.pop_front();
+}
+
+void debuglog_init() {
+    SDL_LogGetOutputFunction(&s_debuglog_prev_fn, &s_debuglog_prev_ud);
+    SDL_LogSetOutputFunction(debuglog_capture, nullptr);
+}
+
+#define DEBUGLOG_ROW_H (int)(MENU_FONT_SIZE * 1.4f)
+#define DEBUGLOG_PAD   (MENU_FONT_SIZE)
+
+void debuglog_render(int win_w, int win_h) {
+    if (!g_debuglog_visible) return;
+    ensure_menu_face();
+
+    int total_w = win_w - DEBUGLOG_PAD * 4;
+    int total_h = win_h - DEBUGLOG_PAD * 4;
+    int ox = DEBUGLOG_PAD * 2;
+    int oy = DEBUGLOG_PAD * 2;
+
+    draw_rect(0, 0, (float)win_w, (float)win_h, 0.f, 0.f, 0.f, 0.55f);
+    draw_rect((float)(ox+3), (float)(oy+3), (float)total_w, (float)total_h, 0,0,0, 0.4f);
+    draw_rect((float)ox, (float)oy, (float)total_w, (float)total_h, 0.08f, 0.08f, 0.10f, 0.97f);
+    draw_rect((float)ox,             (float)oy,             (float)total_w, 1,              0.35f,0.35f,0.55f, 1.f);
+    draw_rect((float)ox,             (float)(oy+total_h-1), (float)total_w, 1,              0.35f,0.35f,0.55f, 1.f);
+    draw_rect((float)ox,             (float)oy,             1,              (float)total_h, 0.35f,0.35f,0.55f, 1.f);
+    draw_rect((float)(ox+total_w-1), (float)oy,             1,              (float)total_h, 0.35f,0.35f,0.55f, 1.f);
+
+    int hdr_h = (int)(MENU_FONT_SIZE * 2.0f);
+    draw_rect((float)ox+1, (float)oy, (float)total_w-2, (float)hdr_h, 0.18f, 0.25f, 0.45f, 1.f);
+    const char *title = "Felix Terminal — Debug Log";
+    draw_text_menu(title, (float)(ox + DEBUGLOG_PAD), (float)oy + hdr_h * 0.72f,
+                   1.f, 1.f, 1.f, 1.f, ATTR_BOLD);
+    const char *hint = "Esc or F12 to close  \xe2\x80\xa2  PgUp/PgDn or wheel to scroll";
+    float hint_x = (float)(ox + total_w) - (float)(strlen(hint) * MENU_FONT_SIZE * 0.56f) - DEBUGLOG_PAD;
+    draw_text_menu(hint, hint_x, (float)oy + hdr_h * 0.72f, 0.50f, 0.50f, 0.62f, 1.f);
+
+    int content_top = oy + hdr_h;
+    int content_h   = total_h - hdr_h - DEBUGLOG_PAD;
+    int max_rows    = content_h / DEBUGLOG_ROW_H;
+    if (max_rows < 1) max_rows = 1;
+
+    std::lock_guard<std::mutex> lock(s_debuglog_mutex);
+    int count = (int)s_debuglog_lines.size();
+    int max_scroll = count > max_rows ? count - max_rows : 0;
+    if (s_debuglog_scroll > max_scroll) s_debuglog_scroll = max_scroll;
+    if (s_debuglog_scroll < 0) s_debuglog_scroll = 0;
+
+    int end   = count - s_debuglog_scroll;
+    int start = end - max_rows;
+    if (start < 0) start = 0;
+
+    float ty = (float)content_top;
+    for (int i = start; i < end; i++) {
+        const std::string &line = s_debuglog_lines[i];
+        float r = 0.80f, g = 0.82f, b = 0.85f;
+        if (line.find("ERROR") != std::string::npos)
+            { r = 1.0f; g = 0.45f; b = 0.45f; }
+        else if (line.find("WARNING") != std::string::npos || line.find("WARN") != std::string::npos)
+            { r = 1.0f; g = 0.85f; b = 0.40f; }
+        draw_text_menu(line.c_str(), (float)(ox + DEBUGLOG_PAD), ty + DEBUGLOG_ROW_H * 0.72f,
+                       r, g, b, 1.f);
+        ty += DEBUGLOG_ROW_H;
+    }
+
+    gl_flush_verts();
+}
+
+bool debuglog_keydown(SDL_Keycode sym) {
+    if (!g_debuglog_visible) return false;
+    if (sym == SDLK_ESCAPE || sym == SDLK_F12) { g_debuglog_visible = false; return true; }
+    if (sym == SDLK_PAGEUP)   { s_debuglog_scroll += 10; return true; }
+    if (sym == SDLK_PAGEDOWN) { s_debuglog_scroll = SDL_max(0, s_debuglog_scroll - 10); return true; }
+    if (sym == SDLK_UP)       { s_debuglog_scroll += 1; return true; }
+    if (sym == SDLK_DOWN)     { s_debuglog_scroll = SDL_max(0, s_debuglog_scroll - 1); return true; }
+    return true;  // swallow all keys while open
+}
+
+void debuglog_scroll(int dy) {
+    if (!g_debuglog_visible) return;
+    s_debuglog_scroll = SDL_max(0, s_debuglog_scroll + dy * 3);
 }
 
 // ============================================================================

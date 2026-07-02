@@ -147,5 +147,19 @@ extern bool g_custom_shell_dialog_open;
 void custom_shell_dialog_render(int win_w, int win_h);
 bool custom_shell_dialog_keydown(SDL_Keycode sym, const char *text);
 
+// ============================================================================
+// DEBUG LOG OVERLAY (F12)
+// ============================================================================
+
+extern bool g_debuglog_visible;
+
+// Installs the SDL log hook that mirrors console output into the overlay.
+// Call once, early, so startup log lines are captured too.
+void debuglog_init();
+
+void debuglog_render(int win_w, int win_h);
+bool debuglog_keydown(SDL_Keycode sym);
+void debuglog_scroll(int dy);
+
 #include "fight_mode.h"
 #include "font_manager.h"

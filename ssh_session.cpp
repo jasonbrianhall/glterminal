@@ -842,7 +842,8 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
 
     // Open channel
 #ifndef _WIN32
-    libssh2_session_callback_set(s_session, LIBSSH2_CALLBACK_X11, (void *)x11_open_callback);
+    if (cfg.x11_forward)
+        libssh2_session_callback_set(s_session, LIBSSH2_CALLBACK_X11, (void *)x11_open_callback);
 #endif
     while (!(s_channel = libssh2_channel_open_session(s_session)))
         if (libssh2_session_last_errno(s_session) != LIBSSH2_ERROR_EAGAIN)
@@ -865,15 +866,17 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     if (!s_have_pty)
         SDL_Log("%s (continuing without PTY)\n", last_ssh2_error("pty request failed").c_str());
 
-    // X11 forwarding — always on. Non-fatal if the server refuses it.
+    // X11 forwarding. Non-fatal if the server refuses it.
 #ifndef _WIN32
-    while ((rc = libssh2_channel_x11_req_ex(s_channel, 0, nullptr, nullptr, 0)) ==
-           LIBSSH2_ERROR_EAGAIN)
-        SDL_Delay(5);
-    if (rc == 0)
-        SDL_Log("[SSH] X11 forwarding enabled\n");
-    else
-        SDL_Log("%s (continuing without X11 forwarding)\n", last_ssh2_error("x11 forwarding request failed").c_str());
+    if (cfg.x11_forward) {
+        while ((rc = libssh2_channel_x11_req_ex(s_channel, 0, nullptr, nullptr, 0)) ==
+               LIBSSH2_ERROR_EAGAIN)
+            SDL_Delay(5);
+        if (rc == 0)
+            SDL_Log("[SSH] X11 forwarding enabled\n");
+        else
+            SDL_Log("%s (continuing without X11 forwarding)\n", last_ssh2_error("x11 forwarding request failed").c_str());
+    }
 #endif
 
     // Start shell

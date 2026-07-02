@@ -204,6 +204,10 @@ int main(int argc, char **argv) {
             ssh_cfg.known_hosts_path = argv[++i];
             continue;
         }
+        if (strcmp(arg, "--no-x11") == 0 || strcmp(arg, "-no-x11") == 0) {
+            ssh_cfg.x11_forward = false;
+            continue;
+        }
         if ((strcmp(arg, "-L") == 0 || strcmp(arg, "--forward-local") == 0) && i + 1 < argc) {
             int lp, rp; std::string rh;
             if (pf_parse_spec(argv[++i], &lp, &rh, &rp))
@@ -256,6 +260,7 @@ int main(int argc, char **argv) {
             SDL_Log("  --ssh-key-pub <path>        Public key file (derived from key path if omitted)\n");
             SDL_Log("  --ssh-password <pass>       Password auth (prefer agent or key)\n");
             SDL_Log("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
+            SDL_Log("  --no-x11                    Disable X11 forwarding\n");
             SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
             SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
             SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
@@ -291,6 +296,7 @@ int main(int argc, char **argv) {
 
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
     SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
+    debuglog_init();
 
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -1347,6 +1353,24 @@ int main(int argc, char **argv) {
                     needs_render = true;
                     break;
                 }
+                if (ev.key.keysym.sym == SDLK_F12) {
+                    // Close all other overlays before toggling the debug log
+                    if (!g_debuglog_visible) {
+                        g_help_visible = false;
+                        g_iv.visible   = false;
+                        if (g_wopr.visible) wopr_close();
+#ifdef USESSH
+                        g_sftp.visible         = false;
+                        g_sftp_console_visible = false;
+                        g_pf_overlay.visible   = false;
+                        g_ssh_key_mgr.visible  = false;
+#endif
+                        g_menu.visible = false;
+                    }
+                    g_debuglog_visible = !g_debuglog_visible;
+                    needs_render = true;
+                    break;
+                }
                 if (ev.key.keysym.sym == SDLK_F5) {
                     // Close all other overlays before opening image viewer
                     g_help_visible = false;
@@ -1404,6 +1428,11 @@ int main(int argc, char **argv) {
                 }
                 if (g_help_visible) {
                     help_keydown(ev.key.keysym.sym);
+                    needs_render = true;
+                    break;
+                }
+                if (g_debuglog_visible) {
+                    debuglog_keydown(ev.key.keysym.sym);
                     needs_render = true;
                     break;
                 }
@@ -1528,6 +1557,11 @@ int main(int argc, char **argv) {
                 // Clicking anywhere dismisses the help overlay (links open their URL)
                 if (g_help_visible) {
                     help_mousedown(ev.button.x, ev.button.y);
+                    needs_render = true;
+                    break;
+                }
+                if (g_debuglog_visible) {
+                    g_debuglog_visible = false;
                     needs_render = true;
                     break;
                 }
@@ -1945,6 +1979,11 @@ int main(int argc, char **argv) {
                         needs_render = true;
                     break;
                 }
+                if (g_debuglog_visible) {
+                    debuglog_scroll(ev.wheel.y);
+                    needs_render = true;
+                    break;
+                }
                 SDL_Keymod mod = SDL_GetModState();
                 if (mod & KMOD_CTRL) {
                     int delta = (ev.wheel.y > 0) ? 1 : -1;
@@ -2106,6 +2145,7 @@ int main(int argc, char **argv) {
             custom_shell_dialog_render(win_w, win_h);
             // Help overlay renders last (topmost layer)
             help_render(win_w, win_h);
+            debuglog_render(win_w, win_h);
             // WOPR overlay — above everything including help
             if (g_wopr.visible) wopr_render(win_w, win_h);
 
