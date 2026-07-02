@@ -489,6 +489,25 @@ int main(int argc, char **argv) {
                 }
             };
 
+            ssh_cfg.prompt_host_key = [&](const char *prompt_str) -> std::string {
+                SDL_LockMutex(prompt_req.mtx);
+                prompt_req.prompt   = prompt_str;
+                prompt_req.response.clear();
+                prompt_req.answered = false;
+                prompt_req.pending  = true;
+                prompt_req.secret   = false;  // echo "yes"/"no" as typed
+                SDL_UnlockMutex(prompt_req.mtx);
+                while (true) {
+                    if (ssh_abort.load()) return std::string{};
+                    SDL_LockMutex(prompt_req.mtx);
+                    bool done = prompt_req.answered;
+                    std::string resp = prompt_req.response;
+                    SDL_UnlockMutex(prompt_req.mtx);
+                    if (done) return resp;
+                    SDL_Delay(10);
+                }
+            };
+
             ssh_thread = std::thread([&]() {
                 ssh_conn_ok = ssh_connect(ssh_cfg, &term);
                 ssh_thread_done.store(true);
@@ -975,6 +994,24 @@ int main(int argc, char **argv) {
                                         SDL_Delay(10);
                                     }
                                 };
+                                ssh_cfg.prompt_host_key = [&](const char *prompt_str) -> std::string {
+                                    SDL_LockMutex(prompt_req.mtx);
+                                    prompt_req.prompt   = prompt_str;
+                                    prompt_req.response.clear();
+                                    prompt_req.answered = false;
+                                    prompt_req.pending  = true;
+                                    prompt_req.secret   = false;
+                                    SDL_UnlockMutex(prompt_req.mtx);
+                                    while (true) {
+                                        if (ssh_abort.load()) return std::string{};
+                                        SDL_LockMutex(prompt_req.mtx);
+                                        bool done = prompt_req.answered;
+                                        std::string resp = prompt_req.response;
+                                        SDL_UnlockMutex(prompt_req.mtx);
+                                        if (done) return resp;
+                                        SDL_Delay(10);
+                                    }
+                                };
                                 ssh_thread = std::thread([&]() {
                                     ssh_conn_ok = ssh_connect(ssh_cfg, &term);
                                     ssh_thread_done.store(true);
@@ -1004,7 +1041,7 @@ int main(int argc, char **argv) {
                         // In SETUP, ignore Escape (keep prompting)
                     } else if (sym == SDLK_BACKSPACE && !ssh_field_input.empty()) {
                         ssh_field_input.pop_back();
-                        if (ssh_phase != SshPhase::PROMPTING)
+                        if (ssh_phase != SshPhase::PROMPTING || !prompt_req.secret)
                             term_feed(&term, "\b \b", 3);
                     }
                     break;
@@ -1438,8 +1475,9 @@ int main(int argc, char **argv) {
                     break;
                 }
                 if (use_ssh && ssh_phase == SshPhase::PROMPTING) {
-                    // No echo — don't reveal password length
                     ssh_field_input += ev.text.text;
+                    if (!prompt_req.secret)  // don't echo passwords, but do echo yes/no etc.
+                        term_feed(&term, ev.text.text, (int)strlen(ev.text.text));
                     break;
                 }
                 if (!ssh_ready) break;

@@ -8,17 +8,20 @@
 #include "term_pty.h"   // term_feed, g_term_write_override
 
 #include <libssh2.h>
+#include <openssl/evp.h>
 
 #include <SDL2/SDL.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <ctype.h>
 #include <string>
 #include <mutex>
 
 #ifndef _WIN32
 #  include <sys/socket.h>
+#  include <sys/stat.h>
 #  include <netdb.h>
 #  include <arpa/inet.h>
 #  include <unistd.h>
@@ -227,12 +230,62 @@ static int hostkey_type_to_knownhost_flag(int key_type) {
     }
 }
 
+// Numeric IP of the connected peer (for the "'host (IP)'" prompt line).
+// Returns "" on failure — caller falls back to just the hostname.
+static std::string get_peer_ip() {
+    struct sockaddr_storage ss;
+    socklen_t len = sizeof(ss);
+    if (getpeername(s_sock, (struct sockaddr *)&ss, &len) != 0)
+        return "";
+    char ipstr[INET6_ADDRSTRLEN] = {};
+    if (getnameinfo((struct sockaddr *)&ss, len, ipstr, sizeof(ipstr),
+                     nullptr, 0, NI_NUMERICHOST) != 0)
+        return "";
+    return ipstr;
+}
+
+// Human-readable key type name for the trust prompt ("RSA", "ED25519", ...).
+static const char *hostkey_type_name(int key_type) {
+    switch (key_type) {
+    case LIBSSH2_HOSTKEY_TYPE_RSA: return "RSA";
+#ifdef LIBSSH2_HOSTKEY_TYPE_ECDSA_256
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_256: return "ECDSA";
+#endif
+#ifdef LIBSSH2_HOSTKEY_TYPE_ECDSA_384
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_384: return "ECDSA";
+#endif
+#ifdef LIBSSH2_HOSTKEY_TYPE_ECDSA_521
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_521: return "ECDSA";
+#endif
+#ifdef LIBSSH2_HOSTKEY_TYPE_ED25519
+    case LIBSSH2_HOSTKEY_TYPE_ED25519: return "ED25519";
+#endif
+    default: return "DSA";
+    }
+}
+
+// OpenSSH-style "SHA256:base64" fingerprint of the server's host key.
+static std::string hostkey_fingerprint() {
+    const char *hash = libssh2_hostkey_hash(s_session, LIBSSH2_HOSTKEY_HASH_SHA256);
+    if (!hash) return "";
+    unsigned char b64[64] = {};
+    int outlen = EVP_EncodeBlock(b64, (const unsigned char *)hash, 32);
+    std::string s((char *)b64, outlen);
+    while (!s.empty() && s.back() == '=')  // OpenSSH fingerprints omit padding
+        s.pop_back();
+    return "SHA256:" + s;
+}
+
 // Verify the server's host key against the known_hosts file.
 // Returns true if the key is trusted, false if it should be rejected.
-static bool verify_host_key(const std::string &host, int port,
-                             const std::string &known_hosts_path) {
+// If the key is unknown and cfg.prompt_host_key is set, interactively asks
+// the user whether to trust it (mirroring OpenSSH's first-connection prompt)
+// and, if accepted, persists it to known_hosts.
+static bool verify_host_key(const SshConfig &cfg) {
+    const std::string &host = cfg.host;
+    int port = cfg.port;
     // Build default path if not provided
-    std::string kh_path = known_hosts_path;
+    std::string kh_path = cfg.known_hosts_path;
     if (kh_path.empty()) {
 #ifndef _WIN32
         const char *home = getenv("HOME");
@@ -257,11 +310,8 @@ static bool verify_host_key(const std::string &host, int port,
     }
 
     int readrc = libssh2_knownhost_readfile(kh, kh_path.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
-    if (readrc < 0) {
-        SDL_Log("[SSH] error reading known_hosts file '%s'\n", kh_path.c_str());
-        libssh2_knownhost_free(kh);
-        return false;
-    }
+    if (readrc < 0)
+        SDL_Log("[SSH] no existing known_hosts at '%s' (or unreadable) — treating as empty\n", kh_path.c_str());
 
     // Get the host key from the server
     size_t hkey_len = 0;
@@ -288,10 +338,53 @@ static bool verify_host_key(const std::string &host, int port,
         SDL_Log("[SSH] host key verified: %s:%d\n", host.c_str(), port);
         trusted = true;
         break;
-    case LIBSSH2_KNOWNHOST_CHECK_NOTFOUND:
+    case LIBSSH2_KNOWNHOST_CHECK_NOTFOUND: {
         SDL_Log("[SSH] WARNING: host key not in known_hosts: %s:%d\n", host.c_str(), port);
-        trusted = false;
+
+        if (!cfg.prompt_host_key) {
+            trusted = false;
+            break;
+        }
+
+        std::string ip         = get_peer_ip();
+        std::string host_field = ip.empty() ? host : (host + " (" + ip + ")");
+        std::string fp         = hostkey_fingerprint();
+        const char *keyname    = hostkey_type_name(hkey_type);
+
+        char prompt[1024];
+        snprintf(prompt, sizeof(prompt),
+                 "The authenticity of host '%s' can't be established.\r\n"
+                 "%s key fingerprint is: %s\r\n"
+                 "This key is not known by any other names.\r\n"
+                 "Are you sure you want to continue connecting (yes/no/[fingerprint])? ",
+                 host_field.c_str(), keyname, fp.c_str());
+
+        std::string answer = cfg.prompt_host_key(prompt);
+        for (char &c : answer) c = (char)tolower((unsigned char)c);
+
+        if (answer == "yes") {
+            // Best-effort: ~/.ssh may not exist yet on a fresh machine.
+#ifndef _WIN32
+            std::string dir = kh_path.substr(0, kh_path.find_last_of('/'));
+            if (!dir.empty()) mkdir(dir.c_str(), 0700);
+#endif
+            struct libssh2_knownhost *added = nullptr;
+            int addrc = libssh2_knownhost_addc(kh, host.c_str(), nullptr, hkey, hkey_len,
+                                                nullptr, 0, check_flags, &added);
+            if (addrc == 0 &&
+                libssh2_knownhost_writefile(kh, kh_path.c_str(),
+                                             LIBSSH2_KNOWNHOST_FILE_OPENSSH) == 0) {
+                SDL_Log("[SSH] host key permanently added for '%s' to known_hosts\n", host.c_str());
+            } else {
+                SDL_Log("[SSH] WARNING: could not persist host key to '%s'\n", kh_path.c_str());
+            }
+            trusted = true;
+        } else {
+            SDL_Log("[SSH] host key not trusted by user, aborting connection\n");
+            trusted = false;
+        }
         break;
+    }
     case LIBSSH2_KNOWNHOST_CHECK_MISMATCH:
         SDL_Log("[SSH] ERROR: host key mismatch (possible MITM): %s:%d\n", host.c_str(), port);
         trusted = false;
@@ -362,7 +455,7 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     }
 
     // Host key verification
-    if (!verify_host_key(cfg.host, cfg.port, cfg.known_hosts_path)) {
+    if (!verify_host_key(cfg)) {
         SDL_Log("[SSH] host key verification failed — aborting\n");
         return false;
     }

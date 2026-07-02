@@ -59,6 +59,13 @@ struct SshConfig {
     // return the password entered by the user, or "" to abort.
     // If nullptr, password auth is skipped when no password is supplied.
     std::function<std::string(const char *prompt)> prompt_password;
+    // Called when the server's host key is not found in known_hosts (i.e.
+    // first time connecting to this host). Receives the full confirmation
+    // prompt text (mirrors OpenSSH's "authenticity of host" prompt) and must
+    // return the user's typed response. "yes" trusts the key and persists it
+    // to known_hosts_path; anything else aborts the connection.
+    // If nullptr, unknown host keys are rejected outright (fails closed).
+    std::function<std::string(const char *prompt)> prompt_host_key;
 };
 
 // Connect, authenticate, and open a PTY channel.
