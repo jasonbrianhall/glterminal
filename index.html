@@ -159,16 +159,99 @@
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             overflow: hidden;
         }
+
+        .slideshow-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background-color 0.2s;
+        }
+
+        .slideshow-btn:hover {
+            background: #764ba2;
+        }
+
+        .slideshow-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.92);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .slideshow-overlay.active {
+            display: flex;
+        }
+
+        .slideshow-overlay img {
+            max-width: 90vw;
+            max-height: 85vh;
+            object-fit: contain;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .slideshow-close {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            color: white;
+            font-size: 32px;
+            cursor: pointer;
+            background: none;
+            border: none;
+            line-height: 1;
+        }
+
+        .slideshow-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+            border: none;
+            font-size: 28px;
+            padding: 12px 16px;
+            cursor: pointer;
+            border-radius: 6px;
+        }
+
+        .slideshow-nav:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .slideshow-prev { left: 20px; }
+        .slideshow-next { right: 20px; }
+
+        .slideshow-caption {
+            position: absolute;
+            bottom: 24px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: #eee;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1 id="title">File Browser</h1>
-            <label class="new-window-toggle">
-                <input type="checkbox" id="newWindowToggle">
-                Open in new window
-            </label>
+            <div style="display: flex; align-items: center; gap: 20px;">
+                <button id="slideshowBtn" class="slideshow-btn" style="display: none;">▶ Slideshow</button>
+                <label class="new-window-toggle">
+                    <input type="checkbox" id="newWindowToggle">
+                    Open in new window
+                </label>
+            </div>
         </div>
         <div class="table-wrapper">
             <table id="fileTable">
@@ -183,6 +266,14 @@
                 <tbody></tbody>
             </table>
         </div>
+    </div>
+
+    <div class="slideshow-overlay" id="slideshowOverlay">
+        <button class="slideshow-close" id="slideshowClose">&times;</button>
+        <button class="slideshow-nav slideshow-prev" id="slideshowPrev">&#10094;</button>
+        <img id="slideshowImg" src="" alt="">
+        <button class="slideshow-nav slideshow-next" id="slideshowNext">&#10095;</button>
+        <div class="slideshow-caption" id="slideshowCaption"></div>
     </div>
 
     <script>
@@ -214,6 +305,78 @@
 
         let currentSorted = [];
 
+        // ---- image detection + slideshow ----
+        const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico', 'tiff', 'tif'];
+
+        function isImageFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return IMAGE_EXTENSIONS.includes(ext);
+        }
+
+        function getImageEntries() {
+            const currentPath = window.location.pathname;
+            return fileData
+                .filter(isImageFile)
+                .map(entry => {
+                    const entryPath = currentPath.endsWith('/')
+                        ? `${currentPath}${entry.name}`
+                        : `${currentPath}/${entry.name}`;
+                    return { name: entry.name, src: encodeParens(entryPath) };
+                });
+        }
+
+        const slideshowBtn = document.getElementById('slideshowBtn');
+        const slideshowOverlay = document.getElementById('slideshowOverlay');
+        const slideshowImg = document.getElementById('slideshowImg');
+        const slideshowCaption = document.getElementById('slideshowCaption');
+        let slideshowImages = [];
+        let slideshowIndex = 0;
+
+        function updateSlideshowButtonVisibility() {
+            const images = getImageEntries();
+            slideshowBtn.style.display = images.length > 0 ? 'inline-block' : 'none';
+        }
+
+        function showSlide(index) {
+            if (slideshowImages.length === 0) return;
+            slideshowIndex = (index + slideshowImages.length) % slideshowImages.length;
+            const img = slideshowImages[slideshowIndex];
+            slideshowImg.src = img.src;
+            slideshowImg.alt = img.name;
+            slideshowCaption.textContent = `${img.name} (${slideshowIndex + 1}/${slideshowImages.length})`;
+        }
+
+        function openSlideshow() {
+            slideshowImages = getImageEntries();
+            if (slideshowImages.length === 0) return;
+            slideshowOverlay.classList.add('active');
+            showSlide(0);
+        }
+
+        function closeSlideshow() {
+            slideshowOverlay.classList.remove('active');
+            slideshowImg.src = '';
+        }
+
+        slideshowBtn.addEventListener('click', openSlideshow);
+        document.getElementById('slideshowClose').addEventListener('click', closeSlideshow);
+        document.getElementById('slideshowPrev').addEventListener('click', () => showSlide(slideshowIndex - 1));
+        document.getElementById('slideshowNext').addEventListener('click', () => showSlide(slideshowIndex + 1));
+
+        slideshowOverlay.addEventListener('click', (e) => {
+            if (e.target === slideshowOverlay) closeSlideshow();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (!slideshowOverlay.classList.contains('active')) return;
+            if (e.key === 'Escape') closeSlideshow();
+            else if (e.key === 'ArrowLeft') showSlide(slideshowIndex - 1);
+            else if (e.key === 'ArrowRight') showSlide(slideshowIndex + 1);
+        });
+
         // Encode parentheses and square brackets in paths: ( -> %28, ) -> %29, [ -> %5B, ] -> %5D
         function encodeParens(path) {
             return path.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\[/g, '%5B').replace(/\]/g, '%5D');
@@ -236,6 +399,7 @@
 
             const data = await response.json();
             fileData = data.entries;
+            updateSlideshowButtonVisibility();
             
             // Sort by name by default
             sortState.col = 'name';
