@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Felix Terminal File Browser</title>
+    <script src="https://cdn.jsdelivr.net/combine/npm/tone@14.7.58,npm/@magenta/music@1.23.1/es6/core.js,npm/html-midi-player@1.5.0"></script>
     <style>
         * {
             margin: 0;
@@ -732,6 +733,7 @@
 
         // ---- audio detection + music player ----
         const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'wma', 'opus'];
+        const MIDI_EXTENSIONS = ['mid', 'midi'];
 
         function isAudioFile(entry) {
             if (entry.type !== 'file') return false;
@@ -739,6 +741,14 @@
             if (dot === -1) return false;
             const ext = entry.name.slice(dot + 1).toLowerCase();
             return AUDIO_EXTENSIONS.includes(ext);
+        }
+
+        function isMidiFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return MIDI_EXTENSIONS.includes(ext);
         }
 
         function isZipFile(entry) {
@@ -784,7 +794,9 @@
                 return track;
             });
 
-            return [...audio, ...zips].map((t, i) => ({ ...t, id: i }));
+            const midis = fileData.filter(isMidiFile).map(e => entryToTrack(e, 'midi'));
+
+            return [...audio, ...zips, ...midis].map((t, i) => ({ ...t, id: i }));
         }
 
         // ---- video detection ----
@@ -1423,6 +1435,55 @@
         const musicShuffleBtn = document.getElementById('musicShuffle');
         const musicRepeatBtn = document.getElementById('musicRepeat');
         const musicArt = document.getElementById('musicArt');
+
+        // ---- MIDI playback (rendered via html-midi-player, driven through our own controls) ----
+        let midiPlayer = null;
+        let midiPollHandle = null;
+
+        function currentTrack() {
+            return musicTracks.find(t => t.id === currentTrackId);
+        }
+
+        function currentIsMidi() {
+            const t = currentTrack();
+            return !!t && t.type === 'midi';
+        }
+
+        function ensureMidiPlayer() {
+            if (midiPlayer) return midiPlayer;
+            midiPlayer = document.createElement('midi-player');
+            midiPlayer.style.display = 'none';
+            midiPlayer.soundFont = '';
+            document.body.appendChild(midiPlayer);
+
+            midiPlayer.addEventListener('start', () => {
+                musicPlayPause.innerHTML = '&#10074;&#10074;';
+                if (!midiPollHandle) midiPollHandle = setInterval(pollMidiProgress, 200);
+            });
+            midiPlayer.addEventListener('stop', (e) => {
+                musicPlayPause.innerHTML = '&#9658;';
+                if (midiPollHandle) { clearInterval(midiPollHandle); midiPollHandle = null; }
+                if (isExporting || !currentIsMidi()) return;
+                if (e.detail && e.detail.finished) {
+                    if (repeatOn) {
+                        midiPlayer.currentTime = 0;
+                        midiPlayer.start();
+                    } else {
+                        nextTrack();
+                    }
+                }
+            });
+            return midiPlayer;
+        }
+
+        function pollMidiProgress() {
+            if (isSeeking || !midiPlayer) return;
+            musicTimeCurrent.textContent = formatTime(midiPlayer.currentTime);
+            musicTimeDuration.textContent = formatTime(midiPlayer.duration);
+            if (midiPlayer.duration) {
+                musicSeek.value = (midiPlayer.currentTime / midiPlayer.duration) * 100;
+            }
+        }
         const cdgCanvas = document.getElementById('cdgCanvas');
         const cdgCtx = cdgCanvas.getContext('2d');
         cdgCanvas.style.cursor = 'pointer';
@@ -1890,8 +1951,20 @@
                 URL.revokeObjectURL(currentObjectUrl);
                 currentObjectUrl = null;
             }
+            musicAudio.pause();
+            if (midiPlayer && midiPlayer.playing) midiPlayer.stop();
 
-            if (track.type === 'zip') {
+            if (track.type === 'midi') {
+                ensureMidiPlayer();
+                musicTitle.textContent = track.name;
+                musicTimeCurrent.textContent = '0:00';
+                musicTimeDuration.textContent = '0:00';
+                musicSeek.value = 0;
+                midiPlayer.src = track.src;
+                midiPlayer.addEventListener('load', () => {
+                    if (token === loadToken) midiPlayer.start();
+                }, { once: true });
+            } else if (track.type === 'zip') {
                 musicTitle.textContent = `Loading ${track.name}...`;
                 try {
                     const { audioUrl, cdgBytes, displayName } = await loadKaraokeZip(track);
@@ -1951,8 +2024,10 @@
             const list = getDisplayedTracks();
             if (list.length === 0) return;
             // If more than 3s into the track, restart it instead of going back
-            if (musicAudio.currentTime > 3) {
-                musicAudio.currentTime = 0;
+            const elapsed = currentIsMidi() ? (midiPlayer && midiPlayer.currentTime) : musicAudio.currentTime;
+            if (elapsed > 3) {
+                if (currentIsMidi()) { midiPlayer.currentTime = 0; }
+                else { musicAudio.currentTime = 0; }
                 return;
             }
             const curIdx = list.findIndex(t => t.id === currentTrackId);
@@ -1985,6 +2060,7 @@
             musicOverlay.classList.remove('active');
             musicAudio.pause();
             musicAudio.src = '';
+            if (midiPlayer && midiPlayer.playing) midiPlayer.stop();
             currentTrackId = null;
             clearCdgState();
             hideVizVisual();
@@ -2002,7 +2078,10 @@
         });
 
         musicPlayPause.addEventListener('click', () => {
-            if (musicAudio.paused) {
+            if (currentIsMidi()) {
+                if (midiPlayer && midiPlayer.playing) midiPlayer.stop();
+                else if (midiPlayer) midiPlayer.start();
+            } else if (musicAudio.paused) {
                 musicAudio.play();
             } else {
                 musicAudio.pause();
@@ -2042,11 +2121,16 @@
 
         musicSeek.addEventListener('input', () => {
             isSeeking = true;
-            musicTimeCurrent.textContent = formatTime((musicSeek.value / 100) * musicAudio.duration);
+            const duration = currentIsMidi() ? (midiPlayer && midiPlayer.duration) : musicAudio.duration;
+            musicTimeCurrent.textContent = formatTime((musicSeek.value / 100) * duration);
         });
 
         musicSeek.addEventListener('change', () => {
-            if (musicAudio.duration) {
+            if (currentIsMidi()) {
+                if (midiPlayer && midiPlayer.duration) {
+                    midiPlayer.currentTime = (musicSeek.value / 100) * midiPlayer.duration;
+                }
+            } else if (musicAudio.duration) {
                 musicAudio.currentTime = (musicSeek.value / 100) * musicAudio.duration;
             }
             isSeeking = false;
@@ -2071,10 +2155,18 @@
             if (document.activeElement === musicSearchInput) return;
             if (e.key === 'ArrowRight') {
                 e.preventDefault();
-                musicAudio.currentTime = Math.min(musicAudio.duration || Infinity, musicAudio.currentTime + 10);
+                if (currentIsMidi() && midiPlayer) {
+                    midiPlayer.currentTime = Math.min(midiPlayer.duration || Infinity, midiPlayer.currentTime + 10);
+                } else {
+                    musicAudio.currentTime = Math.min(musicAudio.duration || Infinity, musicAudio.currentTime + 10);
+                }
             } else if (e.key === 'ArrowLeft') {
                 e.preventDefault();
-                musicAudio.currentTime = Math.max(0, musicAudio.currentTime - 10);
+                if (currentIsMidi() && midiPlayer) {
+                    midiPlayer.currentTime = Math.max(0, midiPlayer.currentTime - 10);
+                } else {
+                    musicAudio.currentTime = Math.max(0, musicAudio.currentTime - 10);
+                }
             } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 nextTrack();
