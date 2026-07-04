@@ -9,6 +9,7 @@
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <SDL2/SDL.h>
+#include "miniz.h"
 
 #include <thread>
 #include <atomic>
@@ -307,6 +308,49 @@ static bool sftp_list_directory(LIBSSH2_SFTP *sftp, const char *path,
 // HTTP Response Builders
 // ============================================================================
 
+// gzip-compress a buffer (miniz gives raw deflate; we wrap it in a gzip
+// header/trailer ourselves since Content-Encoding: gzip needs that framing,
+// not bare zlib). Returns false (leaving out untouched) if compression fails.
+static bool gzip_compress(const std::string &input, std::string &out) {
+    size_t deflated_len = 0;
+    void *deflated = tdefl_compress_mem_to_heap(input.data(), input.size(), &deflated_len, 0);
+    if (!deflated) return false;
+
+    out.clear();
+    out.reserve(deflated_len + 18);
+    out.append("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff", 10); // magic, deflate, no flags, mtime=0, OS=unknown
+    out.append((const char *)deflated, deflated_len);
+    mz_free(deflated);
+
+    uint32_t crc = (uint32_t)mz_crc32(MZ_CRC32_INIT, (const unsigned char *)input.data(), input.size());
+    uint32_t isize = (uint32_t)input.size();
+    out.append((const char *)&crc, 4);
+    out.append((const char *)&isize, 4);
+    return true;
+}
+
+// Case-insensitive check for whether the client's request advertises gzip
+// support via an Accept-Encoding header.
+static bool client_accepts_gzip(const char *raw_request) {
+    const char *p = raw_request;
+    while (*p) {
+        if ((p[0] == 'g' || p[0] == 'G') && (p[1] == 'z' || p[1] == 'Z') &&
+            (p[2] == 'i' || p[2] == 'I') && (p[3] == 'p' || p[3] == 'P'))
+            return true;
+        p++;
+    }
+    return false;
+}
+
+// Only worth gzipping text-ish content above a small size floor — binary
+// media is already compressed and small responses aren't worth the CPU.
+static bool should_gzip(const char *content_type, size_t content_length) {
+    if (content_length < 256) return false;
+    return strstr(content_type, "text/") == content_type ||
+           strcmp(content_type, "application/json") == 0 ||
+           strcmp(content_type, "application/javascript") == 0;
+}
+
 static std::string http_response_headers(int status_code, const char *content_type,
                                         size_t content_length, const char *filename = nullptr) {
     char buf[768];
@@ -326,6 +370,20 @@ static std::string http_response_headers(int status_code, const char *content_ty
         "\r\n",
         status_code, status_text, content_type, content_length);
     
+    return buf;
+}
+
+// Same as http_response_headers, for the 200 text/JSON responses we gzip.
+static std::string http_response_headers_gzip(const char *content_type, size_t content_length) {
+    char buf[768];
+    snprintf(buf, sizeof(buf),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Encoding: gzip\r\n"
+        "Content-Length: %zu\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        content_type, content_length);
     return buf;
 }
 
@@ -675,8 +733,16 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         }
         else if (is_directory || decoded_path == "/") {
             std::string html = get_index_html();
-            std::string response = http_response_headers(200, "text/html", html.length());
-            response += html;
+            std::string response;
+            std::string gzipped;
+            if (client_accepts_gzip(buffer) && should_gzip("text/html", html.length()) &&
+                gzip_compress(html, gzipped)) {
+                response = http_response_headers_gzip("text/html", gzipped.length());
+                response += gzipped;
+            } else {
+                response = http_response_headers(200, "text/html", html.length());
+                response += html;
+            }
             socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] Served directory listing HTML: %s", tunnel_id, decoded_path.c_str());
         }
@@ -979,8 +1045,16 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         SDL_Log("[Tunnel %d] Listed directory: encoded='%s' decoded='%s' (%zu entries)", tunnel_id, dir_path, decoded_dir.c_str(), entries.size());
 
         std::string json = build_directory_json(entries);
-        std::string response = http_response_headers(200, "application/json", json.length());
-        response += json;
+        std::string response;
+        std::string gzipped;
+        if (client_accepts_gzip(buffer) && should_gzip("application/json", json.length()) &&
+            gzip_compress(json, gzipped)) {
+            response = http_response_headers_gzip("application/json", gzipped.length());
+            response += gzipped;
+        } else {
+            response = http_response_headers(200, "application/json", json.length());
+            response += json;
+        }
 
         socket_send_safe(client_socket, response.c_str(), response.length());
     }
