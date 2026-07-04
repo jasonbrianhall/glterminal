@@ -20,6 +20,8 @@
 #include <cerrno>
 #include <vector>
 #include <signal.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -260,6 +262,63 @@ static bool sftp_delete_file(LIBSSH2_SFTP *sftp, const char *remote_path) {
 
 static bool sftp_delete_dir(LIBSSH2_SFTP *sftp, const char *remote_path) {
     return libssh2_sftp_rmdir(sftp, remote_path) == 0;
+}
+
+// ============================================================================
+// Local filesystem mode — serves a directory on disk directly, with no SSH/
+// SFTP involved at all. Used when there's no active SSH session (F9).
+// Read-only: browsing + download only, same as the SFTP-backed browser.
+// ============================================================================
+
+static bool           g_local_mode = false;
+static std::string    g_local_root;   // absolute, no trailing slash (except "/")
+
+// Confines url_path (always absolute, e.g. "/sub/dir") to g_local_root and
+// rejects any attempt to escape it via "..". Returns false on rejection.
+static bool local_resolve_path(const std::string &url_path, std::string &out_fs_path) {
+    if (url_path.find("..") != std::string::npos) return false;
+
+    std::string rel = url_path;
+    if (!rel.empty() && rel[0] == '/') rel.erase(0, 1);
+
+    out_fs_path = g_local_root;
+    if (!rel.empty()) {
+        if (out_fs_path.empty() || out_fs_path.back() != '/') out_fs_path += '/';
+        out_fs_path += rel;
+    }
+    if (out_fs_path.empty()) out_fs_path = "/";
+    return true;
+}
+
+static bool local_list_directory(const char *fs_path, std::vector<RemoteFile> &entries) {
+    DIR *dir = opendir(fs_path);
+    if (!dir) {
+        SDL_Log("[WebServer] local opendir failed for path: %s", fs_path);
+        return false;
+    }
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != nullptr) {
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+
+        std::string child = fs_path;
+        if (child.empty() || child.back() != '/') child += '/';
+        child += de->d_name;
+
+        struct stat st;
+        if (stat(child.c_str(), &st) != 0) continue;
+
+        RemoteFile entry;
+        strncpy(entry.name, de->d_name, sizeof(entry.name) - 1);
+        entry.name[sizeof(entry.name) - 1] = '\0';
+        entry.is_dir   = S_ISDIR(st.st_mode);
+        entry.size     = (uint64_t)st.st_size;
+        entry.modified = st.st_mtime;
+        entries.push_back(entry);
+    }
+
+    closedir(dir);
+    return true;
 }
 
 static bool sftp_list_directory(LIBSSH2_SFTP *sftp, const char *path, 
@@ -640,6 +699,157 @@ static std::string url_decode(const std::string &str) {
 // HTTP Request Handler
 // ============================================================================
 
+// Serves GET (dir listing / file download w/ range) and POST /api/listfiles
+// straight off the local filesystem — read-only, no SSH/SFTP involved.
+static void handle_http_request_local(int client_socket, int tunnel_id,
+                                       const char *method, const char *path,
+                                       const char *buffer, int bytes_read) {
+    (void)bytes_read;
+
+    if (strcmp(method, "GET") == 0) {
+        std::string decoded_path = url_decode(path);
+        std::string fs_path;
+        if (!local_resolve_path(decoded_path, fs_path)) {
+            std::string response = http_response_headers(400, "text/plain", 7);
+            response += "Bad path";
+            socket_send_safe(client_socket, response.c_str(), response.length());
+            SDL_Log("[Tunnel %d] Rejected path traversal attempt: %s", tunnel_id, decoded_path.c_str());
+            return;
+        }
+
+        struct stat st;
+        bool exists = (stat(fs_path.c_str(), &st) == 0);
+        bool is_directory = exists && S_ISDIR(st.st_mode);
+
+        if (!exists) {
+            std::string response = http_response_headers(404, "text/plain", 9);
+            response += "Not found";
+            socket_send_safe(client_socket, response.c_str(), response.length());
+            SDL_Log("[Tunnel %d] File not found: %s", tunnel_id, fs_path.c_str());
+        }
+        else if (is_directory) {
+            std::string html = get_index_html();
+            std::string response;
+            std::string gzipped;
+            if (client_accepts_gzip(buffer) && should_gzip("text/html", html.length()) &&
+                gzip_compress(html, gzipped)) {
+                response = http_response_headers_gzip("text/html", gzipped.length());
+                response += gzipped;
+            } else {
+                response = http_response_headers(200, "text/html", html.length());
+                response += html;
+            }
+            socket_send_safe(client_socket, response.c_str(), response.length());
+            SDL_Log("[Tunnel %d] Served directory listing HTML: %s", tunnel_id, fs_path.c_str());
+        }
+        else {
+            FILE *f = fopen(fs_path.c_str(), "rb");
+            if (!f) {
+                std::string response = http_response_headers(404, "text/plain", 9);
+                response += "Not found";
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to open: %s", tunnel_id, fs_path.c_str());
+                return;
+            }
+
+            uint64_t file_size = (uint64_t)st.st_size;
+            const char *content_type = get_mime_type(fs_path.c_str());
+
+            uint64_t range_start = 0, range_end = (file_size ? file_size - 1 : 0);
+            bool is_partial = parse_range_header(buffer, file_size, range_start, range_end);
+            if (is_partial) {
+#ifdef _WIN32
+                _fseeki64(f, (int64_t)range_start, SEEK_SET);
+#else
+                fseeko(f, (off_t)range_start, SEEK_SET);
+#endif
+            }
+
+            std::string response = http_file_response_headers(is_partial, range_start, range_end,
+                                                                file_size, content_type);
+            int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
+
+            if (header_sent > 0) {
+                const int BUFFER_SIZE = 262144;  // 256KB
+                char *fbuffer = new char[BUFFER_SIZE];
+                uint64_t total_sent = 0;
+                uint64_t bytes_wanted = is_partial ? (range_end - range_start + 1) : file_size;
+
+                while (total_sent < bytes_wanted) {
+                    if (!socket_is_valid(client_socket)) {
+                        SDL_Log("[Tunnel %d] Socket invalid during download: %s (sent %llu/%llu bytes)",
+                                tunnel_id, fs_path.c_str(), total_sent, bytes_wanted);
+                        break;
+                    }
+
+                    size_t to_read = (bytes_wanted - total_sent > (uint64_t)BUFFER_SIZE)
+                                    ? (size_t)BUFFER_SIZE
+                                    : (size_t)(bytes_wanted - total_sent);
+                    size_t n = fread(fbuffer, 1, to_read, f);
+                    if (n == 0) break;
+
+                    int sent = socket_send_safe(client_socket, fbuffer, (int)n);
+                    if (sent <= 0) break;
+                    total_sent += sent;
+                }
+
+                delete[] fbuffer;
+                SDL_Log("[Tunnel %d] Downloaded %s%s: %s (%llu bytes)", tunnel_id,
+                        is_partial ? "range of " : "", "file", fs_path.c_str(), total_sent);
+            }
+
+            fclose(f);
+        }
+    }
+    else if (strcmp(method, "POST") == 0 && strstr(path, "/api/listfiles") != nullptr) {
+        char *body_start = strstr((char *)buffer, "\r\n\r\n");
+        if (!body_start) body_start = strstr((char *)buffer, "\n\n");
+        if (body_start && *body_start == '\n') body_start += 2;
+        else if (body_start) body_start += 4;
+        else body_start = (char *)buffer;
+
+        char dir_path[1024] = "/";
+        char *dir_ptr = strstr(body_start, "\"dir\":");
+        if (dir_ptr) {
+            dir_ptr += 6;
+            while (*dir_ptr && (*dir_ptr == ' ' || *dir_ptr == '"')) dir_ptr++;
+            int i = 0;
+            while (i < 1023 && *dir_ptr && *dir_ptr != '"' && *dir_ptr != '}') {
+                dir_path[i++] = *dir_ptr++;
+            }
+            dir_path[i] = '\0';
+        }
+
+        std::string decoded_dir = url_decode(dir_path);
+        std::string fs_path;
+        std::vector<RemoteFile> entries;
+        if (local_resolve_path(decoded_dir, fs_path)) {
+            local_list_directory(fs_path.c_str(), entries);
+        }
+
+        SDL_Log("[Tunnel %d] Listed directory: %s (%zu entries)", tunnel_id, fs_path.c_str(), entries.size());
+
+        std::string json = build_directory_json(entries);
+        std::string response;
+        std::string gzipped;
+        if (client_accepts_gzip(buffer) && should_gzip("application/json", json.length()) &&
+            gzip_compress(json, gzipped)) {
+            response = http_response_headers_gzip("application/json", gzipped.length());
+            response += gzipped;
+        } else {
+            response = http_response_headers(200, "application/json", json.length());
+            response += json;
+        }
+        socket_send_safe(client_socket, response.c_str(), response.length());
+    }
+    else {
+        std::string response = http_response_headers(400, "text/plain", 18);
+        response += "Method not allowed";
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        SDL_Log("[Tunnel %d] Method not allowed (local mode, read-only): %s", tunnel_id, method);
+    }
+}
+
 static void handle_http_request(int client_socket, int tunnel_id) {
     bool transfer_was_cancelled = false;
     
@@ -671,6 +881,13 @@ static void handle_http_request(int client_socket, int tunnel_id) {
             SDL_Log("[Tunnel %d] Redirecting '%s' -> '%s'", tunnel_id, path, normalized.c_str());
             return;
         }
+    }
+
+    if (g_local_mode) {
+        handle_http_request_local(client_socket, tunnel_id, method, path, buffer, bytes_read);
+        closesocket(client_socket);
+        SDL_Log("[Tunnel %d] Closed", tunnel_id);
+        return;
     }
 
     // Get SSH session — this is the same session/transport the terminal and
@@ -1191,6 +1408,8 @@ bool sftp_webserver_start() {
         return true;
     }
 
+    g_local_mode = false;
+
     setup_signal_handlers();  // Install SIGPIPE handler
     
     if (!g_tunnel_mutex) {
@@ -1201,6 +1420,34 @@ bool sftp_webserver_start() {
     g_webserver_thread = new std::thread(webserver_thread_func);
     
     SDL_Delay(100);
+    return g_webserver_running.load();
+}
+
+// Same server, but reads straight from the local filesystem under root_dir
+// instead of going over SFTP — for when there's no SSH session to browse
+// (e.g. F9 in a local shell). Read-only: browsing + download only.
+bool sftp_webserver_start_local(const char *root_dir) {
+    if (g_webserver_running.load()) {
+        SDL_Log("[WebServer] Already running");
+        return true;
+    }
+
+    g_local_mode = true;
+    g_local_root = root_dir ? root_dir : "/";
+    while (g_local_root.size() > 1 && g_local_root.back() == '/')
+        g_local_root.pop_back();
+
+    setup_signal_handlers();  // Install SIGPIPE handler
+
+    if (!g_tunnel_mutex) {
+        g_tunnel_mutex = SDL_CreateMutex();
+    }
+
+    g_webserver_should_exit.store(false);
+    g_webserver_thread = new std::thread(webserver_thread_func);
+
+    SDL_Delay(100);
+    SDL_Log("[WebServer] Local mode serving: %s", g_local_root.c_str());
     return g_webserver_running.load();
 }
 
@@ -1220,6 +1467,8 @@ void sftp_webserver_stop() {
         SDL_DestroyMutex(g_tunnel_mutex);
         g_tunnel_mutex = nullptr;
     }
+
+    g_local_mode = false;
 }
 
 bool sftp_webserver_running() {

@@ -220,6 +220,7 @@
             background: none;
             border: none;
             line-height: 1;
+            z-index: 10;
         }
 
         .slideshow-nav {
@@ -233,6 +234,7 @@
             padding: 12px 16px;
             cursor: pointer;
             border-radius: 6px;
+            z-index: 10;
         }
 
         .slideshow-nav:hover {
@@ -863,13 +865,24 @@
             if (slideshowImages.length === 0) return;
             slideshowOverlay.classList.add('active');
             showSlide(0);
+            history.pushState({ ivOverlay: 'slideshow' }, '');
         }
 
-        function closeSlideshow() {
+        function closeSlideshow(fromPopState) {
             slideshowOverlay.classList.remove('active');
             slideshowImg.src = '';
             resetZoom();
+            if (!fromPopState && history.state && history.state.ivOverlay === 'slideshow') {
+                history.back();
+            }
         }
+
+        window.addEventListener('popstate', (e) => {
+            if (slideshowOverlay.classList.contains('active') &&
+                (!e.state || e.state.ivOverlay !== 'slideshow')) {
+                closeSlideshow(true);
+            }
+        });
 
         slideshowImg.addEventListener('wheel', (e) => {
             e.preventDefault();

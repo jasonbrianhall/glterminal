@@ -32,6 +32,7 @@
 #  include "sftp_console.h"
 #  include "port_forward.h"
 #  include "pf_overlay.h"
+#  include "sftp_webserver.h"
 #endif
 #include "telnet_session.h"
 #include "serial_session.h"
@@ -1413,6 +1414,20 @@ int main(int argc, char **argv) {
                     if (pf_overlay_keydown(ev.key.keysym.sym))
                         needs_render = true;
                     else break;  // not consumed (e.g. F11) — fall through
+                    break;
+                }
+                // F9 — local file browser web server. Only when there's no
+                // active SSH session (that's what F12-in-sftp_console is for).
+                if (ev.key.keysym.sym == SDLK_F9 && !(use_ssh && ssh_active())) {
+                    if (sftp_webserver_running()) {
+                        sftp_webserver_stop();
+                        SDL_Log("[WebServer] Local file browser stopped\n");
+                    } else {
+                        if (sftp_webserver_start_local("/")) {
+                            SDL_Log("[WebServer] Local file browser: http://localhost:%d\n",
+                                    sftp_webserver_get_port());
+                        }
+                    }
                     break;
                 }
 #endif
