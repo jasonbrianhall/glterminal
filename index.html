@@ -192,10 +192,22 @@
         }
 
         .slideshow-overlay img {
-            max-width: 90vw;
-            max-height: 85vh;
+            width: 100vw;
+            height: 100vh;
             object-fit: contain;
             box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+            transform-origin: center center;
+            cursor: zoom-in;
+            transition: transform 0.05s ease-out;
+        }
+
+        .slideshow-overlay img.zoomed {
+            cursor: grab;
+        }
+
+        .slideshow-overlay img.panning {
+            cursor: grabbing;
+            transition: none;
         }
 
         .slideshow-close {
@@ -340,6 +352,25 @@
             slideshowBtn.style.display = images.length > 0 ? 'inline-block' : 'none';
         }
 
+        // ---- zoom/pan state ----
+        let zoomScale = 1;
+        let panX = 0;
+        let panY = 0;
+        const MIN_ZOOM = 1;
+        const MAX_ZOOM = 6;
+
+        function applyZoomTransform() {
+            slideshowImg.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+            slideshowImg.classList.toggle('zoomed', zoomScale > 1);
+        }
+
+        function resetZoom() {
+            zoomScale = 1;
+            panX = 0;
+            panY = 0;
+            applyZoomTransform();
+        }
+
         function showSlide(index) {
             if (slideshowImages.length === 0) return;
             slideshowIndex = (index + slideshowImages.length) % slideshowImages.length;
@@ -347,6 +378,7 @@
             slideshowImg.src = img.src;
             slideshowImg.alt = img.name;
             slideshowCaption.textContent = `${img.name} (${slideshowIndex + 1}/${slideshowImages.length})`;
+            resetZoom();
         }
 
         function openSlideshow() {
@@ -359,7 +391,74 @@
         function closeSlideshow() {
             slideshowOverlay.classList.remove('active');
             slideshowImg.src = '';
+            resetZoom();
         }
+
+        slideshowImg.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = slideshowImg.getBoundingClientRect();
+            // Cursor position relative to image center, in unscaled pixels
+            const cx = (e.clientX - rect.left - rect.width / 2) / zoomScale;
+            const cy = (e.clientY - rect.top - rect.height / 2) / zoomScale;
+
+            const zoomFactor = Math.exp(-e.deltaY * 0.0015);
+            const newScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomScale * zoomFactor));
+            const actualFactor = newScale / zoomScale;
+
+            // Adjust pan so the point under the cursor stays fixed
+            panX -= cx * (actualFactor - 1) * zoomScale;
+            panY -= cy * (actualFactor - 1) * zoomScale;
+            zoomScale = newScale;
+
+            if (zoomScale === MIN_ZOOM) {
+                panX = 0;
+                panY = 0;
+            }
+
+            applyZoomTransform();
+        }, { passive: false });
+
+        // Drag to pan when zoomed in
+        let isPanning = false;
+        let panStartX = 0;
+        let panStartY = 0;
+        let panOriginX = 0;
+        let panOriginY = 0;
+
+        slideshowImg.addEventListener('mousedown', (e) => {
+            if (zoomScale <= 1) return;
+            isPanning = true;
+            slideshowImg.classList.add('panning');
+            panStartX = e.clientX;
+            panStartY = e.clientY;
+            panOriginX = panX;
+            panOriginY = panY;
+            e.preventDefault();
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isPanning) return;
+            panX = panOriginX + (e.clientX - panStartX);
+            panY = panOriginY + (e.clientY - panStartY);
+            applyZoomTransform();
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isPanning) {
+                isPanning = false;
+                slideshowImg.classList.remove('panning');
+            }
+        });
+
+        // Double-click to toggle zoom
+        slideshowImg.addEventListener('dblclick', () => {
+            if (zoomScale > 1) {
+                resetZoom();
+            } else {
+                zoomScale = 2;
+                applyZoomTransform();
+            }
+        });
 
         slideshowBtn.addEventListener('click', openSlideshow);
         document.getElementById('slideshowClose').addEventListener('click', closeSlideshow);
