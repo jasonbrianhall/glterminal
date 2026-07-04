@@ -251,6 +251,141 @@
             color: #eee;
             font-size: 14px;
         }
+
+        .music-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.92);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .music-overlay.active {
+            display: flex;
+        }
+
+        .music-player {
+            width: 480px;
+            max-width: 90vw;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .music-art {
+            width: 140px;
+            height: 140px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 56px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .music-title {
+            font-size: 16px;
+            font-weight: 600;
+            text-align: center;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .music-progress-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+        }
+
+        .music-time {
+            font-size: 12px;
+            color: #ccc;
+            width: 36px;
+            flex-shrink: 0;
+        }
+
+        .music-seek {
+            flex: 1;
+            accent-color: #667eea;
+            cursor: pointer;
+        }
+
+        .music-controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .music-ctrl-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: white;
+            font-size: 18px;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.2s;
+        }
+
+        .music-ctrl-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .music-ctrl-btn.active {
+            background: #667eea;
+        }
+
+        .music-play-btn {
+            width: 54px;
+            height: 54px;
+            font-size: 20px;
+            background: #667eea;
+        }
+
+        .music-play-btn:hover {
+            background: #7c8ff0;
+        }
+
+        .music-list {
+            width: 100%;
+            max-height: 30vh;
+            overflow-y: auto;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+
+        .music-list-item {
+            padding: 10px 14px;
+            font-size: 13px;
+            color: #ddd;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .music-list-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .music-list-item.playing {
+            background: rgba(102, 126, 234, 0.3);
+            color: white;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -259,6 +394,7 @@
             <h1 id="title">File Browser</h1>
             <div style="display: flex; align-items: center; gap: 20px;">
                 <button id="slideshowBtn" class="slideshow-btn" style="display: none;">▶ Slideshow</button>
+                <button id="musicBtn" class="slideshow-btn" style="display: none;">♪ Play Music</button>
                 <label class="new-window-toggle">
                     <input type="checkbox" id="newWindowToggle">
                     Open in new window
@@ -286,6 +422,28 @@
         <img id="slideshowImg" src="" alt="">
         <button class="slideshow-nav slideshow-next" id="slideshowNext">&#10095;</button>
         <div class="slideshow-caption" id="slideshowCaption"></div>
+    </div>
+
+    <div class="music-overlay" id="musicOverlay">
+        <button class="slideshow-close" id="musicClose">&times;</button>
+        <div class="music-player">
+            <div class="music-art">&#9835;</div>
+            <div class="music-title" id="musicTitle"></div>
+            <div class="music-progress-row">
+                <span class="music-time" id="musicTimeCurrent">0:00</span>
+                <input type="range" id="musicSeek" class="music-seek" min="0" max="100" value="0">
+                <span class="music-time" id="musicTimeDuration">0:00</span>
+            </div>
+            <div class="music-controls">
+                <button id="musicShuffle" class="music-ctrl-btn" title="Shuffle">&#128256;</button>
+                <button id="musicPrev" class="music-ctrl-btn" title="Previous">&#9198;</button>
+                <button id="musicPlayPause" class="music-ctrl-btn music-play-btn" title="Play/Pause">&#9658;</button>
+                <button id="musicNext" class="music-ctrl-btn" title="Next">&#9197;</button>
+                <button id="musicRepeat" class="music-ctrl-btn" title="Repeat">&#128257;</button>
+            </div>
+            <div class="music-list" id="musicList"></div>
+        </div>
+        <audio id="musicAudio"></audio>
     </div>
 
     <script>
@@ -340,6 +498,29 @@
                 });
         }
 
+        // ---- audio detection + music player ----
+        const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'wma', 'opus'];
+
+        function isAudioFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return AUDIO_EXTENSIONS.includes(ext);
+        }
+
+        function getAudioEntries() {
+            const currentPath = window.location.pathname;
+            return fileData
+                .filter(isAudioFile)
+                .map(entry => {
+                    const entryPath = currentPath.endsWith('/')
+                        ? `${currentPath}${entry.name}`
+                        : `${currentPath}/${entry.name}`;
+                    return { name: entry.name, src: encodeParens(entryPath) };
+                });
+        }
+
         const slideshowBtn = document.getElementById('slideshowBtn');
         const slideshowOverlay = document.getElementById('slideshowOverlay');
         const slideshowImg = document.getElementById('slideshowImg');
@@ -350,6 +531,8 @@
         function updateSlideshowButtonVisibility() {
             const images = getImageEntries();
             slideshowBtn.style.display = images.length > 0 ? 'inline-block' : 'none';
+            const audios = getAudioEntries();
+            musicBtn.style.display = audios.length > 0 ? 'inline-block' : 'none';
         }
 
         // ---- zoom/pan state ----
@@ -474,6 +657,170 @@
             if (e.key === 'Escape') closeSlideshow();
             else if (e.key === 'ArrowLeft') showSlide(slideshowIndex - 1);
             else if (e.key === 'ArrowRight') showSlide(slideshowIndex + 1);
+        });
+
+        // ---- music player ----
+        const musicBtn = document.getElementById('musicBtn');
+        const musicOverlay = document.getElementById('musicOverlay');
+        const musicAudio = document.getElementById('musicAudio');
+        const musicTitle = document.getElementById('musicTitle');
+        const musicList = document.getElementById('musicList');
+        const musicSeek = document.getElementById('musicSeek');
+        const musicTimeCurrent = document.getElementById('musicTimeCurrent');
+        const musicTimeDuration = document.getElementById('musicTimeDuration');
+        const musicPlayPause = document.getElementById('musicPlayPause');
+        const musicShuffleBtn = document.getElementById('musicShuffle');
+        const musicRepeatBtn = document.getElementById('musicRepeat');
+
+        let musicTracks = [];
+        let musicIndex = 0;
+        let shuffleOn = false;
+        let repeatOn = false;
+        let isSeeking = false;
+
+        function formatTime(sec) {
+            if (!isFinite(sec)) return '0:00';
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        }
+
+        function renderMusicList() {
+            musicList.innerHTML = '';
+            musicTracks.forEach((track, i) => {
+                const item = document.createElement('div');
+                item.className = 'music-list-item' + (i === musicIndex ? ' playing' : '');
+                item.textContent = track.name;
+                item.addEventListener('click', () => playTrack(i));
+                musicList.appendChild(item);
+            });
+        }
+
+        function playTrack(index) {
+            if (musicTracks.length === 0) return;
+            musicIndex = (index + musicTracks.length) % musicTracks.length;
+            const track = musicTracks[musicIndex];
+            musicAudio.src = track.src;
+            musicTitle.textContent = track.name;
+            musicAudio.play();
+            renderMusicList();
+        }
+
+        function nextTrack() {
+            if (musicTracks.length === 0) return;
+            if (shuffleOn) {
+                let next = Math.floor(Math.random() * musicTracks.length);
+                if (musicTracks.length > 1 && next === musicIndex) {
+                    next = (next + 1) % musicTracks.length;
+                }
+                playTrack(next);
+            } else {
+                playTrack(musicIndex + 1);
+            }
+        }
+
+        function prevTrack() {
+            if (musicTracks.length === 0) return;
+            // If more than 3s into the track, restart it instead of going back
+            if (musicAudio.currentTime > 3) {
+                musicAudio.currentTime = 0;
+                return;
+            }
+            playTrack(musicIndex - 1);
+        }
+
+        function openMusicPlayer() {
+            musicTracks = getAudioEntries();
+            if (musicTracks.length === 0) return;
+            musicOverlay.classList.add('active');
+            playTrack(0);
+        }
+
+        function closeMusicPlayer() {
+            musicOverlay.classList.remove('active');
+            musicAudio.pause();
+            musicAudio.src = '';
+        }
+
+        musicBtn.addEventListener('click', openMusicPlayer);
+        document.getElementById('musicClose').addEventListener('click', closeMusicPlayer);
+
+        musicOverlay.addEventListener('click', (e) => {
+            if (e.target === musicOverlay) closeMusicPlayer();
+        });
+
+        musicPlayPause.addEventListener('click', () => {
+            if (musicAudio.paused) {
+                musicAudio.play();
+            } else {
+                musicAudio.pause();
+            }
+        });
+
+        musicAudio.addEventListener('play', () => {
+            musicPlayPause.innerHTML = '&#10074;&#10074;';
+        });
+
+        musicAudio.addEventListener('pause', () => {
+            musicPlayPause.innerHTML = '&#9658;';
+        });
+
+        musicAudio.addEventListener('ended', () => {
+            if (repeatOn) {
+                musicAudio.currentTime = 0;
+                musicAudio.play();
+            } else {
+                nextTrack();
+            }
+        });
+
+        musicAudio.addEventListener('timeupdate', () => {
+            if (isSeeking) return;
+            musicTimeCurrent.textContent = formatTime(musicAudio.currentTime);
+            musicTimeDuration.textContent = formatTime(musicAudio.duration);
+            if (musicAudio.duration) {
+                musicSeek.value = (musicAudio.currentTime / musicAudio.duration) * 100;
+            }
+        });
+
+        musicAudio.addEventListener('loadedmetadata', () => {
+            musicTimeDuration.textContent = formatTime(musicAudio.duration);
+        });
+
+        musicSeek.addEventListener('input', () => {
+            isSeeking = true;
+            musicTimeCurrent.textContent = formatTime((musicSeek.value / 100) * musicAudio.duration);
+        });
+
+        musicSeek.addEventListener('change', () => {
+            if (musicAudio.duration) {
+                musicAudio.currentTime = (musicSeek.value / 100) * musicAudio.duration;
+            }
+            isSeeking = false;
+        });
+
+        document.getElementById('musicNext').addEventListener('click', nextTrack);
+        document.getElementById('musicPrev').addEventListener('click', prevTrack);
+
+        musicShuffleBtn.addEventListener('click', () => {
+            shuffleOn = !shuffleOn;
+            musicShuffleBtn.classList.toggle('active', shuffleOn);
+        });
+
+        musicRepeatBtn.addEventListener('click', () => {
+            repeatOn = !repeatOn;
+            musicRepeatBtn.classList.toggle('active', repeatOn);
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (!musicOverlay.classList.contains('active')) return;
+            if (e.key === 'Escape') closeMusicPlayer();
+            else if (e.key === 'ArrowLeft') prevTrack();
+            else if (e.key === 'ArrowRight') nextTrack();
+            else if (e.key === ' ') {
+                e.preventDefault();
+                musicPlayPause.click();
+            }
         });
 
         // Encode parentheses and square brackets in paths: ( -> %28, ) -> %29, [ -> %5B, ] -> %5D
