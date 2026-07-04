@@ -342,6 +342,19 @@
             object-fit: contain;
         }
 
+        .midi-viz-wrap {
+            width: 100%;
+            max-width: 480px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+            background: black;
+        }
+
+        midi-visualizer.piano-roll-visualizer svg {
+            background: black !important;
+        }
+
         .viz-btn-row {
             position: absolute;
             top: 8px;
@@ -621,6 +634,9 @@
                     <button id="vizExportBtn" class="viz-mode-btn">&#11015; Export</button>
                     <button id="vizModeBtn" class="viz-mode-btn"></button>
                 </div>
+            </div>
+            <div class="midi-viz-wrap" id="midiVizWrap" style="display: none;">
+                <midi-visualizer type="piano-roll" id="midiVisualizer"></midi-visualizer>
             </div>
             <div class="music-title" id="musicTitle"></div>
             <div class="music-progress-row">
@@ -1435,6 +1451,18 @@
         const musicShuffleBtn = document.getElementById('musicShuffle');
         const musicRepeatBtn = document.getElementById('musicRepeat');
         const musicArt = document.getElementById('musicArt');
+        const midiVizWrap = document.getElementById('midiVizWrap');
+        const midiVisualizer = document.getElementById('midiVisualizer');
+
+        function showMidiVisual() {
+            musicArt.style.display = 'none';
+            hideVizVisual();
+            midiVizWrap.style.display = 'block';
+        }
+
+        function hideMidiVisual() {
+            midiVizWrap.style.display = 'none';
+        }
 
         // ---- MIDI playback (rendered via html-midi-player, driven through our own controls) ----
         let midiPlayer = null;
@@ -1455,6 +1483,7 @@
             midiPlayer.style.display = 'none';
             midiPlayer.soundFont = '';
             document.body.appendChild(midiPlayer);
+            midiPlayer.addVisualizer(midiVisualizer);
 
             midiPlayer.addEventListener('start', () => {
                 musicPlayPause.innerHTML = '&#10074;&#10074;';
@@ -1947,6 +1976,7 @@
 
             renderMusicTable();
             clearCdgState();
+            hideMidiVisual();
             if (currentObjectUrl) {
                 URL.revokeObjectURL(currentObjectUrl);
                 currentObjectUrl = null;
@@ -1956,6 +1986,7 @@
 
             if (track.type === 'midi') {
                 ensureMidiPlayer();
+                showMidiVisual();
                 musicTitle.textContent = track.name;
                 musicTimeCurrent.textContent = '0:00';
                 musicTimeDuration.textContent = '0:00';
