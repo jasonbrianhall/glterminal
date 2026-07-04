@@ -326,10 +326,15 @@
             object-fit: contain;
         }
 
-        .viz-mode-btn {
+        .viz-btn-row {
             position: absolute;
             top: 8px;
             right: 8px;
+            display: flex;
+            gap: 6px;
+        }
+
+        .viz-mode-btn {
             background: rgba(20, 20, 30, 0.75);
             border: 1px solid rgba(255, 255, 255, 0.25);
             color: #cdd6ff;
@@ -337,11 +342,17 @@
             padding: 5px 10px;
             border-radius: 6px;
             cursor: pointer;
+            white-space: nowrap;
         }
 
         .viz-mode-btn:hover {
             background: rgba(102, 126, 234, 0.5);
             color: white;
+        }
+
+        .viz-mode-btn:disabled {
+            opacity: 0.6;
+            cursor: default;
         }
 
         .music-title {
@@ -420,26 +431,26 @@
             font-size: 14px;
             border-radius: 8px;
             border: 1px solid rgba(255, 255, 255, 0.2);
-            background: rgba(255, 255, 255, 0.08);
-            color: white;
+            background: #f0f0f0;
+            color: #000;
             margin-top: 8px;
         }
 
         .music-search::placeholder {
-            color: #aaa;
+            color: #555;
         }
 
         .music-search:focus {
             outline: none;
             border-color: #667eea;
-            background: rgba(255, 255, 255, 0.12);
+            background: #ffffff;
         }
 
         .music-table-scroll {
             width: 100%;
             max-height: 30vh;
             overflow-y: auto;
-            background: rgba(255, 255, 255, 0.05);
+            background: #f0f0f0;
             border-radius: 8px;
         }
 
@@ -460,7 +471,7 @@
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: #bbb;
+            color: #ddd;
             cursor: pointer;
             user-select: none;
             white-space: nowrap;
@@ -472,23 +483,23 @@
 
         .music-table th.sort-asc::after {
             content: " \25B2";
-            color: #8b9dff;
+            color: #b9c4ff;
         }
 
         .music-table th.sort-desc::after {
             content: " \25BC";
-            color: #8b9dff;
+            color: #b9c4ff;
         }
 
         .music-table td {
             padding: 9px 14px;
             font-size: 13px;
-            color: #ddd;
+            color: #000;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
             max-width: 0;
-            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            border-top: 1px solid rgba(0, 0, 0, 0.08);
         }
 
         .music-table tbody tr {
@@ -496,21 +507,21 @@
         }
 
         .music-table tbody tr:hover {
-            background: rgba(255, 255, 255, 0.08);
+            background: rgba(0, 0, 0, 0.06);
         }
 
         .music-table tbody tr.playing {
-            background: rgba(102, 126, 234, 0.3);
+            background: rgba(102, 126, 234, 0.35);
         }
 
         .music-table tbody tr.playing td {
-            color: white;
-            font-weight: 600;
+            color: #000;
+            font-weight: 700;
         }
 
         .music-cdg-cell {
             text-align: center;
-            color: #8fdc8f;
+            color: #1c7a1c;
         }
 
         .video-overlay {
@@ -590,7 +601,10 @@
             <canvas class="cdg-canvas" id="cdgCanvas" width="300" height="216" style="display: none;"></canvas>
             <div class="viz-wrap" id="vizWrap" style="display: none;">
                 <canvas class="viz-canvas" id="vizCanvas" width="480" height="270"></canvas>
-                <button id="vizModeBtn" class="viz-mode-btn"></button>
+                <div class="viz-btn-row">
+                    <button id="vizExportBtn" class="viz-mode-btn">&#11015; Export</button>
+                    <button id="vizModeBtn" class="viz-mode-btn"></button>
+                </div>
             </div>
             <div class="music-title" id="musicTitle"></div>
             <div class="music-progress-row">
@@ -1399,11 +1413,15 @@
         const vizCanvas = document.getElementById('vizCanvas');
         const vizCtx = vizCanvas.getContext('2d');
         const vizModeBtn = document.getElementById('vizModeBtn');
+        const vizExportBtn = document.getElementById('vizExportBtn');
         const VIZ_MODES = ['Symmetry', 'Radial', 'Scope', 'Starfield', 'Plasma', 'Fireworks', 'Matrix', 'Kaleidoscope'];
         let vizMode = 0;
         let vizAnimHandle = null;
         let audioCtx = null, analyser = null, freqData = null, timeData = null;
         let vizStars = null, vizSparks = [], vizLastBurst = -1, vizMatrixCols = null;
+        let exportDestNode = null;
+        let isExporting = false;
+        let activeRecorder = null;
 
         vizModeBtn.textContent = `Viz: ${VIZ_MODES[vizMode]}`;
         vizModeBtn.addEventListener('click', () => {
@@ -1434,6 +1452,95 @@
             freqData = new Uint8Array(analyser.frequencyBinCount);
             timeData = new Uint8Array(analyser.frequencyBinCount);
         }
+
+        // Records the visualizer canvas + audio in real time (as long as the track itself)
+        // and downloads the result as MP4 (falling back to WebM if the browser can't mux MP4).
+        async function exportVisualizationVideo() {
+            if (isExporting) return;
+            if (!vizCanvas.captureStream || typeof MediaRecorder === 'undefined') {
+                alert('Video export is not supported in this browser.');
+                return;
+            }
+            if (!musicAudio.duration || !isFinite(musicAudio.duration)) {
+                alert('Track is not ready yet.');
+                return;
+            }
+
+            ensureAudioGraph();
+            if (!exportDestNode) {
+                exportDestNode = audioCtx.createMediaStreamDestination();
+                analyser.connect(exportDestNode);
+            }
+
+            const mimeCandidates = [
+                'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+                'video/mp4',
+                'video/webm;codecs=vp9,opus',
+                'video/webm;codecs=vp8,opus',
+                'video/webm'
+            ];
+            const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported(m));
+            if (!mimeType) {
+                alert('No supported recording format found in this browser.');
+                return;
+            }
+
+            const canvasStream = vizCanvas.captureStream(30);
+            const combinedStream = new MediaStream([
+                ...canvasStream.getVideoTracks(),
+                ...exportDestNode.stream.getAudioTracks()
+            ]);
+
+            const recordedChunks = [];
+            const recorder = new MediaRecorder(combinedStream, { mimeType });
+            activeRecorder = recorder;
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+
+            const ext = mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
+            const track = musicTracks.find(t => t.id === currentTrackId);
+            const baseName = (track ? track.name : 'visualization').replace(/\.[^.]+$/, '');
+
+            isExporting = true;
+            vizExportBtn.disabled = true;
+            vizModeBtn.disabled = true;
+
+            recorder.onstop = () => {
+                isExporting = false;
+                activeRecorder = null;
+                vizExportBtn.disabled = false;
+                vizModeBtn.disabled = false;
+                vizExportBtn.textContent = '\u2b07 Export';
+
+                const blob = new Blob(recordedChunks, { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${baseName}.${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+            };
+
+            const progressTick = () => {
+                if (recorder.state !== 'recording') return;
+                vizExportBtn.textContent = `Exporting ${formatTime(musicAudio.currentTime)} / ${formatTime(musicAudio.duration)}`;
+                requestAnimationFrame(progressTick);
+            };
+
+            const onEnded = () => {
+                musicAudio.removeEventListener('ended', onEnded);
+                if (recorder.state === 'recording') recorder.stop();
+            };
+            musicAudio.addEventListener('ended', onEnded);
+
+            musicAudio.currentTime = 0;
+            await musicAudio.play();
+            recorder.start();
+            progressTick();
+        }
+
+        vizExportBtn.addEventListener('click', exportVisualizationVideo);
 
         function vizHsl(hue, sat, light) {
             return `hsl(${((hue % 1) + 1) % 1 * 360}, ${sat}%, ${light}%)`;
@@ -1744,6 +1851,7 @@
         });
 
         async function playTrackById(id) {
+            if (isExporting) return;
             const track = musicTracks.find(t => t.id === id);
             if (!track) return;
             currentTrackId = id;
@@ -1846,6 +1954,7 @@
         }
 
         function closeMusicPlayer() {
+            if (activeRecorder && activeRecorder.state === 'recording') activeRecorder.stop();
             musicOverlay.classList.remove('active');
             musicAudio.pause();
             musicAudio.src = '';
@@ -1882,6 +1991,7 @@
         });
 
         musicAudio.addEventListener('ended', () => {
+            if (isExporting) return;
             if (repeatOn) {
                 musicAudio.currentTime = 0;
                 musicAudio.play();
