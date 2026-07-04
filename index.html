@@ -708,6 +708,7 @@
             const currentPath = getCurrentPath();
             return fileData
                 .filter(isImageFile)
+                .sort((a, b) => a.name.localeCompare(b.name))
                 .map(entry => {
                     const entryPath = currentPath.endsWith('/')
                         ? `${currentPath}${entry.name}`
