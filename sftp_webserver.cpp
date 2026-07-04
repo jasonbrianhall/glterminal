@@ -329,6 +329,41 @@ static std::string http_response_headers(int status_code, const char *content_ty
     return buf;
 }
 
+// Response builder for a 302 redirect (e.g. normalizing double slashes in a path).
+static std::string http_redirect_response(const char *location) {
+    char buf[1536];
+    snprintf(buf, sizeof(buf),
+        "HTTP/1.1 302 Found\r\n"
+        "Location: %s\r\n"
+        "Content-Length: 0\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        location);
+    return buf;
+}
+
+// Collapses runs of consecutive '/' into a single '/'. Returns true if the
+// path was changed (i.e. it contained a double slash that needed fixing).
+static bool normalize_path(const char *raw_path, std::string &out) {
+    out.clear();
+    bool changed = false;
+    bool prev_slash = false;
+    for (const char *p = raw_path; *p; ++p) {
+        if (*p == '/') {
+            if (prev_slash) {
+                changed = true;
+                continue;
+            }
+            prev_slash = true;
+        } else {
+            prev_slash = false;
+        }
+        out += *p;
+    }
+    if (out.empty()) out = "/";
+    return changed;
+}
+
 // Response builder for file downloads: always advertises Accept-Ranges so
 // players know they can seek, and emits either a full 200 or a partial
 // 206 (with Content-Range) when range_start/range_end are given.
@@ -536,8 +571,6 @@ static std::string url_decode(const std::string &str) {
             sscanf(str.c_str() + i + 1, "%2x", &value);
             decoded += static_cast<char>(value);
             i += 2;
-        } else if (str[i] == '+') {
-            decoded += ' ';
         } else {
             decoded += str[i];
         }
@@ -567,6 +600,20 @@ static void handle_http_request(int client_socket, int tunnel_id) {
     char method[16] = {};
     char path[1024] = {};
     sscanf(buffer, "%15s %1023s", method, path);
+
+    // If the path contains double (or more) slashes, e.g.
+    // "//home/jbhall/Music", redirect to the normalized single-slash form
+    // so the browser's address bar and any relative links end up clean.
+    if (strcmp(method, "GET") == 0) {
+        std::string normalized;
+        if (normalize_path(path, normalized)) {
+            std::string response = http_redirect_response(normalized.c_str());
+            socket_send_safe(client_socket, response.c_str(), response.length());
+            closesocket(client_socket);
+            SDL_Log("[Tunnel %d] Redirecting '%s' -> '%s'", tunnel_id, path, normalized.c_str());
+            return;
+        }
+    }
 
     // Get SSH session — this is the same session/transport the terminal and
     // the F4 SFTP console use. Lock only long enough to read the pointer.
