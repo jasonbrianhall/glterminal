@@ -495,6 +495,7 @@ static std::string http_file_response_headers(bool is_partial, uint64_t range_st
             "Content-Length: %llu\r\n"
             "Content-Range: bytes %llu-%llu/%llu\r\n"
             "Accept-Ranges: bytes\r\n"
+            "Cache-Control: max-age=3600\r\n"
             "Connection: close\r\n"
             "\r\n",
             content_type,
@@ -507,6 +508,7 @@ static std::string http_file_response_headers(bool is_partial, uint64_t range_st
             "Content-Type: %s\r\n"
             "Content-Length: %llu\r\n"
             "Accept-Ranges: bytes\r\n"
+            "Cache-Control: max-age=3600\r\n"
             "Connection: close\r\n"
             "\r\n",
             content_type, (unsigned long long)total_size);
