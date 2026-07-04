@@ -46,11 +46,6 @@
 // STATE
 // ============================================================================
 
-// Cached from the most recent ssh_connect() call so ssh_reconnect() can
-// re-establish the session later without the caller re-supplying config.
-static SshConfig        s_last_cfg;
-static Terminal        *s_last_terminal = nullptr;
-
 static LIBSSH2_SESSION *s_session  = nullptr;
 static LIBSSH2_CHANNEL *s_channel  = nullptr;
 static int              s_sock     = -1;   // TCP socket fd
@@ -705,10 +700,6 @@ static void ssh_write_bridge(Terminal *t, const char *s, int n) {
 // ============================================================================
 
 bool ssh_connect(const SshConfig &cfg, Terminal *t) {
-    // Remember these so ssh_reconnect() can redo this call later.
-    s_last_cfg = cfg;
-    s_last_terminal = t;
-
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
@@ -1020,25 +1011,6 @@ void ssh_disconnect() {
 #ifdef _WIN32
     WSACleanup();
 #endif
-}
-
-bool ssh_reconnect() {
-    std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
-
-    if (!s_last_terminal) {
-        SDL_Log("[SSH] reconnect requested but no prior connection to reconnect from\n");
-        return false;
-    }
-
-    SDL_Log("[SSH] reconnecting to %s@%s:%d\n",
-            s_last_cfg.user.c_str(), s_last_cfg.host.c_str(), s_last_cfg.port);
-
-    if (s_active || s_session || s_channel)
-        ssh_disconnect();
-
-    // ssh_connect() overwrites s_last_cfg/s_last_terminal with the same
-    // values, so this is safe to call directly with the cached config.
-    return ssh_connect(s_last_cfg, s_last_terminal);
 }
 
 bool ssh_active()  { return s_active; }

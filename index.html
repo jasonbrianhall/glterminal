@@ -304,6 +304,46 @@
             object-fit: contain;
         }
 
+        .viz-wrap {
+            position: relative;
+            width: 100%;
+            max-width: 480px;
+        }
+
+        .viz-canvas {
+            width: 100%;
+            aspect-ratio: 480 / 270;
+            border-radius: 8px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+            background: black;
+            cursor: pointer;
+        }
+
+        .viz-canvas:fullscreen {
+            width: 100vw;
+            height: 100vh;
+            max-width: none;
+            object-fit: contain;
+        }
+
+        .viz-mode-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(20, 20, 30, 0.75);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            color: #cdd6ff;
+            font-size: 11px;
+            padding: 5px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .viz-mode-btn:hover {
+            background: rgba(102, 126, 234, 0.5);
+            color: white;
+        }
+
         .music-title {
             font-size: 16px;
             font-weight: 600;
@@ -548,6 +588,10 @@
         <div class="music-player">
             <div class="music-art" id="musicArt">&#9835;</div>
             <canvas class="cdg-canvas" id="cdgCanvas" width="300" height="216" style="display: none;"></canvas>
+            <div class="viz-wrap" id="vizWrap" style="display: none;">
+                <canvas class="viz-canvas" id="vizCanvas" width="480" height="270"></canvas>
+                <button id="vizModeBtn" class="viz-mode-btn"></button>
+            </div>
             <div class="music-title" id="musicTitle"></div>
             <div class="music-progress-row">
                 <span class="music-time" id="musicTimeCurrent">0:00</span>
@@ -1273,6 +1317,7 @@
 
         function showCdgVisual() {
             musicArt.style.display = 'none';
+            hideVizVisual();
             cdgCanvas.style.display = 'block';
         }
 
@@ -1348,6 +1393,263 @@
             }
         });
         const cdgImageData = cdgCtx.createImageData(CDG_WIDTH, CDG_HEIGHT);
+
+        // ---- audio-reactive visualizer (Web Audio API), used when a track has no CD+G ----
+        const vizWrap = document.getElementById('vizWrap');
+        const vizCanvas = document.getElementById('vizCanvas');
+        const vizCtx = vizCanvas.getContext('2d');
+        const vizModeBtn = document.getElementById('vizModeBtn');
+        const VIZ_MODES = ['Symmetry', 'Radial', 'Scope', 'Starfield', 'Plasma', 'Fireworks', 'Matrix', 'Kaleidoscope'];
+        let vizMode = 0;
+        let vizAnimHandle = null;
+        let audioCtx = null, analyser = null, freqData = null, timeData = null;
+        let vizStars = null, vizSparks = [], vizLastBurst = -1, vizMatrixCols = null;
+
+        vizModeBtn.textContent = `Viz: ${VIZ_MODES[vizMode]}`;
+        vizModeBtn.addEventListener('click', () => {
+            vizMode = (vizMode + 1) % VIZ_MODES.length;
+            vizModeBtn.textContent = `Viz: ${VIZ_MODES[vizMode]}`;
+        });
+
+        vizCanvas.addEventListener('dblclick', () => {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                vizCanvas.requestFullscreen();
+            }
+        });
+
+        function ensureAudioGraph() {
+            if (audioCtx) {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                return;
+            }
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaElementSource(musicAudio);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 512;
+            analyser.smoothingTimeConstant = 0.8;
+            source.connect(analyser);
+            analyser.connect(audioCtx.destination);
+            freqData = new Uint8Array(analyser.frequencyBinCount);
+            timeData = new Uint8Array(analyser.frequencyBinCount);
+        }
+
+        function vizHsl(hue, sat, light) {
+            return `hsl(${((hue % 1) + 1) % 1 * 360}, ${sat}%, ${light}%)`;
+        }
+
+        function drawVizSymmetry(w, h) {
+            const bars = 64, bw = w / bars, midY = h / 2;
+            for (let i = 0; i < bars; i++) {
+                const amp = freqData[i] / 255;
+                const barH = amp * h * 0.48;
+                vizCtx.fillStyle = vizHsl(i / bars, 90, 55);
+                vizCtx.fillRect(i * bw + 1, midY - barH, bw - 2, barH);
+                vizCtx.globalAlpha = 0.5;
+                vizCtx.fillRect(i * bw + 1, midY, bw - 2, barH);
+                vizCtx.globalAlpha = 1;
+            }
+        }
+
+        function drawVizRadial(w, h, t) {
+            const cx = w / 2, cy = h / 2;
+            const maxR = Math.min(w, h) * 0.46, innerR = maxR * 0.18;
+            const bars = 64, rot = t * 0.4;
+            for (let i = 0; i < bars; i++) {
+                const amp = freqData[i] / 255;
+                const angle = rot + (i / bars) * Math.PI * 2;
+                const outerR = innerR + amp * (maxR - innerR);
+                vizCtx.strokeStyle = vizHsl(i / bars + t * 0.02, 100, 55);
+                vizCtx.lineWidth = Math.max(2, w / bars * 0.5);
+                vizCtx.beginPath();
+                vizCtx.moveTo(cx + Math.cos(angle) * innerR, cy + Math.sin(angle) * innerR);
+                vizCtx.lineTo(cx + Math.cos(angle) * outerR, cy + Math.sin(angle) * outerR);
+                vizCtx.stroke();
+            }
+            const pulse = 0.4 + 0.6 * (freqData[0] / 255);
+            vizCtx.fillStyle = vizHsl(0.12, 90, 60);
+            vizCtx.beginPath();
+            vizCtx.arc(cx, cy, innerR * pulse, 0, Math.PI * 2);
+            vizCtx.fill();
+        }
+
+        function drawVizScope(w, h) {
+            vizCtx.strokeStyle = 'rgba(255,255,255,0.85)';
+            vizCtx.lineWidth = 2;
+            vizCtx.beginPath();
+            const slice = w / timeData.length;
+            for (let i = 0; i < timeData.length; i++) {
+                const v = timeData[i] / 128 - 1;
+                const x = i * slice, y = h / 2 + v * h * 0.45;
+                if (i === 0) vizCtx.moveTo(x, y); else vizCtx.lineTo(x, y);
+            }
+            vizCtx.stroke();
+        }
+
+        function drawVizStarfield(w, h) {
+            if (!vizStars) {
+                vizStars = [];
+                for (let i = 0; i < 200; i++) {
+                    vizStars.push({
+                        x: Math.random(), y: Math.random(),
+                        speed: 0.002 + Math.random() * 0.01,
+                        size: 1 + Math.random() * 3, hue: Math.random()
+                    });
+                }
+            }
+            const bass = freqData[0] / 255;
+            for (const s of vizStars) {
+                const dx = s.x - 0.5, dy = s.y - 0.5;
+                const dist = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                const speed = s.speed * (1 + bass * 3);
+                s.x += dx / dist * speed;
+                s.y += dy / dist * speed;
+                if (s.x < 0 || s.x > 1 || s.y < 0 || s.y > 1) {
+                    s.x = 0.5 + (Math.random() - 0.5) * 0.05;
+                    s.y = 0.5 + (Math.random() - 0.5) * 0.05;
+                    s.speed = 0.002 + Math.random() * 0.01;
+                }
+                const dist2 = Math.sqrt((s.x - 0.5) ** 2 + (s.y - 0.5) ** 2);
+                const bright = Math.min(1, dist2 * 3);
+                vizCtx.fillStyle = `hsla(${s.hue * 360}, 70%, 60%, ${bright})`;
+                const sz = s.size * (0.5 + dist2 * 2);
+                vizCtx.fillRect(s.x * w - sz / 2, s.y * h - sz / 2, sz, sz);
+            }
+        }
+
+        function drawVizPlasma(w, h, t) {
+            const cols = 48, rows = 27, cw = w / cols, ch = h / rows;
+            const bass = freqData[2] / 255;
+            for (let py = 0; py < rows; py++) {
+                for (let px = 0; px < cols; px++) {
+                    const nx = px / cols, ny = py / rows;
+                    let v = Math.sin(nx * 10 + t * 1.3) + Math.sin(ny * 10 - t * 1.1)
+                        + Math.sin((nx + ny) * 10 + t * 0.7)
+                        + Math.sin(Math.sqrt((nx - 0.5) ** 2 + (ny - 0.5) ** 2) * 20 - t * 2);
+                    v = (v / 4) * (0.6 + 0.4 * bass);
+                    vizCtx.fillStyle = vizHsl(v * 0.5 + 0.5 + t * 0.03, 85, 55);
+                    vizCtx.fillRect(px * cw, py * ch, cw + 1, ch + 1);
+                }
+            }
+        }
+
+        function drawVizFireworks(w, h, t) {
+            const bass = freqData[1] / 255;
+            if ((bass > 0.75 && t - vizLastBurst > 0.25) || t - vizLastBurst > 1.2) {
+                vizLastBurst = t;
+                const bx = Math.random() * w, by = h * (0.2 + Math.random() * 0.3);
+                const hue0 = Math.random();
+                const count = 40 + Math.floor(Math.random() * 30);
+                for (let i = 0; i < count; i++) {
+                    const ang = (i / count) * Math.PI * 2;
+                    const spd = 40 + Math.random() * 90;
+                    vizSparks.push({
+                        x: bx, y: by, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
+                        life: 1, hue: hue0 + Math.random() * 0.08
+                    });
+                }
+            }
+            const dt = 1 / 60;
+            for (const s of vizSparks) {
+                if (s.life <= 0) continue;
+                s.x += s.vx * dt;
+                s.y += s.vy * dt;
+                s.vy += 60 * dt;
+                s.life -= dt * 0.6;
+                if (s.y > h) s.life = 0;
+                if (s.life > 0) {
+                    vizCtx.fillStyle = `hsla(${(s.hue % 1) * 360}, 90%, 60%, ${Math.max(0, s.life)})`;
+                    vizCtx.fillRect(s.x - 1.5, s.y - 1.5, 3, 3);
+                }
+            }
+            vizSparks = vizSparks.filter(s => s.life > 0);
+            if (vizSparks.length > 4000) vizSparks.splice(0, vizSparks.length - 4000);
+        }
+
+        function drawVizMatrix(w, h) {
+            const cols = 28;
+            if (!vizMatrixCols) {
+                vizMatrixCols = [];
+                for (let i = 0; i < cols; i++) {
+                    vizMatrixCols.push({ y: -Math.random() * h, speed: 60 + Math.random() * 90 });
+                }
+            }
+            const colW = w / cols, charH = 16, trail = 14;
+            vizCtx.font = '14px monospace';
+            vizCtx.textBaseline = 'top';
+            for (let c = 0; c < cols; c++) {
+                const col = vizMatrixCols[c];
+                const bandVal = freqData[c % freqData.length] / 255;
+                col.y += (col.speed * (0.6 + 0.8 * bandVal)) / 60;
+                if (col.y - trail * charH > h) {
+                    col.y = -Math.random() * h * 0.5;
+                    col.speed = 60 + Math.random() * 90;
+                }
+                for (let k = 0; k < trail; k++) {
+                    const cy = col.y - k * charH;
+                    if (cy < 0 || cy > h) continue;
+                    const glyph = String.fromCharCode(33 + Math.floor(Math.random() * 90));
+                    const fade = 1 - k / trail;
+                    const light = k === 0 ? 90 : 30 + fade * 40;
+                    vizCtx.fillStyle = `hsl(120, 80%, ${light}%)`;
+                    vizCtx.fillText(glyph, c * colW, cy);
+                }
+            }
+        }
+
+        function drawVizKaleidoscope(w, h, t) {
+            const cx = w / 2, cy = h / 2;
+            const maxR = Math.min(w, h) * 0.48;
+            const segments = 8, segAngle = Math.PI * 2 / segments, rot = t * 0.25;
+            for (let i = 0; i < 64; i += 2) {
+                const amp = freqData[i] / 255;
+                const baseAngle = (i / 64) * segAngle;
+                const rr = amp * maxR;
+                vizCtx.fillStyle = vizHsl(i / 64 + t * 0.06, 95, 55);
+                for (let seg = 0; seg < segments; seg++) {
+                    let ang = rot + seg * segAngle + baseAngle;
+                    if (seg % 2 === 1) ang = rot + seg * segAngle + (segAngle - baseAngle);
+                    vizCtx.beginPath();
+                    vizCtx.arc(cx + Math.cos(ang) * rr, cy + Math.sin(ang) * rr, 3, 0, Math.PI * 2);
+                    vizCtx.fill();
+                }
+            }
+        }
+
+        function vizLoop() {
+            if (!analyser) return;
+            analyser.getByteFrequencyData(freqData);
+            analyser.getByteTimeDomainData(timeData);
+            const w = vizCanvas.width, h = vizCanvas.height;
+            const t = musicAudio.currentTime;
+            vizCtx.fillStyle = 'black';
+            vizCtx.fillRect(0, 0, w, h);
+            switch (vizMode) {
+                case 0: drawVizSymmetry(w, h); break;
+                case 1: drawVizRadial(w, h, t); break;
+                case 2: drawVizScope(w, h); break;
+                case 3: drawVizStarfield(w, h); break;
+                case 4: drawVizPlasma(w, h, t); break;
+                case 5: drawVizFireworks(w, h, t); break;
+                case 6: drawVizMatrix(w, h); break;
+                case 7: drawVizKaleidoscope(w, h, t); break;
+            }
+            vizAnimHandle = requestAnimationFrame(vizLoop);
+        }
+
+        function showVizVisual() {
+            musicArt.style.display = 'none';
+            vizWrap.style.display = 'block';
+            ensureAudioGraph();
+            if (!vizAnimHandle) vizLoop();
+        }
+
+        function hideVizVisual() {
+            vizWrap.style.display = 'none';
+            if (vizAnimHandle) cancelAnimationFrame(vizAnimHandle);
+            vizAnimHandle = null;
+        }
 
         let musicTracks = [];
         let currentTrackId = null;
@@ -1466,6 +1768,8 @@
                         cdgState = cdgCreateState(cdgBytes);
                         showCdgVisual();
                         cdgLoop();
+                    } else {
+                        showVizVisual();
                     }
                     musicAudio.play();
                 } catch (err) {
@@ -1487,7 +1791,10 @@
                         cdgLoop();
                     } catch (err) {
                         console.error('Failed to load CD+G file', err);
+                        showVizVisual();
                     }
+                } else {
+                    showVizVisual();
                 }
             }
         }
@@ -1544,6 +1851,7 @@
             musicAudio.src = '';
             currentTrackId = null;
             clearCdgState();
+            hideVizVisual();
             if (currentObjectUrl) {
                 URL.revokeObjectURL(currentObjectUrl);
                 currentObjectUrl = null;
@@ -1639,6 +1947,8 @@
             } else if (e.key === ' ') {
                 e.preventDefault();
                 musicPlayPause.click();
+            } else if (e.key === 'v' || e.key === 'V') {
+                vizModeBtn.click();
             }
         });
 

@@ -621,40 +621,30 @@ static void handle_http_request(int client_socket, int tunnel_id) {
     LIBSSH2_SESSION *sess = ssh_get_session();
     ssh_session_unlock();
 
-    LIBSSH2_SFTP *sftp = nullptr;
-    if (sess) {
-        SftpOp op(sess);
-        sftp = libssh2_sftp_init(sess);
-    }
-
-    // The session/tunnel can die between requests (server-side timeout,
-    // network blip, etc.) without the process itself going away. Rather than
-    // failing every request from then on, try once to reconnect and re-init
-    // before giving up.
-    if (!sess || !sftp) {
-        SDL_Log("[Tunnel %d] %s — attempting reconnect", tunnel_id,
-                sess ? "SFTP init failed" : "No SSH session available");
-
-        if (ssh_reconnect()) {
-            ssh_session_lock();
-            sess = ssh_get_session();
-            ssh_session_unlock();
-
-            if (sess) {
-                SftpOp op(sess);
-                sftp = libssh2_sftp_init(sess);
-            }
-        }
-    }
-
     if (!sess) {
         const char *msg = "SSH session not established";
         std::string response = http_response_headers(500, "text/plain", strlen(msg));
         response += msg;
         socket_send_safe(client_socket, response.c_str(), response.length());
         closesocket(client_socket);
-        SDL_Log("[Tunnel %d] No SSH session available after reconnect attempt", tunnel_id);
+        SDL_Log("[Tunnel %d] No SSH session available", tunnel_id);
         return;
+    }
+
+    // libssh2_sftp_init() opens a new "sftp" subsystem channel on the
+    // existing SSH connection. Under load (many tunnels opening at once)
+    // the server can transiently refuse a new channel even though the SSH
+    // session itself is fine, so retry a few times before giving up.
+    LIBSSH2_SFTP *sftp = nullptr;
+    const int MAX_SFTP_INIT_ATTEMPTS = 3;
+    for (int attempt = 1; attempt <= MAX_SFTP_INIT_ATTEMPTS && !sftp; attempt++) {
+        SftpOp op(sess);
+        sftp = libssh2_sftp_init(sess);
+        if (!sftp && attempt < MAX_SFTP_INIT_ATTEMPTS) {
+            SDL_Log("[Tunnel %d] SFTP init failed (attempt %d/%d), retrying",
+                    tunnel_id, attempt, MAX_SFTP_INIT_ATTEMPTS);
+            SDL_Delay(200);
+        }
     }
 
     if (!sftp) {
@@ -663,7 +653,7 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         response += msg;
         socket_send_safe(client_socket, response.c_str(), response.length());
         closesocket(client_socket);
-        SDL_Log("[Tunnel %d] SFTP init failed after reconnect attempt", tunnel_id);
+        SDL_Log("[Tunnel %d] SFTP init failed after %d attempts", tunnel_id, MAX_SFTP_INIT_ATTEMPTS);
         return;
     }
 
@@ -1002,10 +992,11 @@ static void handle_http_request(int client_socket, int tunnel_id) {
     }
 
     // Close SFTP subsystem (the underlying session stays open — shared with
-    // the terminal and console). If the transfer was cancelled, skip
-    // shutdown, as the SFTP subsystem may be in a bad state from the
-    // client's abrupt disconnect.
-    if (sftp && !transfer_was_cancelled) {
+    // the terminal and console). Always do this, even if the transfer was
+    // cancelled — skipping it here leaks a channel on the server side, which
+    // eventually exhausts the server's session/channel limit and makes
+    // libssh2_sftp_init() start failing for new tunnels.
+    if (sftp) {
         SftpOp op(sess);
         libssh2_sftp_shutdown(sftp);
     }
