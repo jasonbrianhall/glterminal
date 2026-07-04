@@ -314,6 +314,7 @@ static std::string http_response_headers(int status_code, const char *content_ty
     if (status_code == 400) status_text = "Bad Request";
     else if (status_code == 404) status_text = "Not Found";
     else if (status_code == 405) status_text = "Method Not Allowed";
+    else if (status_code == 416) status_text = "Range Not Satisfiable";
     else if (status_code == 500) status_text = "Internal Server Error";
 
     // Always use inline disposition to let browser try to open/view the file
@@ -326,6 +327,80 @@ static std::string http_response_headers(int status_code, const char *content_ty
         status_code, status_text, content_type, content_length);
     
     return buf;
+}
+
+// Response builder for file downloads: always advertises Accept-Ranges so
+// players know they can seek, and emits either a full 200 or a partial
+// 206 (with Content-Range) when range_start/range_end are given.
+static std::string http_file_response_headers(bool is_partial, uint64_t range_start,
+                                              uint64_t range_end, uint64_t total_size,
+                                              const char *content_type) {
+    char buf[768];
+    if (is_partial) {
+        snprintf(buf, sizeof(buf),
+            "HTTP/1.1 206 Partial Content\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %llu\r\n"
+            "Content-Range: bytes %llu-%llu/%llu\r\n"
+            "Accept-Ranges: bytes\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            content_type,
+            (unsigned long long)(range_end - range_start + 1),
+            (unsigned long long)range_start, (unsigned long long)range_end,
+            (unsigned long long)total_size);
+    } else {
+        snprintf(buf, sizeof(buf),
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %llu\r\n"
+            "Accept-Ranges: bytes\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            content_type, (unsigned long long)total_size);
+    }
+    return buf;
+}
+
+// Parses a "Range: bytes=START-END" header (END and even START may be
+// omitted per RFC 7233, e.g. "bytes=500-" or "bytes=-500" for last 500
+// bytes). Returns false if no Range header is present. On success, fills
+// in the resolved (inclusive) byte range clamped to [0, file_size-1].
+static bool parse_range_header(const char *request_buf, uint64_t file_size,
+                                uint64_t &range_start, uint64_t &range_end) {
+    const char *range_hdr = strstr(request_buf, "Range:");
+    if (!range_hdr) range_hdr = strstr(request_buf, "range:");
+    if (!range_hdr) return false;
+
+    const char *eq = strchr(range_hdr, '=');
+    if (!eq) return false;
+    eq++;
+
+    unsigned long long start = 0, end = 0;
+    bool has_start = false, has_end = false;
+
+    if (*eq == '-') {
+        // suffix form: bytes=-N  => last N bytes
+        has_end = (sscanf(eq, "-%llu", &end) == 1);
+        if (!has_end || file_size == 0) return false;
+        range_end = file_size - 1;
+        range_start = (end >= file_size) ? 0 : (file_size - end);
+        return true;
+    }
+
+    int matched = sscanf(eq, "%llu-%llu", &start, &end);
+    if (matched < 1) return false;
+    has_start = true;
+    has_end = (matched == 2);
+
+    range_start = start;
+    range_end = has_end ? end : (file_size ? file_size - 1 : 0);
+
+    if (file_size > 0 && range_end >= file_size) range_end = file_size - 1;
+    if (range_start > range_end) return false;
+
+    (void)has_start;
+    return true;
 }
 
 static std::string json_escape(const std::string &s) {
@@ -574,7 +649,17 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                 }
                 
                 const char *content_type = get_mime_type(decoded_path.c_str());
-                std::string response = http_response_headers(200, content_type, file_size, filename);
+
+                uint64_t range_start = 0, range_end = (file_size ? file_size - 1 : 0);
+                bool is_partial = parse_range_header(buffer, file_size, range_start, range_end);
+
+                if (is_partial) {
+                    SftpOp op(sess);
+                    libssh2_sftp_seek64(file_handle, range_start);
+                }
+
+                std::string response = http_file_response_headers(is_partial, range_start, range_end,
+                                                                    file_size, content_type);
                 int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
                 
                 if (header_sent > 0) {
@@ -582,19 +667,20 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                     const int BUFFER_SIZE = 262144;  // 256KB
                     char *fbuffer = new char[BUFFER_SIZE];
                     uint64_t total_sent = 0;
+                    uint64_t bytes_wanted = is_partial ? (range_end - range_start + 1) : file_size;
                     
-                    while (total_sent < file_size) {
+                    while (total_sent < bytes_wanted) {
                         // CRITICAL: Check if socket is still valid BEFORE reading
                         if (!socket_is_valid(client_socket)) {
                             SDL_Log("[Tunnel %d] Socket invalid during download: %s (sent %llu/%llu bytes)", 
-                                    tunnel_id, decoded_path.c_str(), total_sent, file_size);
+                                    tunnel_id, decoded_path.c_str(), total_sent, bytes_wanted);
                             transfer_was_cancelled = true;
                             break;
                         }
                         
-                        int bytes_to_read = (file_size - total_sent > BUFFER_SIZE) 
+                        int bytes_to_read = (bytes_wanted - total_sent > BUFFER_SIZE) 
                                           ? BUFFER_SIZE 
-                                          : (int)(file_size - total_sent);
+                                          : (int)(bytes_wanted - total_sent);
                         
                         int bytes_read;
                         { SftpOp op(sess); bytes_read = libssh2_sftp_read(file_handle, fbuffer, bytes_to_read); }
@@ -606,7 +692,7 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                         int bytes_sent = socket_send_safe(client_socket, fbuffer, bytes_read);
                         if (bytes_sent <= 0) {
                             SDL_Log("[Tunnel %d] Download cancelled by client: %s (sent %llu/%llu bytes)", 
-                                    tunnel_id, decoded_path.c_str(), total_sent, file_size);
+                                    tunnel_id, decoded_path.c_str(), total_sent, bytes_wanted);
                             transfer_was_cancelled = true;
                             break;
                         }
@@ -615,8 +701,9 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                     }
                     
                     if (!transfer_was_cancelled) {
-                        SDL_Log("[Tunnel %d] Downloaded file successfully: %s (%llu bytes)", 
-                                tunnel_id, decoded_path.c_str(), total_sent);
+                        SDL_Log("[Tunnel %d] Downloaded %s%s: %s (%llu bytes)", 
+                                tunnel_id, is_partial ? "range of " : "", "file",
+                                decoded_path.c_str(), (unsigned long long)total_sent);
                     }
                     
                     delete[] fbuffer;
