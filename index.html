@@ -472,6 +472,38 @@
             text-align: center;
             color: #8fdc8f;
         }
+
+        .video-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.92);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .video-overlay.active {
+            display: flex;
+        }
+
+        .video-player {
+            width: 900px;
+            max-width: 92vw;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .video-player video {
+            width: 100%;
+            max-height: 60vh;
+            background: black;
+            border-radius: 8px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+        }
     </style>
 </head>
 <body>
@@ -481,6 +513,7 @@
             <div style="display: flex; align-items: center; gap: 20px;">
                 <button id="slideshowBtn" class="slideshow-btn" style="display: none;">▶ Slideshow</button>
                 <button id="musicBtn" class="slideshow-btn" style="display: none;">♪ Play Music</button>
+                <button id="videoBtn" class="slideshow-btn" style="display: none;">▶ Play Video</button>
                 <label class="new-window-toggle">
                     <input type="checkbox" id="newWindowToggle">
                     Open in new window
@@ -545,6 +578,27 @@
         <audio id="musicAudio"></audio>
     </div>
 
+    <div class="video-overlay" id="videoOverlay">
+        <button class="slideshow-close" id="videoClose">&times;</button>
+        <div class="video-player">
+            <video id="videoElement" controls></video>
+            <div class="music-title" id="videoTitle"></div>
+            <input type="text" id="videoSearch" class="music-search" placeholder="Search files...">
+            <div class="music-table-scroll">
+                <table class="music-table" id="videoTable">
+                    <thead>
+                        <tr>
+                            <th data-col="name">Name</th>
+                            <th data-col="type" style="width: 70px;">Type</th>
+                            <th data-col="subs" style="width: 90px;">Subtitles</th>
+                        </tr>
+                    </thead>
+                    <tbody id="videoTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <script>
         let fileData = [];
         let sortState = { col: null, dir: 1 };
@@ -574,6 +628,11 @@
 
         let currentSorted = [];
 
+        // Collapses repeated slashes (e.g. "//home/jbhall/Music" -> "/home/jbhall/Music")
+        function getCurrentPath() {
+            return window.location.pathname.replace(/\/+/g, '/');
+        }
+
         // ---- image detection + slideshow ----
         const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico', 'tiff', 'tif'];
 
@@ -586,7 +645,7 @@
         }
 
         function getImageEntries() {
-            const currentPath = window.location.pathname;
+            const currentPath = getCurrentPath();
             return fileData
                 .filter(isImageFile)
                 .map(entry => {
@@ -614,7 +673,7 @@
         }
 
         function entryToTrack(entry, type) {
-            const currentPath = window.location.pathname;
+            const currentPath = getCurrentPath();
             const entryPath = currentPath.endsWith('/')
                 ? `${currentPath}${entry.name}`
                 : `${currentPath}/${entry.name}`;
@@ -654,6 +713,48 @@
             return [...audio, ...zips].map((t, i) => ({ ...t, id: i }));
         }
 
+        // ---- video detection ----
+        const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v'];
+        const SUBTITLE_EXTENSIONS = ['vtt', 'srt'];
+
+        function isVideoFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return VIDEO_EXTENSIONS.includes(ext);
+        }
+
+        function getVideoEntries() {
+            // Look for standalone "movie.mp4" + "movie.vtt"/"movie.srt" pairs
+            const subsByBaseName = new Map();
+            fileData.forEach(entry => {
+                if (entry.type !== 'file') return;
+                const dot = entry.name.lastIndexOf('.');
+                if (dot === -1) return;
+                const ext = entry.name.slice(dot + 1).toLowerCase();
+                if (SUBTITLE_EXTENSIONS.includes(ext)) {
+                    subsByBaseName.set(entry.name.slice(0, dot).toLowerCase(), entry.name);
+                }
+            });
+
+            const videos = fileData.filter(isVideoFile).map(e => {
+                const track = entryToTrack(e, 'video');
+                const dot = e.name.lastIndexOf('.');
+                const base = (dot === -1 ? e.name : e.name.slice(0, dot)).toLowerCase();
+                if (subsByBaseName.has(base)) {
+                    track.hasSubs = true;
+                    track.subSrc = entryToTrack({ name: subsByBaseName.get(base) }, 'subtitle').src;
+                    track.subIsSrt = subsByBaseName.get(base).toLowerCase().endsWith('.srt');
+                } else {
+                    track.hasSubs = false;
+                }
+                return track;
+            });
+
+            return videos.map((t, i) => ({ ...t, id: i }));
+        }
+
         const slideshowBtn = document.getElementById('slideshowBtn');
         const slideshowOverlay = document.getElementById('slideshowOverlay');
         const slideshowImg = document.getElementById('slideshowImg');
@@ -666,6 +767,8 @@
             slideshowBtn.style.display = images.length > 0 ? 'inline-block' : 'none';
             const audios = getAudioEntries();
             musicBtn.style.display = audios.length > 0 ? 'inline-block' : 'none';
+            const videos = getVideoEntries();
+            videoBtn.style.display = videos.length > 0 ? 'inline-block' : 'none';
         }
 
         // ---- zoom/pan state ----
@@ -1521,11 +1624,207 @@
             if (!musicOverlay.classList.contains('active')) return;
             if (e.key === 'Escape') { closeMusicPlayer(); return; }
             if (document.activeElement === musicSearchInput) return;
-            if (e.key === 'ArrowLeft') prevTrack();
-            else if (e.key === 'ArrowRight') nextTrack();
-            else if (e.key === ' ') {
+            if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                musicAudio.currentTime = Math.min(musicAudio.duration || Infinity, musicAudio.currentTime + 10);
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                musicAudio.currentTime = Math.max(0, musicAudio.currentTime - 10);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                nextTrack();
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                prevTrack();
+            } else if (e.key === ' ') {
                 e.preventDefault();
                 musicPlayPause.click();
+            }
+        });
+
+        // ---- video player ----
+        const videoBtn = document.getElementById('videoBtn');
+        const videoOverlay = document.getElementById('videoOverlay');
+        const videoElement = document.getElementById('videoElement');
+        const videoTitle = document.getElementById('videoTitle');
+        const videoSearchInput = document.getElementById('videoSearch');
+        const videoTable = document.getElementById('videoTable');
+        const videoTableBody = document.getElementById('videoTableBody');
+
+        let videoTracks = [];
+        let currentVideoTrackId = null;
+        let videoSearchTerm = '';
+        let videoSortState = { col: 'name', dir: 1 };
+        let currentSubtitleUrl = null;
+
+        // Converts SRT timestamps/format to WebVTT so the browser's native <track> can use it
+        function srtToVtt(srtText) {
+            const body = srtText
+                .replace(/\r/g, '')
+                .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+            return 'WEBVTT\n\n' + body;
+        }
+
+        function getDisplayedVideos() {
+            let list = videoTracks;
+            const term = videoSearchTerm.trim().toLowerCase();
+            if (term) list = list.filter(t => t.name.toLowerCase().includes(term));
+
+            const { col, dir } = videoSortState;
+            list = [...list].sort((a, b) => {
+                let av, bv;
+                if (col === 'subs') {
+                    av = a.hasSubs ? 1 : 0;
+                    bv = b.hasSubs ? 1 : 0;
+                } else if (col === 'type') {
+                    av = a.type; bv = b.type;
+                } else {
+                    av = a.name.toLowerCase(); bv = b.name.toLowerCase();
+                }
+                if (av < bv) return -1 * dir;
+                if (av > bv) return 1 * dir;
+                return 0;
+            });
+            return list;
+        }
+
+        function updateVideoSortHeaders() {
+            videoTable.querySelectorAll('th[data-col]').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.col === videoSortState.col) {
+                    th.classList.add(videoSortState.dir === 1 ? 'sort-asc' : 'sort-desc');
+                }
+            });
+        }
+
+        function renderVideoTable() {
+            const list = getDisplayedVideos();
+            videoTableBody.innerHTML = list.map(track => {
+                const subsLabel = track.hasSubs ? '&#10003;' : '&#8212;';
+                return `<tr data-id="${track.id}" class="${track.id === currentVideoTrackId ? 'playing' : ''}">` +
+                    `<td>${escapeHtml(track.name)}</td>` +
+                    `<td>${track.type}</td>` +
+                    `<td class="music-cdg-cell">${subsLabel}</td>` +
+                    `</tr>`;
+            }).join('');
+            updateVideoSortHeaders();
+        }
+
+        videoTableBody.addEventListener('click', (e) => {
+            const row = e.target.closest('tr[data-id]');
+            if (row) playVideoById(parseInt(row.dataset.id, 10));
+        });
+
+        videoTable.querySelectorAll('th[data-col]').forEach(th => {
+            th.addEventListener('click', () => {
+                const col = th.dataset.col;
+                if (videoSortState.col === col) {
+                    videoSortState.dir *= -1;
+                } else {
+                    videoSortState = { col, dir: 1 };
+                }
+                renderVideoTable();
+            });
+        });
+
+        videoSearchInput.addEventListener('input', () => {
+            videoSearchTerm = videoSearchInput.value;
+            renderVideoTable();
+        });
+
+        async function playVideoById(id) {
+            const track = videoTracks.find(t => t.id === id);
+            if (!track) return;
+            currentVideoTrackId = id;
+            renderVideoTable();
+
+            // Clear any existing subtitle track
+            videoElement.querySelectorAll('track').forEach(t => t.remove());
+            if (currentSubtitleUrl) {
+                URL.revokeObjectURL(currentSubtitleUrl);
+                currentSubtitleUrl = null;
+            }
+
+            videoElement.src = track.src;
+            videoTitle.textContent = track.name;
+            videoElement.play();
+
+            if (track.subSrc) {
+                try {
+                    const resp = await fetch(track.subSrc);
+                    let vttText = await resp.text();
+                    if (track.subIsSrt) vttText = srtToVtt(vttText);
+                    const blob = new Blob([vttText], { type: 'text/vtt' });
+                    currentSubtitleUrl = URL.createObjectURL(blob);
+                    const trackEl = document.createElement('track');
+                    trackEl.kind = 'subtitles';
+                    trackEl.label = 'Subtitles';
+                    trackEl.srclang = 'en';
+                    trackEl.src = currentSubtitleUrl;
+                    trackEl.default = true;
+                    videoElement.appendChild(trackEl);
+                } catch (err) {
+                    console.error('Failed to load subtitles', err);
+                }
+            }
+        }
+
+        function nextVideo() {
+            const list = getDisplayedVideos();
+            if (list.length === 0) return;
+            const curIdx = list.findIndex(t => t.id === currentVideoTrackId);
+            playVideoById(list[(curIdx + 1 + list.length) % list.length].id);
+        }
+
+        function prevVideo() {
+            const list = getDisplayedVideos();
+            if (list.length === 0) return;
+            const curIdx = list.findIndex(t => t.id === currentVideoTrackId);
+            playVideoById(list[(curIdx - 1 + list.length) % list.length].id);
+        }
+
+        function openVideoPlayer() {
+            videoTracks = getVideoEntries();
+            if (videoTracks.length === 0) return;
+            videoSearchTerm = '';
+            videoSearchInput.value = '';
+            videoSortState = { col: 'name', dir: 1 };
+            videoOverlay.classList.add('active');
+            renderVideoTable();
+            const list = getDisplayedVideos();
+            if (list.length > 0) playVideoById(list[0].id);
+        }
+
+        function closeVideoPlayer() {
+            videoOverlay.classList.remove('active');
+            videoElement.pause();
+            videoElement.removeAttribute('src');
+            videoElement.load();
+            videoElement.querySelectorAll('track').forEach(t => t.remove());
+            currentVideoTrackId = null;
+            if (currentSubtitleUrl) {
+                URL.revokeObjectURL(currentSubtitleUrl);
+                currentSubtitleUrl = null;
+            }
+        }
+
+        videoBtn.addEventListener('click', openVideoPlayer);
+        document.getElementById('videoClose').addEventListener('click', closeVideoPlayer);
+
+        videoOverlay.addEventListener('click', (e) => {
+            if (e.target === videoOverlay) closeVideoPlayer();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (!videoOverlay.classList.contains('active')) return;
+            if (e.key === 'Escape') { closeVideoPlayer(); return; }
+            if (document.activeElement === videoSearchInput) return;
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                nextVideo();
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                prevVideo();
             }
         });
 
@@ -1535,7 +1834,7 @@
         }
 
         async function loadFiles() {
-            const dir = window.location.pathname;
+            const dir = getCurrentPath();
             const encodedDir = encodeParens(dir);
             
             // Decode the path for display
@@ -1582,7 +1881,7 @@
             tbody.innerHTML = '';
 
             // Add parent directory link if not root
-            const currentPath = window.location.pathname;
+            const currentPath = getCurrentPath();
             const hasParentDir = currentPath !== '/' && currentPath !== '';
             
             if (hasParentDir) {

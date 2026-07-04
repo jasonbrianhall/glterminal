@@ -621,20 +621,40 @@ static void handle_http_request(int client_socket, int tunnel_id) {
     LIBSSH2_SESSION *sess = ssh_get_session();
     ssh_session_unlock();
 
+    LIBSSH2_SFTP *sftp = nullptr;
+    if (sess) {
+        SftpOp op(sess);
+        sftp = libssh2_sftp_init(sess);
+    }
+
+    // The session/tunnel can die between requests (server-side timeout,
+    // network blip, etc.) without the process itself going away. Rather than
+    // failing every request from then on, try once to reconnect and re-init
+    // before giving up.
+    if (!sess || !sftp) {
+        SDL_Log("[Tunnel %d] %s — attempting reconnect", tunnel_id,
+                sess ? "SFTP init failed" : "No SSH session available");
+
+        if (ssh_reconnect()) {
+            ssh_session_lock();
+            sess = ssh_get_session();
+            ssh_session_unlock();
+
+            if (sess) {
+                SftpOp op(sess);
+                sftp = libssh2_sftp_init(sess);
+            }
+        }
+    }
+
     if (!sess) {
         const char *msg = "SSH session not established";
         std::string response = http_response_headers(500, "text/plain", strlen(msg));
         response += msg;
         socket_send_safe(client_socket, response.c_str(), response.length());
         closesocket(client_socket);
-        SDL_Log("[Tunnel %d] No SSH session available", tunnel_id);
+        SDL_Log("[Tunnel %d] No SSH session available after reconnect attempt", tunnel_id);
         return;
-    }
-
-    LIBSSH2_SFTP *sftp;
-    {
-        SftpOp op(sess);
-        sftp = libssh2_sftp_init(sess);
     }
 
     if (!sftp) {
@@ -643,7 +663,7 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         response += msg;
         socket_send_safe(client_socket, response.c_str(), response.length());
         closesocket(client_socket);
-        SDL_Log("[Tunnel %d] SFTP init failed", tunnel_id);
+        SDL_Log("[Tunnel %d] SFTP init failed after reconnect attempt", tunnel_id);
         return;
     }
 

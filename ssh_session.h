@@ -91,6 +91,14 @@ bool ssh_channel_closed();
 // Close channel and free libssh2 resources.
 void ssh_disconnect();
 
+// Tear down and re-establish the session using the config/Terminal from the
+// last ssh_connect() call. Used when a background consumer (e.g. the SFTP
+// web server) finds the session dead and needs it back without going through
+// the interactive connect flow again. Returns false if no prior connection
+// exists to reconnect from, or if reconnecting fails (same failure modes as
+// ssh_connect — logged via SDL_Log).
+bool ssh_reconnect();
+
 #include <libssh2.h>
 
 // Returns true if an SSH session is currently active.
