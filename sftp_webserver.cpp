@@ -5,6 +5,7 @@
 #include "sftp_overlay.h"
 
 #include "index.h"  // Embedded index.html
+#include "404.h" // Embedded 404.html
 
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -425,6 +426,7 @@ static std::string http_response_headers(int status_code, const char *content_ty
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
+        "Cache-Control: max-age=3600\r\n"
         "Connection: close\r\n"
         "\r\n",
         status_code, status_text, content_type, content_length);
@@ -440,6 +442,7 @@ static std::string http_response_headers_gzip(const char *content_type, size_t c
         "Content-Type: %s\r\n"
         "Content-Encoding: gzip\r\n"
         "Content-Length: %zu\r\n"
+        "Cache-Control: max-age=3600\r\n"
         "Connection: close\r\n"
         "\r\n",
         content_type, content_length);
@@ -495,7 +498,6 @@ static std::string http_file_response_headers(bool is_partial, uint64_t range_st
             "Content-Length: %llu\r\n"
             "Content-Range: bytes %llu-%llu/%llu\r\n"
             "Accept-Ranges: bytes\r\n"
-            "Cache-Control: max-age=3600\r\n"
             "Connection: close\r\n"
             "\r\n",
             content_type,
@@ -508,7 +510,6 @@ static std::string http_file_response_headers(bool is_partial, uint64_t range_st
             "Content-Type: %s\r\n"
             "Content-Length: %llu\r\n"
             "Accept-Ranges: bytes\r\n"
-            "Cache-Control: max-age=3600\r\n"
             "Connection: close\r\n"
             "\r\n",
             content_type, (unsigned long long)total_size);
@@ -589,6 +590,10 @@ static std::string build_directory_json(const std::vector<RemoteFile> &entries) 
 
 static std::string get_index_html() {
     return std::string((const char *)index_html, index_html_len);
+}
+
+static std::string get_404() {
+    return std::string((const char *)__404_html, __404_html_len);
 }
 
 // Case-insensitive string comparison for extensions
@@ -724,18 +729,7 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
         bool is_directory = exists && S_ISDIR(st.st_mode);
 
         if (!exists) {
-            std::string data =  "<!DOCTYPE html><html><head><title>404 Not Found</title>"
-        "<style>"
-        "body { font-family: sans-serif; background-color: #f8f9fa; color: #333; text-align: center; padding: 50px; }"
-        "h1 { font-size: 48px; color: #dc3545; }"
-        "p { font-size: 18px; }"
-        "a { color: #007bff; text-decoration: none; }"
-        "a:hover { text-decoration: underline; }"
-        "</style></head><body>"
-        "<h1>404 - Not Found</h1>"
-        "<p>The requested file could not be located.</p>"
-        "<p><a href=\"/\">Return to Home</a></p>"
-        "</body></html>";
+            std::string data =  get_404();
             std::string response = http_response_headers(404, "text/html", data.length());
             response+=data;
             socket_send_safe(client_socket, response.c_str(), response.length());
@@ -759,18 +753,7 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
         else {
             FILE *f = fopen(fs_path.c_str(), "rb");
             if (!f) {
-                std::string data  = "<!DOCTYPE html><html><head><title>404 Not Found</title>"
-        "<style>"
-        "body { font-family: sans-serif; background-color: #f8f9fa; color: #333; text-align: center; padding: 50px; }"
-        "h1 { font-size: 48px; color: #dc3545; }"
-        "p { font-size: 18px; }"
-        "a { color: #007bff; text-decoration: none; }"
-        "a:hover { text-decoration: underline; }"
-        "</style></head><body>"
-        "<h1>404 - Not Found</h1>"
-        "<p>The requested file could not be located.</p>"
-        "<p><a href=\"/\">Return to Home</a></p>"
-        "</body></html>";
+                std::string data  = get_404();
                 std::string response = http_response_headers(404, "text/html", data.length());
                 response+=data;
                 socket_send_safe(client_socket, response.c_str(), response.length());
@@ -969,8 +952,9 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                             LIBSSH2_SFTP_S_ISDIR(attrs.permissions));
         
         if (rc != 0 && decoded_path != "/") {
-            std::string response = http_response_headers(404, "text/plain", 9);
-            response += "Not found";
+            std::string data = get_404();
+            std::string response = http_response_headers(404, "text/html", data.length());
+            response += data;
             socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] File not found: %s", tunnel_id, decoded_path.c_str());
         }
