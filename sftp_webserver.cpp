@@ -722,8 +722,20 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
         bool is_directory = exists && S_ISDIR(st.st_mode);
 
         if (!exists) {
-            std::string response = http_response_headers(404, "text/plain", 9);
-            response += "Not found";
+            std::string data =  "<!DOCTYPE html><html><head><title>404 Not Found</title>"
+        "<style>"
+        "body { font-family: sans-serif; background-color: #f8f9fa; color: #333; text-align: center; padding: 50px; }"
+        "h1 { font-size: 48px; color: #dc3545; }"
+        "p { font-size: 18px; }"
+        "a { color: #007bff; text-decoration: none; }"
+        "a:hover { text-decoration: underline; }"
+        "</style></head><body>"
+        "<h1>404 - Not Found</h1>"
+        "<p>The requested file could not be located.</p>"
+        "<p><a href=\"/\">Return to Home</a></p>"
+        "</body></html>";
+            std::string response = http_response_headers(404, "text/html", data.length());
+            response+=data;
             socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] File not found: %s", tunnel_id, fs_path.c_str());
         }
@@ -745,8 +757,20 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
         else {
             FILE *f = fopen(fs_path.c_str(), "rb");
             if (!f) {
-                std::string response = http_response_headers(404, "text/plain", 9);
-                response += "Not found";
+                std::string data  = "<!DOCTYPE html><html><head><title>404 Not Found</title>"
+        "<style>"
+        "body { font-family: sans-serif; background-color: #f8f9fa; color: #333; text-align: center; padding: 50px; }"
+        "h1 { font-size: 48px; color: #dc3545; }"
+        "p { font-size: 18px; }"
+        "a { color: #007bff; text-decoration: none; }"
+        "a:hover { text-decoration: underline; }"
+        "</style></head><body>"
+        "<h1>404 - Not Found</h1>"
+        "<p>The requested file could not be located.</p>"
+        "<p><a href=\"/\">Return to Home</a></p>"
+        "</body></html>";
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response+=data;
                 socket_send_safe(client_socket, response.c_str(), response.length());
                 SDL_Log("[Tunnel %d] Failed to open: %s", tunnel_id, fs_path.c_str());
                 return;
