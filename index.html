@@ -43,6 +43,10 @@
             color: #333;
             font-weight: 600;
             margin-bottom: 5px;
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         .header .breadcrumb {
@@ -188,6 +192,11 @@
 
         .slideshow-btn:hover {
             background: #764ba2;
+        }
+
+        a.slideshow-btn {
+            display: inline-block;
+            text-decoration: none;
         }
 
         .slideshow-overlay {
@@ -602,7 +611,8 @@
     <div class="container">
         <div class="header">
             <h1 id="title">File Browser</h1>
-            <div style="display: flex; align-items: center; gap: 20px;">
+            <div style="display: flex; align-items: center; gap: 20px; flex-shrink: 0;">
+                <a id="homeBtn" class="slideshow-btn" style="display: none;">&#8962; Home</a>
                 <button id="slideshowBtn" class="slideshow-btn" style="display: none;">▶ Slideshow</button>
                 <button id="musicBtn" class="slideshow-btn" style="display: none;">♪ Play Music</button>
                 <button id="videoBtn" class="slideshow-btn" style="display: none;">▶ Play Video</button>
@@ -833,7 +843,7 @@
         }
 
         // ---- video detection ----
-        const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v'];
+        const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v', 'mkv'];
         const SUBTITLE_EXTENSIONS = ['vtt', 'srt'];
 
         function isVideoFile(entry) {
@@ -2368,6 +2378,14 @@
             const data = await response.json();
             fileData = data.entries;
             updateSlideshowButtonVisibility();
+
+            const homeBtn = document.getElementById('homeBtn');
+            if (data.home) {
+                homeBtn.href = data.home.split('/').map(encodeURIComponent).join('/');
+                homeBtn.style.display = 'inline-block';
+            } else {
+                homeBtn.style.display = 'none';
+            }
             
             // Sort by name by default
             sortState.col = 'name';
