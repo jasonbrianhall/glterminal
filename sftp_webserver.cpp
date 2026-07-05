@@ -404,6 +404,14 @@ static bool client_accepts_gzip(const char *raw_request) {
     return false;
 }
 
+// Client opts in to server-side MIDI->WAV rendering via this header.
+// Without it, .mid/.midi/.kar files are served as-is (plain download) —
+// only our own music player sends this header, so a raw request just
+// gets the raw file.
+static bool client_wants_midi_render(const char *raw_request) {
+    return strstr(raw_request, "X-Render-Midi:") != nullptr;
+}
+
 // Only worth gzipping text-ish content above a small size floor — binary
 // media is already compressed and small responses aren't worth the CPU.
 static bool should_gzip(const char *content_type, size_t content_length) {
@@ -793,7 +801,7 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
             socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] Served directory listing HTML: %s", tunnel_id, fs_path.c_str());
         }
-        else if (is_midi_extension(fs_path.c_str())) {
+        else if (is_midi_extension(fs_path.c_str()) && client_wants_midi_render(buffer)) {
             FILE *mf = fopen(fs_path.c_str(), "rb");
             if (!mf) {
                 std::string data = get_404();
@@ -1042,7 +1050,7 @@ static void handle_http_request(int client_socket, int tunnel_id) {
             socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] Served directory listing HTML: %s", tunnel_id, decoded_path.c_str());
         }
-        else if (is_midi_extension(decoded_path.c_str())) {
+        else if (is_midi_extension(decoded_path.c_str()) && client_wants_midi_render(buffer)) {
             std::vector<uint8_t> midi_bytes;
             bool got_file;
             { SftpOp op(sess); got_file = sftp_get_file(sftp, decoded_path.c_str(), midi_bytes); }

@@ -766,6 +766,7 @@
 
         // ---- audio detection + music player ----
         const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'wma', 'opus'];
+        const MIDI_EXTENSIONS = ['mid', 'midi', 'kar'];
 
         function isAudioFile(entry) {
             if (entry.type !== 'file') return false;
@@ -773,6 +774,14 @@
             if (dot === -1) return false;
             const ext = entry.name.slice(dot + 1).toLowerCase();
             return AUDIO_EXTENSIONS.includes(ext);
+        }
+
+        function isMidiFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return MIDI_EXTENSIONS.includes(ext);
         }
 
         function isZipFile(entry) {
@@ -818,7 +827,9 @@
                 return track;
             });
 
-            return [...audio, ...zips].map((t, i) => ({ ...t, id: i }));
+            const midis = fileData.filter(isMidiFile).map(e => entryToTrack(e, 'midi'));
+
+            return [...audio, ...zips, ...midis].map((t, i) => ({ ...t, id: i }));
         }
 
         // ---- video detection ----
@@ -1946,6 +1957,24 @@
                 } catch (err) {
                     if (token !== loadToken) return;
                     musicTitle.textContent = `Failed to load ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'midi') {
+                musicTitle.textContent = `Rendering ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Render-Midi': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to render ${track.name}`;
                     console.error(err);
                 }
             } else {
