@@ -13,7 +13,7 @@
 #include "sftp_console.h"
 #include "sftp_overlay.h"   // sftp_init(), sftp_local_home_dir(), sftp_local_download_dir()
 #include "ssh_session.h"
-#include "sftp_webserver.h"  // F9 web server
+#include "sftp_webserver.h"  // web server status (started via F9 outside the console)
 #include "gl_renderer.h"
 #include "ft_font.h"
 
@@ -577,7 +577,6 @@ static void cmd_help() {
     push_info("  exit / quit / bye       Close console");
     push_info("");
     push_info("Hotkeys:");
-    push_info("  F9                      Toggle web file browser (http://localhost:53716+)");
 }
 
 // Executed synchronously (no blocking I/O)
@@ -1159,7 +1158,7 @@ void sftp_console_open(int /*win_w*/, int /*win_h*/) {
     refresh_local_cwd();
 
     if (s_lines.empty()) {
-        push_info("SFTP Console — type 'help' for commands, 'exit' to close, F9 for web browser (read-only)");
+        push_info("SFTP Console — type 'help' for commands, 'exit' to close");
     }
 
     // Populate remote CWD from active session if we can
@@ -1200,24 +1199,6 @@ bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
     // Global hotkeys always pass through to the main loop
     if (sym == SDLK_F11) return false;
 
-    // F9 — toggle web server (same key as the no-SSH local browser, so it's
-    // consistent regardless of whether an SFTP session is active)
-    if (sym == SDLK_F9) {
-        if (sftp_webserver_running()) {
-            sftp_webserver_stop();
-            push_line_direct("Web server stopped.", 0.82f, 0.88f, 0.96f);
-        } else {
-            if (sftp_webserver_start()) {
-                int port = sftp_webserver_get_port();
-                char msg[256];
-                snprintf(msg, sizeof(msg), "Web server started on http://localhost:%d", port);
-                push_line_direct(msg, 0.6f, 0.9f, 0.6f);
-            } else {
-                push_line_direct("Failed to start web server", 0.9f, 0.6f, 0.6f);
-            }
-        }
-        return true;
-    }
     if (sym == SDLK_ESCAPE) { sftp_console_close(); return true; }
 
     // Return — execute
@@ -1522,7 +1503,7 @@ void sftp_console_render(int win_w, int win_h) {
         char title[1024];
         snprintf(title, sizeof(title),
                  "SFTP Console (F4)   remote: %s   local: %s   "
-                 "F9: web browser   PgUp/PgDn: scroll   Up/Down: history   Esc: close",
+                 "PgUp/PgDn: scroll   Up/Down: history   Esc: close",
                  s_remote_cwd, s_local_cwd);
         con_text(title, (float)PAD, title_h * 0.72f, 0.65f, 0.82f, 1.0f);
     }
