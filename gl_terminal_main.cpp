@@ -1416,12 +1416,17 @@ int main(int argc, char **argv) {
                     else break;  // not consumed (e.g. F11) — fall through
                     break;
                 }
-                // F9 — local file browser web server. Only when there's no
-                // active SSH session (that's what F12-in-sftp_console is for).
-                if (ev.key.keysym.sym == SDLK_F9 && !(use_ssh && ssh_active())) {
+                // F9 — toggle web file browser. Remote (SFTP-backed) when an
+                // SSH session is active, local filesystem browser otherwise.
+                if (ev.key.keysym.sym == SDLK_F9) {
                     if (sftp_webserver_running()) {
                         sftp_webserver_stop();
-                        SDL_Log("[WebServer] Local file browser stopped\n");
+                        SDL_Log("[WebServer] File browser stopped\n");
+                    } else if (use_ssh && ssh_active()) {
+                        if (sftp_webserver_start()) {
+                            SDL_Log("[WebServer] Remote file browser: http://localhost:%d\n",
+                                    sftp_webserver_get_port());
+                        }
                     } else {
                         if (sftp_webserver_start_local("/")) {
                             SDL_Log("[WebServer] Local file browser: http://localhost:%d\n",
