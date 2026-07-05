@@ -2383,8 +2383,8 @@
 
         document.getElementById('musicNext').addEventListener('click', nextTrack);
         document.getElementById('musicPrev').addEventListener('click', prevTrack);
-        document.getElementById('musicUpBtn').addEventListener('click', nextTrack);
-        document.getElementById('musicDownBtn').addEventListener('click', prevTrack);
+        document.getElementById('musicUpBtn').addEventListener('click', prevTrack);
+        document.getElementById('musicDownBtn').addEventListener('click', nextTrack);
 
         musicShuffleBtn.addEventListener('click', () => {
             shuffleOn = !shuffleOn;
@@ -2408,10 +2408,10 @@
                 musicAudio.currentTime = Math.max(0, musicAudio.currentTime - 10);
             } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                nextTrack();
+                prevTrack();
             } else if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                prevTrack();
+                nextTrack();
             } else if (e.key === ' ') {
                 e.preventDefault();
                 musicPlayPause.click();
@@ -2588,8 +2588,8 @@
 
         videoBtn.addEventListener('click', openVideoPlayer);
         document.getElementById('videoClose').addEventListener('click', closeVideoPlayer);
-        document.getElementById('videoUpBtn').addEventListener('click', nextVideo);
-        document.getElementById('videoDownBtn').addEventListener('click', prevVideo);
+        document.getElementById('videoUpBtn').addEventListener('click', prevVideo);
+        document.getElementById('videoDownBtn').addEventListener('click', nextVideo);
 
         videoOverlay.addEventListener('click', (e) => {
             if (e.target === videoOverlay) closeVideoPlayer();
@@ -2601,10 +2601,10 @@
             if (document.activeElement === videoSearchInput) return;
             if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                nextVideo();
+                prevVideo();
             } else if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                prevVideo();
+                nextVideo();
             }
         });
 
