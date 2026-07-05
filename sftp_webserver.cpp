@@ -581,7 +581,49 @@ static std::string json_escape(const std::string &s) {
     return result;
 }
 
-static std::string build_directory_json(const std::vector<RemoteFile> &entries) {
+// Local user's home directory (F9 / no-SSH mode). Different env var per OS.
+static std::string get_local_home_dir() {
+#ifdef _WIN32
+    const char *p = getenv("USERPROFILE");
+    std::string h = p ? p : "C:/";
+#else
+    const char *p = getenv("HOME");
+    std::string h = p ? p : "/";
+#endif
+    for (auto &c : h) if (c == '\\') c = '/';
+    return h;
+}
+
+// Local mode is served chrooted under g_local_root, so the "Home" link only
+// works if the OS home directory actually falls under that root. Returns
+// false (no link) rather than a broken/misleading path otherwise.
+static bool local_home_url_path(std::string &out_url_path) {
+    std::string home = get_local_home_dir();
+    std::string root = g_local_root;
+    if (home.size() >= root.size() && home.compare(0, root.size(), root) == 0) {
+        std::string rel = home.substr(root.size());
+        if (rel.empty() || rel[0] != '/') rel = "/" + rel;
+        out_url_path = rel;
+        return true;
+    }
+    return false;
+}
+
+// Remote user's home directory (SFTP mode) — realpath(".") resolves relative
+// to the SFTP subsystem's starting directory, which is the login home dir.
+static std::string get_remote_home_dir(LIBSSH2_SESSION *sess, LIBSSH2_SFTP *sftp) {
+    char buf[1024];
+    int rc;
+    { SftpOp op(sess); rc = libssh2_sftp_realpath(sftp, ".", buf, sizeof(buf) - 1); }
+    if (rc > 0) {
+        buf[rc] = '\0';
+        return std::string(buf);
+    }
+    return std::string("/");
+}
+
+static std::string build_directory_json(const std::vector<RemoteFile> &entries,
+                                         const std::string *home_path = nullptr) {
     std::string json = "{\"entries\":[";
     for (size_t i = 0; i < entries.size(); ++i) {
         if (i > 0) json += ",";
@@ -594,7 +636,13 @@ static std::string build_directory_json(const std::vector<RemoteFile> &entries) 
             (long)entries[i].modified);
         json += buf;
     }
-    json += "]}";
+    json += "]";
+    if (home_path) {
+        json += ",\"home\":\"" + json_escape(*home_path) + "\"";
+    } else {
+        json += ",\"home\":null";
+    }
+    json += "}";
     return json;
 }
 
@@ -905,7 +953,9 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
 
         SDL_Log("[Tunnel %d] Listed directory: %s (%zu entries)", tunnel_id, fs_path.c_str(), entries.size());
 
-        std::string json = build_directory_json(entries);
+        std::string home_path;
+        bool have_home = local_home_url_path(home_path);
+        std::string json = build_directory_json(entries, have_home ? &home_path : nullptr);
         std::string response;
         std::string gzipped;
         if (client_accepts_gzip(buffer) && should_gzip("application/json", json.length()) &&
@@ -1362,7 +1412,8 @@ static void handle_http_request(int client_socket, int tunnel_id) {
 
         SDL_Log("[Tunnel %d] Listed directory: encoded='%s' decoded='%s' (%zu entries)", tunnel_id, dir_path, decoded_dir.c_str(), entries.size());
 
-        std::string json = build_directory_json(entries);
+        std::string home_path = get_remote_home_dir(sess, sftp);
+        std::string json = build_directory_json(entries, &home_path);
         std::string response;
         std::string gzipped;
         if (client_accepts_gzip(buffer) && should_gzip("application/json", json.length()) &&
