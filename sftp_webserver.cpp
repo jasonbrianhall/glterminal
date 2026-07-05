@@ -6,6 +6,8 @@
 
 #include "index.h"  // Embedded index.html
 #include "404.h" // Embedded 404.html
+#include "favicon.h" // Embedded favicon.ico
+#include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
 
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -596,6 +598,10 @@ static std::string get_404() {
     return std::string((const char *)__404_html, __404_html_len);
 }
 
+static std::string get_favicon() {
+    return std::string((const char *)favicon_ico, favicon_ico_len);
+}
+
 // Case-insensitive string comparison for extensions
 static int strcasecmp_ext(const char *a, const char *b) {
     while (*a && *b) {
@@ -652,6 +658,10 @@ static const char* get_mime_type(const char *filename) {
     if (strcasecmp_ext(ext, ".m4a") == 0) return "audio/mp4";
     if (strcasecmp_ext(ext, ".aac") == 0) return "audio/aac";
     if (strcasecmp_ext(ext, ".ogg") == 0 || strcasecmp_ext(ext, ".oga") == 0) return "audio/ogg";
+    if (strcasecmp_ext(ext, ".mid") == 0 || strcasecmp_ext(ext, ".midi") == 0) return "audio/midi";
+    if (strcasecmp_ext(ext, ".kar") == 0) return "audio/midi";
+    if (strcasecmp_ext(ext, ".weba") == 0) return "audio/webm";
+    if (strcasecmp_ext(ext, ".opus") == 0) return "audio/opus";
     
     // Video formats
     if (strcasecmp_ext(ext, ".mp4") == 0) return "video/mp4";
@@ -663,6 +673,39 @@ static const char* get_mime_type(const char *filename) {
     if (strcasecmp_ext(ext, ".ogv") == 0) return "video/ogg";
     
     return "application/octet-stream";
+}
+
+// True for MIDI files, which we render to WAV in-process (via midi_render.cpp)
+// instead of streaming raw, since browsers can't play MIDI natively.
+static bool is_midi_extension(const char *filename) {
+    if (!filename) return false;
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return false;
+    return strcasecmp_ext(ext, ".mid") == 0 || strcasecmp_ext(ext, ".midi") == 0 ||
+           strcasecmp_ext(ext, ".kar") == 0;
+}
+
+// Render MIDI bytes (already read into memory) to WAV and send as the
+// response body. Sent in one shot (no range support) since these are
+// freshly synthesized, not seekable source files.
+static void serve_rendered_midi_wav(int client_socket, int tunnel_id,
+                                     const std::vector<uint8_t> &midi_bytes) {
+    std::vector<uint8_t> wav;
+    if (!render_midi_to_wav(midi_bytes, wav)) {
+        const char *msg = "Failed to render MIDI file";
+        std::string response = http_response_headers(500, "text/plain", strlen(msg));
+        response += msg;
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        SDL_Log("[Tunnel %d] MIDI render failed", tunnel_id);
+        return;
+    }
+
+    std::string response = http_response_headers(200, "audio/wav", wav.size());
+    int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
+    if (header_sent > 0) {
+        socket_send_safe(client_socket, (const char *)wav.data(), (int)wav.size());
+    }
+    SDL_Log("[Tunnel %d] Served MIDI rendered to WAV (%zu bytes)", tunnel_id, wav.size());
 }
 
 static std::string url_encode(const std::string &str) {
@@ -749,6 +792,22 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
             }
             socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] Served directory listing HTML: %s", tunnel_id, fs_path.c_str());
+        }
+        else if (is_midi_extension(fs_path.c_str())) {
+            FILE *mf = fopen(fs_path.c_str(), "rb");
+            if (!mf) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to open MIDI: %s", tunnel_id, fs_path.c_str());
+            } else {
+                std::vector<uint8_t> midi_bytes((size_t)st.st_size);
+                size_t rd = fread(midi_bytes.data(), 1, midi_bytes.size(), mf);
+                fclose(mf);
+                midi_bytes.resize(rd);
+                serve_rendered_midi_wav(client_socket, tunnel_id, midi_bytes);
+            }
         }
         else {
             FILE *f = fopen(fs_path.c_str(), "rb");
@@ -892,6 +951,16 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         }
     }
 
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0) {
+        std::string data = get_favicon();
+        std::string response = http_response_headers(200, "image/x-icon", data.length());
+        response += data;
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        closesocket(client_socket);
+        SDL_Log("[Tunnel %d] Served embedded favicon.ico", tunnel_id);
+        return;
+    }
+
     if (g_local_mode) {
         handle_http_request_local(client_socket, tunnel_id, method, path, buffer, bytes_read);
         closesocket(client_socket);
@@ -972,6 +1041,20 @@ static void handle_http_request(int client_socket, int tunnel_id) {
             }
             socket_send_safe(client_socket, response.c_str(), response.length());
             SDL_Log("[Tunnel %d] Served directory listing HTML: %s", tunnel_id, decoded_path.c_str());
+        }
+        else if (is_midi_extension(decoded_path.c_str())) {
+            std::vector<uint8_t> midi_bytes;
+            bool got_file;
+            { SftpOp op(sess); got_file = sftp_get_file(sftp, decoded_path.c_str(), midi_bytes); }
+            if (!got_file) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to fetch MIDI: %s", tunnel_id, decoded_path.c_str());
+            } else {
+                serve_rendered_midi_wav(client_socket, tunnel_id, midi_bytes);
+            }
         }
         else {
             // Get file size first using stat

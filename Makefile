@@ -191,7 +191,9 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               ssh_key_manager.cpp   serial_session.cpp    \
               felixchirp/fc_file.cpp felixchirp/fc_text.cpp  \
               felixchirp/fc_input.cpp felixchirp/fc_zip.cpp \
-              sftp_webserver.cpp
+              sftp_webserver.cpp      midi_render.cpp       \
+              dbopl.cpp               dbopl_wrapper.cpp     \
+              instruments.cpp
 
 SRCS_MINIZ = libtelnet.c felixchirp/miniz.c felixchirp/miniz_tdef.c felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c \
             wopr/zork/actors.c \
