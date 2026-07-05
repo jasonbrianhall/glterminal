@@ -145,6 +145,7 @@
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             border-bottom: 3px solid var(--accent);
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             justify-content: space-between;
             gap: 20px;
@@ -158,8 +159,8 @@
             color: var(--text-main);
             font-weight: 600;
             margin-bottom: 5px;
-            flex: 1 1 auto;
-            min-width: 0;
+            flex: 1 1 280px;
+            min-width: 220px;
             overflow-wrap: anywhere;
             word-break: break-word;
         }
@@ -325,6 +326,21 @@
             cursor: pointer;
         }
 
+        .file-filter {
+            flex: 0 1 240px;
+            padding: 9px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 14px;
+            color: var(--text-main);
+            background: var(--card-bg);
+        }
+
+        .file-filter:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
         .slideshow-overlay {
             display: none;
             position: fixed;
@@ -369,6 +385,29 @@
             border: none;
             line-height: 1;
             z-index: 10;
+        }
+
+        .slideshow-autoplay {
+            position: absolute;
+            top: 24px;
+            right: 80px;
+            color: white;
+            font-size: 18px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.15);
+            border: none;
+            border-radius: 6px;
+            padding: 8px 12px;
+            line-height: 1;
+            z-index: 10;
+        }
+
+        .slideshow-autoplay:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .slideshow-autoplay.active {
+            background: var(--accent);
         }
 
         .slideshow-nav {
@@ -737,6 +776,7 @@
     <div class="container">
         <div class="header">
             <h1 id="title">File Browser</h1>
+            <input type="text" id="fileFilter" class="file-filter" placeholder="Filter files...">
             <div style="display: flex; align-items: center; gap: 20px; flex-shrink: 0;">
                 <a id="homeBtn" class="slideshow-btn" style="display: none;">&#8962; Home</a>
                 <button id="slideshowBtn" class="slideshow-btn" style="display: none;">▶ Slideshow</button>
@@ -766,6 +806,7 @@
 
     <div class="slideshow-overlay" id="slideshowOverlay">
         <button class="slideshow-close" id="slideshowClose">&times;</button>
+        <button class="slideshow-autoplay" id="slideshowAutoplay" title="Auto-advance">&#9658;</button>
         <button class="slideshow-nav slideshow-prev" id="slideshowPrev">&#10094;</button>
         <img id="slideshowImg" src="" alt="">
         <button class="slideshow-nav slideshow-next" id="slideshowNext">&#10095;</button>
@@ -916,6 +957,19 @@
         });
 
         let currentSorted = [];
+        let fileFilterTerm = '';
+
+        const fileFilterInput = document.getElementById('fileFilter');
+        fileFilterInput.addEventListener('input', () => {
+            fileFilterTerm = fileFilterInput.value;
+            renderTable(currentSorted);
+        });
+
+        function getFilteredEntries(entries) {
+            const term = fileFilterTerm.trim().toLowerCase();
+            if (!term) return entries;
+            return entries.filter(e => e.name.toLowerCase().includes(term));
+        }
 
         // Collapses repeated slashes (e.g. "//home/jbhall/Music" -> "/home/jbhall/Music")
         function getCurrentPath() {
@@ -1106,6 +1160,7 @@
             if (slideshowImages.length === 0) return;
             slideshowOverlay.classList.add('active');
             showSlide(0);
+            stopSlideshowAutoplay();
             history.pushState({ ivOverlay: 'slideshow' }, '');
         }
 
@@ -1113,10 +1168,36 @@
             slideshowOverlay.classList.remove('active');
             slideshowImg.src = '';
             resetZoom();
+            stopSlideshowAutoplay();
             if (!fromPopState && history.state && history.state.ivOverlay === 'slideshow') {
                 history.back();
             }
         }
+
+        // ---- autoplay ----
+        const slideshowAutoplayBtn = document.getElementById('slideshowAutoplay');
+        let slideshowAutoplayHandle = null;
+
+        function startSlideshowAutoplay() {
+            if (slideshowAutoplayHandle) return;
+            slideshowAutoplayHandle = setInterval(() => showSlide(slideshowIndex + 1), 2000);
+            slideshowAutoplayBtn.classList.add('active');
+            slideshowAutoplayBtn.innerHTML = '&#10074;&#10074;';
+        }
+
+        function stopSlideshowAutoplay() {
+            if (slideshowAutoplayHandle) {
+                clearInterval(slideshowAutoplayHandle);
+                slideshowAutoplayHandle = null;
+            }
+            slideshowAutoplayBtn.classList.remove('active');
+            slideshowAutoplayBtn.innerHTML = '&#9658;';
+        }
+
+        slideshowAutoplayBtn.addEventListener('click', () => {
+            if (slideshowAutoplayHandle) stopSlideshowAutoplay();
+            else startSlideshowAutoplay();
+        });
 
         window.addEventListener('popstate', (e) => {
             if (slideshowOverlay.classList.contains('active') &&
@@ -2551,6 +2632,9 @@
             fileData = data.entries;
             updateSlideshowButtonVisibility();
 
+            fileFilterTerm = '';
+            fileFilterInput.value = '';
+
             const homeBtn = document.getElementById('homeBtn');
             if (data.home) {
                 homeBtn.href = data.home.split('/').map(encodeURIComponent).join('/');
@@ -2586,6 +2670,8 @@
         function renderTable(entries) {
             const tbody = document.querySelector('#fileTable tbody');
             tbody.innerHTML = '';
+
+            entries = getFilteredEntries(entries);
 
             // Add parent directory link if not root
             const currentPath = getCurrentPath();
