@@ -845,6 +845,10 @@
                 <button id="musicBtn" class="slideshow-btn" style="display: none;">♪ Play Music</button>
                 <button id="videoBtn" class="slideshow-btn" style="display: none;">▶ Play Video</button>
                 <label class="new-window-toggle">
+                    <input type="checkbox" id="showHiddenToggle">
+                    Show hidden
+                </label>
+                <label class="new-window-toggle">
                     <input type="checkbox" id="newWindowToggle">
                     Open in new window
                 </label>
@@ -1020,6 +1024,7 @@
 
         let currentSorted = [];
         let fileFilterTerm = '';
+        let showHiddenFiles = false;
 
         const fileFilterInput = document.getElementById('fileFilter');
         fileFilterInput.addEventListener('input', () => {
@@ -1027,10 +1032,24 @@
             renderTable(currentSorted);
         });
 
+        const showHiddenToggle = document.getElementById('showHiddenToggle');
+        showHiddenToggle.addEventListener('change', () => {
+            showHiddenFiles = showHiddenToggle.checked;
+            renderTable(currentSorted);
+        });
+
         function getFilteredEntries(entries) {
             const term = fileFilterTerm.trim().toLowerCase();
-            if (!term) return entries;
-            return entries.filter(e => e.name.toLowerCase().includes(term));
+            let filtered = entries;
+            
+            // Filter out hidden files if toggle is off
+            if (!showHiddenFiles) {
+                filtered = filtered.filter(e => !e.name.startsWith('.'));
+            }
+            
+            // Apply search term
+            if (!term) return filtered;
+            return filtered.filter(e => e.name.toLowerCase().includes(term));
         }
 
         // Collapses repeated slashes (e.g. "//home/jbhall/Music" -> "/home/jbhall/Music")
@@ -2847,6 +2866,10 @@
         function renderTable(entries) {
             const tbody = document.querySelector('#fileTable tbody');
             tbody.innerHTML = '';
+
+            // Check if there are any hidden files and show/hide toggle accordingly
+            const hasHiddenFiles = entries.some(e => e.name.startsWith('.'));
+            document.getElementById('showHiddenToggle').parentElement.style.display = hasHiddenFiles ? '' : 'none';
 
             // Save current path to history
             addToHistory(getCurrentPath());
