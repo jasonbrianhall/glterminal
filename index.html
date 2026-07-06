@@ -166,7 +166,32 @@
         }
 
         .header .breadcrumb {
-            display: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: var(--text-secondary);
+            flex-wrap: wrap;
+            flex: 1 1 100%;
+            order: 3;
+        }
+
+        .breadcrumb a {
+            color: var(--accent);
+            text-decoration: none;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+
+        .breadcrumb a:hover {
+            background-color: var(--parent-hover);
+            text-decoration: underline;
+        }
+
+        .breadcrumb span {
+            color: var(--text-secondary);
         }
 
         .new-window-toggle {
@@ -776,6 +801,7 @@
     <div class="container">
         <div class="header">
             <h1 id="title">File Browser</h1>
+            <div class="breadcrumb"></div>
             <input type="text" id="fileFilter" class="file-filter" placeholder="Filter files...">
             <div style="display: flex; align-items: center; gap: 20px; flex-shrink: 0;">
                 <a id="homeBtn" class="slideshow-btn" style="display: none;">&#8962; Home</a>
@@ -2608,6 +2634,140 @@
             }
         });
 
+        // Cookie management for navigation history
+        function setCookie(name, value, days = 30) {
+            const date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            const expires = `expires=${date.toUTCString()}`;
+            document.cookie = `${name}=${encodeURIComponent(value)};${expires};path=/`;
+        }
+
+        function getCookie(name) {
+            const nameEQ = `${name}=`;
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                let c = cookies[i].trim();
+                if (c.indexOf(nameEQ) === 0) return decodeURIComponent(c.substring(nameEQ.length));
+            }
+            return null;
+        }
+
+        function getNavigationHistory() {
+            const history = getCookie('fileNavHistory');
+            return history ? JSON.parse(history) : [];
+        }
+
+        function addToHistory(path) {
+            let history = getNavigationHistory();
+            // Remove if already exists to avoid duplicates
+            history = history.filter(p => p !== path);
+            // Add to end
+            history.push(path);
+            // Keep only last 20 items
+            if (history.length > 20) history.shift();
+            setCookie('fileNavHistory', JSON.stringify(history));
+        }
+
+        function updateBreadcrumb() {
+            const breadcrumb = document.querySelector('.breadcrumb');
+            const currentPath = getCurrentPath();
+            breadcrumb.innerHTML = '';
+
+            // Home link
+            const homeLink = document.createElement('a');
+            homeLink.textContent = '🏠';
+            homeLink.href = '/';
+            homeLink.title = 'Home';
+            breadcrumb.appendChild(homeLink);
+
+            // Path segments
+            if (currentPath && currentPath !== '/') {
+                const segments = currentPath.split('/').filter(s => s);
+                let pathBuilder = '';
+                
+                segments.forEach((segment, index) => {
+                    pathBuilder += '/' + segment;
+                    
+                    const separator = document.createElement('span');
+                    separator.textContent = '/';
+                    breadcrumb.appendChild(separator);
+
+                    const link = document.createElement('a');
+                    link.textContent = segment;
+                    link.href = pathBuilder;
+                    link.onclick = (e) => {
+                        e.preventDefault();
+                        window.location.hash = pathBuilder;
+                        loadFiles();
+                    };
+                    breadcrumb.appendChild(link);
+                });
+            }
+
+            // History dropdown
+            const history = getNavigationHistory();
+            if (history.length > 0) {
+                const separator = document.createElement('span');
+                separator.textContent = '|';
+                breadcrumb.appendChild(separator);
+
+                const historyBtn = document.createElement('a');
+                historyBtn.textContent = '📋 Recent';
+                historyBtn.style.position = 'relative';
+                historyBtn.style.cursor = 'pointer';
+                
+                const dropdown = document.createElement('div');
+                dropdown.style.display = 'none';
+                dropdown.style.position = 'absolute';
+                dropdown.style.top = '100%';
+                dropdown.style.left = '0';
+                dropdown.style.backgroundColor = 'var(--card-bg)';
+                dropdown.style.border = '1px solid var(--border-color)';
+                dropdown.style.borderRadius = '4px';
+                dropdown.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)';
+                dropdown.style.zIndex = '1000';
+                dropdown.style.minWidth = '200px';
+                dropdown.style.maxHeight = '300px';
+                dropdown.style.overflowY = 'auto';
+                
+                history.slice().reverse().forEach(path => {
+                    const item = document.createElement('div');
+                    item.style.padding = '8px 12px';
+                    item.style.borderBottom = '1px solid var(--border-color)';
+                    item.style.cursor = 'pointer';
+                    item.style.whiteSpace = 'nowrap';
+                    item.style.textOverflow = 'ellipsis';
+                    item.style.overflow = 'hidden';
+                    item.style.fontSize = '13px';
+                    item.textContent = path || '/';
+                    item.style.color = 'var(--text-main)';
+                    
+                    item.onmouseover = () => {
+                        item.style.backgroundColor = 'var(--parent-hover)';
+                    };
+                    item.onmouseout = () => {
+                        item.style.backgroundColor = 'transparent';
+                    };
+                    
+                    item.onclick = () => {
+                        window.location.hash = path;
+                        loadFiles();
+                        dropdown.style.display = 'none';
+                    };
+                    
+                    dropdown.appendChild(item);
+                });
+
+                historyBtn.onmouseover = () => dropdown.style.display = 'block';
+                historyBtn.onmouseout = () => dropdown.style.display = 'none';
+                dropdown.onmouseover = () => dropdown.style.display = 'block';
+                dropdown.onmouseout = () => dropdown.style.display = 'none';
+
+                historyBtn.appendChild(dropdown);
+                breadcrumb.appendChild(historyBtn);
+            }
+        }
+
         // Encode parentheses and square brackets in paths: ( -> %28, ) -> %29, [ -> %5B, ] -> %5D
         function encodeParens(path) {
             return path.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\[/g, '%5B').replace(/\]/g, '%5D');
@@ -2671,6 +2831,9 @@
             const tbody = document.querySelector('#fileTable tbody');
             tbody.innerHTML = '';
 
+            // Save current path to history
+            addToHistory(getCurrentPath());
+
             entries = getFilteredEntries(entries);
 
             // Add parent directory link if not root
@@ -2717,6 +2880,9 @@
                 `;
                 tbody.appendChild(row);
             });
+
+            // Update breadcrumb after table is rendered
+            updateBreadcrumb();
         }
 
         function sortByColumn(col) {
@@ -2756,6 +2922,8 @@
             th.addEventListener('click', () => sortByColumn(th.dataset.col));
         });
 
+        // Initialize after all functions are defined
+        updateBreadcrumb();
         loadFiles();
     </script>
 </body>
