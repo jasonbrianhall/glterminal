@@ -114,6 +114,42 @@
             --card-bg: #000000; --text-main: #ffffff; --text-secondary: #dddddd;
             --border-color: #444444; --thead-bg: #111111; --parent-hover: #222222; --placeholder: #999999;
         }
+        
+        html[data-theme="highcontrast"] .slideshow-btn,
+        html[data-theme="highcontrast"] .music-ctrl-btn,
+        html[data-theme="highcontrast"] .video-nav-btn,
+        html[data-theme="highcontrast"] .viz-mode-btn,
+        html[data-theme="highcontrast"] button {
+            background: #000000 !important;
+            color: #ff0000 !important;
+            border: 3px solid #ffffff !important;
+        }
+        
+        html[data-theme="highcontrast"] .slideshow-btn:hover,
+        html[data-theme="highcontrast"] .music-ctrl-btn:hover,
+        html[data-theme="highcontrast"] .video-nav-btn:hover,
+        html[data-theme="highcontrast"] .viz-mode-btn:hover,
+        html[data-theme="highcontrast"] button:hover {
+            background: #1a1a1a !important;
+            color: #ff6666 !important;
+        }
+        
+        html[data-theme="highcontrast"] td {
+            color: #ffffff !important;
+        }
+        
+        html[data-theme="highcontrast"] .type-directory,
+        html[data-theme="highcontrast"] .type-link {
+            color: #ff0000 !important;
+        }
+        
+        html[data-theme="highcontrast"] a {
+            color: #ffffff !important;
+        }
+        
+        html[data-theme="highcontrast"] a:hover {
+            color: #ff0000 !important;
+        }
         html[data-theme="slate-blue"] {
             --bg-start: #1e3c72; --bg-end: #2a5298; --accent: #4a7fd6; --accent-dark: #345c9e;
             --card-bg: #101c30; --text-main: #e4ecfa; --text-secondary: #9db2d4;
@@ -804,7 +840,7 @@
             <div class="breadcrumb"></div>
             <input type="text" id="fileFilter" class="file-filter" placeholder="Filter files...">
             <div style="display: flex; align-items: center; gap: 20px; flex-shrink: 0;">
-                <a id="homeBtn" class="slideshow-btn" style="display: none;">&#8962; Home</a>
+                <a id="homeBtn" class="slideshow-btn" style="display: none; cursor: pointer;">&#8962; Home</a>
                 <button id="slideshowBtn" class="slideshow-btn" style="display: none;">▶ Slideshow</button>
                 <button id="musicBtn" class="slideshow-btn" style="display: none;">♪ Play Music</button>
                 <button id="videoBtn" class="slideshow-btn" style="display: none;">▶ Play Video</button>
@@ -2694,11 +2730,10 @@
 
                     const link = document.createElement('a');
                     link.textContent = segment;
-                    link.href = pathBuilder;
+                    link.style.cursor = 'pointer';
                     link.onclick = (e) => {
                         e.preventDefault();
-                        window.location.hash = pathBuilder;
-                        loadFiles();
+                        window.location.pathname = pathBuilder;
                     };
                     breadcrumb.appendChild(link);
                 });
@@ -2750,8 +2785,7 @@
                     };
                     
                     item.onclick = () => {
-                        window.location.hash = path;
-                        loadFiles();
+                        window.location.pathname = path;
                         dropdown.style.display = 'none';
                     };
                     
@@ -2773,6 +2807,8 @@
             return path.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\[/g, '%5B').replace(/\]/g, '%5D');
         }
 
+        let globalHomePath = null;
+        
         async function loadFiles() {
             const dir = getCurrentPath();
             const encodedDir = encodeParens(dir);
@@ -2790,18 +2826,11 @@
 
             const data = await response.json();
             fileData = data.entries;
+            globalHomePath = data.home;
             updateSlideshowButtonVisibility();
 
             fileFilterTerm = '';
             fileFilterInput.value = '';
-
-            const homeBtn = document.getElementById('homeBtn');
-            if (data.home) {
-                homeBtn.href = data.home.split('/').map(encodeURIComponent).join('/');
-                homeBtn.style.display = 'inline-block';
-            } else {
-                homeBtn.style.display = 'none';
-            }
             
             // Sort by name by default
             sortState.col = 'name';
@@ -2921,6 +2950,15 @@
         document.querySelectorAll('th[data-col]').forEach(th => {
             th.addEventListener('click', () => sortByColumn(th.dataset.col));
         });
+
+        // Initialize Home button before loading files
+        const homeBtn = document.getElementById('homeBtn');
+        homeBtn.onclick = () => {
+            if (globalHomePath) {
+                const homePath = globalHomePath.split('/').map(encodeURIComponent).join('/');
+                window.location.pathname = homePath;
+            }
+        };
 
         // Initialize after all functions are defined
         updateBreadcrumb();
