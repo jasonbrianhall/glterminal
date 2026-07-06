@@ -436,7 +436,7 @@ static std::string http_response_headers(int status_code, const char *content_ty
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
-        "Cache-Control: max-age=3600\r\n"
+        "Cache-Control: max-age=60\r\n"
         "Connection: close\r\n"
         "\r\n",
         status_code, status_text, content_type, content_length);
@@ -452,7 +452,7 @@ static std::string http_response_headers_gzip(const char *content_type, size_t c
         "Content-Type: %s\r\n"
         "Content-Encoding: gzip\r\n"
         "Content-Length: %zu\r\n"
-        "Cache-Control: max-age=3600\r\n"
+        "Cache-Control: max-age=60\r\n"
         "Connection: close\r\n"
         "\r\n",
         content_type, content_length);
