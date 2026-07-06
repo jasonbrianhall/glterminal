@@ -2712,32 +2712,16 @@
             // Home link
             const homeLink = document.createElement('a');
             homeLink.textContent = '🏠';
-            homeLink.href = '/';
+            homeLink.style.cursor = 'pointer';
             homeLink.title = 'Home';
+            homeLink.onclick = (e) => {
+                e.preventDefault();
+                if (globalHomePath) {
+                    const homePath = globalHomePath.split('/').map(encodeURIComponent).join('/');
+                    window.location.pathname = homePath;
+                }
+            };
             breadcrumb.appendChild(homeLink);
-
-            // Path segments
-            if (currentPath && currentPath !== '/') {
-                const segments = currentPath.split('/').filter(s => s);
-                let pathBuilder = '';
-                
-                segments.forEach((segment, index) => {
-                    pathBuilder += '/' + segment;
-                    
-                    const separator = document.createElement('span');
-                    separator.textContent = '/';
-                    breadcrumb.appendChild(separator);
-
-                    const link = document.createElement('a');
-                    link.textContent = segment;
-                    link.style.cursor = 'pointer';
-                    link.onclick = (e) => {
-                        e.preventDefault();
-                        window.location.pathname = pathBuilder;
-                    };
-                    breadcrumb.appendChild(link);
-                });
-            }
 
             // History dropdown
             const history = getNavigationHistory();
@@ -2827,6 +2811,10 @@
             const data = await response.json();
             fileData = data.entries;
             globalHomePath = data.home;
+            const homeBtn = document.getElementById('homeBtn');
+            if (globalHomePath) {
+                homeBtn.style.display = 'inline-block';
+            }
             updateSlideshowButtonVisibility();
 
             fileFilterTerm = '';
