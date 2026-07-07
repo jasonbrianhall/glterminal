@@ -133,8 +133,6 @@ bool render_voc_to_wav(const std::vector<uint8_t> &voc_bytes,
             uint16_t compression_type = (ptr[6] | (ptr[7] << 8));
             has_explicit_rate = true;
 
-                    sample_rate, bits_per_sample, channels, compression_type);
-
             if (compression_type != 0) {
                 ptr += block_size;
                 continue;
@@ -151,9 +149,6 @@ bool render_voc_to_wav(const std::vector<uint8_t> &voc_bytes,
     if (pcm_data.empty()) {
         return false;
     }
-
-            pcm_data.size(), sample_rate, channels, bits_per_sample);
-            (double)pcm_data.size() / (sample_rate * channels * (bits_per_sample / 8)));
 
     // If we never found an explicit sample rate, try to guess from file size
     if (!has_explicit_rate && pcm_data.size() > 0) {
