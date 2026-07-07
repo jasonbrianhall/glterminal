@@ -1084,6 +1084,9 @@
         // ---- audio detection + music player ----
         const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'wma', 'opus'];
         const MIDI_EXTENSIONS = ['mid', 'midi', 'kar'];
+        const VOC_EXTENSIONS = ['voc'];
+        const AU_EXTENSIONS = ['au', 'snd'];
+        const AIFF_EXTENSIONS = ['aiff', 'aif'];
 
         function isAudioFile(entry) {
             if (entry.type !== 'file') return false;
@@ -1099,6 +1102,30 @@
             if (dot === -1) return false;
             const ext = entry.name.slice(dot + 1).toLowerCase();
             return MIDI_EXTENSIONS.includes(ext);
+        }
+
+        function isVocFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return VOC_EXTENSIONS.includes(ext);
+        }
+
+        function isAuFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return AU_EXTENSIONS.includes(ext);
+        }
+
+        function isAiffFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return AIFF_EXTENSIONS.includes(ext);
         }
 
         function isZipFile(entry) {
@@ -1146,7 +1173,13 @@
 
             const midis = fileData.filter(isMidiFile).map(e => entryToTrack(e, 'midi'));
 
-            return [...audio, ...zips, ...midis].map((t, i) => ({ ...t, id: i }));
+            const vocs = fileData.filter(isVocFile).map(e => entryToTrack(e, 'voc'));
+
+            const aus = fileData.filter(isAuFile).map(e => entryToTrack(e, 'au'));
+
+            const aiffs = fileData.filter(isAiffFile).map(e => entryToTrack(e, 'aiff'));
+
+            return [...audio, ...zips, ...midis, ...vocs, ...aus, ...aiffs].map((t, i) => ({ ...t, id: i }));
         }
 
         // ---- video detection ----
@@ -2319,6 +2352,60 @@
                 } catch (err) {
                     if (token !== loadToken) return;
                     musicTitle.textContent = `Failed to render ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'voc') {
+                musicTitle.textContent = `Converting ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Render-Voc': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to convert ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'au') {
+                musicTitle.textContent = `Converting ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Render-Au': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to convert ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'aiff') {
+                musicTitle.textContent = `Converting ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Render-Aiff': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to convert ${track.name}`;
                     console.error(err);
                 }
             } else {

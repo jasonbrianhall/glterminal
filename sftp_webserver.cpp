@@ -9,6 +9,8 @@
 #include "favicon.h" // Embedded favicon.ico
 #include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
 #include "voc_render.h"  // In-process VOC -> WAV converter
+#include "au_render.h"   // In-process AU/SND -> WAV converter
+#include "aiff_render.h" // In-process AIFF -> WAV converter
 
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -803,6 +805,70 @@ static void serve_rendered_voc_wav(int client_socket, int tunnel_id,
     SDL_Log("[Tunnel %d] Served VOC rendered to WAV (%zu bytes)", tunnel_id, wav.size());
 }
 
+// AU/SND file rendering
+static bool client_wants_au_render(const char *raw_request) {
+    return strstr(raw_request, "X-Render-Au:") != nullptr;
+}
+
+static bool is_au_extension(const char *filename) {
+    if (!filename) return false;
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return false;
+    return strcasecmp_ext(ext, ".au") == 0 || strcasecmp_ext(ext, ".snd") == 0;
+}
+
+static void serve_rendered_au_wav(int client_socket, int tunnel_id,
+                                   const std::vector<uint8_t> &au_bytes) {
+    std::vector<uint8_t> wav;
+    if (!render_au_to_wav(au_bytes, wav)) {
+        const char *msg = "Failed to convert AU file";
+        std::string response = http_response_headers(500, "text/plain", strlen(msg));
+        response += msg;
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        SDL_Log("[Tunnel %d] AU convert failed", tunnel_id);
+        return;
+    }
+
+    std::string response = http_response_headers(200, "audio/wav", wav.size());
+    int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
+    if (header_sent > 0) {
+        socket_send_safe(client_socket, (const char *)wav.data(), (int)wav.size());
+    }
+    SDL_Log("[Tunnel %d] Served AU converted to WAV (%zu bytes)", tunnel_id, wav.size());
+}
+
+// AIFF file rendering
+static bool client_wants_aiff_render(const char *raw_request) {
+    return strstr(raw_request, "X-Render-Aiff:") != nullptr;
+}
+
+static bool is_aiff_extension(const char *filename) {
+    if (!filename) return false;
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return false;
+    return strcasecmp_ext(ext, ".aiff") == 0 || strcasecmp_ext(ext, ".aif") == 0;
+}
+
+static void serve_rendered_aiff_wav(int client_socket, int tunnel_id,
+                                     const std::vector<uint8_t> &aiff_bytes) {
+    std::vector<uint8_t> wav;
+    if (!render_aiff_to_wav(aiff_bytes, wav)) {
+        const char *msg = "Failed to convert AIFF file";
+        std::string response = http_response_headers(500, "text/plain", strlen(msg));
+        response += msg;
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        SDL_Log("[Tunnel %d] AIFF convert failed", tunnel_id);
+        return;
+    }
+
+    std::string response = http_response_headers(200, "audio/wav", wav.size());
+    int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
+    if (header_sent > 0) {
+        socket_send_safe(client_socket, (const char *)wav.data(), (int)wav.size());
+    }
+    SDL_Log("[Tunnel %d] Served AIFF converted to WAV (%zu bytes)", tunnel_id, wav.size());
+}
+
 static std::string url_encode(const std::string &str) {
     std::string encoded;
     for (char c : str) {
@@ -918,6 +984,38 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
                 fclose(vf);
                 voc_bytes.resize(rd);
                 serve_rendered_voc_wav(client_socket, tunnel_id, voc_bytes);
+            }
+        }
+        else if (is_au_extension(fs_path.c_str()) && client_wants_au_render(buffer)) {
+            FILE *af = fopen(fs_path.c_str(), "rb");
+            if (!af) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to open AU: %s", tunnel_id, fs_path.c_str());
+            } else {
+                std::vector<uint8_t> au_bytes((size_t)st.st_size);
+                size_t rd = fread(au_bytes.data(), 1, au_bytes.size(), af);
+                fclose(af);
+                au_bytes.resize(rd);
+                serve_rendered_au_wav(client_socket, tunnel_id, au_bytes);
+            }
+        }
+        else if (is_aiff_extension(fs_path.c_str()) && client_wants_aiff_render(buffer)) {
+            FILE *aff = fopen(fs_path.c_str(), "rb");
+            if (!aff) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to open AIFF: %s", tunnel_id, fs_path.c_str());
+            } else {
+                std::vector<uint8_t> aiff_bytes((size_t)st.st_size);
+                size_t rd = fread(aiff_bytes.data(), 1, aiff_bytes.size(), aff);
+                fclose(aff);
+                aiff_bytes.resize(rd);
+                serve_rendered_aiff_wav(client_socket, tunnel_id, aiff_bytes);
             }
         }
         else {
@@ -1181,6 +1279,34 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                 SDL_Log("[Tunnel %d] Failed to fetch VOC: %s", tunnel_id, decoded_path.c_str());
             } else {
                 serve_rendered_voc_wav(client_socket, tunnel_id, voc_bytes);
+            }
+        }
+        else if (is_au_extension(decoded_path.c_str()) && client_wants_au_render(buffer)) {
+            std::vector<uint8_t> au_bytes;
+            bool got_file;
+            { SftpOp op(sess); got_file = sftp_get_file(sftp, decoded_path.c_str(), au_bytes); }
+            if (!got_file) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to fetch AU: %s", tunnel_id, decoded_path.c_str());
+            } else {
+                serve_rendered_au_wav(client_socket, tunnel_id, au_bytes);
+            }
+        }
+        else if (is_aiff_extension(decoded_path.c_str()) && client_wants_aiff_render(buffer)) {
+            std::vector<uint8_t> aiff_bytes;
+            bool got_file;
+            { SftpOp op(sess); got_file = sftp_get_file(sftp, decoded_path.c_str(), aiff_bytes); }
+            if (!got_file) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to fetch AIFF: %s", tunnel_id, decoded_path.c_str());
+            } else {
+                serve_rendered_aiff_wav(client_socket, tunnel_id, aiff_bytes);
             }
         }
         else {
