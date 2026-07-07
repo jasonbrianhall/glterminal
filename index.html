@@ -1082,7 +1082,20 @@
         }
 
         // ---- audio detection + music player ----
-        const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'wma', 'opus'];
+        // Native browser formats (no conversion needed)
+        const AUDIO_EXTENSIONS = [
+          'mp3',   // OS codec
+          'aac',   // OS codec
+          'm4a',   // AAC only
+          'mp4',   // AAC only
+          'wav',   // built-in
+          'ogg',   // built-in (Vorbis/Opus)
+          'flac',  // built-in
+          'opus',  // built-in
+          'webm',   // built-in (Opus/Vorbis)
+        ];
+
+        // Formats that need conversion to WAV
         const MIDI_EXTENSIONS = ['mid', 'midi', 'kar'];
         const VOC_EXTENSIONS = ['voc'];
         const AU_EXTENSIONS = ['au', 'snd'];
@@ -1183,7 +1196,8 @@
         }
 
         // ---- video detection ----
-        const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v', 'mkv'];
+        // Native browser video formats
+        const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v', 'mkv', 'avi', 'flv', 'wmv'];
         const SUBTITLE_EXTENSIONS = ['vtt', 'srt'];
 
         function isVideoFile(entry) {
