@@ -8,6 +8,7 @@
 #include "404.h" // Embedded 404.html
 #include "favicon.h" // Embedded favicon.ico
 #include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
+#include "voc_render.h"  // In-process VOC -> WAV converter
 
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -764,6 +765,44 @@ static void serve_rendered_midi_wav(int client_socket, int tunnel_id,
     SDL_Log("[Tunnel %d] Served MIDI rendered to WAV (%zu bytes)", tunnel_id, wav.size());
 }
 
+// Client opts in to server-side VOC->WAV rendering via this header.
+// Without it, .voc files are served as-is (plain download).
+static bool client_wants_voc_render(const char *raw_request) {
+    return strstr(raw_request, "X-Render-Voc:") != nullptr;
+}
+
+// True for VOC files, which we render to WAV in-process (via voc_render.cpp)
+// instead of streaming raw, since browsers can't play VOC natively.
+static bool is_voc_extension(const char *filename) {
+    if (!filename) return false;
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return false;
+    return strcasecmp_ext(ext, ".voc") == 0;
+}
+
+// Render VOC bytes (already read into memory) to WAV and send as the
+// response body. Sent in one shot (no range support) since these are
+// freshly converted, not seekable source files.
+static void serve_rendered_voc_wav(int client_socket, int tunnel_id,
+                                    const std::vector<uint8_t> &voc_bytes) {
+    std::vector<uint8_t> wav;
+    if (!render_voc_to_wav(voc_bytes, wav)) {
+        const char *msg = "Failed to render VOC file";
+        std::string response = http_response_headers(500, "text/plain", strlen(msg));
+        response += msg;
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        SDL_Log("[Tunnel %d] VOC render failed", tunnel_id);
+        return;
+    }
+
+    std::string response = http_response_headers(200, "audio/wav", wav.size());
+    int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
+    if (header_sent > 0) {
+        socket_send_safe(client_socket, (const char *)wav.data(), (int)wav.size());
+    }
+    SDL_Log("[Tunnel %d] Served VOC rendered to WAV (%zu bytes)", tunnel_id, wav.size());
+}
+
 static std::string url_encode(const std::string &str) {
     std::string encoded;
     for (char c : str) {
@@ -863,6 +902,22 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
                 fclose(mf);
                 midi_bytes.resize(rd);
                 serve_rendered_midi_wav(client_socket, tunnel_id, midi_bytes);
+            }
+        }
+        else if (is_voc_extension(fs_path.c_str()) && client_wants_voc_render(buffer)) {
+            FILE *vf = fopen(fs_path.c_str(), "rb");
+            if (!vf) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to open VOC: %s", tunnel_id, fs_path.c_str());
+            } else {
+                std::vector<uint8_t> voc_bytes((size_t)st.st_size);
+                size_t rd = fread(voc_bytes.data(), 1, voc_bytes.size(), vf);
+                fclose(vf);
+                voc_bytes.resize(rd);
+                serve_rendered_voc_wav(client_socket, tunnel_id, voc_bytes);
             }
         }
         else {
@@ -1112,6 +1167,20 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                 SDL_Log("[Tunnel %d] Failed to fetch MIDI: %s", tunnel_id, decoded_path.c_str());
             } else {
                 serve_rendered_midi_wav(client_socket, tunnel_id, midi_bytes);
+            }
+        }
+        else if (is_voc_extension(decoded_path.c_str()) && client_wants_voc_render(buffer)) {
+            std::vector<uint8_t> voc_bytes;
+            bool got_file;
+            { SftpOp op(sess); got_file = sftp_get_file(sftp, decoded_path.c_str(), voc_bytes); }
+            if (!got_file) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to fetch VOC: %s", tunnel_id, decoded_path.c_str());
+            } else {
+                serve_rendered_voc_wav(client_socket, tunnel_id, voc_bytes);
             }
         }
         else {
