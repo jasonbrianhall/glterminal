@@ -45,11 +45,14 @@ struct SshConfig {
     int         port        = 22;
     std::string user;
     // Authentication: tried in order —
-    //   1. SSH agent (if running)
-    //   2. key_path  (private key; key_path_pub = key_path + ".pub" if empty)
-    //   3. password  (if non-empty, or prompt_password is called)
-    std::string key_path;       // "" = skip file-based key auth
+    //   1. Explicit key_path (command-line -i flag)
+    //   2. config_key_paths (IdentityFile entries from ~/.ssh/config)
+    //   3. Default key paths (id_ed25519, id_rsa, id_dsa, id_ecdsa)
+    //   4. SSH agent
+    //   5. password (if non-empty, or prompt_password is called)
+    std::string key_path;       // "" = try config then defaults
     std::string key_path_pub;   // "" = derive from key_path
+    std::vector<std::string> config_key_paths;  // IdentityFile entries from ~/.ssh/config
     std::string password;       // "" = skip password auth (use prompt_password)
     // Optional: known-hosts file for host-key verification.
     // Set to "" to skip verification (INSECURE — use only on trusted networks).
@@ -74,6 +77,11 @@ struct SshConfig {
 // dimensions are sent to the remote side.
 // Returns true on success; on failure prints a message via SDL_Log and returns false.
 bool ssh_connect(const SshConfig &cfg, Terminal *t);
+
+// Parse ~/.ssh/config and apply settings to cfg for the given alias/hostname.
+// Merges config file settings with existing cfg values (command-line takes precedence).
+// Returns true if config was found and parsed, false if file doesn't exist or parse failed.
+bool ssh_config_load(const char *alias, SshConfig &cfg);
 
 // Non-blocking read from the SSH channel into the terminal parser.
 // Returns true if any data was received (caller should set needs_render).

@@ -126,6 +126,138 @@ static int tcp_connect(const std::string &host, int port) {
     return fd;
 }
 
+// Build default SSH key paths to try (~/.ssh/id_rsa, id_ed25519, etc.)
+static std::vector<std::string> get_default_key_paths() {
+    std::vector<std::string> keys;
+    
+#ifndef _WIN32
+    const char *home = getenv("HOME");
+    if (!home) home = "/root";  // fallback
+#else
+    const char *home = getenv("USERPROFILE");
+    if (!home) home = "C:\\Users\\DefaultAccount";
+#endif
+    
+    std::string ssh_dir = home;
+    ssh_dir += "/.ssh";
+    
+    // Try common key names in order of preference (OpenSSH order)
+    const char *key_names[] = { "id_ed25519_sk", "id_ed25519", "id_ecdsa_sk", "id_ecdsa", "id_dsa", "id_rsa" };
+    for (size_t i = 0; i < sizeof(key_names) / sizeof(key_names[0]); i++) {
+        std::string path = ssh_dir + "/" + key_names[i];
+        
+        // Check if file exists and is readable
+        FILE *f = fopen(path.c_str(), "r");
+        if (f) {
+            fclose(f);
+            keys.push_back(path);
+        }
+    }
+    
+    return keys;
+}
+
+// Parse ~/.ssh/config for a given host alias
+// Supports: Host, HostName, User, Port, IdentityFile, ProxyCommand, etc.
+bool ssh_config_load(const char *alias, SshConfig &cfg) {
+#ifndef _WIN32
+    const char *home = getenv("HOME");
+    if (!home) home = "/root";
+#else
+    const char *home = getenv("USERPROFILE");
+    if (!home) home = "C:\\Users\\DefaultAccount";
+#endif
+    
+    std::string config_path = home;
+    config_path += "/.ssh/config";
+    
+    FILE *f = fopen(config_path.c_str(), "r");
+    if (!f) {
+        SDL_Log("[SSH] no ~/.ssh/config found\n");
+        return false;
+    }
+    
+    bool found_host = false;
+    bool in_host_block = false;
+    char line[512];
+    
+    while (fgets(line, sizeof(line), f)) {
+        // Strip leading/trailing whitespace and comments
+        char *p = line;
+        while (*p && isspace(*p)) p++;
+        if (!*p || *p == '#') continue;
+        
+        char *eol = strchr(p, '\n');
+        if (eol) *eol = 0;
+        eol = strchr(p, '\r');
+        if (eol) *eol = 0;
+        
+        // Remove trailing whitespace
+        int len = strlen(p);
+        while (len > 0 && isspace(p[len-1])) p[--len] = 0;
+        
+        // Parse key value pairs
+        char *space = strchr(p, ' ');
+        if (!space) continue;
+        
+        // Null-terminate key and skip to value
+        *space = 0;
+        char *key = p;
+        char *value = space + 1;
+        while (*value && isspace(*value)) value++;
+        
+        // Case-insensitive key comparison (SSH config is case-insensitive for keys)
+        // Convert to lowercase for comparison
+        char key_lower[64];
+        snprintf(key_lower, sizeof(key_lower), "%s", key);
+        for (char *k = key_lower; *k; k++) *k = tolower(*k);
+        
+        if (strcmp(key_lower, "host") == 0) {
+            // New Host block — check if this matches our alias
+            if (found_host) break;  // Already found and processed our host
+            
+            // Host can have wildcards, but for simplicity we do exact match
+            if (strcmp(value, alias) == 0 || strcmp(value, "*") == 0) {
+                in_host_block = true;
+                found_host = true;
+            } else {
+                in_host_block = false;
+            }
+        } else if (in_host_block) {
+            // Apply config directives to our host block
+            if (strcmp(key_lower, "hostname") == 0) {
+                if (cfg.host.empty()) cfg.host = value;
+            } else if (strcmp(key_lower, "user") == 0) {
+                if (cfg.user.empty()) cfg.user = value;
+            } else if (strcmp(key_lower, "port") == 0) {
+                if (cfg.port == 22) {  // default port — override if config specifies
+                    int p = atoi(value);
+                    if (p > 0 && p <= 65535) cfg.port = p;
+                }
+            } else if (strcmp(key_lower, "identityfile") == 0) {
+                // IdentityFile can appear multiple times — collect all of them
+                // Expand ~ to home
+                std::string expanded = value;
+                if (expanded[0] == '~') {
+                    expanded = home + expanded.substr(1);
+                }
+                cfg.config_key_paths.push_back(expanded);
+            }
+        }
+    }
+    
+    fclose(f);
+    
+    if (found_host) {
+        SDL_Log("[SSH] loaded config for host '%s': hostname=%s user=%s port=%d\n",
+                alias, cfg.host.c_str(), cfg.user.c_str(), cfg.port);
+        return true;
+    }
+    
+    SDL_Log("[SSH] host '%s' not found in ~/.ssh/config\n", alias);
+    return false;
+}
+
 // Attempt authentication via ssh-agent.
 static bool auth_agent(const std::string &user) {
     LIBSSH2_AGENT *agent = libssh2_agent_init(s_session);
@@ -747,7 +879,12 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
         return false;
     }
 
-    // Authentication: agent → key file → password (supplied or prompted by caller)
+    // Authentication priority (OpenSSH-like):
+    //   1. Explicit key (-i flag)
+    //   2. IdentityFile from ~/.ssh/config (in order listed)
+    //   3. Default keys (~/.ssh/id_ed25519, id_rsa, id_dsa, id_ecdsa)
+    //   4. SSH agent
+    //   5. Password (supplied or prompted)
     bool authed = false;
 
     // Query what the server will accept — must retry on EAGAIN for non-blocking session
@@ -762,26 +899,48 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     } while (true);
     SDL_Log("[SSH] server auth methods: %s\n", auth_methods ? auth_methods : "(none/error)");
 
-    // An explicitly-given key (-i) is tried first. Some servers (GitHub among
-    // them) cap the number of auth attempts; if the agent is tried first and
-    // offers unrelated identities, it can burn through that limit before the
-    // key the user actually asked for ever gets a turn.
-    if (!authed && !cfg.key_path.empty()) {
-        authed = auth_key(cfg.user, cfg.key_path, cfg.key_path_pub, cfg.password);
+    // Collect all keys to try, in order of preference
+    std::vector<std::string> keys_to_try;
+    
+    // 1. Explicit -i key (highest priority)
+    if (!cfg.key_path.empty()) {
+        keys_to_try.push_back(cfg.key_path);
+    }
+    
+    // 2. Config file IdentityFile entries
+    for (const auto &key : cfg.config_key_paths) {
+        keys_to_try.push_back(key);
+    }
+    
+    // 3. Default key paths (only if no explicit key or config keys)
+    if (cfg.key_path.empty() && cfg.config_key_paths.empty()) {
+        std::vector<std::string> default_keys = get_default_key_paths();
+        for (const auto &key : default_keys) {
+            keys_to_try.push_back(key);
+        }
+    }
+
+    // Try all collected keys
+    for (const auto &key_path : keys_to_try) {
+        if (authed) break;
+        SDL_Log("[SSH] trying key '%s'\n", key_path.c_str());
+        authed = auth_key(cfg.user, key_path, "", cfg.password);
 
         if (!authed && cfg.prompt_password) {
             const int MAX_ATTEMPTS = 3;
             for (int attempt = 1; attempt <= MAX_ATTEMPTS && !authed; attempt++) {
                 char prompt[256];
                 snprintf(prompt, sizeof(prompt), "Enter passphrase for key '%s': ",
-                         cfg.key_path.c_str());
+                         key_path.c_str());
                 std::string passphrase = cfg.prompt_password(prompt);
                 if (passphrase.empty()) break;
-                authed = auth_key(cfg.user, cfg.key_path, cfg.key_path_pub, passphrase);
+                authed = auth_key(cfg.user, key_path, "", passphrase);
             }
+            if (authed) break;
         }
     }
 
+    // Try agent if no key worked
     if (!authed) {
         SDL_Log("[SSH] trying agent auth for user '%s'\n", cfg.user.c_str());
         authed = auth_agent(cfg.user);

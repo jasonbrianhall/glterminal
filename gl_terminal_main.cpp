@@ -957,9 +957,29 @@ int main(int argc, char **argv) {
 
                         if (ssh_phase == SshPhase::SETUP) {
                             // Store the typed value into the right field
-                            if (ssh_cfg.host.empty())
-                                ssh_cfg.host = ssh_field_input;
-                            else if (ssh_cfg.user.empty())
+                            if (ssh_cfg.host.empty()) {
+                                // User entered host — check if it contains username@host format
+                                const char *at = strchr(ssh_field_input.c_str(), '@');
+                                if (at) {
+                                    // Parse "username@host[:port]" format
+                                    ssh_cfg.user = std::string(ssh_field_input.c_str(), at - ssh_field_input.c_str());
+                                    const char *host_start = at + 1;
+                                    const char *colon = strrchr(host_start, ':');
+                                    if (colon) {
+                                        ssh_cfg.host = std::string(host_start, colon - host_start);
+                                        ssh_cfg.port = atoi(colon + 1);
+                                        if (ssh_cfg.port <= 0 || ssh_cfg.port > 65535) ssh_cfg.port = 22;
+                                    } else {
+                                        ssh_cfg.host = host_start;
+                                    }
+                                } else {
+                                    // Just a hostname, will prompt for user later
+                                    ssh_cfg.host = ssh_field_input;
+                                }
+                                
+                                // Try to load SSH config for this host alias
+                                ssh_config_load(ssh_cfg.host.c_str(), ssh_cfg);
+                            } else if (ssh_cfg.user.empty())
                                 ssh_cfg.user = ssh_field_input;
                             ssh_field_input.clear();
 
