@@ -174,6 +174,166 @@
             margin: 0 auto;
         }
 
+        .preview-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1000;
+            overflow: auto;
+        }
+
+        .preview-modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .preview-container {
+            background: var(--card-bg);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 900px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .preview-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+
+        .preview-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-main);
+            word-break: break-all;
+            flex: 1;
+        }
+
+        .preview-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-left: 16px;
+        }
+
+        .preview-close:hover {
+            color: var(--text-main);
+        }
+
+        .preview-content {
+            flex: 1;
+            overflow: auto;
+            padding: 20px;
+        }
+
+        .preview-image {
+            max-width: 100%;
+            max-height: 100%;
+            margin: 0 auto;
+            display: block;
+        }
+
+        .preview-code {
+            background: var(--thead-bg);
+            border-radius: 8px;
+            padding: 16px;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-main);
+        }
+
+        .preview-code-line {
+            display: flex;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .preview-code-line-num {
+            display: inline-block;
+            width: 40px;
+            text-align: right;
+            margin-right: 16px;
+            color: var(--placeholder);
+            user-select: none;
+            flex-shrink: 0;
+        }
+
+        .preview-code-line-content {
+            flex: 1;
+        }
+
+        .syntax-keyword { color: #d73a49; }
+        .syntax-string { color: #24a138; }
+        .syntax-number { color: #005cc5; }
+        .syntax-comment { color: #6a737d; font-style: italic; }
+        .syntax-function { color: #6f42c1; }
+
+        html[data-theme="dracula"] .syntax-keyword { color: #ff79c6; }
+        html[data-theme="dracula"] .syntax-string { color: #f1fa8c; }
+        html[data-theme="dracula"] .syntax-number { color: #bd93f9; }
+        html[data-theme="dracula"] .syntax-comment { color: #6272a4; }
+        html[data-theme="dracula"] .syntax-function { color: #50fa7b; }
+
+        html[data-theme="nord"] .syntax-keyword { color: #bf616a; }
+        html[data-theme="nord"] .syntax-string { color: #a3be8c; }
+        html[data-theme="nord"] .syntax-number { color: #b48ead; }
+        html[data-theme="nord"] .syntax-comment { color: #616e88; }
+        html[data-theme="nord"] .syntax-function { color: #88c0d0; }
+
+        .preview-text {
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-main);
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .preview-truncated {
+            color: var(--placeholder);
+            font-style: italic;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .preview-size-warning {
+            background: #fff3cd;
+            color: #856404;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
+
+        html[data-theme="dracula"] .preview-size-warning {
+            background: #44475a;
+            color: #f8f8f2;
+        }
+
         .header {
             background: var(--card-bg);
             border-radius: 12px 12px 0 0;
@@ -947,6 +1107,16 @@
                     <tbody id="videoTableBody"></tbody>
                 </table>
             </div>
+        </div>
+    </div>
+
+    <div id="previewModal" class="preview-modal">
+        <div class="preview-container">
+            <div class="preview-header">
+                <div class="preview-title" id="previewTitle"></div>
+                <button class="preview-close" onclick="closePreview()">&times;</button>
+            </div>
+            <div class="preview-content" id="previewContent"></div>
         </div>
     </div>
 
@@ -2907,6 +3077,143 @@
             }
         }
 
+        // File preview functionality
+        const IMAGE_EXTS = /\.(jpg|jpeg|png|gif|webp|svg)$/i;
+        const TEXT_EXTS = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i;
+        const MAX_PREVIEW_SIZE = 1024 * 1024; // 1MB limit
+
+        function closePreview() {
+            document.getElementById('previewModal').classList.remove('active');
+        }
+
+        function syntaxHighlight(text, ext) {
+            // Simple syntax highlighting for common patterns
+            let html = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+
+            // Keywords
+            const keywords = ['if', 'else', 'for', 'while', 'function', 'const', 'let', 'var', 'return', 'class', 'def', 'import', 'from', 'as', 'try', 'except', 'finally', 'with', 'yield', 'async', 'await', 'true', 'false', 'null', 'undefined', 'new', 'this', 'super', 'static', 'public', 'private', 'protected', 'package', 'interface', 'extends', 'implements', 'throws', 'synchronized'];
+            keywords.forEach(kw => {
+                html = html.replace(new RegExp(`\\b${kw}\\b`, 'g'), `<span class="syntax-keyword">${kw}</span>`);
+            });
+
+            // Strings (both single and double quotes)
+            html = html.replace(/(["'`])(?:(?=(\\?))\2.)*?\1/g, '<span class="syntax-string">$&</span>');
+
+            // Numbers
+            html = html.replace(/\b\d+\.?\d*\b/g, '<span class="syntax-number">$&</span>');
+
+            // Comments (# for Python/Bash, // for JS/Java, /* */ for multi-line)
+            html = html.replace(/^#.*/gm, '<span class="syntax-comment">$&</span>');
+            html = html.replace(/\/\/.*/g, '<span class="syntax-comment">$&</span>');
+
+            return html;
+        }
+
+        async function previewFile(filePath, fileName) {
+            // If open-in-new-window is enabled, just open the file normally
+            if (openInNewWindow) {
+                window.open(filePath, '_blank');
+                return;
+            }
+
+            const modal = document.getElementById('previewModal');
+            const title = document.getElementById('previewTitle');
+            const content = document.getElementById('previewContent');
+
+            title.textContent = fileName;
+            content.innerHTML = '<p>Loading...</p>';
+            modal.classList.add('active');
+
+            try {
+                const response = await fetch(filePath);
+                if (!response.ok) throw new Error('Failed to load file');
+
+                const blob = await response.blob();
+                const size = blob.size;
+
+                if (IMAGE_EXTS.test(fileName)) {
+                    // Image preview
+                    const url = URL.createObjectURL(blob);
+                    content.innerHTML = `<img src="${url}" class="preview-image" alt="${fileName}">`;
+                } else if (TEXT_EXTS.test(fileName)) {
+                    // Text preview
+                    let text = await blob.text();
+                    const isTruncated = size > MAX_PREVIEW_SIZE;
+
+                    if (isTruncated) {
+                        text = text.substring(0, MAX_PREVIEW_SIZE);
+                    }
+
+                    const ext = fileName.split('.').pop().toLowerCase();
+                    const highlighted = syntaxHighlight(text, ext);
+                    const lines = highlighted.split('\n');
+                    
+                    const CHUNK_SIZE = 500;
+                    let displayedLines = 0;
+
+                    let html = '';
+                    if (isTruncated) {
+                        html += '<div class="preview-size-warning">File is large (' + 
+                            (size / (1024 * 1024)).toFixed(2) + 'MB). Showing first 1MB.</div>';
+                    }
+                    
+                    html += '<div class="preview-code" id="previewCode">';
+
+                    // Load first chunk
+                    for (let i = 0; i < Math.min(CHUNK_SIZE, lines.length); i++) {
+                        const line = lines[i];
+                        html += `<div class="preview-code-line">
+                            <div class="preview-code-line-num">${i + 1}</div>
+                            <div class="preview-code-line-content">${line || '&nbsp;'}</div>
+                        </div>`;
+                        displayedLines++;
+                    }
+
+                    html += '</div>';
+                    content.innerHTML = html;
+
+                    // Setup infinite scroll for remaining lines
+                    if (displayedLines < lines.length) {
+                        const previewCode = content.querySelector('#previewCode');
+                        
+                        const loadMore = () => {
+                            const scrollTop = content.scrollTop;
+                            const scrollHeight = content.scrollHeight;
+                            const clientHeight = content.clientHeight;
+                            
+                            // Load more when user scrolls near bottom (within 200px)
+                            if (scrollHeight - scrollTop - clientHeight < 200 && displayedLines < lines.length) {
+                                let html = '';
+                                for (let i = displayedLines; i < Math.min(displayedLines + CHUNK_SIZE, lines.length); i++) {
+                                    const line = lines[i];
+                                    html += `<div class="preview-code-line">
+                                        <div class="preview-code-line-num">${i + 1}</div>
+                                        <div class="preview-code-line-content">${line || '&nbsp;'}</div>
+                                    </div>`;
+                                }
+                                previewCode.innerHTML += html;
+                                displayedLines = Math.min(displayedLines + CHUNK_SIZE, lines.length);
+                            }
+                        };
+
+                        content.addEventListener('scroll', loadMore);
+                    }
+                } else {
+                    // Unsupported file type
+                    const ext = fileName.split('.').pop().toLowerCase();
+                    content.innerHTML = `<p>Cannot preview ${fileName}</p>
+                        <p style="color: var(--text-secondary); font-size: 13px;">Type: ${ext}</p>
+                        <p style="color: var(--text-secondary); font-size: 13px;">Size: ${(size / 1024).toFixed(2)} KB</p>`;
+                }
+            } catch (err) {
+                content.innerHTML = `<p style="color: #d32f2f;">Error loading file: ${err.message}</p>`;
+            }
+        }
+
         // Encode parentheses and square brackets in paths: ( -> %28, ) -> %29, [ -> %5B, ] -> %5D
         function encodeParens(path) {
             return path.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\[/g, '%5B').replace(/\]/g, '%5D');
@@ -3006,7 +3313,13 @@
                 if (entry.type === 'directory') {
                     nameCell = `<a href="${encodedEntryPath}">${entry.name}</a>`;
                 } else {
-                    nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}">${entry.name}</a>`;
+                    // Check if file is previewable
+                    const isPreviewable = IMAGE_EXTS.test(entry.name) || TEXT_EXTS.test(entry.name);
+                    if (isPreviewable) {
+                        nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}" onclick="if(event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) { previewFile('${encodedEntryPath}', '${entry.name}'); return false; }">${entry.name}</a>`;
+                    } else {
+                        nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}">${entry.name}</a>`;
+                    }
                 }
 
                 const typeClass = entry.type === 'directory' ? 'type-directory' : 
@@ -3062,6 +3375,20 @@
 
         document.querySelectorAll('th[data-col]').forEach(th => {
             th.addEventListener('click', () => sortByColumn(th.dataset.col));
+        });
+
+        // Modal event listeners
+        const previewModal = document.getElementById('previewModal');
+        previewModal.addEventListener('click', (e) => {
+            if (e.target === previewModal) {
+                closePreview();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && previewModal.classList.contains('active')) {
+                closePreview();
+            }
         });
 
         // Initialize Home button before loading files
