@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Felix Terminal File Browser</title>
+    <title>Felix Stargate</title>
     <style>
         :root {
             --bg-start: #667eea;
@@ -1009,7 +1009,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1 id="title">File Browser</h1>
+            <h1 id="title">Felix Stargate</h1>
             <div class="breadcrumb"></div>
             <input type="text" id="fileFilter" class="file-filter" placeholder="Filter files...">
             <div style="display: flex; align-items: center; gap: 20px; flex-shrink: 0;">
@@ -3371,7 +3371,7 @@
             
             // Decode the path for display
             const displayDir = decodeURIComponent(dir) || '/';
-            document.title = `File Browser - ${displayDir}`;
+            document.title = `Felix Stargate - ${displayDir}`;
             document.getElementById('title').textContent = displayDir;
 
             const response = await fetch('/api/listfiles', {
