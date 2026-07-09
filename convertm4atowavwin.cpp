@@ -275,7 +275,7 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
 }
 
 // Memory-based conversion for any supported audio format
-static bool convertAudioToWavInMemory(const std::vector<uint8_t>& audio_data, std::vector<uint8_t>& wav_data, const char* file_extension) {
+bool convertAudioToWavInMemory(const std::vector<uint8_t>& audio_data, std::vector<uint8_t>& wav_data, const char* file_extension) {
     // Media Foundation requires actual file access for audio files
     // Create a temporary file for the conversion process
     char temp_path[MAX_PATH];

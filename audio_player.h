@@ -63,5 +63,16 @@ void init_conversion_cache(ConversionCache *cache);
 void cleanup_conversion_cache(ConversionCache *cache);
 const char* get_cached_conversion(ConversionCache *cache, const char* original_path);
 void add_to_conversion_cache(ConversionCache *cache, const char* original_path, const char* virtual_filename);
+bool convertM4aToWavInMemory(const std::vector<unsigned char>& m4a_data, 
+                              std::vector<unsigned char>& wav_data);
+bool convertWmaToWavInMemory(const std::vector<unsigned char>& wma_data, 
+                              std::vector<unsigned char>& wav_data);
+#ifdef __linux__
+bool convertAudioToWavInMemory(const std::vector<unsigned char>& audio_data, std::vector<unsigned char>& wav_data, const char* file_extension);
+#endif
+
+#ifdef _WIN32
+bool convertAudioToWavInMemory(const std::vector<uint8_t>& audio_data, std::vector<uint8_t>& wav_data, const char* file_extension);
+#endif
 
 #endif // AUDIO_PLAYER_H
