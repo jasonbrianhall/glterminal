@@ -1203,7 +1203,7 @@ static const HelpRow HELP_ROWS[] = {
     { "── General ──",            nullptr, nullptr, nullptr },
     { nullptr, "F1",              "Toggle this help screen",                             nullptr },
     { nullptr, "F5",              "Felix Chirp - image/audio player (SSH or local)",     nullptr },
-    { nullptr, "F7",              "WOPR terminal (games and entertainment",              nullptr },
+    { nullptr, "F7",              "WOPR terminal (games and entertainment)",              nullptr },
     { nullptr, "F9",              "Felix Stargate - Web server (SFTP tunnel or local)",  nullptr },
     { nullptr, "F9 Cont.",        "Default port is 53716 F5E3L7I1X6; see F12",           nullptr },
     { nullptr, "F11",             "Toggle fullscreen",                                   nullptr },
