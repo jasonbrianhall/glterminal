@@ -184,7 +184,7 @@ CFLAGS_WIN_DEBUG   = $(CFLAGS_COMMON) -DWIN32 -D_WIN32 -DDEBUG -g -O0
 # ============================================================================
 # SOURCES
 # ============================================================================
-SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
+SRCS_COMMON = felixterminal.cpp     gl_renderer.cpp       \
               sdl_renderer.cpp      ft_font.cpp           \
               term_color.cpp        terminal.cpp          \
               term_ui.cpp           gl_bouncingcircle.cpp \
