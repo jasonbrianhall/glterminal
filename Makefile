@@ -58,6 +58,12 @@ SSH2_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags libssh2 2>/dev/null || e
 SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || echo "-lssh2")
 
 # ============================================================================
+# FFMPEG/LIBAV  (for M4A, WMA, MP2 audio conversion on Linux)
+# ============================================================================
+FFMPEG_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags libavformat libavcodec libavutil libswresample 2>/dev/null || echo "")
+FFMPEG_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libavformat libavcodec libavutil libswresample 2>/dev/null || echo "-lavformat -lavcodec -lavutil -lswresample")
+
+# ============================================================================
 # GSTREAMER  (for video playback)
 # ============================================================================
 GSTREAMER_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags gstreamer-1.0 gstreamer-app-1.0 2>/dev/null || echo "")
@@ -116,13 +122,13 @@ endif
 # ============================================================================
 CXXFLAGS_LINUX = $(CXXFLAGS_COMMON) \
                  $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
-                 $(GSTREAMER_CFLAGS_LINUX) \
+                 $(GSTREAMER_CFLAGS_LINUX) $(FFMPEG_CFLAGS_LINUX) \
                  $(SSH_CFLAGS_LINUX) \
                  -Iwopr \
                  -DLINUX $(SSH_DEFINE) -O2 -ffunction-sections -fdata-sections -flto -DDONTUSEGMP
 
 LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
-                 $(GSTREAMER_LIBS_LINUX) \
+                 $(GSTREAMER_LIBS_LINUX) $(FFMPEG_LIBS_LINUX) \
                  $(SSH_LIBS_LINUX) \
                  -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) \
                  -lssl -lcrypto \
@@ -130,13 +136,13 @@ LDFLAGS_LINUX  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
 
 CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
                        $(SDL2_CFLAGS_LINUX) $(GLEW_CFLAGS_LINUX) $(FREETYPE_CFLAGS_LINUX) \
-                       $(GSTREAMER_CFLAGS_LINUX) \
+                       $(GSTREAMER_CFLAGS_LINUX) $(FFMPEG_CFLAGS_LINUX) \
                        $(SSH_CFLAGS_LINUX) \
                        -Iwopr \
                        -DLINUX $(SSH_DEFINE) -DDEBUG -g -O0 -DDONTUSEGMP
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
-                       $(GSTREAMER_LIBS_LINUX) \
+                       $(GSTREAMER_LIBS_LINUX) $(FFMPEG_LIBS_LINUX) \
                        $(SSH_LIBS_LINUX) \
                        -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lssl -lcrypto -lwebp
 
@@ -194,7 +200,9 @@ SRCS_COMMON = gl_terminal_main.cpp  gl_renderer.cpp       \
               sftp_webserver.cpp      midi_render.cpp       \
               dbopl.cpp               dbopl_wrapper.cpp     \
               instruments.cpp         voc_render.cpp        \
-              au_render.cpp           aiff_render.cpp     
+              au_render.cpp           aiff_render.cpp       \
+              convertm4atowavlin.cpp  convertm4atowavwin.cpp \
+              vfs.cpp
 
 SRCS_MINIZ = libtelnet.c felixchirp/miniz.c felixchirp/miniz_tdef.c felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c \
             wopr/zork/actors.c \
@@ -506,6 +514,7 @@ check-deps:
 	@$(PKG_CONFIG_LINUX) --exists glew      && echo "✓ glew"      || echo "✗ glew"
 	@$(PKG_CONFIG_LINUX) --exists gstreamer-1.0 && echo "✓ gstreamer-1.0" || echo "✗ gstreamer-1.0 (video playback)"
 	@$(PKG_CONFIG_LINUX) --exists libssh2   && echo "✓ libssh2"   || echo "✗ libssh2 (optional, needed for SSH=1)"
+	@$(PKG_CONFIG_LINUX) --exists libavformat libavcodec libavutil && echo "✓ ffmpeg" || echo "✗ ffmpeg (for audio conversion: libavformat, libavcodec, libavutil)"
 	@echo "=== Windows (mingw64) ==="
 	@$(PKG_CONFIG_WIN) --exists freetype2 && echo "✓ freetype2" || echo "✗ freetype2"
 	@$(PKG_CONFIG_WIN) --exists sdl2      && echo "✓ sdl2"      || echo "✗ sdl2"
@@ -546,3 +555,7 @@ help:
 	@echo "                  sudo dnf install libssh2-devel openssl-devel"
 	@echo "SSH Windows deps: mingw64-libssh2 mingw64-openssl (Fedora)"
 	@echo "                  or build from source via mxe.cc"
+	@echo ""
+	@echo "Audio conversion (M4A/WMA/MP2) Linux deps:"
+	@echo "  Ubuntu: sudo apt install libavformat-dev libavcodec-dev libavutil-dev"
+	@echo "  Fedora: sudo dnf install ffmpeg-devel"

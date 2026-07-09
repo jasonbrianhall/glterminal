@@ -869,6 +869,74 @@ static void serve_rendered_aiff_wav(int client_socket, int tunnel_id,
     SDL_Log("[Tunnel %d] Served AIFF converted to WAV (%zu bytes)", tunnel_id, wav.size());
 }
 
+// Audio format conversion (M4A, WMA, MP2, etc.) — platform-specific
+#ifdef _WIN32
+    #include "convertm4atowavwin.h"
+    // Windows uses convertAudioToWavInMemory (generic for M4A/WMA)
+    static bool convert_audio_to_wav_memory(const std::vector<uint8_t>& audio_data, 
+                                             std::vector<uint8_t>& wav_data,
+                                             const char* file_extension) {
+        return convertAudioToWavInMemory(audio_data, wav_data, file_extension);
+    }
+#else
+    #include "convertm4atowavlin.h"
+    // Linux uses convertM4aToWavInMemory (ffmpeg-based, generic)
+    static bool convert_audio_to_wav_memory(const std::vector<uint8_t>& audio_data, 
+                                             std::vector<uint8_t>& wav_data,
+                                             const char* file_extension) {
+        return convertM4aToWavInMemory(audio_data, wav_data);
+    }
+#endif
+
+// Helper to detect if a file needs conversion
+static bool is_convertible_audio_format(const char* filename) {
+    if (!filename) return false;
+    const char* ext = strrchr(filename, '.');
+    if (!ext) return false;
+    // Check for M4A, WMA, MP2, MPA
+    return (strcasecmp_ext(ext, ".m4a") == 0 || strcasecmp_ext(ext, ".m4p") == 0 ||
+            strcasecmp_ext(ext, ".wma") == 0 || strcasecmp_ext(ext, ".mp2") == 0 || 
+            strcasecmp_ext(ext, ".mpa") == 0);
+}
+
+static bool client_wants_audio_convert(const char *raw_request) {
+    return strstr(raw_request, "X-Convert-Audio:") != nullptr;
+}
+
+static void serve_converted_audio_wav(int client_socket, int tunnel_id,
+                                       const std::vector<uint8_t> &audio_bytes,
+                                       const char *original_filename) {
+    std::vector<uint8_t> wav;
+    
+    const char* ext = strrchr(original_filename, '.');
+    if (!ext) {
+        const char *msg = "Failed to detect audio format";
+        std::string response = http_response_headers(400, "text/plain", strlen(msg));
+        response += msg;
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        SDL_Log("[Tunnel %d] Audio convert failed: cannot detect format", tunnel_id);
+        return;
+    }
+    
+    const char *format = ext + 1;  // Remove leading dot
+    
+    if (!convert_audio_to_wav_memory(audio_bytes, wav, format)) {
+        const char *msg = "Failed to convert audio file";
+        std::string response = http_response_headers(500, "text/plain", strlen(msg));
+        response += msg;
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        SDL_Log("[Tunnel %d] Audio convert failed", tunnel_id);
+        return;
+    }
+
+    std::string response = http_response_headers(200, "audio/wav", wav.size());
+    int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
+    if (header_sent > 0) {
+        socket_send_safe(client_socket, (const char *)wav.data(), (int)wav.size());
+    }
+    SDL_Log("[Tunnel %d] Served %s converted to WAV (%zu bytes)", tunnel_id, original_filename, wav.size());
+}
+
 static std::string url_encode(const std::string &str) {
     std::string encoded;
     for (char c : str) {
@@ -1016,6 +1084,22 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
                 fclose(aff);
                 aiff_bytes.resize(rd);
                 serve_rendered_aiff_wav(client_socket, tunnel_id, aiff_bytes);
+            }
+        }
+        else if (is_convertible_audio_format(fs_path.c_str()) && client_wants_audio_convert(buffer)) {
+            FILE *af = fopen(fs_path.c_str(), "rb");
+            if (!af) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to open audio: %s", tunnel_id, fs_path.c_str());
+            } else {
+                std::vector<uint8_t> audio_bytes((size_t)st.st_size);
+                size_t rd = fread(audio_bytes.data(), 1, audio_bytes.size(), af);
+                fclose(af);
+                audio_bytes.resize(rd);
+                serve_converted_audio_wav(client_socket, tunnel_id, audio_bytes, fs_path.c_str());
             }
         }
         else {
@@ -1307,6 +1391,20 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                 SDL_Log("[Tunnel %d] Failed to fetch AIFF: %s", tunnel_id, decoded_path.c_str());
             } else {
                 serve_rendered_aiff_wav(client_socket, tunnel_id, aiff_bytes);
+            }
+        }
+        else if (is_convertible_audio_format(decoded_path.c_str()) && client_wants_audio_convert(buffer)) {
+            std::vector<uint8_t> audio_bytes;
+            bool got_file;
+            { SftpOp op(sess); got_file = sftp_get_file(sftp, decoded_path.c_str(), audio_bytes); }
+            if (!got_file) {
+                std::string data = get_404();
+                std::string response = http_response_headers(404, "text/html", data.length());
+                response += data;
+                socket_send_safe(client_socket, response.c_str(), response.length());
+                SDL_Log("[Tunnel %d] Failed to fetch audio: %s", tunnel_id, decoded_path.c_str());
+            } else {
+                serve_converted_audio_wav(client_socket, tunnel_id, audio_bytes, decoded_path.c_str());
             }
         }
         else {
