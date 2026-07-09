@@ -162,10 +162,12 @@ CXXFLAGS_WIN = $(CXXFLAGS_COMMON) \
                $(SSH_DEFINE) $(FELIXBASIC_DEFINE) -O2 -ffunction-sections -fdata-sections -flto -DDONTUSEGMP
 
 # term_pty_win.cpp replaces term_pty.cpp for ConPTY
+# Media Foundation libs (mf, mfplat, mfreadwrite, mfuuid) for M4A audio conversion on Windows
 LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(GSTREAMER_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
                -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lws2_32 \
+               -lmf -lmfplat -lmfreadwrite -lmfuuid -lole32 -loleaut32 \
                -s -Wl,--gc-sections -flto -lwebp
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
