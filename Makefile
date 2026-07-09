@@ -330,9 +330,9 @@ debug: flt-linux-debug flt-windows-debug
 # LINUX BUILD
 # ============================================================================
 .PHONY: flt-linux
-flt-linux: $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX)
+flt-linux: index.h $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX)
 
-$(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX): $(OBJECTS_LINUX)
+$(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX): index.h $(OBJECTS_LINUX)
 	@echo "Linking Linux: $@"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX) $^ -o $@ $(LDFLAGS_LINUX)
 	@echo "✓ $@"
@@ -383,9 +383,9 @@ $(BUILD_DIR_LINUX)/wopr/%.o: wopr/%.c
 # LINUX DEBUG BUILD
 # ============================================================================
 .PHONY: flt-linux-debug
-flt-linux-debug: $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG)
+flt-linux-debug: index.h $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG)
 
-$(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG): $(OBJECTS_LINUX_DEBUG)
+$(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG): index.h $(OBJECTS_LINUX_DEBUG)
 	@echo "Linking Linux debug: $@"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) $^ -o $@ $(LDFLAGS_LINUX_DEBUG)
 	@echo "✓ $@"
@@ -416,9 +416,9 @@ $(BUILD_DIR_LINUX_DEBUG)/wopr/%.debug.o: wopr/%.c
 # gets recompiled with -DFELIXBASIC_BUILD (and likewise when switching back).
 .PHONY: flt-windows
 ifeq ($(FELIXBASIC),1)
-flt-windows: clean-win-obj $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
+flt-windows: index.h clean-win-obj $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 else
-flt-windows: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
+flt-windows: index.h $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 endif
 
 .PHONY: clean-win-obj
@@ -426,7 +426,7 @@ clean-win-obj:
 	@echo "Cleaning Windows object files (FELIXBASIC build)..."
 	find $(BUILD_DIR_WIN) -type f \( -name "*.win.o" -o -name "*.win.d" \) -delete 2>/dev/null || true
 
-$(BUILD_DIR_WIN)/$(EXECUTABLE_WIN): $(OBJECTS_WIN)
+$(BUILD_DIR_WIN)/$(EXECUTABLE_WIN): index.h $(OBJECTS_WIN)
 	@echo "Linking Windows: $@"
 	$(CXX_WIN) $(CXXFLAGS_WIN) $^ -o $@ $(LDFLAGS_WIN)
 	@echo "✓ $@"
@@ -454,9 +454,9 @@ $(BUILD_DIR_WIN)/wopr/%.win.o: wopr/%.c
 # WINDOWS DEBUG BUILD
 # ============================================================================
 .PHONY: flt-windows-debug
-flt-windows-debug: $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG)
+flt-windows-debug: index.h $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG)
 
-$(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG): $(OBJECTS_WIN_DEBUG)
+$(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG): index.h $(OBJECTS_WIN_DEBUG)
 	@echo "Linking Windows debug: $@"
 	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) $^ -o $@ $(LDFLAGS_WIN)
 	@echo "✓ $@"
@@ -496,6 +496,16 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 			echo "  (SSH build) libssh2.dll, libssl-*.dll, libcrypto-*.dll"; \
 		fi \
 	fi
+
+# ============================================================================
+# GZIPPED WEB ASSETS
+# ============================================================================
+# Gzip index.html and convert to C header (saves ~100KB in binary)
+# Automatically regenerated when index.html changes
+index.h: index.html
+	@echo "Generating index.html header..."
+	@xxd -i index.html > index.h
+	@echo "✓ Converted index.html"
 
 # ============================================================================
 # DEPENDENCY FILES

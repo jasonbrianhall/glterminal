@@ -765,6 +765,19 @@
             cursor: default;
         }
 
+        .cdg-export-wrap {
+            position: relative;
+            width: 100%;
+            max-width: 480px;
+        }
+
+        .cdg-btn-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+            justify-content: center;
+        }
+
         .music-title {
             font-size: 16px;
             font-weight: 600;
@@ -1053,6 +1066,11 @@
                 <div class="viz-btn-row">
                     <button id="vizExportBtn" class="viz-mode-btn">&#11015; Export</button>
                     <button id="vizModeBtn" class="viz-mode-btn"></button>
+                </div>
+            </div>
+            <div class="cdg-export-wrap" id="cdgExportWrap" style="display: none;">
+                <div class="cdg-btn-row">
+                    <button id="cdgExportBtn" class="viz-mode-btn">&#11015; Export</button>
                 </div>
             </div>
             <div class="music-title" id="musicTitle"></div>
@@ -1978,10 +1996,12 @@
             musicArt.style.display = 'none';
             hideVizVisual();
             cdgCanvas.style.display = 'block';
+            cdgExportWrap.style.display = 'block';
         }
 
         function hideCdgVisual() {
             cdgCanvas.style.display = 'none';
+            cdgExportWrap.style.display = 'none';
             musicArt.style.display = 'flex';
         }
 
@@ -2044,6 +2064,11 @@
 
         const cdgCanvas = document.getElementById('cdgCanvas');
         const cdgCtx = cdgCanvas.getContext('2d');
+        const cdgExportWrap = document.getElementById('cdgExportWrap');
+        const cdgExportBtn = document.getElementById('cdgExportBtn');
+        let cdgExportRecorder = null;
+        let isCdgExporting = false;
+        
         cdgCanvas.style.cursor = 'pointer';
         cdgCanvas.addEventListener('dblclick', () => {
             if (document.fullscreenElement) {
@@ -2187,6 +2212,96 @@
         }
 
         vizExportBtn.addEventListener('click', exportVisualizationVideo);
+
+        // Export CDG as WebP video during playback (works same as visualization export)
+        async function exportCdgVideo() {
+            if (isCdgExporting) return;
+            if (!cdgCanvas.captureStream || typeof MediaRecorder === 'undefined') {
+                alert('Video export is not supported in this browser.');
+                return;
+            }
+            if (!musicAudio.duration || !isFinite(musicAudio.duration)) {
+                alert('Track is not ready yet.');
+                return;
+            }
+
+            ensureAudioGraph();
+            if (!exportDestNode) {
+                exportDestNode = audioCtx.createMediaStreamDestination();
+                analyser.connect(exportDestNode);
+            }
+
+            const mimeCandidates = [
+                'video/webp',
+                'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+                'video/mp4',
+                'video/webm;codecs=vp9,opus',
+                'video/webm'
+            ];
+            const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported(m));
+            if (!mimeType) {
+                alert('No supported recording format found in this browser.');
+                return;
+            }
+
+            const canvasStream = cdgCanvas.captureStream(30);
+            const combinedStream = new MediaStream([
+                ...canvasStream.getVideoTracks(),
+                ...exportDestNode.stream.getAudioTracks()
+            ]);
+
+            const recordedChunks = [];
+            const recorder = new MediaRecorder(combinedStream, { mimeType });
+            cdgExportRecorder = recorder;
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+
+            // Determine file extension based on mime type
+            let ext = 'webp';
+            if (mimeType.startsWith('video/mp4')) ext = 'mp4';
+            else if (mimeType.startsWith('video/webm')) ext = 'webm';
+
+            const track = musicTracks.find(t => t.id === currentTrackId);
+            const baseName = (track ? track.name : 'cdg-export').replace(/\.[^.]+$/, '');
+
+            isCdgExporting = true;
+            cdgExportBtn.disabled = true;
+
+            recorder.onstop = () => {
+                isCdgExporting = false;
+                cdgExportRecorder = null;
+                cdgExportBtn.disabled = false;
+                cdgExportBtn.textContent = '\u2b07 Export';
+
+                const blob = new Blob(recordedChunks, { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${baseName}.${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+            };
+
+            const progressTick = () => {
+                if (recorder.state !== 'recording') return;
+                cdgExportBtn.textContent = `Exporting ${formatTime(musicAudio.currentTime)} / ${formatTime(musicAudio.duration)}`;
+                requestAnimationFrame(progressTick);
+            };
+
+            const onEnded = () => {
+                musicAudio.removeEventListener('ended', onEnded);
+                if (recorder.state === 'recording') recorder.stop();
+            };
+            musicAudio.addEventListener('ended', onEnded);
+
+            musicAudio.currentTime = 0;
+            await musicAudio.play();
+            recorder.start();
+            progressTick();
+        }
+
+        cdgExportBtn.addEventListener('click', exportCdgVideo);
 
         function vizHsl(hue, sat, light) {
             return `hsl(${((hue % 1) + 1) % 1 * 360}, ${sat}%, ${light}%)`;
