@@ -1,7 +1,7 @@
 # Ignore everything
 *
 
-# But not these directories (Git needs this to recurse)
+# But not directories (Git needs this to recurse)
 !*/
 
 # Allow specific file types
@@ -11,3 +11,7 @@
 !*.md
 !*.mp3
 !*.yml
+
+# Explicitly allow index.h even though *.h already covers it
+!index.h
+
