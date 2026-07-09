@@ -359,6 +359,9 @@ bool convertWmaToWav(const char* wma_filename, const char* wav_filename) {
     return convertAudioToWav(wma_filename, wav_filename);
 }
 
+// Forward declaration
+bool convert_audio_to_wav_internal(AudioPlayer *player, const char* filename);
+
 bool convert_audio_to_wav(AudioPlayer *player, const char* filename) {
     return convert_audio_to_wav_internal(player, filename);
 }
