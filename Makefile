@@ -330,9 +330,9 @@ debug: flt-linux-debug flt-windows-debug
 # LINUX BUILD
 # ============================================================================
 .PHONY: flt-linux
-flt-linux: index.h $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX)
+flt-linux: index.hpp $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX)
 
-$(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX): index.h $(OBJECTS_LINUX)
+$(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX): index.hpp $(OBJECTS_LINUX)
 	@echo "Linking Linux: $@"
 	$(CXX_LINUX) $(CXXFLAGS_LINUX) $^ -o $@ $(LDFLAGS_LINUX)
 	@echo "✓ $@"
@@ -504,7 +504,7 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 # Automatically regenerated when index.html changes
 index.h: index.html
 	@echo "Generating index.html header..."
-	@xxd -i index.html > index.h
+	@xxd -i index.html > index.hpp
 	@echo "✓ Converted index.html"
 
 # ============================================================================

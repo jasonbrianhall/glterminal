@@ -4,7 +4,7 @@
 #include "ssh_session.h"
 #include "sftp_overlay.h"
 
-#include "index.h"  // Embedded index.html
+#include "index.hpp"  // Embedded index.html (renamed so it doesn't get checked in with git add *.h)
 #include "404.h" // Embedded 404.html
 #include "favicon.h" // Embedded favicon.ico
 #include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
