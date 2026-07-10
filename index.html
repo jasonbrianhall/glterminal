@@ -3816,28 +3816,40 @@
                         addOutputLine('Usage: play <filename>');
                     } else {
                         const filePath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
-                        // Try to preview the file if it's a supported type
                         const filename = args.join(' ');
-                        const isPreviewable = /\.(jpg|jpeg|png|gif|webp|txt|md|json|xml|csv|log|html|htm)$/i.test(filename);
-                        const isPlayable = /\.(mp3|mp4|webm|ogg|wav|flac|m4a|aac)$/i.test(filename);
                         
-                        if (isPlayable) {
-                            // Open in new window for audio/video playback
-                            window.open(filePath, '_blank');
-                            addOutputLine('Opening: ' + args.join(' '));
+                        // Check for video formats (open in new tab)
+                        const isVideo = /\.(mp4|webm|mkv|avi|mov)$/i.test(filename);
+                        
+                        // Check for image formats (open in new tab)
+                        const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(filename);
+                        
+                        // Check for audio formats (keep in console)
+                        const isNativeAudio = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(filename);
+                        const isConvertibleAudio = /\.(aiff|aif|ra|au|voc|wma|m4b|ape|ac3|mp2|mid)$/i.test(filename);
+                        
+                        const isPreviewable = /\.(txt|md|json|xml|csv|log|html|htm)$/i.test(filename);
+                        
+                        if (isVideo || isImage) {
+                            checkFileExists(filePath, filename, isImage);
+                        } else if (isNativeAudio) {
+                            playAudio(filePath, filename);
+                        } else if (isConvertibleAudio) {
+                            playWithConverter(filePath, filename, getConverterHeader(filename));
                         } else if (isPreviewable) {
                             previewFile(filePath, filename);
-                            addOutputLine('Previewing: ' + args.join(' '));
+                            addOutputLine('Previewing: ' + filename);
                         } else {
                             addOutputLine('Error: File type not playable/previewable');
                         }
                     }
+                } else if (command === 'help') {
                     addOutputLine('Commands:');
                     addOutputLine('  ls [dir]       - List directory contents (sorted)');
                     addOutputLine('  pwd            - Print working directory');
                     addOutputLine('  cd [dir]       - Change directory (cd .. to go up, cd ~ for home)');
                     addOutputLine('  get <file>     - Download single file');
-                    addOutputLine('  play <file>    - Play or preview file');
+                    addOutputLine('  play <file>    - Play or preview file (converts aiff, ra, etc)');
                     addOutputLine('  help           - Show this help');
                     addOutputLine('  clear          - Clear screen');
                     addOutputLine('  exit           - Close console');
@@ -3877,8 +3889,175 @@
                     historyIndex = -1;
                     consoleInput.value = '';
                 }
+            } else if (e.key === 'Tab') {
+                e.preventDefault();
+                autocompleteFilename();
             }
         });
+
+        function getConverterHeader(filename) {
+            if (/\.mid$/i.test(filename)) return 'X-Render-Midi';
+            if (/\.aiff?$/i.test(filename)) return 'X-Render-Aiff';
+            if (/\.au$/i.test(filename)) return 'X-Render-Au';
+            if (/\.voc$/i.test(filename)) return 'X-Render-Voc';
+            if (/\.ra$/i.test(filename)) return 'X-Convert-Audio';
+            return 'X-Convert-Audio'; // Default for wma, m4b, ape, ac3, mp2
+        }
+
+        function checkFileExists(filePath, filename, isImage) {
+            fetch(filePath, { method: 'HEAD' }).then(res => {
+                if (res.ok) {
+                    window.open(filePath, '_blank');
+                    const fileType = isImage ? 'image' : 'video';
+                    addOutputLine('Opening (' + fileType + '): ' + filename);
+                } else if (res.status === 404) {
+                    addOutputLine('Error: File not found');
+                } else {
+                    addOutputLine(`Error: HTTP ${res.status}`);
+                }
+            }).catch(err => {
+                addOutputLine('Error: Failed to open ' + filename);
+                console.error(err);
+            });
+        }
+
+        function playAudio(filePath, filename) {
+            try {
+                addOutputLine('Playing: ' + filename);
+                
+                // Create player element in console
+                const playerDiv = document.createElement('div');
+                playerDiv.style.cssText = 'margin: 10px 0; padding: 10px; background: var(--thead-bg); border-radius: 4px; border: 1px solid var(--border-color);';
+                playerDiv.innerHTML = `
+                    <div style="color: var(--text-main); margin-bottom: 8px; font-weight: bold;">${filename}</div>
+                    <audio controls style="width: 100%; margin-top: 5px;">
+                        <source src="${filePath}">
+                        Your browser does not support the audio element.
+                    </audio>
+                `;
+                consoleOutput.appendChild(playerDiv);
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+                
+                // Auto-play and handle errors
+                const audio = playerDiv.querySelector('audio');
+                audio.onerror = () => {
+                    playerDiv.remove();
+                    addOutputLine('Error: File not found');
+                };
+                audio.play().catch(e => {
+                    console.error('Playback error:', e);
+                });
+            } catch (error) {
+                addOutputLine('Error: Failed to play ' + filename);
+                console.error(error);
+            }
+        }
+
+        async function playWithConverter(filePath, filename, header) {
+            try {
+                addOutputLine('Converting and playing: ' + filename);
+                const headers = { [header]: '1' };
+                const res = await fetch(filePath, { 
+                    method: 'GET',
+                    headers: headers 
+                });
+                if (!res.ok) {
+                    if (res.status === 404) {
+                        addOutputLine('Error: File not found');
+                    } else {
+                        addOutputLine(`Error: HTTP ${res.status}`);
+                    }
+                    return;
+                }
+                const blob = await res.blob();
+                const audioUrl = URL.createObjectURL(blob);
+                
+                // Create player element in console
+                const playerDiv = document.createElement('div');
+                playerDiv.style.cssText = 'margin: 10px 0; padding: 10px; background: var(--thead-bg); border-radius: 4px; border: 1px solid var(--border-color);';
+                playerDiv.innerHTML = `
+                    <div style="color: var(--text-main); margin-bottom: 8px; font-weight: bold;">${filename}</div>
+                    <audio controls style="width: 100%; margin-top: 5px;">
+                        <source src="${audioUrl}" type="audio/wav">
+                        Your browser does not support the audio element.
+                    </audio>
+                `;
+                consoleOutput.appendChild(playerDiv);
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+                
+                // Auto-play
+                const audio = playerDiv.querySelector('audio');
+                audio.play().catch(e => {
+                    console.error('Playback error:', e);
+                });
+            } catch (error) {
+                addOutputLine('Error: Failed to convert/play ' + filename);
+                console.error(error);
+            }
+        }
+
+        async function autocompleteFilename() {
+            const input = consoleInput.value.trim();
+            if (!input) return;
+
+            const parts = input.split(/\s+/);
+            const lastPart = parts[parts.length - 1];
+            
+            // Determine directory and partial filename
+            let dir = currentPath;
+            let partial = lastPart;
+            
+            if (lastPart.includes('/')) {
+                const lastSlash = lastPart.lastIndexOf('/');
+                dir = lastPart.substring(0, lastSlash) || '/';
+                partial = lastPart.substring(lastSlash + 1);
+            }
+
+            try {
+                const response = await fetch('/api/listfiles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dir: dir })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const matches = data.entries
+                        .filter(e => e.name.toLowerCase().startsWith(partial.toLowerCase()))
+                        .sort((a, b) => a.name.localeCompare(b.name));
+
+                    if (matches.length === 1) {
+                        // Single match: complete it with trailing / if directory
+                        const suffix = matches[0].type === 'directory' ? '/' : '';
+                        const newLastPart = (lastPart.includes('/') ? lastPart.substring(0, lastPart.lastIndexOf('/') + 1) : '') + matches[0].name + suffix;
+                        const newValue = parts.slice(0, -1).concat(newLastPart).join(' ');
+                        consoleInput.value = newValue;
+                    } else if (matches.length > 1) {
+                        // Multiple matches: find common prefix
+                        let commonPrefix = matches[0].name;
+                        for (let i = 1; i < matches.length; i++) {
+                            let j = 0;
+                            while (j < commonPrefix.length && j < matches[i].name.length && 
+                                   commonPrefix[j].toLowerCase() === matches[i].name[j].toLowerCase()) {
+                                j++;
+                            }
+                            commonPrefix = commonPrefix.substring(0, j);
+                        }
+
+                        if (commonPrefix.length > partial.length) {
+                            const newLastPart = (lastPart.includes('/') ? lastPart.substring(0, lastPart.lastIndexOf('/') + 1) : '') + commonPrefix;
+                            const newValue = parts.slice(0, -1).concat(newLastPart).join(' ');
+                            consoleInput.value = newValue;
+                        } else {
+                            // Show matches
+                            addOutputLine(matches.map(m => m.name + (m.type === 'directory' ? '/' : '')).join('  '));
+                        }
+                    }
+                }
+            } catch (error) {
+                addOutputLine('Error: ' + error.message);
+            }
+        }
 
         document.getElementById('consoleBtn').addEventListener('click', () => {
             consoleModal.classList.add('active');
