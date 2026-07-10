@@ -3907,9 +3907,11 @@
         function checkFileExists(filePath, filename, isImage) {
             fetch(filePath, { method: 'HEAD' }).then(res => {
                 if (res.ok) {
-                    window.open(filePath, '_blank');
-                    const fileType = isImage ? 'image' : 'video';
-                    addOutputLine('Opening (' + fileType + '): ' + filename);
+                    if (isImage) {
+                        playImage(filePath, filename);
+                    } else {
+                        playVideo(filePath, filename);
+                    }
                 } else if (res.status === 404) {
                     addOutputLine('Error: File not found');
                 } else {
@@ -3919,6 +3921,74 @@
                 addOutputLine('Error: Failed to open ' + filename);
                 console.error(err);
             });
+        }
+
+        function playImage(filePath, filename) {
+            try {
+                addOutputLine('Viewing: ' + filename);
+                
+                // Create overlay
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10000; cursor: pointer;';
+                
+                const img = document.createElement('img');
+                img.src = filePath;
+                img.style.cssText = 'max-width: 90%; max-height: 90%; object-fit: contain; cursor: auto;';
+                
+                overlay.appendChild(img);
+                document.body.appendChild(overlay);
+                
+                // Close on click
+                overlay.addEventListener('click', () => overlay.remove());
+                
+                // Close on escape key
+                const closeOnEscape = (e) => {
+                    if (e.key === 'Escape') {
+                        overlay.remove();
+                        document.removeEventListener('keydown', closeOnEscape);
+                    }
+                };
+                document.addEventListener('keydown', closeOnEscape);
+            } catch (error) {
+                addOutputLine('Error: Failed to open ' + filename);
+                console.error(error);
+            }
+        }
+
+        function playVideo(filePath, filename) {
+            try {
+                addOutputLine('Playing: ' + filename);
+                
+                // Create overlay
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; align-items: center; justify-content: center; z-index: 10000; cursor: pointer;';
+                
+                const video = document.createElement('video');
+                video.src = filePath;
+                video.style.cssText = 'max-width: 90%; max-height: 90%; cursor: auto;';
+                video.controls = true;
+                video.autoplay = true;
+                
+                overlay.appendChild(video);
+                document.body.appendChild(overlay);
+                
+                // Close on click (outside video)
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) overlay.remove();
+                });
+                
+                // Close on escape key
+                const closeOnEscape = (e) => {
+                    if (e.key === 'Escape') {
+                        overlay.remove();
+                        document.removeEventListener('keydown', closeOnEscape);
+                    }
+                };
+                document.addEventListener('keydown', closeOnEscape);
+            } catch (error) {
+                addOutputLine('Error: Failed to open ' + filename);
+                console.error(error);
+            }
         }
 
         function playAudio(filePath, filename) {
