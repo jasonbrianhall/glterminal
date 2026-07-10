@@ -174,6 +174,119 @@
             margin: 0 auto;
         }
 
+        #consoleBtn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+            transition: background 0.2s;
+        }
+
+        #consoleBtn:hover {
+            background: var(--accent-dark);
+        }
+
+        .console-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .console-modal.active {
+            display: flex;
+        }
+
+        .console-container {
+            background: var(--card-bg);
+            color: var(--accent);
+            font-family: 'Courier New', monospace;
+            width: 100%;
+            height: 100%;
+            border-radius: 0;
+            display: flex;
+            flex-direction: column;
+            box-shadow: none;
+        }
+
+        .console-header {
+            background: var(--thead-bg);
+            padding: 10px 15px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-radius: 0;
+        }
+
+        .console-header h3 {
+            margin: 0;
+            font-size: 14px;
+            color: var(--accent);
+        }
+
+        .console-close {
+            background: none;
+            border: none;
+            color: var(--accent);
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        .console-output {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            font-size: 13px;
+            line-height: 1.4;
+            background: var(--card-bg);
+            color: var(--text-main);
+        }
+
+        .console-input-line {
+            display: flex;
+            padding: 5px 15px;
+            background: var(--card-bg);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .console-prompt {
+            color: var(--accent);
+            margin-right: 5px;
+            flex-shrink: 0;
+        }
+
+        .console-input-line input {
+            background: var(--card-bg);
+            color: var(--accent);
+            border: none;
+            outline: none;
+            flex: 1;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .console-output-line {
+            margin: 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: var(--text-main);
+        }
+
+        .console-output-line.command {
+            color: var(--accent);
+        }
+
         .preview-modal {
             display: none;
             position: fixed;
@@ -1014,6 +1127,7 @@
             <input type="text" id="fileFilter" class="file-filter" placeholder="Filter files...">
             <div style="display: flex; align-items: center; gap: 20px; flex-shrink: 0;">
                 <a id="homeBtn" class="slideshow-btn" style="display: none; cursor: pointer;">&#8962; Home</a>
+                <button id="consoleBtn" style="background: var(--accent); color: white; border: none; padding: 10px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; margin-left: 10px;">Warpdrive</button>
                 <button id="slideshowBtn" class="slideshow-btn" style="display: none;">▶ Slideshow</button>
                 <button id="musicBtn" class="slideshow-btn" style="display: none;">♪ Play Music</button>
                 <button id="videoBtn" class="slideshow-btn" style="display: none;">▶ Play Video</button>
@@ -3547,6 +3661,243 @@
         // Initialize after all functions are defined
         updateBreadcrumb();
         loadFiles();
+
+        // Console functionality
+        const consoleModal = document.createElement('div');
+        consoleModal.className = 'console-modal';
+        consoleModal.innerHTML = `
+            <div class="console-container">
+                <div class="console-header">
+                    <h3>Felix Warpdrive</h3>
+                    <button class="console-close">×</button>
+                </div>
+                <div class="console-output" id="consoleOutput"></div>
+                <div class="console-input-line">
+                    <span class="console-prompt">$ </span>
+                    <input type="text" id="consoleInput" autofocus>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(consoleModal);
+
+        let currentPath = '/';
+        let homePath = '/';
+        let commandHistory = [];
+        let historyIndex = -1;
+
+        const consoleInput = document.getElementById('consoleInput');
+        const consoleOutput = document.getElementById('consoleOutput');
+
+        function addOutputLine(text, isCommand = false) {
+            const line = document.createElement('div');
+            line.className = 'console-output-line';
+            if (isCommand) {
+                line.classList.add('command');
+                line.textContent = '$ ' + text;
+            } else {
+                line.textContent = text;
+            }
+            consoleOutput.appendChild(line);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+
+        async function executeCommand(cmd) {
+            cmd = cmd.trim();
+            if (!cmd) return;
+
+            addOutputLine(cmd, true);
+            
+            // Add to history (keep last 100)
+            commandHistory.push(cmd);
+            if (commandHistory.length > 100) {
+                commandHistory.shift();
+            }
+            historyIndex = -1;
+
+            const parts = cmd.split(/\s+/);
+            const command = parts[0];
+            const args = parts.slice(1);
+
+            try {
+                if (command === 'pwd') {
+                    addOutputLine(currentPath);
+                } else if (command === 'ls') {
+                    const pattern = args.join(' ') || '*';
+                    let dir = currentPath;
+                    let filename = pattern;
+                    
+                    // Check if pattern contains a directory separator
+                    if (pattern.includes('/')) {
+                        dir = pattern.startsWith('/') ? pattern.substring(0, pattern.lastIndexOf('/')) || '/' : currentPath + (currentPath.endsWith('/') ? '' : '/') + pattern.substring(0, pattern.lastIndexOf('/'));
+                        filename = pattern.substring(pattern.lastIndexOf('/') + 1);
+                    }
+                    
+                    const response = await fetch('/api/listfiles', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ dir: dir })
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.entries && data.entries.length > 0) {
+                            const regex = new RegExp('^' + filename.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+                            const matches = data.entries.filter(e => regex.test(e.name)).sort((a, b) => a.name.localeCompare(b.name));
+                            
+                            if (matches.length === 0) {
+                                addOutputLine('(no matches)');
+                            } else if (matches.length === 1 && matches[0].type === 'directory') {
+                                // If single match is a directory, list its contents
+                                const subDir = dir + (dir.endsWith('/') ? '' : '/') + matches[0].name;
+                                const subResponse = await fetch('/api/listfiles', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ dir: subDir })
+                                });
+                                if (subResponse.ok) {
+                                    const subData = await subResponse.json();
+                                    if (subData.entries && subData.entries.length > 0) {
+                                        const sorted = [...subData.entries].sort((a, b) => a.name.localeCompare(b.name));
+                                        sorted.forEach(entry => {
+                                            const type = entry.type === 'directory' ? '/' : '';
+                                            addOutputLine(entry.name + type);
+                                        });
+                                    } else {
+                                        addOutputLine('(empty directory)');
+                                    }
+                                }
+                            } else {
+                                matches.forEach(entry => {
+                                    const type = entry.type === 'directory' ? '/' : '';
+                                    addOutputLine(entry.name + type);
+                                });
+                            }
+                        } else {
+                            addOutputLine('(empty directory)');
+                        }
+                    } else {
+                        addOutputLine('Error: directory not found');
+                    }
+                } else if (command === 'get') {
+                    if (args.length === 0) {
+                        addOutputLine('Usage: get <filename>');
+                    } else {
+                        const filePath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
+                        window.open(filePath, '_blank');
+                        addOutputLine('Downloading: ' + args.join(' '));
+                    }
+                } else if (command === 'cd') {
+                    if (args.length === 0) {
+                        currentPath = '/';
+                    } else if (args[0] === '..') {
+                        if (currentPath === '/') {
+                            addOutputLine('Already at root');
+                        } else {
+                            currentPath = currentPath.endsWith('/') ? currentPath.slice(0, -1) : currentPath;
+                            currentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+                            if (currentPath !== '/') currentPath += '/';
+                        }
+                    } else if (args[0] === '~') {
+                        currentPath = homePath.endsWith('/') ? homePath : homePath + '/';
+                    } else {
+                        const newPath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
+                        const response = await fetch('/api/listfiles', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ dir: newPath })
+                        });
+                        if (response.ok) {
+                            currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                        } else {
+                            addOutputLine('Error: directory not found');
+                        }
+                    }
+                } else if (command === 'play') {
+                    if (args.length === 0) {
+                        addOutputLine('Usage: play <filename>');
+                    } else {
+                        const filePath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
+                        // Try to preview the file if it's a supported type
+                        const filename = args.join(' ');
+                        const isPreviewable = /\.(jpg|jpeg|png|gif|webp|txt|md|json|xml|csv|log|html|htm)$/i.test(filename);
+                        const isPlayable = /\.(mp3|mp4|webm|ogg|wav|flac|m4a|aac)$/i.test(filename);
+                        
+                        if (isPlayable) {
+                            // Open in new window for audio/video playback
+                            window.open(filePath, '_blank');
+                            addOutputLine('Opening: ' + args.join(' '));
+                        } else if (isPreviewable) {
+                            previewFile(filePath, filename);
+                            addOutputLine('Previewing: ' + args.join(' '));
+                        } else {
+                            addOutputLine('Error: File type not playable/previewable');
+                        }
+                    }
+                    addOutputLine('Commands:');
+                    addOutputLine('  ls [dir]       - List directory contents (sorted)');
+                    addOutputLine('  pwd            - Print working directory');
+                    addOutputLine('  cd [dir]       - Change directory (cd .. to go up, cd ~ for home)');
+                    addOutputLine('  get <file>     - Download single file');
+                    addOutputLine('  play <file>    - Play or preview file');
+                    addOutputLine('  help           - Show this help');
+                    addOutputLine('  clear          - Clear screen');
+                    addOutputLine('  exit           - Close console');
+                } else if (command === 'clear') {
+                    consoleOutput.innerHTML = '';
+                } else if (command === 'exit') {
+                    consoleModal.classList.remove('active');
+                } else {
+                    addOutputLine('Command not found: ' + command);
+                }
+            } catch (error) {
+                addOutputLine('Error: ' + error.message);
+            }
+
+            consoleInput.value = '';
+        }
+
+        consoleInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                executeCommand(consoleInput.value);
+            }
+        });
+
+        consoleInput.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    consoleInput.value = commandHistory[commandHistory.length - 1 - historyIndex];
+                }
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    consoleInput.value = commandHistory[commandHistory.length - 1 - historyIndex];
+                } else if (historyIndex === 0) {
+                    historyIndex = -1;
+                    consoleInput.value = '';
+                }
+            }
+        });
+
+        document.getElementById('consoleBtn').addEventListener('click', () => {
+            consoleModal.classList.add('active');
+            consoleInput.focus();
+            homePath = globalHomePath || '/';
+            currentPath = getCurrentPath();
+            if (!currentPath.endsWith('/')) currentPath += '/';
+            addOutputLine('Type "help" for commands');
+        });
+
+        consoleModal.querySelector('.console-close').addEventListener('click', () => {
+            consoleModal.classList.remove('active');
+        });
+
+        consoleModal.addEventListener('click', (e) => {
+            if (e.target === consoleModal) {
+                consoleModal.classList.remove('active');
+            }
+        });
     </script>
 </body>
 </html>
