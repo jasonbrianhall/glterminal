@@ -985,8 +985,9 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
                                        const char *buffer, int bytes_read) {
     (void)bytes_read;
 
-    if (strcmp(method, "GET") == 0) {
+    if (strcmp(method, "GET") == 0 || strcmp(method, "HEAD") == 0) {
         std::string decoded_path = url_decode(path);
+        bool is_head_request = (strcmp(method, "HEAD") == 0);
         std::string fs_path;
         if (!local_resolve_path(decoded_path, fs_path)) {
             std::string response = http_response_headers(400, "text/plain", 7);
@@ -1130,7 +1131,7 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
                                                                 file_size, content_type);
             int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
 
-            if (header_sent > 0) {
+            if (header_sent > 0 && !is_head_request) {
                 const int BUFFER_SIZE = 262144;  // 256KB
                 char *fbuffer = new char[BUFFER_SIZE];
                 uint64_t total_sent = 0;
@@ -1157,6 +1158,8 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
                 delete[] fbuffer;
                 SDL_Log("[Tunnel %d] Downloaded %s%s: %s (%llu bytes)", tunnel_id,
                         is_partial ? "range of " : "", "file", fs_path.c_str(), total_sent);
+            } else if (is_head_request && header_sent > 0) {
+                SDL_Log("[Tunnel %d] HEAD: sent headers for %s (size: %llu bytes)", tunnel_id, fs_path.c_str(), (unsigned long long)file_size);
             }
 
             fclose(f);
@@ -1305,9 +1308,10 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         return;
     }
 
-    if (strcmp(method, "GET") == 0) {
+    if (strcmp(method, "GET") == 0 || strcmp(method, "HEAD") == 0) {
         std::string decoded_path = url_decode(path);
-        SDL_Log("[Tunnel %d] GET: encoded='%s' decoded='%s'", tunnel_id, path, decoded_path.c_str());
+        bool is_head_request = (strcmp(method, "HEAD") == 0);
+        SDL_Log("[Tunnel %d] %s: encoded='%s' decoded='%s'", tunnel_id, method, path, decoded_path.c_str());
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         int rc;
         { SftpOp op(sess); rc = libssh2_sftp_stat(sftp, decoded_path.c_str(), &attrs); }
@@ -1446,7 +1450,7 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                                                                     file_size, content_type);
                 int header_sent = socket_send_safe(client_socket, response.c_str(), response.length());
                 
-                if (header_sent > 0) {
+                if (header_sent > 0 && !is_head_request) {
                     // Stream file in 256KB chunks
                     const int BUFFER_SIZE = 262144;  // 256KB
                     char *fbuffer = new char[BUFFER_SIZE];
@@ -1491,6 +1495,9 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                     }
                     
                     delete[] fbuffer;
+                } else if (is_head_request && header_sent > 0) {
+                    SDL_Log("[Tunnel %d] HEAD: sent headers for %s (size: %llu bytes)", 
+                            tunnel_id, decoded_path.c_str(), (unsigned long long)file_size);
                 } else {
                     SDL_Log("[Tunnel %d] Failed to send headers for: %s", tunnel_id, decoded_path.c_str());
                 }
