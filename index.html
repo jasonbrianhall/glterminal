@@ -3662,6 +3662,13 @@
         updateBreadcrumb();
         loadFiles();
 
+        // Check for warpdrive cookie and auto-open if set
+        if (document.cookie.includes('warpdrive_active=true')) {
+            setTimeout(() => {
+                document.getElementById('consoleBtn').click();
+            }, 500);
+        }
+
         // Console functionality
         const consoleModal = document.createElement('div');
         consoleModal.className = 'console-modal';
@@ -3687,6 +3694,14 @@
 
         const consoleInput = document.getElementById('consoleInput');
         const consoleOutput = document.getElementById('consoleOutput');
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
+        }
 
         function addOutputLine(text, isCommand = false) {
             const line = document.createElement('div');
@@ -3826,15 +3841,49 @@
                         currentPath = homePath.endsWith('/') ? homePath : homePath + '/';
                     } else {
                         const newPath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
-                        const response = await fetch('/api/listfiles', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ dir: newPath })
+                        const response = await fetch(newPath, {
+                            method: 'HEAD'
                         });
                         if (response.ok) {
-                            currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                            const fileType = response.headers.get('Felix-file-type');
+                            if (fileType === 'dir') {
+                                currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                            } else if (fileType === 'file') {
+                                addOutputLine('Error: not a directory');
+                            } else {
+                                currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                            }
+                        } else if (response.status === 403) {
+                            addOutputLine('Error: permission denied');
                         } else {
                             addOutputLine('Error: directory not found');
+                        }
+                    }
+                } else if (command === 'info') {
+                    if (args.length === 0) {
+                        addOutputLine('Usage: info <file|directory>');
+                    } else {
+                        const targetPath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
+                        const response = await fetch('/api/fileinfo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: targetPath })
+                        });
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.type === 'directory') {
+                                addOutputLine('Directory: ' + args.join(' '));
+                                addOutputLine('  Path: ' + data.path);
+                                addOutputLine('  Files: ' + data.file_count);
+                            } else {
+                                addOutputLine('File: ' + args.join(' '));
+                                addOutputLine('  Path: ' + data.path);
+                                addOutputLine('  Type: ' + (data.mime_type || 'unknown'));
+                                addOutputLine('  Size: ' + formatBytes(data.size));
+                                addOutputLine('  Modified: ' + new Date(data.modified * 1000).toLocaleString());
+                            }
+                        } else {
+                            addOutputLine('Error: file or directory not found');
                         }
                     }
                 } else if (command === 'play') {
@@ -3876,13 +3925,16 @@
                     addOutputLine('  get <file>     - Download single file');
                     addOutputLine('  play <file>    - Play or preview file (converts aiff, ra, midi, voc, mp2, and a few other formats)');
                     addOutputLine('                       Images, text, and movies files open in an overlay; music is in-line');
+                    addOutputLine('  info <file>    - Show file/directory info (size, type, modified date, file count)');
                     addOutputLine('  help           - Show this help');
                     addOutputLine('  clear          - Clear screen');
-                    addOutputLine('  exit           - Close console');
+                    addOutputLine('  exit, bye      - Close console');
                 } else if (command === 'clear') {
                     consoleOutput.innerHTML = '';
-                } else if (command === 'exit') {
+                } else if (command === 'exit' || command === 'bye') {
                     consoleModal.classList.remove('active');
+                    // Clear cookie when warpdrive is closed
+                    document.cookie = "warpdrive_active=; path=/; max-age=0";
                 } else {
                     addOutputLine('Command not found: ' + command);
                 }
@@ -4193,15 +4245,21 @@
             currentPath = getCurrentPath();
             if (!currentPath.endsWith('/')) currentPath += '/';
             addOutputLine('Type "help" for commands');
+            // Set cookie when warpdrive is opened
+            document.cookie = "warpdrive_active=true; path=/; max-age=" + (365 * 24 * 60 * 60);
         });
 
         consoleModal.querySelector('.console-close').addEventListener('click', () => {
             consoleModal.classList.remove('active');
+            // Clear cookie when warpdrive is closed
+            document.cookie = "warpdrive_active=; path=/; max-age=0";
         });
 
         consoleModal.addEventListener('click', (e) => {
             if (e.target === consoleModal) {
                 consoleModal.classList.remove('active');
+                // Clear cookie when warpdrive is closed
+                document.cookie = "warpdrive_active=; path=/; max-age=0";
             }
         });
     </script>
