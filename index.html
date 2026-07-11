@@ -3714,7 +3714,33 @@
             }
             historyIndex = -1;
 
-            const parts = cmd.split(/\s+/);
+            // Parse command with support for quoted arguments
+            const parts = [];
+            let current = '';
+            let inQuotes = false;
+            let quoteChar = '';
+            
+            for (let i = 0; i < cmd.length; i++) {
+                const char = cmd[i];
+                if ((char === '"' || char === "'") && !inQuotes) {
+                    inQuotes = true;
+                    quoteChar = char;
+                } else if (char === quoteChar && inQuotes) {
+                    inQuotes = false;
+                    quoteChar = '';
+                } else if (char === ' ' && !inQuotes) {
+                    if (current) {
+                        parts.push(current);
+                        current = '';
+                    }
+                } else {
+                    current += char;
+                }
+            }
+            if (current) {
+                parts.push(current);
+            }
+            
             const command = parts[0];
             const args = parts.slice(1);
 
@@ -3997,13 +4023,16 @@
             try {
                 addOutputLine('Playing: ' + filename);
                 
+                // URL encode the file path to handle special characters
+                const encodedPath = filePath.split('/').map(part => encodeURIComponent(part)).join('/');
+                
                 // Create player element in console
                 const playerDiv = document.createElement('div');
                 playerDiv.style.cssText = 'margin: 10px 0; padding: 10px; background: var(--thead-bg); border-radius: 4px; border: 1px solid var(--border-color);';
                 playerDiv.innerHTML = `
                     <div style="color: var(--text-main); margin-bottom: 8px; font-weight: bold;">${filename}</div>
                     <audio controls style="width: 100%; margin-top: 5px;">
-                        <source src="${filePath}">
+                        <source src="${encodedPath}">
                         Your browser does not support the audio element.
                     </audio>
                 `;
@@ -4029,7 +4058,9 @@
             try {
                 addOutputLine('Converting and playing: ' + filename);
                 const headers = { [header]: '1' };
-                const res = await fetch(filePath, { 
+                // URL encode the file path to handle special characters
+                const encodedPath = filePath.split('/').map(part => encodeURIComponent(part)).join('/');
+                const res = await fetch(encodedPath, { 
                     method: 'GET',
                     headers: headers 
                 });
@@ -4069,20 +4100,34 @@
         }
 
         async function autocompleteFilename() {
-            const input = consoleInput.value.trim();
+            const input = consoleInput.value;
             if (!input) return;
 
-            const parts = input.split(/\s+/);
-            const lastPart = parts[parts.length - 1];
+            // Split into command and arguments
+            const trimmedInput = input.trim();
+            const spaceIndex = trimmedInput.indexOf(' ');
+            if (spaceIndex === -1) return; // No filename argument yet
+            
+            const command = trimmedInput.substring(0, spaceIndex);
+            const filenameArg = trimmedInput.substring(spaceIndex + 1);
             
             // Determine directory and partial filename
             let dir = currentPath;
-            let partial = lastPart;
+            let partial = filenameArg;
             
-            if (lastPart.includes('/')) {
-                const lastSlash = lastPart.lastIndexOf('/');
-                dir = lastPart.substring(0, lastSlash) || '/';
-                partial = lastPart.substring(lastSlash + 1);
+            // Handle quoted strings
+            let isQuoted = false;
+            let quoteChar = '';
+            if ((filenameArg.startsWith('"') || filenameArg.startsWith("'"))) {
+                isQuoted = true;
+                quoteChar = filenameArg[0];
+                partial = filenameArg.substring(1);
+            }
+            
+            if (partial.includes('/')) {
+                const lastSlash = partial.lastIndexOf('/');
+                dir = partial.substring(0, lastSlash) || '/';
+                partial = partial.substring(lastSlash + 1);
             }
 
             try {
@@ -4099,10 +4144,22 @@
                         .sort((a, b) => a.name.localeCompare(b.name));
 
                     if (matches.length === 1) {
-                        // Single match: complete it with trailing / if directory
+                        // Single match: complete it
                         const suffix = matches[0].type === 'directory' ? '/' : '';
-                        const newLastPart = (lastPart.includes('/') ? lastPart.substring(0, lastPart.lastIndexOf('/') + 1) : '') + matches[0].name + suffix;
-                        const newValue = parts.slice(0, -1).concat(newLastPart).join(' ');
+                        let fullFilename = matches[0].name + suffix;
+                        
+                        // Reconstruct the path if we had a directory component
+                        if (partial !== filenameArg) {
+                            const dirPart = filenameArg.substring(0, filenameArg.lastIndexOf('/') + 1);
+                            fullFilename = dirPart + fullFilename;
+                        }
+                        
+                        // Add quotes if it has spaces or special chars and wasn't already quoted
+                        if (!isQuoted && /[\s'"()[\]{}]/.test(fullFilename)) {
+                            fullFilename = '"' + fullFilename + '"';
+                        }
+                        
+                        const newValue = command + ' ' + fullFilename;
                         consoleInput.value = newValue;
                     } else if (matches.length > 1) {
                         // Multiple matches: find common prefix
@@ -4117,8 +4174,8 @@
                         }
 
                         if (commonPrefix.length > partial.length) {
-                            const newLastPart = (lastPart.includes('/') ? lastPart.substring(0, lastPart.lastIndexOf('/') + 1) : '') + commonPrefix;
-                            const newValue = parts.slice(0, -1).concat(newLastPart).join(' ');
+                            let completion = (partial !== filenameArg ? filenameArg.substring(0, filenameArg.lastIndexOf('/') + 1) : '') + commonPrefix;
+                            const newValue = command + ' ' + completion;
                             consoleInput.value = newValue;
                         } else {
                             // Show matches
