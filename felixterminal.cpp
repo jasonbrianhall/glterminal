@@ -2230,6 +2230,7 @@ int main(int argc, char **argv) {
     kitty_shutdown();
     basic_graphics_shutdown();
     menu_font_shutdown();
+    term_free(&term);      // Clean up terminal buffers (fixes memory leaks)
 #ifdef USESSH
     if (use_ssh) {
         ssh_abort.store(true);
