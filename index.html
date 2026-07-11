@@ -3337,7 +3337,7 @@
 
         // File preview functionality
         const IMAGE_EXTS = /\.(jpg|jpeg|png|gif|webp|svg)$/i;
-        const TEXT_EXTS = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i;
+        const TEXT_EXTS = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|py|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i;
         const MAX_PREVIEW_SIZE = 1024 * 1024; // 1MB limit
 
         function closePreview() {
@@ -3854,8 +3854,7 @@
                         const isNativeAudio = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(filename);
                         const isConvertibleAudio = /\.(aiff|aif|ra|au|voc|wma|m4b|ape|ac3|mp2|mid)$/i.test(filename);
                         
-                        const isPreviewable = /\.(txt|md|json|xml|csv|log|html|htm)$/i.test(filename);
-                        
+                        const isPreviewable = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|py|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i.test(filename);
                         if (isVideo || isImage) {
                             checkFileExists(filePath, filename, isImage);
                         } else if (isNativeAudio) {
