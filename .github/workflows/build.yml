@@ -63,7 +63,8 @@ jobs:
           ImageMagick \
           libssh2-devel \
           libwebp-devel \
-          mingw64-libwebp
+          mingw64-libwebp \
+          xxd
 
     - name: Build Windows Executable
       run: |
