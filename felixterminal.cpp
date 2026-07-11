@@ -1,12 +1,5 @@
-// gl_terminal_main.cpp  — entry point only
-// Build (local shell):
-//   g++ gl_terminal_main.cpp gl_renderer.cpp ft_font.cpp term_color.cpp
-//       terminal.cpp term_pty.cpp term_ui.cpp ssh_key_manager.cpp gl_bouncingcircle.cpp
-//       font_manager.cpp basic_graphics.cpp
-//       -lGL -lGLEW -lSDL2 -lfreetype -o gl_terminal
-//
-// Build (with SSH support):
-//   g++ ... ssh_session.cpp basic_graphics.cpp ... -lssh2 -lcrypto -lssl -DUSESSH -o gl_terminal
+// Felix Terminal Main program
+// Written by Jason Brian Hall (jasonbrianhall@gmail.com)
 
 #include "gl_terminal.h"
 #include "gl_renderer.h"
@@ -26,14 +19,12 @@
 #include "font_manager.h"
 #include "felixchirp/felixchirp.h"
 #include "wopr/wopr.h"
-#ifdef USESSH
-#  include "ssh_session.h"
-#  include "sftp_overlay.h"
-#  include "sftp_console.h"
-#  include "port_forward.h"
-#  include "pf_overlay.h"
-#  include "sftp_webserver.h"
-#endif
+#include "ssh_session.h"
+#include "sftp_overlay.h"
+#include "sftp_console.h"
+#include "port_forward.h"
+#include "pf_overlay.h"
+#include "sftp_webserver.h"
 #include "telnet_session.h"
 #include "serial_session.h"
 
