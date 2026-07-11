@@ -3839,6 +3839,26 @@
                         }
                     } else if (args[0] === '~') {
                         currentPath = homePath.endsWith('/') ? homePath : homePath + '/';
+                    } else if (args[0].startsWith('~/')) {
+                        const subpath = args[0].substring(2);
+                        const newPath = homePath + (homePath.endsWith('/') ? '' : '/') + subpath;
+                        const response = await fetch(newPath, {
+                            method: 'HEAD'
+                        });
+                        if (response.ok) {
+                            const fileType = response.headers.get('Felix-file-type');
+                            if (fileType === 'dir') {
+                                currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                            } else if (fileType === 'file') {
+                                addOutputLine('Error: not a directory');
+                            } else {
+                                currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                            }
+                        } else if (response.status === 403) {
+                            addOutputLine('Error: permission denied');
+                        } else {
+                            addOutputLine('Error: directory not found');
+                        }
                     } else {
                         const newPath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
                         const response = await fetch(newPath, {
