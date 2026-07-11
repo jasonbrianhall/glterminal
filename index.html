@@ -3716,6 +3716,35 @@
             consoleOutput.scrollTop = consoleOutput.scrollHeight;
         }
 
+        function resolvePath(pathStr) {
+            // Remember if input had trailing slash
+            const hadTrailingSlash = pathStr.endsWith('/');
+            
+            // Normalize path separators and split into components
+            const parts = pathStr.split('/').filter(p => p !== '');
+            const stack = [];
+            
+            for (const part of parts) {
+                if (part === '..') {
+                    if (stack.length > 0) {
+                        stack.pop();
+                    }
+                    // If we're at root, .. stays at root (no error)
+                } else if (part !== '.' && part !== '') {
+                    stack.push(part);
+                }
+            }
+            
+            // Reconstruct path
+            const resolved = '/' + stack.join('/');
+            
+            // Preserve trailing slash only if original had it
+            if (hadTrailingSlash && !resolved.endsWith('/')) {
+                return resolved + '/';
+            }
+            return resolved;
+        }
+
         async function executeCommand(cmd) {
             cmd = cmd.trim();
             if (!cmd) return;
@@ -3769,14 +3798,21 @@
                     
                     // Check if pattern contains a directory separator
                     if (pattern.includes('/')) {
-                        dir = pattern.startsWith('/') ? pattern.substring(0, pattern.lastIndexOf('/')) || '/' : currentPath + (currentPath.endsWith('/') ? '' : '/') + pattern.substring(0, pattern.lastIndexOf('/'));
+                        let targetDir = pattern.substring(0, pattern.lastIndexOf('/'));
+                        dir = pattern.startsWith('/') ? targetDir || '/' : currentPath + (currentPath.endsWith('/') ? '' : '/') + targetDir;
                         filename = pattern.substring(pattern.lastIndexOf('/') + 1);
                     }
+                    
+                    // Normalize dir - remove trailing slash for consistency, then add it back for API call
+                    if (dir.endsWith('/') && dir !== '/') {
+                        dir = dir.slice(0, -1);
+                    }
+                    const apiDir = dir.endsWith('/') ? dir : dir + '/';
                     
                     const response = await fetch('/api/listfiles', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ dir: dir })
+                        body: JSON.stringify({ dir: apiDir })
                     });
                     if (response.ok) {
                         const data = await response.json();
@@ -3788,11 +3824,16 @@
                                 addOutputLine('(no matches)');
                             } else if (matches.length === 1 && matches[0].type === 'directory') {
                                 // If single match is a directory, list its contents
-                                const subDir = dir + (dir.endsWith('/') ? '' : '/') + matches[0].name;
+                                let subDir = dir + (dir.endsWith('/') ? '' : '/') + matches[0].name;
+                                // Normalize subDir - remove trailing slash for consistency, then add it back for API call
+                                if (subDir.endsWith('/')) {
+                                    subDir = subDir.slice(0, -1);
+                                }
+                                const apiSubDir = subDir.endsWith('/') ? subDir : subDir + '/';
                                 const subResponse = await fetch('/api/listfiles', {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ dir: subDir })
+                                    body: JSON.stringify({ dir: apiSubDir })
                                 });
                                 if (subResponse.ok) {
                                     const subData = await subResponse.json();
@@ -3829,14 +3870,6 @@
                 } else if (command === 'cd') {
                     if (args.length === 0) {
                         currentPath = '/';
-                    } else if (args[0] === '..') {
-                        if (currentPath === '/') {
-                            addOutputLine('Already at root');
-                        } else {
-                            currentPath = currentPath.endsWith('/') ? currentPath.slice(0, -1) : currentPath;
-                            currentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
-                            if (currentPath !== '/') currentPath += '/';
-                        }
                     } else if (args[0] === '~') {
                         currentPath = homePath.endsWith('/') ? homePath : homePath + '/';
                     } else if (args[0].startsWith('~/')) {
@@ -3860,18 +3893,22 @@
                             addOutputLine('Error: directory not found');
                         }
                     } else {
-                        const newPath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
+                        // Resolve the path, handling .. and . components
+                        const inputPath = args.join(' ');
+                        let pathToResolve = inputPath.startsWith('/') ? inputPath : currentPath + (currentPath.endsWith('/') ? '' : '/') + inputPath;
+                        const newPath = resolvePath(pathToResolve);
+                        
                         const response = await fetch(newPath, {
                             method: 'HEAD'
                         });
                         if (response.ok) {
                             const fileType = response.headers.get('Felix-file-type');
                             if (fileType === 'dir') {
-                                currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                                currentPath = newPath;
                             } else if (fileType === 'file') {
                                 addOutputLine('Error: not a directory');
                             } else {
-                                currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                                currentPath = newPath;
                             }
                         } else if (response.status === 403) {
                             addOutputLine('Error: permission denied');
@@ -3883,27 +3920,46 @@
                     if (args.length === 0) {
                         addOutputLine('Usage: info <file|directory>');
                     } else {
-                        const targetPath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
-                        const response = await fetch('/api/fileinfo', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ path: targetPath })
+                        const inputPath = args.join(' ');
+                        let targetPath = inputPath.startsWith('/') ? inputPath : currentPath + (currentPath.endsWith('/') ? '' : '/') + inputPath;
+                        // Resolve path to handle .. and .
+                        targetPath = resolvePath(targetPath);
+                        
+                        const response = await fetch(targetPath, {
+                            method: 'HEAD'
                         });
                         if (response.ok) {
-                            const data = await response.json();
-                            if (data.type === 'directory') {
-                                addOutputLine('Directory: ' + args.join(' '));
-                                addOutputLine('  Path: ' + data.path);
-                                addOutputLine('  Files: ' + data.file_count);
+                            const fileType = response.headers.get('Felix-file-type');
+                            const mimeType = response.headers.get('Content-Type');
+                            const size = response.headers.get('Content-Length');
+                            const modified = response.headers.get('Last-Modified');
+                            const fileCount = response.headers.get('Felix-file-count');
+                            
+                            if (fileType === 'dir') {
+                                addOutputLine('Directory: ' + inputPath);
+                                addOutputLine('  Path: ' + targetPath);
+                                if (fileCount) {
+                                    addOutputLine('  Files: ' + fileCount);
+                                }
                             } else {
-                                addOutputLine('File: ' + args.join(' '));
-                                addOutputLine('  Path: ' + data.path);
-                                addOutputLine('  Type: ' + (data.mime_type || 'unknown'));
-                                addOutputLine('  Size: ' + formatBytes(data.size));
-                                addOutputLine('  Modified: ' + new Date(data.modified * 1000).toLocaleString());
+                                addOutputLine('File: ' + inputPath);
+                                addOutputLine('  Path: ' + targetPath);
+                                if (mimeType) {
+                                    addOutputLine('  Type: ' + mimeType);
+                                }
+                                if (size) {
+                                    addOutputLine('  Size: ' + formatBytes(parseInt(size)));
+                                }
+                                if (modified) {
+                                    addOutputLine('  Modified: ' + new Date(modified).toLocaleString());
+                                }
                             }
-                        } else {
+                        } else if (response.status === 404) {
                             addOutputLine('Error: file or directory not found');
+                        } else if (response.status === 403) {
+                            addOutputLine('Error: permission denied');
+                        } else {
+                            addOutputLine('Error: unable to get file info');
                         }
                     }
                 } else if (command === 'play') {
