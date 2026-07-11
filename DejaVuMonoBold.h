@@ -5593,7 +5593,6 @@ static const unsigned int MONOSPACE_FONT_ORIGINAL_SIZE = 334268;
 // Returns decoded data size, or -1 on error
 // Caller must free the decoded buffer
 static inline int base64_decode(const char *src, size_t src_len, unsigned char **out_data, size_t *out_len) {
-    // Allocate output buffer (base64 decodes to ~75% of input size)
     size_t max_out = (src_len * 3) / 4 + 10;
     *out_data = (unsigned char *)malloc(max_out);
     if (!*out_data) return -1;
@@ -5603,30 +5602,26 @@ static inline int base64_decode(const char *src, size_t src_len, unsigned char *
     
     unsigned char *dest = *out_data;
     size_t dest_pos = 0;
-    int bits = 0;
+    unsigned int bits = 0;  // Changed to unsigned int
     int bitcount = 0;
     
     for (size_t i = 0; i < src_len; i++) {
         char c = src[i];
         
-        // Skip whitespace
         if (c == '\n' || c == '\r' || c == ' ' || c == '\t') continue;
         
-        // Find value
         int val = -1;
         if (c >= 'A' && c <= 'Z') val = c - 'A';
         else if (c >= 'a' && c <= 'z') val = c - 'a' + 26;
         else if (c >= '0' && c <= '9') val = c - '0' + 52;
         else if (c == '+') val = 62;
         else if (c == '/') val = 63;
-        else if (c == '=') break;  // Padding
+        else if (c == '=') break;
         else continue;
         
-        // Accumulate bits
         bits = (bits << 6) | val;
         bitcount += 6;
         
-        // Output bytes when we have 8 bits
         if (bitcount >= 8) {
             bitcount -= 8;
             dest[dest_pos++] = (bits >> bitcount) & 0xFF;
