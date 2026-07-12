@@ -262,7 +262,7 @@ int main(int argc, char **argv) {
             SDL_Log("  F2                          SFTP upload browser (SSH sessions only)\n");
             SDL_Log("  F3                          SFTP download browser (SSH sessions only)\n");
             SDL_Log("  F4                          SFTP interactive console (SSH sessions only)\n");
-            SDL_Log("  F5                          Eye of Felix — image viewer / audio player\n");
+            SDL_Log("  F5                          Felix Chirp — image viewer / audio player\n");
             SDL_Log("  F6                          Port forward manager (SSH sessions only)\n");
             SDL_Log("  F7                          WOPR Terminal\n");
             SDL_Log("  F8                          SSH Key Manager (additional fuction when in SSH mode\n");
@@ -2109,7 +2109,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Eye of Felix tick — always runs when visible, outside the needs_render gate
+        // Felix Chirp tick — always runs when visible, outside the needs_render gate
         if (g_iv.visible) {
             iv_tick((double)bc_dt);
             if (g_iv.audio_playing || g_iv.audio_paused || g_iv.cdg_display)
