@@ -227,10 +227,10 @@ int main(int argc, char **argv) {
 #endif // USESSH
 
         // Positional: shell command (local mode only)
-        if (strcmp(arg, "--sdl") == 0 || strcmp(arg, "-sdl") == 0) {
+/*        if (strcmp(arg, "--sdl") == 0 || strcmp(arg, "-sdl") == 0) {
             force_sdl = true;
             continue;
-        }
+        }*/
 
         if (arg[0] != '-' && !use_ssh) {
             shell = arg;
@@ -243,8 +243,10 @@ int main(int argc, char **argv) {
             SDL_Log("       flt [options]\n\n");
             SDL_Log("Options:\n");
             SDL_Log("  [shell]                     Command to run instead of default shell\n");
-            SDL_Log("  --sdl                       Force SDL renderer (for testing fallback path)\n");
-#ifdef USESSH
+
+
+// SDL is broken and very buggy; not really supporting
+            //SDL_Log("  --sdl                       Force SDL renderer (for testing fallback path)\n");
             SDL_Log("\nSSH options:\n");
             SDL_Log("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
             SDL_Log("  -i <path>                   Private key file (alias: --ssh-key)\n");
@@ -256,7 +258,6 @@ int main(int argc, char **argv) {
             SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
             SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
             SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
-#endif
             SDL_Log("\nKeyboard shortcuts:\n");
             SDL_Log("  F2                          SFTP upload browser (SSH sessions only)\n");
             SDL_Log("  F3                          SFTP download browser (SSH sessions only)\n");
@@ -275,7 +276,7 @@ int main(int argc, char **argv) {
             SDL_Log("    export MESA_GL_VERSION_OVERRIDE=3.3\n");
             SDL_Log("    export MESA_GLSL_VERSION_OVERRIDE=330\n");
             SDL_Log("  Without the override, flt falls back to an SDL software renderer\n");
-            SDL_Log("  which supports all features except GPU-accelerated visual effects.\n");
+            SDL_Log("  which is buggy and only meant for testing until I fix all the bugs.\n");
             return 0;
         }
     }
