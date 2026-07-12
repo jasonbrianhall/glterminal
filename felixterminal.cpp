@@ -226,7 +226,8 @@ int main(int argc, char **argv) {
         }
 #endif // USESSH
 
-        // Positional: shell command (local mode only)
+        // NOTE: SDL renderer path is disabled — OpenGL 3.3+ is required.
+        // The --sdl flag is no longer supported.
 /*        if (strcmp(arg, "--sdl") == 0 || strcmp(arg, "-sdl") == 0) {
             force_sdl = true;
             continue;
@@ -273,15 +274,16 @@ int main(int argc, char **argv) {
             SDL_Log("  Shift+PageUp/Down           Scroll scrollback buffer\n");
             SDL_Log("  Ctrl+Click                  Open URL in browser\n");
             SDL_Log("\nTroubleshooting:\n");
-            SDL_Log("  If the terminal fails to start due to missing OpenGL 3.3 support\n");
-            SDL_Log("  (common on Raspberry Pi with Mesa/VC4), try:\n");
+            SDL_Log("  OpenGL 3.3+ is required. If the terminal fails to start:\n");
+            SDL_Log("  (common on older systems or Raspberry Pi with Mesa/VC4)\n");
+            SDL_Log("  Try setting environment variables:\n");
             SDL_Log("    MESA_GL_VERSION_OVERRIDE=3.3 MESA_GLSL_VERSION_OVERRIDE=330 flt\n");
             SDL_Log("  Or add these to your ~/.profile to make it permanent:\n");
             SDL_Log("    export MESA_GL_VERSION_OVERRIDE=3.3\n");
             SDL_Log("    export MESA_GLSL_VERSION_OVERRIDE=330\n");
-            SDL_Log("  Without the override, flt falls back to an SDL software renderer\n");
-            SDL_Log("  which is buggy and only meant for testing until I fix all the bugs.\n");
-            SDL_Log("      SDL mode is broken.\n");
+            SDL_Log("  If OpenGL 3.3 is still unavailable, your hardware/driver\n");
+            SDL_Log("  does not support the required graphics capabilities.\n");
+            
             
             return 0;
         }
@@ -322,52 +324,36 @@ int main(int argc, char **argv) {
     }
 
     SDL_GLContext ctx = nullptr;
-    if (!force_sdl) {
+    // OpenGL 3.3+ is now required — SDL renderer fallback is disabled
+    ctx = SDL_GL_CreateContext(window);
+    if (!ctx) {
+        SDL_Log("INFO: GL 3.3 core not available (%s), retrying with Compatibility profile\n",
+                SDL_GetError());
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
         ctx = SDL_GL_CreateContext(window);
-        if (!ctx) {
-            SDL_Log("INFO: GL 3.3 not available (%s), retrying with Compatibility profile\n",
-                    SDL_GetError());
-            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
-            ctx = SDL_GL_CreateContext(window);
-        }
-        if (!ctx)
-            SDL_Log("INFO: GL 3.3 unavailable (%s), falling back to SDL renderer\n", SDL_GetError());
-    } else {
-        SDL_Log("INFO: --sdl flag set, forcing SDL renderer\n");
     }
-
-    if (force_sdl || !ctx) {
-        g_use_sdl_renderer = true;
-        // Recreate the window without the OpenGL flag so the SDL renderer can own it
+    if (!ctx) {
+        // OpenGL 3.3+ is required — show error dialog and exit
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg),
+            "OpenGL 3.3 or higher is required to run Felix Terminal.\n\n"
+            "Your graphics card or driver does not support OpenGL 3.3.\n"
+            "Please ensure you have:\n"
+            "- A compatible GPU (most modern GPUs support OpenGL 3.3+)\n"
+            "- Updated graphics drivers\n\n"
+            "Error: %s", SDL_GetError());
+        SDL_ShowSimpleMessageBox(
+            SDL_MESSAGEBOX_ERROR,
+            "OpenGL 3.3+ Required",
+            error_msg,
+            window);
         SDL_DestroyWindow(window);
-        window = SDL_CreateWindow(
-            WIN_TITLE,
-            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-            win_w, win_h,
-            SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-        g_sdl_window = window;
-        // Set icon again on the new window
-        SDL_Surface *icon_surf2 = SDL_CreateRGBSurfaceFrom(
-            (void*)icon_pixels, icon_w, icon_h, 32, icon_w * 4,
-            0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-        if (icon_surf2) { SDL_SetWindowIcon(window, icon_surf2); SDL_FreeSurface(icon_surf2); }
-        g_sdl_renderer = SDL_CreateRenderer(window, -1,
-            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        if (!g_sdl_renderer) {
-            SDL_Log("WARN: Accelerated renderer failed (%s), trying software\n", SDL_GetError());
-            g_sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
-        }
-        if (!g_sdl_renderer) {
-            SDL_Log("FATAL: Could not create any renderer: %s\n", SDL_GetError());
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-            return 1;
-        }
-        SDL_SetRenderDrawBlendMode(g_sdl_renderer, SDL_BLENDMODE_BLEND);
-    } else {
-        SDL_GL_MakeCurrent(window, ctx);
-        SDL_GL_SetSwapInterval(1);
+        SDL_Quit();
+        return 1;
     }
+    
+    SDL_GL_MakeCurrent(window, ctx);
+    SDL_GL_SetSwapInterval(1);
 
     apply_theme(0);
     ft_init();
