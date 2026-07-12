@@ -264,6 +264,10 @@ int main(int argc, char **argv) {
             SDL_Log("  F4                          SFTP interactive console (SSH sessions only)\n");
             SDL_Log("  F5                          Eye of Felix — image viewer / audio player\n");
             SDL_Log("  F6                          Port forward manager (SSH sessions only)\n");
+            SDL_Log("  F7                          WOPR Terminal\n");
+            SDL_Log("  F8                          SSH Key Manager (additional fuction when in SSH mode\n");
+            SDL_Log("  F9                          Web Server (serves on http://localhost:53716 by default)\n");
+            SDL_Log("                                  Works locally and with SSH supporting SFTP\n");
             SDL_Log("  F11                         Toggle full screen\n");
             SDL_Log("  Ctrl+Scroll                 Resize font\n");
             SDL_Log("  Shift+PageUp/Down           Scroll scrollback buffer\n");
@@ -277,6 +281,8 @@ int main(int argc, char **argv) {
             SDL_Log("    export MESA_GLSL_VERSION_OVERRIDE=330\n");
             SDL_Log("  Without the override, flt falls back to an SDL software renderer\n");
             SDL_Log("  which is buggy and only meant for testing until I fix all the bugs.\n");
+            SDL_Log("      SDL mode is broken.\n");
+            
             return 0;
         }
     }
