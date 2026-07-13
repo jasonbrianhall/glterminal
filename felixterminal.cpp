@@ -306,6 +306,7 @@ int main(int argc, char **argv) {
             SDL_Log("\nSerial options:\n");
             SDL_Log("  --serial [port]             Connect via serial port (prompts if omitted)\n");
             SDL_Log("  --serial-baud <baud>        Serial baud rate\n");
+#ifdef USESSH
             SDL_Log("\nSSH options:\n");
             SDL_Log("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
             SDL_Log("  -i <path>                   Private key file (alias: --ssh-key)\n");
@@ -318,9 +319,7 @@ int main(int argc, char **argv) {
             SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
             SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
             SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
-            SDL_Log("\nWeb Server Options\n");
-            SDL_Log("  --webserver (listenaddress:port)        Listen address and port are optional but if listen address, port must be specified\n");
-
+#endif
             SDL_Log("\nKeyboard shortcuts:\n");
             SDL_Log("  F2                          SFTP upload browser (SSH sessions only)\n");
             SDL_Log("  F3                          SFTP download browser (SSH sessions only)\n");
@@ -2359,6 +2358,7 @@ int main(int argc, char **argv) {
         if (prompt_req.mtx) SDL_DestroyMutex(prompt_req.mtx);
         sftp_console_join();
         sftp_transfer_join();
+        sftp_webserver_stop();  // Stop web server before shutting down SFTP
         sftp_shutdown();
         pf_shutdown_all();
         ssh_disconnect();

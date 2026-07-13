@@ -1809,6 +1809,12 @@ bool sftp_webserver_start(const char *bind_addr, int port) {
         return true;
     }
 
+    // Clean up any lingering socket from previous run
+    if (g_listen_socket != INVALID_SOCKET) {
+        closesocket(g_listen_socket);
+        g_listen_socket = INVALID_SOCKET;
+    }
+
     // Validate and store configuration
     if (bind_addr) {
         g_webserver_bind_addr = bind_addr;
@@ -1845,6 +1851,12 @@ bool sftp_webserver_start_local(const char *root_dir, const char *bind_addr, int
     if (g_webserver_running.load()) {
         SDL_Log("[WebServer] Already running");
         return true;
+    }
+
+    // Clean up any lingering socket from previous run
+    if (g_listen_socket != INVALID_SOCKET) {
+        closesocket(g_listen_socket);
+        g_listen_socket = INVALID_SOCKET;
     }
 
     // Validate and store configuration
@@ -1886,6 +1898,12 @@ void sftp_webserver_stop() {
     SDL_Log("[WebServer] Shutdown requested");
     g_webserver_should_exit.store(true);
 
+    // Close the listening socket to interrupt accept()
+    if (g_listen_socket != INVALID_SOCKET) {
+        closesocket(g_listen_socket);
+        g_listen_socket = INVALID_SOCKET;
+    }
+
     if (g_webserver_thread) {
         g_webserver_thread->join();
         delete g_webserver_thread;
@@ -1897,6 +1915,7 @@ void sftp_webserver_stop() {
         g_tunnel_mutex = nullptr;
     }
 
+    g_webserver_running.store(false);
     g_local_mode = false;
 }
 
