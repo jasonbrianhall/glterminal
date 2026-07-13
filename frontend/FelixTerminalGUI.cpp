@@ -99,8 +99,16 @@ public:
         // Notebook for settings
         wxNotebook *notebook = new wxNotebook(mainPanel, wxID_ANY);
 
-        // ---- Connection Tab ----
+        // ---- Connection Tab (for type selection) ----
         CreateConnectionPanel(notebook, mainPanel);
+        // ---- Local Shell Tab ----
+        CreateLocalShellTab(notebook, mainPanel);
+        // ---- Telnet Tab ----
+        CreateTelnetTab(notebook, mainPanel);
+        // ---- Serial Tab ----
+        CreateSerialTab(notebook, mainPanel);
+        // ---- SSH Tab ----
+        CreateSSHTab(notebook, mainPanel);
         // ---- Port Forward Tab ----
         CreatePortForwardPanel(notebook, mainPanel);
         // ---- Web Server Tab ----
@@ -192,13 +200,12 @@ private:
     void CreateConnectionPanel(wxNotebook *notebook, wxPanel *mainPanel) {
         wxPanel *panel = new wxPanel(notebook);
         wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-        wxScrolledWindow *scrolled = new wxScrolledWindow(panel, wxID_ANY);
-        scrolled->SetScrollRate(5, 5);
-        wxBoxSizer *scrolledSizer = new wxBoxSizer(wxVERTICAL);
-
+        
+        wxStaticBoxSizer *typeBox = new wxStaticBoxSizer(wxVERTICAL, panel, "Connection Type");
+        
         wxBoxSizer *typeSizer = new wxBoxSizer(wxHORIZONTAL);
-        typeSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Connection Type:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_connTypeChoice = new wxChoice(scrolled, wxID_ANY);
+        typeSizer->Add(new wxStaticText(panel, wxID_ANY, "Select Type:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_connTypeChoice = new wxChoice(panel, wxID_ANY);
         m_connTypeChoice->Append("Local Shell");
         m_connTypeChoice->Append("Telnet");
         m_connTypeChoice->Append("Serial");
@@ -206,11 +213,22 @@ private:
         m_connTypeChoice->SetSelection(0);
         m_connTypeChoice->Bind(wxEVT_CHOICE, &FelixTerminalFrame::OnConnTypeChange, this);
         typeSizer->Add(m_connTypeChoice, 1, wxEXPAND);
-        scrolledSizer->Add(typeSizer, 0, wxEXPAND | wxALL, 8);
-
-        scrolledSizer->Add(new wxStaticLine(scrolled), 0, wxEXPAND | wxALL, 8);
-
-        // Local Shell
+        typeBox->Add(typeSizer, 0, wxEXPAND | wxALL, 8);
+        
+        sizer->Add(typeBox, 0, wxEXPAND | wxALL, 8);
+        sizer->AddStretchSpacer();
+        
+        panel->SetSizer(sizer);
+        notebook->AddPage(panel, "Connection");
+    }
+    
+    void CreateLocalShellTab(wxNotebook *notebook, wxPanel *parentPanel) {
+        wxPanel *panel = new wxPanel(notebook);
+        wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+        wxScrolledWindow *scrolled = new wxScrolledWindow(panel, wxID_ANY);
+        scrolled->SetScrollRate(5, 5);
+        wxBoxSizer *scrolledSizer = new wxBoxSizer(wxVERTICAL);
+        
         wxStaticBoxSizer *localBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "Local Shell");
         wxBoxSizer *shellSizer = new wxBoxSizer(wxHORIZONTAL);
         shellSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Shell:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
@@ -219,8 +237,21 @@ private:
         shellSizer->Add(m_localShellCtrl, 1, wxEXPAND);
         localBox->Add(shellSizer, 0, wxEXPAND | wxALL, 4);
         scrolledSizer->Add(localBox, 0, wxEXPAND | wxALL, 8);
-
-        // Telnet
+        
+        scrolledSizer->AddStretchSpacer();
+        scrolled->SetSizer(scrolledSizer);
+        sizer->Add(scrolled, 1, wxEXPAND);
+        panel->SetSizer(sizer);
+        notebook->AddPage(panel, "Local Shell");
+    }
+    
+    void CreateTelnetTab(wxNotebook *notebook, wxPanel *parentPanel) {
+        wxPanel *panel = new wxPanel(notebook);
+        wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+        wxScrolledWindow *scrolled = new wxScrolledWindow(panel, wxID_ANY);
+        scrolled->SetScrollRate(5, 5);
+        wxBoxSizer *scrolledSizer = new wxBoxSizer(wxVERTICAL);
+        
         wxStaticBoxSizer *telnetBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "Telnet");
         
         wxBoxSizer *telnetHostPortSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -251,8 +282,20 @@ private:
         telnetBox->Add(m_telnetSSLCheck, 0, wxALL, 4);
         
         scrolledSizer->Add(telnetBox, 0, wxEXPAND | wxALL, 8);
-
-        // Serial
+        scrolledSizer->AddStretchSpacer();
+        scrolled->SetSizer(scrolledSizer);
+        sizer->Add(scrolled, 1, wxEXPAND);
+        panel->SetSizer(sizer);
+        notebook->AddPage(panel, "Telnet");
+    }
+    
+    void CreateSerialTab(wxNotebook *notebook, wxPanel *parentPanel) {
+        wxPanel *panel = new wxPanel(notebook);
+        wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+        wxScrolledWindow *scrolled = new wxScrolledWindow(panel, wxID_ANY);
+        scrolled->SetScrollRate(5, 5);
+        wxBoxSizer *scrolledSizer = new wxBoxSizer(wxVERTICAL);
+        
         wxStaticBoxSizer *serialBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "Serial");
         
         wxBoxSizer *serialPortBaudSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -283,8 +326,20 @@ private:
         serialBox->Add(serialPortBaudSizer, 0, wxEXPAND | wxALL, 4);
         
         scrolledSizer->Add(serialBox, 0, wxEXPAND | wxALL, 8);
-
-        // SSH
+        scrolledSizer->AddStretchSpacer();
+        scrolled->SetSizer(scrolledSizer);
+        sizer->Add(scrolled, 1, wxEXPAND);
+        panel->SetSizer(sizer);
+        notebook->AddPage(panel, "Serial");
+    }
+    
+    void CreateSSHTab(wxNotebook *notebook, wxPanel *parentPanel) {
+        wxPanel *panel = new wxPanel(notebook);
+        wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+        wxScrolledWindow *scrolled = new wxScrolledWindow(panel, wxID_ANY);
+        scrolled->SetScrollRate(5, 5);
+        wxBoxSizer *scrolledSizer = new wxBoxSizer(wxVERTICAL);
+        
         wxStaticBoxSizer *sshBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "SSH");
         wxBoxSizer *sshUserHostSizer = new wxBoxSizer(wxHORIZONTAL);
         sshUserHostSizer->Add(new wxStaticText(scrolled, wxID_ANY, "User:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
@@ -350,13 +405,13 @@ private:
         m_sshCommandCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
         sshCmdSizer->Add(m_sshCommandCtrl, 1, wxEXPAND | wxALL, 4);
         sshBox->Add(sshCmdSizer, 1, wxEXPAND | wxALL, 4);
-
-        scrolledSizer->Add(sshBox, 0, wxEXPAND | wxALL, 8);
-
+        
+        scrolledSizer->Add(sshBox, 1, wxEXPAND | wxALL, 8);
+        scrolledSizer->AddStretchSpacer();
         scrolled->SetSizer(scrolledSizer);
         sizer->Add(scrolled, 1, wxEXPAND);
         panel->SetSizer(sizer);
-        notebook->AddPage(panel, "Connection");
+        notebook->AddPage(panel, "SSH");
     }
 
     void CreatePortForwardPanel(wxNotebook *notebook, wxPanel *mainPanel) {
