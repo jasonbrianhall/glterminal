@@ -20,12 +20,24 @@ struct SessionConfig {
     wxString name;
     int connType = 0;
     wxString localShell;
+    
+    // Telnet
+    wxString telnetHost;
+    int telnetPort = 23;
+    wxString telnetTType = "xterm-256color";
+    bool telnetRaw = false;
+    bool telnetSSL = false;
+    
+    // Serial
+    wxString serialPort;
+    int serialBaud = 9600;
+    
+    // SSH
     wxString sshUser;
     wxString sshHost = "localhost";
     int sshPort = 22;
     int sshAuthMethod = 0;
     wxString sshKeyPath;
-    wxString sshPassword;
     wxString sshKnownHosts;
     bool sshX11 = true;
     std::vector<wxString> localPF;
@@ -127,13 +139,25 @@ private:
     // Connection
     wxChoice *m_connTypeChoice;
     wxTextCtrl *m_localShellCtrl;
+    
+    // Telnet
+    wxTextCtrl *m_telnetHostCtrl;
+    wxSpinCtrl *m_telnetPortSpin;
+    wxTextCtrl *m_telnetTTypeCtrl;
+    wxCheckBox *m_telnetRawCheck;
+    wxCheckBox *m_telnetSSLCheck;
+    
+    // Serial
+    wxTextCtrl *m_serialPortCtrl;
+    wxSpinCtrl *m_serialBaudSpin;
+    
+    // SSH
     wxTextCtrl *m_sshUserCtrl;
     wxTextCtrl *m_sshHostCtrl;
     wxSpinCtrl *m_sshPortSpin;
     wxChoice *m_sshAuthChoice;
     wxTextCtrl *m_sshKeyCtrl;
     wxButton *m_browseSshKeyBtn;
-    wxTextCtrl *m_sshPassCtrl;
     wxTextCtrl *m_sshKnownHostsCtrl;
     wxCheckBox *m_sshX11Check;
 
@@ -156,6 +180,8 @@ private:
         typeSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Connection Type:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_connTypeChoice = new wxChoice(scrolled, wxID_ANY);
         m_connTypeChoice->Append("Local Shell");
+        m_connTypeChoice->Append("Telnet");
+        m_connTypeChoice->Append("Serial");
         m_connTypeChoice->Append("SSH");
         m_connTypeChoice->SetSelection(0);
         m_connTypeChoice->Bind(wxEVT_CHOICE, &FelixTerminalFrame::OnConnTypeChange, this);
@@ -173,6 +199,56 @@ private:
         shellSizer->Add(m_localShellCtrl, 1, wxEXPAND);
         localBox->Add(shellSizer, 0, wxEXPAND | wxALL, 4);
         scrolledSizer->Add(localBox, 0, wxEXPAND | wxALL, 8);
+
+        // Telnet
+        wxStaticBoxSizer *telnetBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "Telnet");
+        
+        wxBoxSizer *telnetHostPortSizer = new wxBoxSizer(wxHORIZONTAL);
+        telnetHostPortSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Host:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_telnetHostCtrl = new wxTextCtrl(scrolled, wxID_ANY, "localhost");
+        m_telnetHostCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
+        telnetHostPortSizer->Add(m_telnetHostCtrl, 1, wxRIGHT, 16);
+        
+        telnetHostPortSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_telnetPortSpin = new wxSpinCtrl(scrolled, wxID_ANY, "23", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 65535);
+        m_telnetPortSpin->Bind(wxEVT_SPINCTRL, &FelixTerminalFrame::OnControlChange, this);
+        telnetHostPortSizer->Add(m_telnetPortSpin, 0);
+        telnetBox->Add(telnetHostPortSizer, 0, wxEXPAND | wxALL, 4);
+        
+        wxBoxSizer *telnetTTypeSizer = new wxBoxSizer(wxHORIZONTAL);
+        telnetTTypeSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Terminal Type:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_telnetTTypeCtrl = new wxTextCtrl(scrolled, wxID_ANY, "xterm-256color");
+        m_telnetTTypeCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
+        telnetTTypeSizer->Add(m_telnetTTypeCtrl, 1, wxEXPAND);
+        telnetBox->Add(telnetTTypeSizer, 0, wxEXPAND | wxALL, 4);
+        
+        m_telnetRawCheck = new wxCheckBox(scrolled, wxID_ANY, "Raw Mode");
+        m_telnetRawCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnControlChange, this);
+        telnetBox->Add(m_telnetRawCheck, 0, wxALL, 4);
+        
+        m_telnetSSLCheck = new wxCheckBox(scrolled, wxID_ANY, "Use SSL/TLS");
+        m_telnetSSLCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnControlChange, this);
+        telnetBox->Add(m_telnetSSLCheck, 0, wxALL, 4);
+        
+        scrolledSizer->Add(telnetBox, 0, wxEXPAND | wxALL, 8);
+
+        // Serial
+        wxStaticBoxSizer *serialBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "Serial");
+        
+        wxBoxSizer *serialPortBaudSizer = new wxBoxSizer(wxHORIZONTAL);
+        serialPortBaudSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_serialPortCtrl = new wxTextCtrl(scrolled, wxID_ANY, "");
+        m_serialPortCtrl->SetToolTip("e.g., /dev/ttyUSB0 or COM3");
+        m_serialPortCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
+        serialPortBaudSizer->Add(m_serialPortCtrl, 1, wxRIGHT, 16);
+        
+        serialPortBaudSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Baud:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_serialBaudSpin = new wxSpinCtrl(scrolled, wxID_ANY, "9600", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 300, 921600);
+        m_serialBaudSpin->Bind(wxEVT_SPINCTRL, &FelixTerminalFrame::OnControlChange, this);
+        serialPortBaudSizer->Add(m_serialBaudSpin, 0);
+        serialBox->Add(serialPortBaudSizer, 0, wxEXPAND | wxALL, 4);
+        
+        scrolledSizer->Add(serialBox, 0, wxEXPAND | wxALL, 8);
 
         // SSH
         wxStaticBoxSizer *sshBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "SSH");
@@ -194,51 +270,44 @@ private:
         sshPortSizer->Add(m_sshPortSpin, 0);
         sshBox->Add(sshPortSizer, 0, wxEXPAND | wxALL, 4);
 
-        wxBoxSizer *sshAuthSizer = new wxBoxSizer(wxHORIZONTAL);
-        sshAuthSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Auth:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        wxBoxSizer *authSizer = new wxBoxSizer(wxHORIZONTAL);
+        authSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Auth Method:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_sshAuthChoice = new wxChoice(scrolled, wxID_ANY);
-        m_sshAuthChoice->Append("SSH Agent (default)");
-        m_sshAuthChoice->Append("Private Key (-i)");
-        m_sshAuthChoice->Append("Password");
+        m_sshAuthChoice->Append("SSH Agent");
+        m_sshAuthChoice->Append("Specific Private Key");
         m_sshAuthChoice->SetSelection(0);
         m_sshAuthChoice->Bind(wxEVT_CHOICE, &FelixTerminalFrame::OnSSHAuthChange, this);
-        sshAuthSizer->Add(m_sshAuthChoice, 1, wxEXPAND);
-        sshBox->Add(sshAuthSizer, 0, wxEXPAND | wxALL, 4);
+        authSizer->Add(m_sshAuthChoice, 1, wxEXPAND);
+        sshBox->Add(authSizer, 0, wxEXPAND | wxALL, 4);
 
-        wxBoxSizer *sshKeySizer = new wxBoxSizer(wxHORIZONTAL);
-        sshKeySizer->Add(new wxStaticText(scrolled, wxID_ANY, "Key:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        wxBoxSizer *keyPathSizer = new wxBoxSizer(wxHORIZONTAL);
+        keyPathSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Private Key:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_sshKeyCtrl = new wxTextCtrl(scrolled, wxID_ANY, "");
-        m_sshKeyCtrl->Enable(false);
         m_sshKeyCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
-        sshKeySizer->Add(m_sshKeyCtrl, 1, wxEXPAND | wxRIGHT, 4);
+        keyPathSizer->Add(m_sshKeyCtrl, 1);
         m_browseSshKeyBtn = new wxButton(scrolled, wxID_ANY, "Browse");
-        m_browseSshKeyBtn->Enable(false);
         m_browseSshKeyBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnBrowseSshKey, this);
-        sshKeySizer->Add(m_browseSshKeyBtn, 0);
-        sshBox->Add(sshKeySizer, 0, wxEXPAND | wxALL, 4);
+        keyPathSizer->Add(m_browseSshKeyBtn, 0, wxLEFT, 4);
+        sshBox->Add(keyPathSizer, 0, wxEXPAND | wxALL, 4);
+        
+        wxStaticText *agentNote = new wxStaticText(scrolled, wxID_ANY, 
+            "Note: SSH Agent uses keys from ssh-agent, CAC, or ~/.ssh/config");
+        agentNote->SetFont(agentNote->GetFont().MakeItalic());
+        sshBox->Add(agentNote, 0, wxALL, 4);
 
-        wxBoxSizer *sshPassSizer = new wxBoxSizer(wxHORIZONTAL);
-        sshPassSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Password:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshPassCtrl = new wxTextCtrl(scrolled, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
-        m_sshPassCtrl->Enable(false);
-        m_sshPassCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
-        sshPassSizer->Add(m_sshPassCtrl, 1, wxEXPAND);
-        sshBox->Add(sshPassSizer, 0, wxEXPAND | wxALL, 4);
-
-        wxBoxSizer *sshKnownSizer = new wxBoxSizer(wxHORIZONTAL);
-        sshKnownSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Known Hosts:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        wxBoxSizer *knownHostsSizer = new wxBoxSizer(wxHORIZONTAL);
+        knownHostsSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Known Hosts:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_sshKnownHostsCtrl = new wxTextCtrl(scrolled, wxID_ANY, "");
         m_sshKnownHostsCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
-        sshKnownSizer->Add(m_sshKnownHostsCtrl, 1, wxEXPAND);
-        sshBox->Add(sshKnownSizer, 0, wxEXPAND | wxALL, 4);
+        knownHostsSizer->Add(m_sshKnownHostsCtrl, 1, wxEXPAND);
+        sshBox->Add(knownHostsSizer, 0, wxEXPAND | wxALL, 4);
 
-        m_sshX11Check = new wxCheckBox(scrolled, wxID_ANY, "X11 Forwarding (default on)");
+        m_sshX11Check = new wxCheckBox(scrolled, wxID_ANY, "Enable X11 Forwarding");
         m_sshX11Check->SetValue(true);
         m_sshX11Check->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnControlChange, this);
         sshBox->Add(m_sshX11Check, 0, wxALL, 4);
 
         scrolledSizer->Add(sshBox, 0, wxEXPAND | wxALL, 8);
-        scrolledSizer->AddStretchSpacer();
 
         scrolled->SetSizer(scrolledSizer);
         sizer->Add(scrolled, 1, wxEXPAND);
@@ -249,151 +318,69 @@ private:
     void CreatePortForwardPanel(wxNotebook *notebook, wxPanel *mainPanel) {
         wxPanel *panel = new wxPanel(notebook);
         wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-        wxScrolledWindow *scrolled = new wxScrolledWindow(panel, wxID_ANY);
-        scrolled->SetScrollRate(5, 5);
-        wxBoxSizer *scrolledSizer = new wxBoxSizer(wxVERTICAL);
 
-        scrolledSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Port Forwarding (SSH only)"), 0, wxALL, 8);
+        wxStaticBoxSizer *localPFBox = new wxStaticBoxSizer(wxVERTICAL, panel, "Local Port Forward (-L)");
+        m_localPFList = new wxListBox(panel, wxID_ANY, wxDefaultPosition, wxSize(-1, 80));
+        localPFBox->Add(m_localPFList, 1, wxEXPAND | wxALL, 4);
+        wxBoxSizer *localPFBtnSizer = new wxBoxSizer(wxHORIZONTAL);
+        wxButton *addLocalPFBtn = new wxButton(panel, wxID_ANY, "Add");
+        wxButton *delLocalPFBtn = new wxButton(panel, wxID_ANY, "Remove");
+        addLocalPFBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnAddLocalPF, this);
+        delLocalPFBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnRemoveLocalPF, this);
+        localPFBtnSizer->Add(addLocalPFBtn, 0, wxRIGHT, 4);
+        localPFBtnSizer->Add(delLocalPFBtn, 0);
+        localPFBox->Add(localPFBtnSizer, 0, wxEXPAND | wxALL, 4);
+        sizer->Add(localPFBox, 1, wxEXPAND | wxALL, 8);
 
-        // Local port forwarding
-        scrolledSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Local Port Forward (-L): local_port:remote_host:remote_port"), 0, wxALL, 8);
-        wxBoxSizer *localInputSizer = new wxBoxSizer(wxHORIZONTAL);
-        wxTextCtrl *localPFCtrl = new wxTextCtrl(scrolled, wxID_ANY, "");
-        localInputSizer->Add(localPFCtrl, 1, wxEXPAND | wxRIGHT, 4);
-        wxButton *addLocalBtn = new wxButton(scrolled, wxID_ANY, "Add");
-        addLocalBtn->Bind(wxEVT_BUTTON, [this, localPFCtrl](wxCommandEvent&) {
-            if (!localPFCtrl->IsEmpty()) {
-                m_localPFEntries.push_back(localPFCtrl->GetValue());
-                m_localPFList->Append(localPFCtrl->GetValue());
-                localPFCtrl->Clear();
-                UpdatePreview();
-            }
-        });
-        localInputSizer->Add(addLocalBtn, 0);
-        scrolledSizer->Add(localInputSizer, 0, wxEXPAND | wxALL, 4);
-        m_localPFList = new wxListBox(scrolled, wxID_ANY, wxDefaultPosition, wxSize(-1, 80));
-        scrolledSizer->Add(m_localPFList, 0, wxEXPAND | wxALL, 4);
-        wxButton *removeLocalBtn = new wxButton(scrolled, wxID_ANY, "Remove Selected");
-        removeLocalBtn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-            int sel = m_localPFList->GetSelection();
-            if (sel != wxNOT_FOUND) {
-                m_localPFList->Delete(sel);
-                m_localPFEntries.erase(m_localPFEntries.begin() + sel);
-                UpdatePreview();
-            }
-        });
-        scrolledSizer->Add(removeLocalBtn, 0, wxALL, 4);
+        wxStaticBoxSizer *remotePFBox = new wxStaticBoxSizer(wxVERTICAL, panel, "Remote Port Forward (-R)");
+        m_remotePFList = new wxListBox(panel, wxID_ANY, wxDefaultPosition, wxSize(-1, 80));
+        remotePFBox->Add(m_remotePFList, 1, wxEXPAND | wxALL, 4);
+        wxBoxSizer *remotePFBtnSizer = new wxBoxSizer(wxHORIZONTAL);
+        wxButton *addRemotePFBtn = new wxButton(panel, wxID_ANY, "Add");
+        wxButton *delRemotePFBtn = new wxButton(panel, wxID_ANY, "Remove");
+        addRemotePFBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnAddRemotePF, this);
+        delRemotePFBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnRemoveRemotePF, this);
+        remotePFBtnSizer->Add(addRemotePFBtn, 0, wxRIGHT, 4);
+        remotePFBtnSizer->Add(delRemotePFBtn, 0);
+        remotePFBox->Add(remotePFBtnSizer, 0, wxEXPAND | wxALL, 4);
+        sizer->Add(remotePFBox, 1, wxEXPAND | wxALL, 8);
 
-        scrolledSizer->Add(new wxStaticLine(scrolled), 0, wxEXPAND | wxALL, 8);
+        wxStaticBoxSizer *socksBox = new wxStaticBoxSizer(wxVERTICAL, panel, "SOCKS5 Dynamic Forward (-D)");
+        m_socksList = new wxListBox(panel, wxID_ANY, wxDefaultPosition, wxSize(-1, 80));
+        socksBox->Add(m_socksList, 1, wxEXPAND | wxALL, 4);
+        wxBoxSizer *socksBtnSizer = new wxBoxSizer(wxHORIZONTAL);
+        wxButton *addSocksBtn = new wxButton(panel, wxID_ANY, "Add");
+        wxButton *delSocksBtn = new wxButton(panel, wxID_ANY, "Remove");
+        addSocksBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnAddSocks, this);
+        delSocksBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnRemoveSocks, this);
+        socksBtnSizer->Add(addSocksBtn, 0, wxRIGHT, 4);
+        socksBtnSizer->Add(delSocksBtn, 0);
+        socksBox->Add(socksBtnSizer, 0, wxEXPAND | wxALL, 4);
+        sizer->Add(socksBox, 1, wxEXPAND | wxALL, 8);
 
-        // Remote port forwarding
-        scrolledSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Remote Port Forward (-R): remote_port:local_host:local_port"), 0, wxALL, 8);
-        wxBoxSizer *remoteInputSizer = new wxBoxSizer(wxHORIZONTAL);
-        wxTextCtrl *remotePFCtrl = new wxTextCtrl(scrolled, wxID_ANY, "");
-        remoteInputSizer->Add(remotePFCtrl, 1, wxEXPAND | wxRIGHT, 4);
-        wxButton *addRemoteBtn = new wxButton(scrolled, wxID_ANY, "Add");
-        addRemoteBtn->Bind(wxEVT_BUTTON, [this, remotePFCtrl](wxCommandEvent&) {
-            if (!remotePFCtrl->IsEmpty()) {
-                m_remotePFEntries.push_back(remotePFCtrl->GetValue());
-                m_remotePFList->Append(remotePFCtrl->GetValue());
-                remotePFCtrl->Clear();
-                UpdatePreview();
-            }
-        });
-        remoteInputSizer->Add(addRemoteBtn, 0);
-        scrolledSizer->Add(remoteInputSizer, 0, wxEXPAND | wxALL, 4);
-        m_remotePFList = new wxListBox(scrolled, wxID_ANY, wxDefaultPosition, wxSize(-1, 80));
-        scrolledSizer->Add(m_remotePFList, 0, wxEXPAND | wxALL, 4);
-        wxButton *removeRemoteBtn = new wxButton(scrolled, wxID_ANY, "Remove Selected");
-        removeRemoteBtn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-            int sel = m_remotePFList->GetSelection();
-            if (sel != wxNOT_FOUND) {
-                m_remotePFList->Delete(sel);
-                m_remotePFEntries.erase(m_remotePFEntries.begin() + sel);
-                UpdatePreview();
-            }
-        });
-        scrolledSizer->Add(removeRemoteBtn, 0, wxALL, 4);
-
-        scrolledSizer->Add(new wxStaticLine(scrolled), 0, wxEXPAND | wxALL, 8);
-
-        // SOCKS5 dynamic forwarding
-        scrolledSizer->Add(new wxStaticText(scrolled, wxID_ANY, "SOCKS5 Dynamic (-D): port"), 0, wxALL, 8);
-        wxBoxSizer *socksInputSizer = new wxBoxSizer(wxHORIZONTAL);
-        wxTextCtrl *socksCtrl = new wxTextCtrl(scrolled, wxID_ANY, "");
-        socksInputSizer->Add(socksCtrl, 1, wxEXPAND | wxRIGHT, 4);
-        wxButton *addSocksBtn = new wxButton(scrolled, wxID_ANY, "Add");
-        addSocksBtn->Bind(wxEVT_BUTTON, [this, socksCtrl](wxCommandEvent&) {
-            if (!socksCtrl->IsEmpty()) {
-                m_socksEntries.push_back(socksCtrl->GetValue());
-                m_socksList->Append(socksCtrl->GetValue());
-                socksCtrl->Clear();
-                UpdatePreview();
-            }
-        });
-        socksInputSizer->Add(addSocksBtn, 0);
-        scrolledSizer->Add(socksInputSizer, 0, wxEXPAND | wxALL, 4);
-        m_socksList = new wxListBox(scrolled, wxID_ANY, wxDefaultPosition, wxSize(-1, 80));
-        scrolledSizer->Add(m_socksList, 0, wxEXPAND | wxALL, 4);
-        wxButton *removeSocksBtn = new wxButton(scrolled, wxID_ANY, "Remove Selected");
-        removeSocksBtn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-            int sel = m_socksList->GetSelection();
-            if (sel != wxNOT_FOUND) {
-                m_socksList->Delete(sel);
-                m_socksEntries.erase(m_socksEntries.begin() + sel);
-                UpdatePreview();
-            }
-        });
-        scrolledSizer->Add(removeSocksBtn, 0, wxALL, 4);
-        scrolledSizer->AddStretchSpacer();
-
-        scrolled->SetSizer(scrolledSizer);
-        sizer->Add(scrolled, 1, wxEXPAND);
         panel->SetSizer(sizer);
         notebook->AddPage(panel, "Port Forward");
     }
 
-    void CreateConfigDir() {
-        wxString configPath = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + "felixterminal";
-        if (!wxDirExists(configPath)) {
-            wxMkdir(configPath);
-        }
-    }
-
-    void LoadSessions() {
-        m_sessionList->DeleteAllItems();
-        wxString configPath = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + "felixterminal";
-        wxDir dir(configPath);
-        wxString filename;
-        long index = 0;
-        if (dir.IsOpened()) {
-            bool cont = dir.GetFirst(&filename, "*.cfg", wxDIR_FILES);
-            while (cont) {
-                m_sessionList->InsertItem(index++, filename.BeforeLast('.'));
-                cont = dir.GetNext(&filename);
-            }
-        }
-    }
-
     void OnConnTypeChange(wxCommandEvent &event) {
+        int sel = m_connTypeChoice->GetSelection();
         UpdatePreview();
     }
 
     void OnSSHAuthChange(wxCommandEvent &event) {
-        int sel = m_sshAuthChoice->GetSelection();
-        m_sshKeyCtrl->Enable(sel == 1);
-        m_browseSshKeyBtn->Enable(sel == 1);
-        m_sshPassCtrl->Enable(sel == 2);
+        int authType = m_sshAuthChoice->GetSelection();
+        m_sshKeyCtrl->Enable(authType == 1);  // Only enable for "Specific Private Key"
+        m_browseSshKeyBtn->Enable(authType == 1);
         UpdatePreview();
     }
 
     void OnBrowseSshKey(wxCommandEvent &event) {
-        wxString homeDir = wxGetHomeDir();
-        wxFileDialog dlg(this, "Select SSH Private Key", homeDir + "/.ssh", "", 
-                        "All files (*)|*", wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        wxFileDialog dlg(this, "Select SSH Private Key", "", "", 
+                        "All files (*.*)|*.*",
+                        wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         if (dlg.ShowModal() == wxID_OK) {
             m_sshKeyCtrl->SetValue(dlg.GetPath());
-            UpdatePreview();
+            OnControlChange(event);
         }
     }
 
@@ -402,53 +389,163 @@ private:
     }
 
     void UpdatePreview() {
-        std::stringstream cmd;
-        cmd << FLT_EXECUTABLE;
-
+        wxString cmd = FLT_EXECUTABLE;
         int connType = m_connTypeChoice->GetSelection();
 
-        if (connType == 1) {  // SSH
-            cmd << " --ssh ";
+        if (connType == 0) {  // Local Shell
+            wxString shell = m_localShellCtrl->GetValue();
+            if (!shell.empty()) {
+                cmd += " " + shell;
+            }
+        } else if (connType == 1) {  // Telnet
+            wxString host = m_telnetHostCtrl->GetValue();
+            int port = m_telnetPortSpin->GetValue();
+            if (!host.empty()) {
+                cmd += " --telnet " + host;
+                if (port != 23) {
+                    cmd += wxString::Format(":%d", port);
+                }
+            }
+            wxString ttype = m_telnetTTypeCtrl->GetValue();
+            if (!ttype.empty() && ttype != "xterm-256color") {
+                cmd += " --telnet-ttype " + ttype;
+            }
+            if (m_telnetRawCheck->GetValue()) {
+                cmd += " --raw";
+            }
+            if (m_telnetSSLCheck->GetValue()) {
+                cmd += " --ssl";
+            }
+        } else if (connType == 2) {  // Serial
+            cmd += " --serial";
+            wxString port = m_serialPortCtrl->GetValue();
+            if (!port.empty()) {
+                cmd += " " + port;
+            }
+            int baud = m_serialBaudSpin->GetValue();
+            if (baud != 9600) {
+                cmd += wxString::Format(" --serial-baud %d", baud);
+            }
+        } else if (connType == 3) {  // SSH
             wxString user = m_sshUserCtrl->GetValue();
             wxString host = m_sshHostCtrl->GetValue();
             int port = m_sshPortSpin->GetValue();
             
-            if (!user.empty()) cmd << std::string(user.mb_str()) << "@";
-            cmd << std::string(host.mb_str());
-            if (port != 22) cmd << ":" << port;
+            if (!host.empty()) {
+                cmd += " --ssh ";
+                if (!user.empty()) {
+                    cmd += user + "@";
+                }
+                cmd += host;
+                if (port != 22) {
+                    cmd += wxString::Format(":%d", port);
+                }
+            }
 
-            int authSel = m_sshAuthChoice->GetSelection();
-            if (authSel == 1 && !m_sshKeyCtrl->IsEmpty()) {
-                cmd << " -i " << std::string(m_sshKeyCtrl->GetValue().mb_str());
+            int authMethod = m_sshAuthChoice->GetSelection();
+            if (authMethod == 1) {  // Specific Private Key
+                wxString keyPath = m_sshKeyCtrl->GetValue();
+                if (!keyPath.empty()) {
+                    cmd += " -i " + keyPath;
+                }
             }
-            if (authSel == 2 && !m_sshPassCtrl->IsEmpty()) {
-                cmd << " --ssh-password " << std::string(m_sshPassCtrl->GetValue().mb_str());
+            // authMethod == 0 (SSH Agent) doesn't need additional flags
+
+            wxString knownHosts = m_sshKnownHostsCtrl->GetValue();
+            if (!knownHosts.empty()) {
+                cmd += " --ssh-known-hosts " + knownHosts;
             }
-            if (!m_sshKnownHostsCtrl->IsEmpty()) {
-                cmd << " --ssh-known-hosts " << std::string(m_sshKnownHostsCtrl->GetValue().mb_str());
-            }
+
             if (!m_sshX11Check->GetValue()) {
-                cmd << " --no-x11";
+                cmd += " --no-x11";
             }
 
             for (const auto &pf : m_localPFEntries) {
-                cmd << " -L " << std::string(pf.mb_str());
+                cmd += " -L " + pf;
             }
             for (const auto &pf : m_remotePFEntries) {
-                cmd << " -R " << std::string(pf.mb_str());
+                cmd += " -R " + pf;
             }
-            for (const auto &socks : m_socksEntries) {
-                cmd << " -D " << std::string(socks.mb_str());
-            }
-        }
-        else if (connType == 0) {  // Local shell
-            wxString shell = m_localShellCtrl->GetValue();
-            if (!shell.empty()) {
-                cmd << " " << std::string(shell.mb_str());
+            for (const auto &s : m_socksEntries) {
+                cmd += " -D " + s;
             }
         }
 
-        m_cmdPreview->SetValue(cmd.str());
+        m_cmdPreview->SetValue(cmd);
+    }
+
+    void OnAddLocalPF(wxCommandEvent &event) {
+        wxTextEntryDialog dlg(this, "Enter local port forward (local_port:remote_host:remote_port):", "Add Local Port Forward");
+        if (dlg.ShowModal() == wxID_OK && !dlg.GetValue().empty()) {
+            m_localPFEntries.push_back(dlg.GetValue());
+            m_localPFList->Append(dlg.GetValue());
+            UpdatePreview();
+        }
+    }
+
+    void OnRemoveLocalPF(wxCommandEvent &event) {
+        int sel = m_localPFList->GetSelection();
+        if (sel != wxNOT_FOUND) {
+            m_localPFEntries.erase(m_localPFEntries.begin() + sel);
+            m_localPFList->Delete(sel);
+            UpdatePreview();
+        }
+    }
+
+    void OnAddRemotePF(wxCommandEvent &event) {
+        wxTextEntryDialog dlg(this, "Enter remote port forward (remote_port:local_host:local_port):", "Add Remote Port Forward");
+        if (dlg.ShowModal() == wxID_OK && !dlg.GetValue().empty()) {
+            m_remotePFEntries.push_back(dlg.GetValue());
+            m_remotePFList->Append(dlg.GetValue());
+            UpdatePreview();
+        }
+    }
+
+    void OnRemoveRemotePF(wxCommandEvent &event) {
+        int sel = m_remotePFList->GetSelection();
+        if (sel != wxNOT_FOUND) {
+            m_remotePFEntries.erase(m_remotePFEntries.begin() + sel);
+            m_remotePFList->Delete(sel);
+            UpdatePreview();
+        }
+    }
+
+    void OnAddSocks(wxCommandEvent &event) {
+        wxTextEntryDialog dlg(this, "Enter SOCKS5 port (local_port):", "Add SOCKS5 Forward");
+        if (dlg.ShowModal() == wxID_OK && !dlg.GetValue().empty()) {
+            m_socksEntries.push_back(dlg.GetValue());
+            m_socksList->Append(dlg.GetValue());
+            UpdatePreview();
+        }
+    }
+
+    void OnRemoveSocks(wxCommandEvent &event) {
+        int sel = m_socksList->GetSelection();
+        if (sel != wxNOT_FOUND) {
+            m_socksEntries.erase(m_socksEntries.begin() + sel);
+            m_socksList->Delete(sel);
+            UpdatePreview();
+        }
+    }
+
+    void CreateConfigDir() {
+        wxString configDir = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + "felixterminal";
+        if (!wxDirExists(configDir)) {
+            wxMkdir(configDir);
+        }
+    }
+
+    void LoadSessions() {
+        wxString configDir = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + "felixterminal";
+        wxDir dir(configDir);
+        wxString filename;
+        bool cont = dir.GetFirst(&filename, "*.cfg", wxDIR_FILES);
+        
+        while (cont) {
+            wxString sessionName = filename.BeforeLast('.');
+            m_sessionList->InsertItem(m_sessionList->GetItemCount(), sessionName);
+            cont = dir.GetNext(&filename);
+        }
     }
 
     void OnLoadSession(wxCommandEvent &event) {
@@ -520,13 +617,22 @@ private:
         SessionConfig cfg;
         cfg.name = name;
         cfg.connType = m_connTypeChoice->GetSelection();
+        
         cfg.localShell = m_localShellCtrl->GetValue();
+        cfg.telnetHost = m_telnetHostCtrl->GetValue();
+        cfg.telnetPort = m_telnetPortSpin->GetValue();
+        cfg.telnetTType = m_telnetTTypeCtrl->GetValue();
+        cfg.telnetRaw = m_telnetRawCheck->GetValue();
+        cfg.telnetSSL = m_telnetSSLCheck->GetValue();
+        
+        cfg.serialPort = m_serialPortCtrl->GetValue();
+        cfg.serialBaud = m_serialBaudSpin->GetValue();
+        
         cfg.sshUser = m_sshUserCtrl->GetValue();
         cfg.sshHost = m_sshHostCtrl->GetValue();
         cfg.sshPort = m_sshPortSpin->GetValue();
         cfg.sshAuthMethod = m_sshAuthChoice->GetSelection();
         cfg.sshKeyPath = m_sshKeyCtrl->GetValue();
-        cfg.sshPassword = m_sshPassCtrl->GetValue();
         cfg.sshKnownHosts = m_sshKnownHostsCtrl->GetValue();
         cfg.sshX11 = m_sshX11Check->GetValue();
         cfg.localPF = m_localPFEntries;
@@ -552,12 +658,18 @@ private:
                 
                 if (key == "connType") cfg.connType = wxAtoi(val);
                 else if (key == "localShell") cfg.localShell = val;
+                else if (key == "telnetHost") cfg.telnetHost = val;
+                else if (key == "telnetPort") cfg.telnetPort = wxAtoi(val);
+                else if (key == "telnetTType") cfg.telnetTType = val;
+                else if (key == "telnetRaw") cfg.telnetRaw = (val == "1");
+                else if (key == "telnetSSL") cfg.telnetSSL = (val == "1");
+                else if (key == "serialPort") cfg.serialPort = val;
+                else if (key == "serialBaud") cfg.serialBaud = wxAtoi(val);
                 else if (key == "sshUser") cfg.sshUser = val;
                 else if (key == "sshHost") cfg.sshHost = val;
                 else if (key == "sshPort") cfg.sshPort = wxAtoi(val);
                 else if (key == "sshAuthMethod") cfg.sshAuthMethod = wxAtoi(val);
                 else if (key == "sshKeyPath") cfg.sshKeyPath = val;
-                else if (key == "sshPassword") cfg.sshPassword = val;
                 else if (key == "sshKnownHosts") cfg.sshKnownHosts = val;
                 else if (key == "sshX11") cfg.sshX11 = (val == "1");
                 else if (key.StartsWith("localPF_")) cfg.localPF.push_back(val);
@@ -581,12 +693,21 @@ private:
         file.AddLine("# Felix Terminal Session Config");
         file.AddLine(wxString::Format("connType=%d", cfg.connType));
         file.AddLine("localShell=" + cfg.localShell);
+        
+        file.AddLine("telnetHost=" + cfg.telnetHost);
+        file.AddLine(wxString::Format("telnetPort=%d", cfg.telnetPort));
+        file.AddLine("telnetTType=" + cfg.telnetTType);
+        file.AddLine(wxString::Format("telnetRaw=%d", cfg.telnetRaw ? 1 : 0));
+        file.AddLine(wxString::Format("telnetSSL=%d", cfg.telnetSSL ? 1 : 0));
+        
+        file.AddLine("serialPort=" + cfg.serialPort);
+        file.AddLine(wxString::Format("serialBaud=%d", cfg.serialBaud));
+        
         file.AddLine("sshUser=" + cfg.sshUser);
         file.AddLine("sshHost=" + cfg.sshHost);
         file.AddLine(wxString::Format("sshPort=%d", cfg.sshPort));
         file.AddLine(wxString::Format("sshAuthMethod=%d", cfg.sshAuthMethod));
         file.AddLine("sshKeyPath=" + cfg.sshKeyPath);
-        file.AddLine("sshPassword=" + cfg.sshPassword);
         file.AddLine("sshKnownHosts=" + cfg.sshKnownHosts);
         file.AddLine(wxString::Format("sshX11=%d", cfg.sshX11 ? 1 : 0));
         
@@ -607,12 +728,21 @@ private:
     void LoadSessionToUI(const SessionConfig &cfg) {
         m_connTypeChoice->SetSelection(cfg.connType);
         m_localShellCtrl->SetValue(cfg.localShell);
+        
+        m_telnetHostCtrl->SetValue(cfg.telnetHost);
+        m_telnetPortSpin->SetValue(cfg.telnetPort);
+        m_telnetTTypeCtrl->SetValue(cfg.telnetTType);
+        m_telnetRawCheck->SetValue(cfg.telnetRaw);
+        m_telnetSSLCheck->SetValue(cfg.telnetSSL);
+        
+        m_serialPortCtrl->SetValue(cfg.serialPort);
+        m_serialBaudSpin->SetValue(cfg.serialBaud);
+        
         m_sshUserCtrl->SetValue(cfg.sshUser);
         m_sshHostCtrl->SetValue(cfg.sshHost);
         m_sshPortSpin->SetValue(cfg.sshPort);
         m_sshAuthChoice->SetSelection(cfg.sshAuthMethod);
         m_sshKeyCtrl->SetValue(cfg.sshKeyPath);
-        m_sshPassCtrl->SetValue(cfg.sshPassword);
         m_sshKnownHostsCtrl->SetValue(cfg.sshKnownHosts);
         m_sshX11Check->SetValue(cfg.sshX11);
         
@@ -639,6 +769,7 @@ private:
         
         wxCommandEvent dummy;
         OnSSHAuthChange(dummy);
+        OnConnTypeChange(dummy);
         UpdatePreview();
     }
 };
