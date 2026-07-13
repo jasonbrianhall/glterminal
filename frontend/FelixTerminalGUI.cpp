@@ -50,7 +50,6 @@ struct SessionConfig {
     wxString webServerAddr = "127.0.0.1";
     int webServerPort = 53716;
     wxString webRootDir = "/";
-    bool webServerStartViaSsh = false;
 };
 
 class FelixTerminalFrame : public wxFrame {
@@ -189,7 +188,6 @@ private:
     wxSpinCtrl *m_webServerPortSpin;
     wxTextCtrl *m_webRootDirCtrl;
     wxButton *m_browseWebRootBtn;
-    wxCheckBox *m_webServerViaSshCheck;
 
     void CreateConnectionPanel(wxNotebook *notebook, wxPanel *mainPanel) {
         wxPanel *panel = new wxPanel(notebook);
@@ -452,24 +450,6 @@ private:
 
         scrolledSizer->Add(webBox, 0, wxEXPAND | wxALL, 8);
 
-        scrolledSizer->Add(new wxStaticLine(scrolled), 0, wxEXPAND | wxALL, 8);
-
-        // Start via SSH
-        wxStaticBoxSizer *sshStartBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "Start via SSH");
-        m_webServerViaSshCheck = new wxCheckBox(scrolled, wxID_ANY, 
-            "Execute this web server command in SSH session");
-        m_webServerViaSshCheck->SetToolTip("When enabled, the web server will be started as an SSH command on the remote host");
-        m_webServerViaSshCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnControlChange, this);
-        sshStartBox->Add(m_webServerViaSshCheck, 0, wxALL, 4);
-
-        wxStaticText *sshNote = new wxStaticText(scrolled, wxID_ANY,
-            "This will append the web server startup to your SSH command execution.\n"
-            "Requires SSH connection type and will run in the remote shell.");
-        sshNote->SetFont(sshNote->GetFont().MakeItalic());
-        sshStartBox->Add(sshNote, 0, wxALL, 4);
-
-        scrolledSizer->Add(sshStartBox, 0, wxEXPAND | wxALL, 8);
-
         scrolledSizer->AddStretchSpacer();
 
         scrolled->SetSizer(scrolledSizer);
@@ -621,35 +601,19 @@ private:
                 cmd += " -D " + s;
             }
 
-            // SSH Command Execution - build combined command if needed
+            // SSH Command Execution
             wxString sshCmd = m_sshCommandCtrl->GetValue();
-            wxString webCmd;
-            
-            if (m_webServerEnabledCheck->GetValue() && m_webServerViaSshCheck->GetValue()) {
-                webCmd = BuildWebServerCommand(false);  // Don't include --web-root for SSH
-            }
-
-            // Combine SSH command and web server command if both exist
-            wxString finalCmd = sshCmd;
-            if (!webCmd.empty()) {
-                if (!sshCmd.empty()) {
-                    finalCmd = sshCmd + " && " + webCmd;
-                } else {
-                    finalCmd = webCmd;
-                }
-            }
-
-            if (!finalCmd.empty()) {
+            if (!sshCmd.empty()) {
                 // Escape single quotes in command
-                finalCmd.Replace("'", "'\\''");
-                cmd += " -c '" + finalCmd + "'";
+                sshCmd.Replace("'", "'\\''");
+                cmd += " -c '" + sshCmd + "'";
             }
 
-            // SSH Web Server (direct, not via SSH remote execution)
-            if (m_webServerEnabledCheck->GetValue() && !m_webServerViaSshCheck->GetValue()) {
-                wxString directWebCmd = BuildWebServerCommand(false);  // Don't include --web-root for SSH
-                if (!directWebCmd.empty()) {
-                    cmd += " " + directWebCmd;
+            // SSH Web Server
+            if (m_webServerEnabledCheck->GetValue()) {
+                wxString webCmd = BuildWebServerCommand(false);  // Don't include --web-root for SSH
+                if (!webCmd.empty()) {
+                    cmd += " " + webCmd;
                 }
             }
         }
@@ -847,7 +811,6 @@ private:
         m_webServerAddrCtrl->SetValue("");
         m_webServerPortSpin->SetValue(53716);
         m_webRootDirCtrl->SetValue("");
-        m_webServerViaSshCheck->SetValue(false);
         
         wxCommandEvent dummy;
         OnSSHAuthChange(dummy);
@@ -893,7 +856,6 @@ private:
         cfg.webServerAddr = m_webServerAddrCtrl->GetValue();
         cfg.webServerPort = m_webServerPortSpin->GetValue();
         cfg.webRootDir = m_webRootDirCtrl->GetValue();
-        cfg.webServerStartViaSsh = m_webServerViaSshCheck->GetValue();
         
         return cfg;
     }
@@ -937,7 +899,6 @@ private:
                 else if (key == "webServerAddr") cfg.webServerAddr = val;
                 else if (key == "webServerPort") cfg.webServerPort = wxAtoi(val);
                 else if (key == "webRootDir") cfg.webRootDir = val;
-                else if (key == "webServerStartViaSsh") cfg.webServerStartViaSsh = (val == "1");
             }
             file.Close();
         }
@@ -989,7 +950,6 @@ private:
         file.AddLine("webServerAddr=" + cfg.webServerAddr);
         file.AddLine(wxString::Format("webServerPort=%d", cfg.webServerPort));
         file.AddLine("webRootDir=" + cfg.webRootDir);
-        file.AddLine(wxString::Format("webServerStartViaSsh=%d", cfg.webServerStartViaSsh ? 1 : 0));
         
         file.Write();
         file.Close();
@@ -1048,7 +1008,6 @@ private:
         m_webServerAddrCtrl->SetValue(cfg.webServerAddr);
         m_webServerPortSpin->SetValue(cfg.webServerPort);
         m_webRootDirCtrl->SetValue(cfg.webRootDir);
-        m_webServerViaSshCheck->SetValue(cfg.webServerStartViaSsh);
         
         wxCommandEvent dummy;
         OnSSHAuthChange(dummy);
