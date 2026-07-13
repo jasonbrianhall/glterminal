@@ -40,9 +40,17 @@ struct SessionConfig {
     wxString sshKeyPath;
     wxString sshKnownHosts;
     bool sshX11 = true;
+    wxString sshCommand;  // Command to execute via SSH
     std::vector<wxString> localPF;
     std::vector<wxString> remotePF;
     std::vector<wxString> socks;
+    
+    // Web Server
+    bool webServerEnabled = false;
+    wxString webServerAddr = "127.0.0.1";
+    int webServerPort = 53716;
+    wxString webRootDir = "/";
+    bool webServerStartViaSsh = false;
 };
 
 class FelixTerminalFrame : public wxFrame {
@@ -96,6 +104,8 @@ public:
         CreateConnectionPanel(notebook, mainPanel);
         // ---- Port Forward Tab ----
         CreatePortForwardPanel(notebook, mainPanel);
+        // ---- Web Server Tab ----
+        CreateWebServerPanel(notebook, mainPanel);
 
         rightSizer->Add(notebook, 1, wxEXPAND | wxALL, 8);
 
@@ -108,14 +118,17 @@ public:
 
         // ---- Buttons ----
         wxBoxSizer *bottomBtnSizer = new wxBoxSizer(wxHORIZONTAL);
+        wxButton *clearBtn = new wxButton(mainPanel, wxID_ANY, "Clear");
         m_openBtn = new wxButton(mainPanel, wxID_ANY, "Open");
         m_closeBtn = new wxButton(mainPanel, wxID_CLOSE, "Close");
         
+        clearBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnClear, this);
         m_openBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnOpen, this);
         m_closeBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnClose, this);
 
-        bottomBtnSizer->Add(m_openBtn, 0, wxRIGHT, 4);
+        bottomBtnSizer->Add(clearBtn, 0, wxRIGHT, 4);
         bottomBtnSizer->AddStretchSpacer();
+        bottomBtnSizer->Add(m_openBtn, 0, wxRIGHT, 4);
         bottomBtnSizer->Add(m_closeBtn, 0);
         rightSizer->Add(bottomBtnSizer, 0, wxEXPAND | wxALL, 8);
 
@@ -149,7 +162,7 @@ private:
     
     // Serial
     wxTextCtrl *m_serialPortCtrl;
-    wxSpinCtrl *m_serialBaudSpin;
+    wxChoice *m_serialBaudChoice;
     
     // SSH
     wxTextCtrl *m_sshUserCtrl;
@@ -160,6 +173,7 @@ private:
     wxButton *m_browseSshKeyBtn;
     wxTextCtrl *m_sshKnownHostsCtrl;
     wxCheckBox *m_sshX11Check;
+    wxTextCtrl *m_sshCommandCtrl;  // SSH command to execute
 
     // Port Forwarding
     wxListBox *m_localPFList;
@@ -168,6 +182,14 @@ private:
     std::vector<wxString> m_localPFEntries;
     std::vector<wxString> m_remotePFEntries;
     std::vector<wxString> m_socksEntries;
+
+    // Web Server
+    wxCheckBox *m_webServerEnabledCheck;
+    wxTextCtrl *m_webServerAddrCtrl;
+    wxSpinCtrl *m_webServerPortSpin;
+    wxTextCtrl *m_webRootDirCtrl;
+    wxButton *m_browseWebRootBtn;
+    wxCheckBox *m_webServerViaSshCheck;
 
     void CreateConnectionPanel(wxNotebook *notebook, wxPanel *mainPanel) {
         wxPanel *panel = new wxPanel(notebook);
@@ -243,9 +265,23 @@ private:
         serialPortBaudSizer->Add(m_serialPortCtrl, 1, wxRIGHT, 16);
         
         serialPortBaudSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Baud:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_serialBaudSpin = new wxSpinCtrl(scrolled, wxID_ANY, "9600", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 300, 921600);
-        m_serialBaudSpin->Bind(wxEVT_SPINCTRL, &FelixTerminalFrame::OnControlChange, this);
-        serialPortBaudSizer->Add(m_serialBaudSpin, 0);
+        m_serialBaudChoice = new wxChoice(scrolled, wxID_ANY);
+        m_serialBaudChoice->Append("300");
+        m_serialBaudChoice->Append("1200");
+        m_serialBaudChoice->Append("2400");
+        m_serialBaudChoice->Append("4800");
+        m_serialBaudChoice->Append("9600");
+        m_serialBaudChoice->Append("14400");
+        m_serialBaudChoice->Append("19200");
+        m_serialBaudChoice->Append("28800");
+        m_serialBaudChoice->Append("38400");
+        m_serialBaudChoice->Append("57600");
+        m_serialBaudChoice->Append("115200");
+        m_serialBaudChoice->Append("230400");
+        m_serialBaudChoice->Append("460800");
+        m_serialBaudChoice->SetSelection(4);  // Default to 9600
+        m_serialBaudChoice->Bind(wxEVT_CHOICE, &FelixTerminalFrame::OnControlChange, this);
+        serialPortBaudSizer->Add(m_serialBaudChoice, 0);
         serialBox->Add(serialPortBaudSizer, 0, wxEXPAND | wxALL, 4);
         
         scrolledSizer->Add(serialBox, 0, wxEXPAND | wxALL, 8);
@@ -307,6 +343,16 @@ private:
         m_sshX11Check->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnControlChange, this);
         sshBox->Add(m_sshX11Check, 0, wxALL, 4);
 
+        // SSH Command Execution
+        wxBoxSizer *sshCmdSizer = new wxBoxSizer(wxVERTICAL);
+        sshCmdSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Execute Command (-c):"), 0, wxALL, 4);
+        m_sshCommandCtrl = new wxTextCtrl(scrolled, wxID_ANY, "", wxDefaultPosition, wxSize(-1, 50), 
+                                          wxTE_MULTILINE | wxTE_WORDWRAP);
+        m_sshCommandCtrl->SetToolTip("Command to execute on remote server (optional)");
+        m_sshCommandCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
+        sshCmdSizer->Add(m_sshCommandCtrl, 1, wxEXPAND | wxALL, 4);
+        sshBox->Add(sshCmdSizer, 1, wxEXPAND | wxALL, 4);
+
         scrolledSizer->Add(sshBox, 0, wxEXPAND | wxALL, 8);
 
         scrolled->SetSizer(scrolledSizer);
@@ -362,6 +408,76 @@ private:
         notebook->AddPage(panel, "Port Forward");
     }
 
+    void CreateWebServerPanel(wxNotebook *notebook, wxPanel *mainPanel) {
+        wxPanel *panel = new wxPanel(notebook);
+        wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+        wxScrolledWindow *scrolled = new wxScrolledWindow(panel, wxID_ANY);
+        scrolled->SetScrollRate(5, 5);
+        wxBoxSizer *scrolledSizer = new wxBoxSizer(wxVERTICAL);
+
+        // Enable Web Server
+        m_webServerEnabledCheck = new wxCheckBox(scrolled, wxID_ANY, "Enable Web Server");
+        m_webServerEnabledCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnControlChange, this);
+        scrolledSizer->Add(m_webServerEnabledCheck, 0, wxALL, 8);
+
+        scrolledSizer->Add(new wxStaticLine(scrolled), 0, wxEXPAND | wxALL, 8);
+
+        // Web Server Settings
+        wxStaticBoxSizer *webBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "Web Server Configuration");
+
+        wxBoxSizer *addrSizer = new wxBoxSizer(wxHORIZONTAL);
+        addrSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Listen Address:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_webServerAddrCtrl = new wxTextCtrl(scrolled, wxID_ANY, "");
+        m_webServerAddrCtrl->SetToolTip("IP address to listen on (e.g., 127.0.0.1, 0.0.0.0). Leave empty for default.");
+        m_webServerAddrCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
+        addrSizer->Add(m_webServerAddrCtrl, 1, wxEXPAND | wxRIGHT, 16);
+
+        addrSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_webServerPortSpin = new wxSpinCtrl(scrolled, wxID_ANY, "53716", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 65535);
+        m_webServerPortSpin->SetToolTip("Only used if Listen Address is specified");
+        m_webServerPortSpin->Bind(wxEVT_SPINCTRL, &FelixTerminalFrame::OnControlChange, this);
+        addrSizer->Add(m_webServerPortSpin, 0);
+        webBox->Add(addrSizer, 0, wxEXPAND | wxALL, 4);
+
+        wxBoxSizer *rootDirSizer = new wxBoxSizer(wxHORIZONTAL);
+        rootDirSizer->Add(new wxStaticText(scrolled, wxID_ANY, "Root Directory:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_webRootDirCtrl = new wxTextCtrl(scrolled, wxID_ANY, "");
+        m_webRootDirCtrl->SetToolTip("Directory to serve. Leave empty for default (/).");
+        m_webRootDirCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnControlChange, this);
+        rootDirSizer->Add(m_webRootDirCtrl, 1);
+        m_browseWebRootBtn = new wxButton(scrolled, wxID_ANY, "Browse");
+        m_browseWebRootBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnBrowseWebRoot, this);
+        rootDirSizer->Add(m_browseWebRootBtn, 0, wxLEFT, 4);
+        webBox->Add(rootDirSizer, 0, wxEXPAND | wxALL, 4);
+
+        scrolledSizer->Add(webBox, 0, wxEXPAND | wxALL, 8);
+
+        scrolledSizer->Add(new wxStaticLine(scrolled), 0, wxEXPAND | wxALL, 8);
+
+        // Start via SSH
+        wxStaticBoxSizer *sshStartBox = new wxStaticBoxSizer(wxVERTICAL, scrolled, "Start via SSH");
+        m_webServerViaSshCheck = new wxCheckBox(scrolled, wxID_ANY, 
+            "Execute this web server command in SSH session");
+        m_webServerViaSshCheck->SetToolTip("When enabled, the web server will be started as an SSH command on the remote host");
+        m_webServerViaSshCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnControlChange, this);
+        sshStartBox->Add(m_webServerViaSshCheck, 0, wxALL, 4);
+
+        wxStaticText *sshNote = new wxStaticText(scrolled, wxID_ANY,
+            "This will append the web server startup to your SSH command execution.\n"
+            "Requires SSH connection type and will run in the remote shell.");
+        sshNote->SetFont(sshNote->GetFont().MakeItalic());
+        sshStartBox->Add(sshNote, 0, wxALL, 4);
+
+        scrolledSizer->Add(sshStartBox, 0, wxEXPAND | wxALL, 8);
+
+        scrolledSizer->AddStretchSpacer();
+
+        scrolled->SetSizer(scrolledSizer);
+        sizer->Add(scrolled, 1, wxEXPAND);
+        panel->SetSizer(sizer);
+        notebook->AddPage(panel, "Web Server");
+    }
+
     void OnConnTypeChange(wxCommandEvent &event) {
         int sel = m_connTypeChoice->GetSelection();
         UpdatePreview();
@@ -384,6 +500,14 @@ private:
         }
     }
 
+    void OnBrowseWebRoot(wxCommandEvent &event) {
+        wxDirDialog dlg(this, "Select Root Directory for Web Server");
+        if (dlg.ShowModal() == wxID_OK) {
+            m_webRootDirCtrl->SetValue(dlg.GetPath());
+            OnControlChange(event);
+        }
+    }
+
     void OnControlChange(wxCommandEvent &event) {
         UpdatePreview();
     }
@@ -396,6 +520,14 @@ private:
             wxString shell = m_localShellCtrl->GetValue();
             if (!shell.empty()) {
                 cmd += " " + shell;
+            }
+
+            // Local Shell Web Server
+            if (m_webServerEnabledCheck->GetValue()) {
+                wxString webCmd = BuildWebServerCommand();
+                if (!webCmd.empty()) {
+                    cmd += " " + webCmd;
+                }
             }
         } else if (connType == 1) {  // Telnet
             wxString host = m_telnetHostCtrl->GetValue();
@@ -416,15 +548,35 @@ private:
             if (m_telnetSSLCheck->GetValue()) {
                 cmd += " --ssl";
             }
+
+            // Telnet Web Server
+            if (m_webServerEnabledCheck->GetValue()) {
+                wxString webCmd = BuildWebServerCommand();
+                if (!webCmd.empty()) {
+                    cmd += " " + webCmd;
+                }
+            }
         } else if (connType == 2) {  // Serial
             cmd += " --serial";
             wxString port = m_serialPortCtrl->GetValue();
             if (!port.empty()) {
                 cmd += " " + port;
             }
-            int baud = m_serialBaudSpin->GetValue();
-            if (baud != 9600) {
-                cmd += wxString::Format(" --serial-baud %d", baud);
+            int baudSel = m_serialBaudChoice->GetSelection();
+            if (baudSel != wxNOT_FOUND) {
+                wxString baudStr = m_serialBaudChoice->GetString(baudSel);
+                int baud = wxAtoi(baudStr);
+                if (baud != 9600) {
+                    cmd += wxString::Format(" --serial-baud %d", baud);
+                }
+            }
+
+            // Serial Web Server
+            if (m_webServerEnabledCheck->GetValue()) {
+                wxString webCmd = BuildWebServerCommand();
+                if (!webCmd.empty()) {
+                    cmd += " " + webCmd;
+                }
             }
         } else if (connType == 3) {  // SSH
             wxString user = m_sshUserCtrl->GetValue();
@@ -449,7 +601,6 @@ private:
                     cmd += " -i " + keyPath;
                 }
             }
-            // authMethod == 0 (SSH Agent) doesn't need additional flags
 
             wxString knownHosts = m_sshKnownHostsCtrl->GetValue();
             if (!knownHosts.empty()) {
@@ -469,9 +620,60 @@ private:
             for (const auto &s : m_socksEntries) {
                 cmd += " -D " + s;
             }
+
+            // SSH Command Execution - build combined command if needed
+            wxString sshCmd = m_sshCommandCtrl->GetValue();
+            wxString webCmd;
+            
+            if (m_webServerEnabledCheck->GetValue() && m_webServerViaSshCheck->GetValue()) {
+                webCmd = BuildWebServerCommand(false);  // Don't include --web-root for SSH
+            }
+
+            // Combine SSH command and web server command if both exist
+            wxString finalCmd = sshCmd;
+            if (!webCmd.empty()) {
+                if (!sshCmd.empty()) {
+                    finalCmd = sshCmd + " && " + webCmd;
+                } else {
+                    finalCmd = webCmd;
+                }
+            }
+
+            if (!finalCmd.empty()) {
+                // Escape single quotes in command
+                finalCmd.Replace("'", "'\\''");
+                cmd += " -c '" + finalCmd + "'";
+            }
+
+            // SSH Web Server (direct, not via SSH remote execution)
+            if (m_webServerEnabledCheck->GetValue() && !m_webServerViaSshCheck->GetValue()) {
+                wxString directWebCmd = BuildWebServerCommand(false);  // Don't include --web-root for SSH
+                if (!directWebCmd.empty()) {
+                    cmd += " " + directWebCmd;
+                }
+            }
         }
 
         m_cmdPreview->SetValue(cmd);
+    }
+
+    wxString BuildWebServerCommand(bool includeWebRoot = true) {
+        wxString addr = m_webServerAddrCtrl->GetValue();
+        wxString rootDir = m_webRootDirCtrl->GetValue();
+
+        wxString webCmd = "--webserver";
+        
+        // Only add address:port if address is not empty
+        if (!addr.empty()) {
+            int port = m_webServerPortSpin->GetValue();
+            webCmd += wxString::Format(" %s:%d", addr, port);
+        }
+
+        if (includeWebRoot && !rootDir.empty() && rootDir != "/") {
+            webCmd += " --web-root " + rootDir;
+        }
+
+        return webCmd;
     }
 
     void OnAddLocalPF(wxCommandEvent &event) {
@@ -609,6 +811,50 @@ private:
         wxMessageBox("Felix Terminal launched!", "Success", wxOK | wxICON_INFORMATION);
     }
 
+    void OnClear(wxCommandEvent &event) {
+        // Reset all fields to defaults
+        m_sessionNameCtrl->SetValue("New Session");
+        m_connTypeChoice->SetSelection(0);
+        
+        m_localShellCtrl->SetValue("");
+        
+        m_telnetHostCtrl->SetValue("localhost");
+        m_telnetPortSpin->SetValue(23);
+        m_telnetTTypeCtrl->SetValue("xterm-256color");
+        m_telnetRawCheck->SetValue(false);
+        m_telnetSSLCheck->SetValue(false);
+        
+        m_serialPortCtrl->SetValue("");
+        m_serialBaudChoice->SetSelection(4);  // Default to 9600
+        
+        m_sshUserCtrl->SetValue("");
+        m_sshHostCtrl->SetValue("localhost");
+        m_sshPortSpin->SetValue(22);
+        m_sshAuthChoice->SetSelection(0);
+        m_sshKeyCtrl->SetValue("");
+        m_sshKnownHostsCtrl->SetValue("");
+        m_sshX11Check->SetValue(true);
+        m_sshCommandCtrl->SetValue("");
+        
+        m_localPFList->Clear();
+        m_localPFEntries.clear();
+        m_remotePFList->Clear();
+        m_remotePFEntries.clear();
+        m_socksList->Clear();
+        m_socksEntries.clear();
+        
+        m_webServerEnabledCheck->SetValue(false);
+        m_webServerAddrCtrl->SetValue("");
+        m_webServerPortSpin->SetValue(53716);
+        m_webRootDirCtrl->SetValue("");
+        m_webServerViaSshCheck->SetValue(false);
+        
+        wxCommandEvent dummy;
+        OnSSHAuthChange(dummy);
+        OnConnTypeChange(dummy);
+        UpdatePreview();
+    }
+
     void OnClose(wxCommandEvent &event) {
         Close();
     }
@@ -626,7 +872,10 @@ private:
         cfg.telnetSSL = m_telnetSSLCheck->GetValue();
         
         cfg.serialPort = m_serialPortCtrl->GetValue();
-        cfg.serialBaud = m_serialBaudSpin->GetValue();
+        int baudSel = m_serialBaudChoice->GetSelection();
+        if (baudSel != wxNOT_FOUND) {
+            cfg.serialBaud = wxAtoi(m_serialBaudChoice->GetString(baudSel));
+        }
         
         cfg.sshUser = m_sshUserCtrl->GetValue();
         cfg.sshHost = m_sshHostCtrl->GetValue();
@@ -635,9 +884,17 @@ private:
         cfg.sshKeyPath = m_sshKeyCtrl->GetValue();
         cfg.sshKnownHosts = m_sshKnownHostsCtrl->GetValue();
         cfg.sshX11 = m_sshX11Check->GetValue();
+        cfg.sshCommand = m_sshCommandCtrl->GetValue();
         cfg.localPF = m_localPFEntries;
         cfg.remotePF = m_remotePFEntries;
         cfg.socks = m_socksEntries;
+        
+        cfg.webServerEnabled = m_webServerEnabledCheck->GetValue();
+        cfg.webServerAddr = m_webServerAddrCtrl->GetValue();
+        cfg.webServerPort = m_webServerPortSpin->GetValue();
+        cfg.webRootDir = m_webRootDirCtrl->GetValue();
+        cfg.webServerStartViaSsh = m_webServerViaSshCheck->GetValue();
+        
         return cfg;
     }
 
@@ -672,9 +929,15 @@ private:
                 else if (key == "sshKeyPath") cfg.sshKeyPath = val;
                 else if (key == "sshKnownHosts") cfg.sshKnownHosts = val;
                 else if (key == "sshX11") cfg.sshX11 = (val == "1");
+                else if (key == "sshCommand") cfg.sshCommand = val;
                 else if (key.StartsWith("localPF_")) cfg.localPF.push_back(val);
                 else if (key.StartsWith("remotePF_")) cfg.remotePF.push_back(val);
                 else if (key.StartsWith("socks_")) cfg.socks.push_back(val);
+                else if (key == "webServerEnabled") cfg.webServerEnabled = (val == "1");
+                else if (key == "webServerAddr") cfg.webServerAddr = val;
+                else if (key == "webServerPort") cfg.webServerPort = wxAtoi(val);
+                else if (key == "webRootDir") cfg.webRootDir = val;
+                else if (key == "webServerStartViaSsh") cfg.webServerStartViaSsh = (val == "1");
             }
             file.Close();
         }
@@ -710,6 +973,7 @@ private:
         file.AddLine("sshKeyPath=" + cfg.sshKeyPath);
         file.AddLine("sshKnownHosts=" + cfg.sshKnownHosts);
         file.AddLine(wxString::Format("sshX11=%d", cfg.sshX11 ? 1 : 0));
+        file.AddLine("sshCommand=" + cfg.sshCommand);
         
         for (size_t i = 0; i < cfg.localPF.size(); i++) {
             file.AddLine(wxString::Format("localPF_%zu=%s", i, cfg.localPF[i]));
@@ -720,6 +984,12 @@ private:
         for (size_t i = 0; i < cfg.socks.size(); i++) {
             file.AddLine(wxString::Format("socks_%zu=%s", i, cfg.socks[i]));
         }
+        
+        file.AddLine(wxString::Format("webServerEnabled=%d", cfg.webServerEnabled ? 1 : 0));
+        file.AddLine("webServerAddr=" + cfg.webServerAddr);
+        file.AddLine(wxString::Format("webServerPort=%d", cfg.webServerPort));
+        file.AddLine("webRootDir=" + cfg.webRootDir);
+        file.AddLine(wxString::Format("webServerStartViaSsh=%d", cfg.webServerStartViaSsh ? 1 : 0));
         
         file.Write();
         file.Close();
@@ -736,7 +1006,13 @@ private:
         m_telnetSSLCheck->SetValue(cfg.telnetSSL);
         
         m_serialPortCtrl->SetValue(cfg.serialPort);
-        m_serialBaudSpin->SetValue(cfg.serialBaud);
+        // Find and select the matching baud rate
+        for (int i = 0; i < (int)m_serialBaudChoice->GetCount(); i++) {
+            if (wxAtoi(m_serialBaudChoice->GetString(i)) == cfg.serialBaud) {
+                m_serialBaudChoice->SetSelection(i);
+                break;
+            }
+        }
         
         m_sshUserCtrl->SetValue(cfg.sshUser);
         m_sshHostCtrl->SetValue(cfg.sshHost);
@@ -745,6 +1021,7 @@ private:
         m_sshKeyCtrl->SetValue(cfg.sshKeyPath);
         m_sshKnownHostsCtrl->SetValue(cfg.sshKnownHosts);
         m_sshX11Check->SetValue(cfg.sshX11);
+        m_sshCommandCtrl->SetValue(cfg.sshCommand);
         
         m_localPFList->Clear();
         m_localPFEntries.clear();
@@ -766,6 +1043,12 @@ private:
             m_socksList->Append(s);
             m_socksEntries.push_back(s);
         }
+        
+        m_webServerEnabledCheck->SetValue(cfg.webServerEnabled);
+        m_webServerAddrCtrl->SetValue(cfg.webServerAddr);
+        m_webServerPortSpin->SetValue(cfg.webServerPort);
+        m_webRootDirCtrl->SetValue(cfg.webRootDir);
+        m_webServerViaSshCheck->SetValue(cfg.webServerStartViaSsh);
         
         wxCommandEvent dummy;
         OnSSHAuthChange(dummy);
