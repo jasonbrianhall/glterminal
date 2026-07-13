@@ -72,6 +72,24 @@ GSTREAMER_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   gstreamer-1.0 gst
 GSTREAMER_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags gstreamer-1.0 gstreamer-app-1.0 2>/dev/null || echo "")
 GSTREAMER_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   gstreamer-1.0 gstreamer-app-1.0 2>/dev/null || echo "-lgstreamer-1.0 -lgstapp-1.0")
 
+# ============================================================================
+# wxWIDGETS (for FelixTerminalGUI frontend)
+# ============================================================================
+WX_CFLAGS_LINUX := $(shell wx-config --cppflags 2>/dev/null || echo "")
+WX_LIBS_LINUX   := $(shell wx-config --libs 2>/dev/null || echo "-lwx_gtk3u_core-3.0 -lwx_baseu-3.0")
+
+WX_CFLAGS_WIN   := -I/usr/x86_64-w64-mingw32/sys-root/mingw/include/wx-3.0 \
+                   -I/usr/x86_64-w64-mingw32/sys-root/mingw/lib/wx/include/x86_64-w64-mingw32-msw-unicode-3.0
+WX_LIBS_WIN     := -L/usr/x86_64-w64-mingw32/sys-root/mingw/lib \
+                   -lwx_mswu_core-3.0-x86_64-w64-mingw32 \
+                   -lwx_baseu-3.0-x86_64-w64-mingw32
+
+# ============================================================================
+# FRONTEND BUILD TARGETS
+# ============================================================================
+FRONTEND_LINUX      = $(BUILD_DIR_LINUX)/FelixTerminalGUI
+FRONTEND_WIN        = $(BUILD_DIR_WIN)/FelixTerminalGUI.exe
+
   SSH_SRCS         = ssh_session.cpp port_forward.cpp pf_overlay.cpp
   SSH_DEFINE       = -DUSESSH
   SSH_CFLAGS_LINUX = $(SSH2_CFLAGS_LINUX)
@@ -116,6 +134,15 @@ ifeq ($(FELIXBASIC),1)
 else
   FELIXBASIC_DEFINE =
 endif
+
+# ============================================================================
+# FRONTEND FLAGS
+# ============================================================================
+CXXFLAGS_FRONTEND_LINUX = -std=c++14 $(WX_CFLAGS_LINUX) -O2
+LDFLAGS_FRONTEND_LINUX  = $(WX_LIBS_LINUX) -lm
+
+CXXFLAGS_FRONTEND_WIN   = -std=c++17 $(WX_CFLAGS_WIN) -O2
+LDFLAGS_FRONTEND_WIN    = $(WX_LIBS_WIN) -lm
 
 # ============================================================================
 # LINUX FLAGS
@@ -331,7 +358,7 @@ debug: flt-linux-debug flt-windows-debug
 # LINUX BUILD
 # ============================================================================
 .PHONY: flt-linux
-flt-linux: index.hpp $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX)
+flt-linux: index.hpp $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX) frontend-linux
 
 $(BUILD_DIR_LINUX)/$(EXECUTABLE_LINUX): index.hpp $(OBJECTS_LINUX)
 	@echo "Linking Linux: $@"
@@ -384,7 +411,7 @@ $(BUILD_DIR_LINUX)/wopr/%.o: wopr/%.c
 # LINUX DEBUG BUILD
 # ============================================================================
 .PHONY: flt-linux-debug
-flt-linux-debug: index.hpp $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG)
+flt-linux-debug: index.hpp $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG) frontend-linux
 
 $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG): index.hpp $(OBJECTS_LINUX_DEBUG)
 	@echo "Linking Linux debug: $@"
@@ -417,9 +444,9 @@ $(BUILD_DIR_LINUX_DEBUG)/wopr/%.debug.o: wopr/%.c
 # gets recompiled with -DFELIXBASIC_BUILD (and likewise when switching back).
 .PHONY: flt-windows
 ifeq ($(FELIXBASIC),1)
-flt-windows: index.hpp clean-win-obj $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
+flt-windows: index.hpp clean-win-obj $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN) frontend-windows-dlls
 else
-flt-windows: index.hpp $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
+flt-windows: index.hpp $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN) frontend-windows-dlls
 endif
 
 .PHONY: clean-win-obj
@@ -455,7 +482,7 @@ $(BUILD_DIR_WIN)/wopr/%.win.o: wopr/%.c
 # WINDOWS DEBUG BUILD
 # ============================================================================
 .PHONY: flt-windows-debug
-flt-windows-debug: index.hpp $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG)
+flt-windows-debug: index.hpp $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG) frontend-windows-dlls
 
 $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG): index.hpp $(OBJECTS_WIN_DEBUG)
 	@echo "Linking Windows debug: $@"
@@ -480,6 +507,50 @@ $(BUILD_DIR_WIN_DEBUG)/wopr/%.win.debug.o: wopr/%.c
 	@mkdir -p $(dir $@)
 	@echo "Compiling C (Windows Debug): $<"
 	$(CC_WIN) $(CFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
+
+# ============================================================================
+# FRONTEND BUILD TARGETS
+# ============================================================================
+.PHONY: frontend frontend-linux frontend-windows frontend-windows-dlls frontend-all frontend-clean
+
+frontend: frontend-linux
+
+frontend-linux: $(FRONTEND_LINUX)
+	@echo "✓ FelixTerminalGUI (Linux) built successfully"
+	@echo "   Output: $(FRONTEND_LINUX)"
+
+$(FRONTEND_LINUX): frontend/FelixTerminalGUI.cpp
+	@mkdir -p $(BUILD_DIR_LINUX)
+	@echo "Compiling FelixTerminalGUI (Linux)..."
+	$(CXX_LINUX) $(CXXFLAGS_FRONTEND_LINUX) $< -o $@ $(LDFLAGS_FRONTEND_LINUX)
+
+frontend-windows: $(FRONTEND_WIN)
+	@echo "✓ FelixTerminalGUI.exe (Windows) built successfully"
+	@echo "   Output: $(FRONTEND_WIN)"
+
+$(FRONTEND_WIN): frontend/FelixTerminalGUI.cpp
+	@mkdir -p $(BUILD_DIR_WIN)
+	@echo "Compiling FelixTerminalGUI (Windows)..."
+	$(CXX_WIN) $(CXXFLAGS_FRONTEND_WIN) $< -o $@ $(LDFLAGS_FRONTEND_WIN)
+
+frontend-windows-dlls: $(FRONTEND_WIN)
+	@echo "Collecting Windows DLLs for FelixTerminalGUI (64-bit, wxWidgets 3.0 only)..."
+	@if [ -f collect_dlls.sh ]; then \
+		./collect_dlls.sh $(FRONTEND_WIN) /usr/x86_64-w64-mingw32/sys-root/mingw/bin $(BUILD_DIR_WIN); \
+	else \
+		echo "collect_dlls.sh not found, copying DLLs manually..."; \
+	fi
+	@echo "Copying wxWidgets 3.0 DLLs (x86_64 only)..."
+	@find /usr/x86_64-w64-mingw32/sys-root/mingw/bin/ -name "wx*30u*.dll" -type f -exec cp -v {} $(BUILD_DIR_WIN)/ \; 2>/dev/null || true
+	@echo "✓ DLLs collected to $(BUILD_DIR_WIN)"
+
+frontend-all: frontend-windows frontend-windows-dlls
+	@echo "✓ Full Windows frontend build complete (binary + DLLs)"
+	@echo "   Location: $(BUILD_DIR_WIN)/"
+
+frontend-clean:
+	@echo "Cleaning frontend binaries..."
+	rm -f $(FRONTEND_LINUX) $(FRONTEND_WIN)
 
 # ============================================================================
 # DLL COLLECTION
@@ -541,6 +612,7 @@ clean:
 	rm -f $(BUILD_DIR_LINUX_DEBUG)/$(EXECUTABLE_LINUX_DEBUG)
 	rm -f $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 	rm -f $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG)
+	rm -f $(FRONTEND_LINUX) $(FRONTEND_WIN)
 
 clean-all:
 	rm -rf $(BUILD_DIR)
@@ -555,6 +627,18 @@ help:
 	@echo "  make check-deps   - Verify all dependencies are present"
 	@echo "  make clean        - Remove object files and binaries"
 	@echo "  make clean-all    - Remove entire build/ directory"
+	@echo ""
+	@echo "Frontend (FelixTerminalGUI) targets:"
+	@echo "  make frontend             - Build GUI frontend for Linux"
+	@echo "  make frontend-linux       - Build GUI frontend for Linux (output: build/linux/)"
+	@echo "  make frontend-windows     - Build GUI frontend for Windows (output: build/windows/)"
+	@echo "  make frontend-windows-dlls - Build Windows binary + collect DLLs (output: build/windows/)"
+	@echo "  make frontend-all         - Full Windows frontend build (binary + DLLs)"
+	@echo "  make frontend-clean       - Remove frontend binaries"
+	@echo ""
+	@echo "Frontend requires:"
+	@echo "  Linux:   wxWidgets development library (libwxgtk3.0-dev or wxGTK-devel)"
+	@echo "  Windows: mingw64-wxWidgets or manually configured wxWidgets cross-build"
 	@echo ""
 	@echo "Windows cross-compile requires:"
 	@echo "  x86_64-w64-mingw32-g++  (mingw-w64)"
