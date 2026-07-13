@@ -56,6 +56,9 @@ static int g_listen_socket = INVALID_SOCKET;
 static int g_tunnel_counter = 0;
 static SDL_mutex *g_tunnel_mutex = nullptr;
 static int g_webserver_port = 53716;  // Track which port we're actually using
+static std::string g_webserver_bind_addr = "127.0.0.1";  // Track bind address
+static int g_webserver_configured_port = 53716;  // User-requested port (no auto-increment)
+static bool g_webserver_use_auto_port = true;  // Whether to auto-increment port on failure
 
 // ============================================================================
 // Signal Handler Setup
@@ -1702,24 +1705,41 @@ static void webserver_thread_func() {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    
+    // Parse bind address
+    if (inet_pton(AF_INET, g_webserver_bind_addr.c_str(), &addr.sin_addr) <= 0) {
+        SDL_Log("[WebServer] Invalid bind address: %s", g_webserver_bind_addr.c_str());
+        closesocket(g_listen_socket);
+        return;
+    }
 
-    // Try to bind to a port, starting at 53716 and incrementing up to 100 times
-    int port = 53716;
+    // Try to bind to configured port, optionally incrementing if auto-port is enabled
+    int port = g_webserver_configured_port;
     int bind_result = -1;
-    for (int attempt = 0; attempt < 100; attempt++) {
+    int max_attempts = g_webserver_use_auto_port ? 100 : 1;
+    
+    for (int attempt = 0; attempt < max_attempts; attempt++) {
         addr.sin_port = htons(port);
         bind_result = bind(g_listen_socket, (struct sockaddr *)&addr, sizeof(addr));
         if (bind_result == 0) {
             g_webserver_port = port;  // Store the port we're using
-            SDL_Log("[WebServer] Starting on port %d", port);
+            SDL_Log("[WebServer] Starting on %s:%d", g_webserver_bind_addr.c_str(), port);
             break;
+        }
+        if (!g_webserver_use_auto_port) {
+            break;  // Don't retry if auto-port is disabled
         }
         port++;
     }
 
     if (bind_result < 0) {
-        SDL_Log("[WebServer] bind() failed on all ports 53716-53815: %s", strerror(errno));
+        if (g_webserver_use_auto_port) {
+            SDL_Log("[WebServer] bind() failed on ports %d-%d: %s", 
+                    g_webserver_configured_port, g_webserver_configured_port + 99, strerror(errno));
+        } else {
+            SDL_Log("[WebServer] bind() failed on %s:%d: %s", 
+                    g_webserver_bind_addr.c_str(), g_webserver_configured_port, strerror(errno));
+        }
         closesocket(g_listen_socket);
         return;
     }
@@ -1739,7 +1759,7 @@ static void webserver_thread_func() {
 #endif
 
     g_webserver_running.store(true);
-    SDL_Log("[WebServer] Listening on localhost:%d", g_webserver_port);
+    SDL_Log("[WebServer] Listening on %s:%d", g_webserver_bind_addr.c_str(), g_webserver_port);
 
     while (!g_webserver_should_exit.load()) {
         struct sockaddr_in client_addr;
@@ -1783,11 +1803,25 @@ static void webserver_thread_func() {
 // Public API
 // ============================================================================
 
-bool sftp_webserver_start() {
+bool sftp_webserver_start(const char *bind_addr, int port) {
     if (g_webserver_running.load()) {
         SDL_Log("[WebServer] Already running");
         return true;
     }
+
+    // Validate and store configuration
+    if (bind_addr) {
+        g_webserver_bind_addr = bind_addr;
+    } else {
+        g_webserver_bind_addr = "127.0.0.1";
+    }
+    
+    if (port <= 0 || port > 65535) {
+        SDL_Log("[WebServer] Invalid port %d, using default 53716", port);
+        port = 53716;
+    }
+    g_webserver_configured_port = port;
+    g_webserver_use_auto_port = false;  // Don't auto-increment when explicitly configured
 
     g_local_mode = false;
 
@@ -1807,11 +1841,25 @@ bool sftp_webserver_start() {
 // Same server, but reads straight from the local filesystem under root_dir
 // instead of going over SFTP — for when there's no SSH session to browse
 // (e.g. F9 in a local shell). Read-only: browsing + download only.
-bool sftp_webserver_start_local(const char *root_dir) {
+bool sftp_webserver_start_local(const char *root_dir, const char *bind_addr, int port) {
     if (g_webserver_running.load()) {
         SDL_Log("[WebServer] Already running");
         return true;
     }
+
+    // Validate and store configuration
+    if (bind_addr) {
+        g_webserver_bind_addr = bind_addr;
+    } else {
+        g_webserver_bind_addr = "127.0.0.1";
+    }
+    
+    if (port <= 0 || port > 65535) {
+        SDL_Log("[WebServer] Invalid port %d, using default 53716", port);
+        port = 53716;
+    }
+    g_webserver_configured_port = port;
+    g_webserver_use_auto_port = false;  // Don't auto-increment when explicitly configured
 
     g_local_mode = true;
     g_local_root = root_dir ? root_dir : "/";
@@ -1828,7 +1876,7 @@ bool sftp_webserver_start_local(const char *root_dir) {
     g_webserver_thread = new std::thread(webserver_thread_func);
 
     SDL_Delay(100);
-    SDL_Log("[WebServer] Local mode serving: %s", g_local_root.c_str());
+    SDL_Log("[WebServer] Local mode serving: %s on %s:%d", g_local_root.c_str(), g_webserver_bind_addr.c_str(), port);
     return g_webserver_running.load();
 }
 

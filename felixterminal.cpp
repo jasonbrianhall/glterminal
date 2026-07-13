@@ -103,6 +103,11 @@ int main(int argc, char **argv) {
     TelnetConfig telnet_cfg;
     SerialConfig serial_cfg;
 
+    bool        start_webserver = false;
+    int         webserver_port = 53716;
+    std::string webserver_bind_addr = "127.0.0.1";
+    std::string webserver_root = "/";  // Default to root filesystem
+
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
@@ -230,6 +235,48 @@ int main(int argc, char **argv) {
             ssh_cfg.command = argv[++i];
             continue;
         }
+
+        // --web-server [addr:port]  — starts web server at boot
+        // Examples:
+        //   --web-server                    (use defaults: 127.0.0.1:53716)
+        //   --web-server 127.0.0.1:8080     (specific address and port)
+        //   --web-server 0.0.0.0:8080       (listen on all interfaces)
+        //   --web-server [::1]:8080         (IPv6 localhost)
+        if ((strcmp(arg, "--web-server") == 0 || strcmp(arg, "--webserver") == 0)) {
+            start_webserver = true;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                const char *spec = argv[++i];
+                const char *colon = strrchr(spec, ':');
+                
+                if (colon) {
+                    // addr:port format
+                    webserver_bind_addr = std::string(spec, colon - spec);
+                    webserver_port = atoi(colon + 1);
+                    if (webserver_port <= 0 || webserver_port > 65535) {
+                        SDL_Log("Bad web server port (1-65535): %d\n", webserver_port);
+                        webserver_port = 53716;
+                    }
+                } else {
+                    // Just address or port? Try to parse as port, fall back to address
+                    int port_attempt = atoi(spec);
+                    if (port_attempt > 0 && port_attempt <= 65535) {
+                        webserver_port = port_attempt;
+                        webserver_bind_addr = "127.0.0.1";
+                    } else {
+                        // Treat as address
+                        webserver_bind_addr = spec;
+                        webserver_port = 53716;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // --web-root <dir>  — root directory for local file server mode
+        if ((strcmp(arg, "--web-root") == 0) && i + 1 < argc) {
+            webserver_root = argv[++i];
+            continue;
+        }
 #endif // USESSH
 
         // NOTE: SDL renderer path is disabled — OpenGL 3.3+ is required.
@@ -259,7 +306,6 @@ int main(int argc, char **argv) {
             SDL_Log("\nSerial options:\n");
             SDL_Log("  --serial [port]             Connect via serial port (prompts if omitted)\n");
             SDL_Log("  --serial-baud <baud>        Serial baud rate\n");
-#ifdef USESSH
             SDL_Log("\nSSH options:\n");
             SDL_Log("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
             SDL_Log("  -i <path>                   Private key file (alias: --ssh-key)\n");
@@ -272,7 +318,9 @@ int main(int argc, char **argv) {
             SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
             SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
             SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
-#endif
+            SDL_Log("\nWeb Server Options\n");
+            SDL_Log("  --webserver (listenaddress:port)        Listen address and port are optional but if listen address, port must be specified\n");
+
             SDL_Log("\nKeyboard shortcuts:\n");
             SDL_Log("  F2                          SFTP upload browser (SSH sessions only)\n");
             SDL_Log("  F3                          SFTP download browser (SSH sessions only)\n");
@@ -283,6 +331,10 @@ int main(int argc, char **argv) {
             SDL_Log("  F8                          SSH Key Manager (additional function when in SSH mode)\n");
             SDL_Log("  F9                          Web Server (serves on http://localhost:53716 by default)\n");
             SDL_Log("                                  Works locally and with SSH supporting SFTP\n");
+#ifdef USESSH
+            SDL_Log("  --web-server [addr:port]    Start web server at boot (e.g. 127.0.0.1:8080 or 0.0.0.0:3000)\n");
+            SDL_Log("  --web-root <dir>            Directory to serve (local mode only)\n");
+#endif
             SDL_Log("  F11                         Toggle full screen\n");
             SDL_Log("  Ctrl+Scroll                 Resize font\n");
             SDL_Log("  Shift+PageUp/Down           Scroll scrollback buffer\n");
@@ -613,6 +665,17 @@ int main(int argc, char **argv) {
                      "Press any key to quit.\r\n", shell);
             term_feed(&term, msg, (int)strlen(msg));
         }
+
+        // Start web server if requested (local mode)
+        if (start_webserver) {
+            if (!sftp_webserver_start_local(webserver_root.c_str(), webserver_bind_addr.c_str(), webserver_port)) {
+                SDL_Log("[WEBSERVER] Failed to start local web server on %s:%d\n",
+                        webserver_bind_addr.c_str(), webserver_port);
+            } else {
+                SDL_Log("[WEBSERVER] Started local web server on %s:%d\n",
+                        webserver_bind_addr.c_str(), webserver_port);
+            }
+        }
     }
 
 #ifdef _WIN32
@@ -820,6 +883,18 @@ int main(int argc, char **argv) {
                     // Schedule remote/socks for later with a delay to let libssh2 stabilize
                     ssh_setup_deferred_forwards = true;
                     ssh_setup_forward_delay = 100;  // ~100ms at 60fps
+
+                    // Start web server if requested (SFTP mode)
+                    if (start_webserver) {
+                        if (!sftp_webserver_start(webserver_bind_addr.c_str(), webserver_port)) {
+                            SDL_Log("[WEBSERVER] Failed to start SFTP web server on %s:%d\n",
+                                    webserver_bind_addr.c_str(), webserver_port);
+                        } else {
+                            SDL_Log("[WEBSERVER] Started SFTP web server on %s:%d\n",
+                                    webserver_bind_addr.c_str(), webserver_port);
+                        }
+                    }
+
                     needs_render = true;
                 } else {
                     ssh_phase = SshPhase::FAILED;
@@ -1189,6 +1264,17 @@ int main(int argc, char **argv) {
                             if (telnet_connect(telnet_cfg, &term)) {
                                 telnet_phase = TelnetPhase::ACTIVE;
                                 telnet_active_since = SDL_GetTicks();
+
+                                // Start web server if requested (local mode for telnet)
+                                if (start_webserver) {
+                                    if (!sftp_webserver_start_local(webserver_root.c_str(), webserver_bind_addr.c_str(), webserver_port)) {
+                                        SDL_Log("[WEBSERVER] Failed to start local web server on %s:%d\n",
+                                                webserver_bind_addr.c_str(), webserver_port);
+                                    } else {
+                                        SDL_Log("[WEBSERVER] Started local web server on %s:%d\n",
+                                                webserver_bind_addr.c_str(), webserver_port);
+                                    }
+                                }
                             } else {
                                 telnet_phase = TelnetPhase::FAILED;
                                 const char *fail = "\r\nConnection failed. Press any key to close.\r\n";
@@ -1284,6 +1370,17 @@ int main(int argc, char **argv) {
                             }
                             if (serial_connect(serial_cfg, &term)) {
                                 serial_phase = SerialPhase::ACTIVE;
+
+                                // Start web server if requested (local mode for serial)
+                                if (start_webserver) {
+                                    if (!sftp_webserver_start_local(webserver_root.c_str(), webserver_bind_addr.c_str(), webserver_port)) {
+                                        SDL_Log("[WEBSERVER] Failed to start local web server on %s:%d\n",
+                                                webserver_bind_addr.c_str(), webserver_port);
+                                    } else {
+                                        SDL_Log("[WEBSERVER] Started local web server on %s:%d\n",
+                                                webserver_bind_addr.c_str(), webserver_port);
+                                    }
+                                }
                             } else {
                                 serial_phase = SerialPhase::FAILED;
                                 const char *fail = "\r\nFailed to open port. Press any key to close.\r\n";
