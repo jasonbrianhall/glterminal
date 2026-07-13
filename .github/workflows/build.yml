@@ -64,6 +64,7 @@ jobs:
           libssh2-devel \
           libwebp-devel \
           mingw64-libwebp \
+          mingw64-wxWidgets3 \
           xxd
 
     - name: Build Windows Executable
