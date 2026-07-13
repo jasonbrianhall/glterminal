@@ -244,10 +244,16 @@ int main(int argc, char **argv) {
             SDL_Log("       flt [options]\n\n");
             SDL_Log("Options:\n");
             SDL_Log("  [shell]                     Command to run instead of default shell\n");
-
-
-// SDL is broken and very buggy; not really supporting
-            //SDL_Log("  --sdl                       Force SDL renderer (for testing fallback path)\n");
+            SDL_Log("\nTelnet options:\n");
+            SDL_Log("  --telnet [host[:port]]      Connect via Telnet (port defaults to 23)\n");
+            SDL_Log("  --telnet-port <port>        Override Telnet port\n");
+            SDL_Log("  --telnet-ttype <type>       Terminal type (default: xterm-256color)\n");
+            SDL_Log("  --raw                       Enable raw mode\n");
+            SDL_Log("  --ssl                       Use SSL/TLS connection\n");
+            SDL_Log("\nSerial options:\n");
+            SDL_Log("  --serial [port]             Connect via serial port (prompts if omitted)\n");
+            SDL_Log("  --serial-baud <baud>        Serial baud rate\n");
+#ifdef USESSH
             SDL_Log("\nSSH options:\n");
             SDL_Log("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
             SDL_Log("  -i <path>                   Private key file (alias: --ssh-key)\n");
@@ -259,6 +265,7 @@ int main(int argc, char **argv) {
             SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
             SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
             SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
+#endif
             SDL_Log("\nKeyboard shortcuts:\n");
             SDL_Log("  F2                          SFTP upload browser (SSH sessions only)\n");
             SDL_Log("  F3                          SFTP download browser (SSH sessions only)\n");
@@ -266,7 +273,7 @@ int main(int argc, char **argv) {
             SDL_Log("  F5                          Felix Chirp — image viewer / audio player\n");
             SDL_Log("  F6                          Port forward manager (SSH sessions only)\n");
             SDL_Log("  F7                          WOPR Terminal\n");
-            SDL_Log("  F8                          SSH Key Manager (additional fuction when in SSH mode\n");
+            SDL_Log("  F8                          SSH Key Manager (additional function when in SSH mode)\n");
             SDL_Log("  F9                          Web Server (serves on http://localhost:53716 by default)\n");
             SDL_Log("                                  Works locally and with SSH supporting SFTP\n");
             SDL_Log("  F11                         Toggle full screen\n");
