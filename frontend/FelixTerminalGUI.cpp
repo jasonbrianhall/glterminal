@@ -7,6 +7,7 @@
 #include <wx/stdpaths.h>
 #include <wx/dir.h>
 #include <wx/filefn.h>
+#include <wx/fileconf.h>
 #ifdef _WIN32
 #include <wx/msw/registry.h>
 #endif
@@ -265,9 +266,11 @@ private:
         telnetBox->Add(ttypeSizer, 0, wxEXPAND | wxALL, 8);
         
         m_telnetRawCheck = new wxCheckBox(panel, wxID_ANY, "Raw Mode");
+        m_telnetRawCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnUpdatePreview, this);
         telnetBox->Add(m_telnetRawCheck, 0, wxALL, 8);
         
         m_telnetSSLCheck = new wxCheckBox(panel, wxID_ANY, "Use SSL/TLS");
+        m_telnetSSLCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnUpdatePreview, this);
         telnetBox->Add(m_telnetSSLCheck, 0, wxALL, 8);
         
         sizer->Add(telnetBox, 0, wxEXPAND | wxALL, 8);
@@ -308,32 +311,33 @@ private:
     }
 
     void CreateSSHTab(wxNotebook *notebook, wxPanel *mainPanel) {
-        wxPanel *panel = new wxPanel(notebook);
+        wxScrolledWindow *scrollPanel = new wxScrolledWindow(notebook);
+        scrollPanel->SetScrollRate(5, 5);
         wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
         
-        wxStaticBoxSizer *sshBox = new wxStaticBoxSizer(wxVERTICAL, panel, "SSH Settings");
+        wxStaticBoxSizer *sshBox = new wxStaticBoxSizer(wxVERTICAL, scrollPanel, "SSH Settings");
         
         wxBoxSizer *userSizer = new wxBoxSizer(wxHORIZONTAL);
-        userSizer->Add(new wxStaticText(panel, wxID_ANY, "User:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshUserCtrl = new wxTextCtrl(panel, wxID_ANY, "root");
+        userSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "User:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_sshUserCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "root");
         userSizer->Add(m_sshUserCtrl, 1, wxEXPAND);
         sshBox->Add(userSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *hostSizer = new wxBoxSizer(wxHORIZONTAL);
-        hostSizer->Add(new wxStaticText(panel, wxID_ANY, "Host:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshHostCtrl = new wxTextCtrl(panel, wxID_ANY, "localhost");
+        hostSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Host:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_sshHostCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "localhost");
         hostSizer->Add(m_sshHostCtrl, 1, wxEXPAND);
         sshBox->Add(hostSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *portSizer = new wxBoxSizer(wxHORIZONTAL);
-        portSizer->Add(new wxStaticText(panel, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshPortSpin = new wxSpinCtrl(panel, wxID_ANY, "22", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 65535, 22);
+        portSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_sshPortSpin = new wxSpinCtrl(scrollPanel, wxID_ANY, "22", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 65535, 22);
         portSizer->Add(m_sshPortSpin, 1, wxEXPAND);
         sshBox->Add(portSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *authSizer = new wxBoxSizer(wxHORIZONTAL);
-        authSizer->Add(new wxStaticText(panel, wxID_ANY, "Auth Method:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshAuthChoice = new wxChoice(panel, wxID_ANY);
+        authSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Auth Method:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_sshAuthChoice = new wxChoice(scrollPanel, wxID_ANY);
         m_sshAuthChoice->Append("Password");
         m_sshAuthChoice->Append("Public Key");
         m_sshAuthChoice->SetSelection(0);
@@ -342,33 +346,35 @@ private:
         sshBox->Add(authSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *keySizer = new wxBoxSizer(wxHORIZONTAL);
-        keySizer->Add(new wxStaticText(panel, wxID_ANY, "Key Path:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshKeyCtrl = new wxTextCtrl(panel, wxID_ANY, "");
+        keySizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Key Path:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_sshKeyCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "");
+        m_sshKeyCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
         keySizer->Add(m_sshKeyCtrl, 1, wxEXPAND | wxRIGHT, 4);
-        m_browseSshKeyBtn = new wxButton(panel, wxID_ANY, "Browse");
+        m_browseSshKeyBtn = new wxButton(scrollPanel, wxID_ANY, "Browse");
         m_browseSshKeyBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnBrowseSshKey, this);
         keySizer->Add(m_browseSshKeyBtn, 0, wxEXPAND);
         sshBox->Add(keySizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *knownHostsSizer = new wxBoxSizer(wxHORIZONTAL);
-        knownHostsSizer->Add(new wxStaticText(panel, wxID_ANY, "Known Hosts:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshKnownHostsCtrl = new wxTextCtrl(panel, wxID_ANY, "");
+        knownHostsSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Known Hosts:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_sshKnownHostsCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "");
         knownHostsSizer->Add(m_sshKnownHostsCtrl, 1, wxEXPAND);
         sshBox->Add(knownHostsSizer, 0, wxEXPAND | wxALL, 8);
         
-        m_sshX11Check = new wxCheckBox(panel, wxID_ANY, "X11 Forwarding");
+        m_sshX11Check = new wxCheckBox(scrollPanel, wxID_ANY, "X11 Forwarding");
         m_sshX11Check->SetValue(true);
+        m_sshX11Check->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnUpdatePreview, this);
         sshBox->Add(m_sshX11Check, 0, wxALL, 8);
         
         wxBoxSizer *cmdSizer = new wxBoxSizer(wxHORIZONTAL);
-        cmdSizer->Add(new wxStaticText(panel, wxID_ANY, "Command:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshCommandCtrl = new wxTextCtrl(panel, wxID_ANY, "");
+        cmdSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Command:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_sshCommandCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "");
         cmdSizer->Add(m_sshCommandCtrl, 1, wxEXPAND);
         sshBox->Add(cmdSizer, 0, wxEXPAND | wxALL, 8);
         
         sizer->Add(sshBox, 0, wxEXPAND | wxALL, 8);
-        panel->SetSizer(sizer);
-        notebook->AddPage(panel, "SSH");
+        scrollPanel->SetSizer(sizer);
+        notebook->AddPage(scrollPanel, "SSH");
     }
 
     void CreatePortForwardPanel(wxNotebook *notebook, wxPanel *mainPanel) {
@@ -435,23 +441,27 @@ private:
         wxStaticBoxSizer *webBox = new wxStaticBoxSizer(wxVERTICAL, panel, "Web Server Settings");
         
         m_webServerEnabledCheck = new wxCheckBox(panel, wxID_ANY, "Enable Web Server");
+        m_webServerEnabledCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnUpdatePreview, this);
         webBox->Add(m_webServerEnabledCheck, 0, wxALL, 8);
         
         wxBoxSizer *addrSizer = new wxBoxSizer(wxHORIZONTAL);
         addrSizer->Add(new wxStaticText(panel, wxID_ANY, "Listen Address:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_webServerAddrCtrl = new wxTextCtrl(panel, wxID_ANY, "127.0.0.1");
+        m_webServerAddrCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
         addrSizer->Add(m_webServerAddrCtrl, 1, wxEXPAND);
         webBox->Add(addrSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *portSizer = new wxBoxSizer(wxHORIZONTAL);
         portSizer->Add(new wxStaticText(panel, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_webServerPortSpin = new wxSpinCtrl(panel, wxID_ANY, "53716", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 65535, 53716);
+        m_webServerPortSpin->Bind(wxEVT_SPINCTRL, &FelixTerminalFrame::OnUpdatePreview, this);
         portSizer->Add(m_webServerPortSpin, 1, wxEXPAND);
         webBox->Add(portSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *dirSizer = new wxBoxSizer(wxHORIZONTAL);
         dirSizer->Add(new wxStaticText(panel, wxID_ANY, "Root Directory:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_webRootDirCtrl = new wxTextCtrl(panel, wxID_ANY, "/");
+        m_webRootDirCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
         dirSizer->Add(m_webRootDirCtrl, 1, wxEXPAND | wxRIGHT, 4);
         m_browseWebRootBtn = new wxButton(panel, wxID_ANY, "Browse");
         m_browseWebRootBtn->Bind(wxEVT_BUTTON, &FelixTerminalFrame::OnBrowseWebRoot, this);
@@ -471,12 +481,18 @@ private:
         int selection = m_sshAuthChoice->GetSelection();
         m_sshKeyCtrl->Enable(selection == 1);  // Enable key path only for public key auth
         m_browseSshKeyBtn->Enable(selection == 1);
+        UpdatePreview();
+    }
+
+    void OnUpdatePreview(wxCommandEvent &event) {
+        UpdatePreview();
     }
 
     void OnBrowseSshKey(wxCommandEvent &event) {
-        wxFileDialog dlg(this, "Select SSH Key", "", "", "PEM files (*.pem)|*.pem|All files (*.*)|*.*", wxFD_OPEN);
+        wxFileDialog dlg(this, "Select SSH Key", "", "", "All files (*)|*", wxFD_OPEN);
         if (dlg.ShowModal() == wxID_OK) {
             m_sshKeyCtrl->SetValue(dlg.GetPath());
+            UpdatePreview();
         }
     }
 
@@ -484,6 +500,7 @@ private:
         wxDirDialog dlg(this, "Select Web Root Directory");
         if (dlg.ShowModal() == wxID_OK) {
             m_webRootDirCtrl->SetValue(dlg.GetPath());
+            UpdatePreview();
         }
     }
 
@@ -573,11 +590,30 @@ private:
                 if (m_sshAuthChoice->GetSelection() == 1 && !m_sshKeyCtrl->GetValue().empty()) {
                     cmd += " -i " + m_sshKeyCtrl->GetValue();
                 }
-                if (m_sshX11Check->GetValue()) cmd += " -X";
+                if (!m_sshX11Check->GetValue()) cmd += " --no-x11";
                 if (!m_sshCommandCtrl->GetValue().empty()) {
-                    cmd += " -- " + m_sshCommandCtrl->GetValue();
+                    cmd += " -c " + m_sshCommandCtrl->GetValue();
+                }
+                
+                // Port forwarding
+                for (const auto &pf : m_localPFEntries) {
+                    cmd += " -L " + pf;
+                }
+                for (const auto &pf : m_remotePFEntries) {
+                    cmd += " -R " + pf;
+                }
+                for (const auto &sock : m_socksEntries) {
+                    cmd += " -D " + sock;
                 }
                 break;
+        }
+        
+        // Web server
+        if (m_webServerEnabledCheck->GetValue()) {
+            cmd += " --webserver " + m_webServerAddrCtrl->GetValue() + ":" + wxString::Format("%d", m_webServerPortSpin->GetValue());
+            if (m_webRootDirCtrl->GetValue() != "/") {
+                cmd += " --web-root " + m_webRootDirCtrl->GetValue();
+            }
         }
         
         m_cmdPreview->SetValue(cmd);
@@ -621,7 +657,20 @@ private:
         return cfg;
     }
 
+    wxString GetConfigDir() {
+        #ifdef __WXMSW__
+        return wxEmptyString;  // Use registry on Windows
+        #else
+        wxString configDir = wxStandardPaths::Get().GetUserConfigDir() + "/FelixTerminal";
+        if (!wxDirExists(configDir)) {
+            wxMkdir(configDir);
+        }
+        return configDir;
+        #endif
+    }
+
     void LoadSessions() {
+        #ifdef __WXMSW__
         wxRegKey regKey(wxRegKey::HKCU, "Software\\FelixTerminal\\Sessions");
         if (!regKey.Exists()) return;
         
@@ -632,6 +681,19 @@ private:
                 m_sessionList->InsertItem(m_sessionList->GetItemCount(), sessionName);
             } while (regKey.GetNextKey(sessionName, index));
         }
+        #else
+        wxString sessionsDir = GetConfigDir() + "/sessions";
+        if (!wxDirExists(sessionsDir)) return;
+        
+        wxDir dir(sessionsDir);
+        wxString filename;
+        bool cont = dir.GetFirst(&filename, "*.cfg");
+        while (cont) {
+            wxString sessionName = filename.BeforeLast('.');
+            m_sessionList->InsertItem(m_sessionList->GetItemCount(), sessionName);
+            cont = dir.GetNext(&filename);
+        }
+        #endif
     }
 
     void OnLoadSession(wxCommandEvent &event) {
@@ -679,15 +741,22 @@ private:
         }
 
         wxString sessionName = m_sessionList->GetItemText(sel);
-#undef HKEY_CURRENT_USER
-        wxRegKey regKey(wxRegKey::HKCU, "Software\\FelixTerminal\\Sessions\\" + sessionName);
-#define HKEY_CURRENT_USER ((HKEY)(LONG_PTR)(0x80000001))
         
+        #ifdef __WXMSW__
+        wxRegKey regKey(wxRegKey::HKCU, "Software\\FelixTerminal\\Sessions\\" + sessionName);
         if (regKey.Exists()) {
             regKey.DeleteSelf();
             m_sessionList->DeleteItem(sel);
             wxMessageBox("Session deleted!", "Success", wxOK | wxICON_INFORMATION);
         }
+        #else
+        wxString sessionFile = GetConfigDir() + "/sessions/" + sessionName + ".cfg";
+        if (wxFileExists(sessionFile)) {
+            wxRemoveFile(sessionFile);
+            m_sessionList->DeleteItem(sel);
+            wxMessageBox("Session deleted!", "Success", wxOK | wxICON_INFORMATION);
+        }
+        #endif
     }
 
     void OnOpen(wxCommandEvent &event) {
@@ -740,31 +809,34 @@ private:
         Close(true);
     }
 
+    wxString GetConfigValue(wxFileConfig &config, const wxString &key, const wxString &defaultVal = "") {
+        return config.Read(key, defaultVal);
+    }
+
+    long GetConfigLong(wxFileConfig &config, const wxString &key, long defaultVal = 0) {
+        return config.ReadLong(key, defaultVal);
+    }
+
     SessionConfig LoadSessionConfig(const wxString &name) {
         SessionConfig cfg;
         cfg.name = name;
         
-#undef HKEY_CURRENT_USER
+        #ifdef __WXMSW__
         wxRegKey regKey(wxRegKey::HKCU, "Software\\FelixTerminal\\Sessions\\" + name);
-#define HKEY_CURRENT_USER ((HKEY)(LONG_PTR)(0x80000001))
-        if (!regKey.Exists()) return cfg;  // Return empty config if key doesn't exist
+        if (!regKey.Exists()) return cfg;
         
         long lVal;
+        wxString sVal;
         
         if (regKey.QueryValue("connType", &lVal)) cfg.connType = lVal;
-        
-        wxString sVal;
         if (regKey.QueryValue("localShell", sVal)) cfg.localShell = sVal;
-        
         if (regKey.QueryValue("telnetHost", sVal)) cfg.telnetHost = sVal;
         if (regKey.QueryValue("telnetPort", &lVal)) cfg.telnetPort = lVal;
         if (regKey.QueryValue("telnetTType", sVal)) cfg.telnetTType = sVal;
         if (regKey.QueryValue("telnetRaw", &lVal)) cfg.telnetRaw = (lVal != 0);
         if (regKey.QueryValue("telnetSSL", &lVal)) cfg.telnetSSL = (lVal != 0);
-        
         if (regKey.QueryValue("serialPort", sVal)) cfg.serialPort = sVal;
         if (regKey.QueryValue("serialBaud", &lVal)) cfg.serialBaud = lVal;
-        
         if (regKey.QueryValue("sshUser", sVal)) cfg.sshUser = sVal;
         if (regKey.QueryValue("sshHost", sVal)) cfg.sshHost = sVal;
         if (regKey.QueryValue("sshPort", &lVal)) cfg.sshPort = lVal;
@@ -774,7 +846,6 @@ private:
         if (regKey.QueryValue("sshX11", &lVal)) cfg.sshX11 = (lVal != 0);
         if (regKey.QueryValue("sshCommand", sVal)) cfg.sshCommand = sVal;
         
-        // Parse port forwards and SOCKS from pipe-delimited strings
         if (regKey.QueryValue("localPF", sVal)) {
             wxArrayString parts = wxSplit(sVal, '|');
             for (const auto &part : parts) {
@@ -799,36 +870,64 @@ private:
         if (regKey.QueryValue("webServerPort", &lVal)) cfg.webServerPort = lVal;
         if (regKey.QueryValue("webRootDir", sVal)) cfg.webRootDir = sVal;
         
+        #else
+        wxString sessionFile = GetConfigDir() + "/sessions/" + name + ".cfg";
+        if (!wxFileExists(sessionFile)) return cfg;
+        
+        wxFileConfig config(wxEmptyString, wxEmptyString, sessionFile);
+        
+        cfg.connType = config.ReadLong("connType", 0);
+        cfg.localShell = config.Read("localShell", "");
+        cfg.telnetHost = config.Read("telnetHost", "");
+        cfg.telnetPort = config.ReadLong("telnetPort", 23);
+        cfg.telnetTType = config.Read("telnetTType", "xterm-256color");
+        cfg.telnetRaw = config.ReadLong("telnetRaw", 0) != 0;
+        cfg.telnetSSL = config.ReadLong("telnetSSL", 0) != 0;
+        cfg.serialPort = config.Read("serialPort", "");
+        cfg.serialBaud = config.ReadLong("serialBaud", 9600);
+        cfg.sshUser = config.Read("sshUser", "");
+        cfg.sshHost = config.Read("sshHost", "localhost");
+        cfg.sshPort = config.ReadLong("sshPort", 22);
+        cfg.sshAuthMethod = config.ReadLong("sshAuthMethod", 0);
+        cfg.sshKeyPath = config.Read("sshKeyPath", "");
+        cfg.sshKnownHosts = config.Read("sshKnownHosts", "");
+        cfg.sshX11 = config.ReadLong("sshX11", 1) != 0;
+        cfg.sshCommand = config.Read("sshCommand", "");
+        
+        wxString localPFStr = config.Read("localPF", "");
+        if (!localPFStr.empty()) {
+            wxArrayString parts = wxSplit(localPFStr, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.localPF.push_back(part);
+            }
+        }
+        
+        wxString remotePFStr = config.Read("remotePF", "");
+        if (!remotePFStr.empty()) {
+            wxArrayString parts = wxSplit(remotePFStr, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.remotePF.push_back(part);
+            }
+        }
+        
+        wxString socksStr = config.Read("socks", "");
+        if (!socksStr.empty()) {
+            wxArrayString parts = wxSplit(socksStr, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.socks.push_back(part);
+            }
+        }
+        
+        cfg.webServerEnabled = config.ReadLong("webServerEnabled", 0) != 0;
+        cfg.webServerAddr = config.Read("webServerAddr", "127.0.0.1");
+        cfg.webServerPort = config.ReadLong("webServerPort", 53716);
+        cfg.webRootDir = config.Read("webRootDir", "/");
+        #endif
+        
         return cfg;
     }
 
     void SaveSessionConfig(const SessionConfig &cfg) {
-#undef HKEY_CURRENT_USER
-        wxRegKey regKey(wxRegKey::HKCU, "Software\\FelixTerminal\\Sessions\\" + cfg.name);
-#define HKEY_CURRENT_USER ((HKEY)(LONG_PTR)(0x80000001))
-        if (!regKey.Exists()) regKey.Create();
-        
-        regKey.SetValue("connType", (long)cfg.connType);
-        regKey.SetValue("localShell", cfg.localShell);
-        
-        regKey.SetValue("telnetHost", cfg.telnetHost);
-        regKey.SetValue("telnetPort", (long)cfg.telnetPort);
-        regKey.SetValue("telnetTType", cfg.telnetTType);
-        regKey.SetValue("telnetRaw", cfg.telnetRaw ? 1L : 0L);
-        regKey.SetValue("telnetSSL", cfg.telnetSSL ? 1L : 0L);
-        
-        regKey.SetValue("serialPort", cfg.serialPort);
-        regKey.SetValue("serialBaud", (long)cfg.serialBaud);
-        
-        regKey.SetValue("sshUser", cfg.sshUser);
-        regKey.SetValue("sshHost", cfg.sshHost);
-        regKey.SetValue("sshPort", (long)cfg.sshPort);
-        regKey.SetValue("sshAuthMethod", (long)cfg.sshAuthMethod);
-        regKey.SetValue("sshKeyPath", cfg.sshKeyPath);
-        regKey.SetValue("sshKnownHosts", cfg.sshKnownHosts);
-        regKey.SetValue("sshX11", cfg.sshX11 ? 1L : 0L);
-        regKey.SetValue("sshCommand", cfg.sshCommand);
-        
         // Store port forwards and SOCKS as concatenated strings
         wxString localPFStr, remotePFStr, socksStr;
         for (size_t i = 0; i < cfg.localPF.size(); i++) {
@@ -844,14 +943,70 @@ private:
             socksStr += cfg.socks[i];
         }
         
+        #ifdef __WXMSW__
+        wxRegKey regKey(wxRegKey::HKCU, "Software\\FelixTerminal\\Sessions\\" + cfg.name);
+        if (!regKey.Exists()) regKey.Create();
+        
+        regKey.SetValue("connType", (long)cfg.connType);
+        regKey.SetValue("localShell", cfg.localShell);
+        regKey.SetValue("telnetHost", cfg.telnetHost);
+        regKey.SetValue("telnetPort", (long)cfg.telnetPort);
+        regKey.SetValue("telnetTType", cfg.telnetTType);
+        regKey.SetValue("telnetRaw", cfg.telnetRaw ? 1L : 0L);
+        regKey.SetValue("telnetSSL", cfg.telnetSSL ? 1L : 0L);
+        regKey.SetValue("serialPort", cfg.serialPort);
+        regKey.SetValue("serialBaud", (long)cfg.serialBaud);
+        regKey.SetValue("sshUser", cfg.sshUser);
+        regKey.SetValue("sshHost", cfg.sshHost);
+        regKey.SetValue("sshPort", (long)cfg.sshPort);
+        regKey.SetValue("sshAuthMethod", (long)cfg.sshAuthMethod);
+        regKey.SetValue("sshKeyPath", cfg.sshKeyPath);
+        regKey.SetValue("sshKnownHosts", cfg.sshKnownHosts);
+        regKey.SetValue("sshX11", cfg.sshX11 ? 1L : 0L);
+        regKey.SetValue("sshCommand", cfg.sshCommand);
         regKey.SetValue("localPF", localPFStr);
         regKey.SetValue("remotePF", remotePFStr);
         regKey.SetValue("socks", socksStr);
-        
         regKey.SetValue("webServerEnabled", cfg.webServerEnabled ? 1L : 0L);
         regKey.SetValue("webServerAddr", cfg.webServerAddr);
         regKey.SetValue("webServerPort", (long)cfg.webServerPort);
         regKey.SetValue("webRootDir", cfg.webRootDir);
+        
+        #else
+        wxString sessionsDir = GetConfigDir() + "/sessions";
+        if (!wxDirExists(sessionsDir)) {
+            wxMkdir(sessionsDir);
+        }
+        
+        wxString sessionFile = sessionsDir + "/" + cfg.name + ".cfg";
+        wxFileConfig config(wxEmptyString, wxEmptyString, sessionFile);
+        
+        config.Write("connType", (long)cfg.connType);
+        config.Write("localShell", cfg.localShell);
+        config.Write("telnetHost", cfg.telnetHost);
+        config.Write("telnetPort", (long)cfg.telnetPort);
+        config.Write("telnetTType", cfg.telnetTType);
+        config.Write("telnetRaw", cfg.telnetRaw ? 1L : 0L);
+        config.Write("telnetSSL", cfg.telnetSSL ? 1L : 0L);
+        config.Write("serialPort", cfg.serialPort);
+        config.Write("serialBaud", (long)cfg.serialBaud);
+        config.Write("sshUser", cfg.sshUser);
+        config.Write("sshHost", cfg.sshHost);
+        config.Write("sshPort", (long)cfg.sshPort);
+        config.Write("sshAuthMethod", (long)cfg.sshAuthMethod);
+        config.Write("sshKeyPath", cfg.sshKeyPath);
+        config.Write("sshKnownHosts", cfg.sshKnownHosts);
+        config.Write("sshX11", cfg.sshX11 ? 1L : 0L);
+        config.Write("sshCommand", cfg.sshCommand);
+        config.Write("localPF", localPFStr);
+        config.Write("remotePF", remotePFStr);
+        config.Write("socks", socksStr);
+        config.Write("webServerEnabled", cfg.webServerEnabled ? 1L : 0L);
+        config.Write("webServerAddr", cfg.webServerAddr);
+        config.Write("webServerPort", (long)cfg.webServerPort);
+        config.Write("webRootDir", cfg.webRootDir);
+        config.Flush();
+        #endif
     }
 
     void LoadSessionToUI(const SessionConfig &cfg) {
