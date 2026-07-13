@@ -1038,11 +1038,28 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     }
 #endif
 
-    // Start shell
-    while ((rc = libssh2_channel_shell(s_channel)) == LIBSSH2_ERROR_EAGAIN)
-        SDL_Delay(5);
+    // Setup remote port forwarding (-R)
+    // The remote_forwards are just specs that get passed to pf_add_remote
+    // which already handles the actual libssh2 relay logic
+    for (const auto &fwd_spec : cfg.remote_forwards) {
+        SDL_Log("[SSH] queuing remote forward: %s\n", fwd_spec.c_str());
+    }
+
+    // Start shell or execute command
+    if (!cfg.command.empty()) {
+        // Execute a specific command on the remote server
+        SDL_Log("[SSH] executing command: %s\n", cfg.command.c_str());
+        while ((rc = libssh2_channel_exec(s_channel, cfg.command.c_str())) 
+               == LIBSSH2_ERROR_EAGAIN)
+            SDL_Delay(5);
+    } else {
+        // Start interactive shell (default behavior)
+        SDL_Log("[SSH] starting interactive shell\n");
+        while ((rc = libssh2_channel_shell(s_channel)) == LIBSSH2_ERROR_EAGAIN)
+            SDL_Delay(5);
+    }
     if (rc != 0) {
-        SDL_Log("%s\n", last_ssh2_error("shell request failed").c_str());
+        SDL_Log("%s\n", last_ssh2_error("shell/command request failed").c_str());
         return false;
     }
 

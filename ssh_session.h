@@ -19,6 +19,8 @@
 //   cfg.user = "alice";
 //   cfg.key_path = "/home/alice/.ssh/id_ed25519";  // "" = try agent then password
 //   cfg.password = "";
+//   cfg.command = "";  // "" = interactive shell, else specify command like "/bin/sh"
+//   cfg.remote_forwards.push_back("8080:localhost:3000");  // optional -R forwarding
 //
 //   if (!ssh_connect(cfg, &term))  // blocks until authenticated
 //       return 1;
@@ -70,6 +72,23 @@ struct SshConfig {
     // If nullptr, unknown host keys are rejected outright (fails closed).
     std::function<std::string(const char *prompt)> prompt_host_key;
     bool x11_forward = true;  // forward $DISPLAY to the remote session
+    
+    // Command to execute on the remote server.
+    // If empty (default), an interactive shell is started.
+    // Examples: "/bin/bash", "/bin/sh", "python3", "echo hello"
+    std::string command;
+    
+    // Remote port forwarding (ssh -R syntax)
+    // Format: "listen_port:bind_address:forward_port"
+    // Example: "8080:localhost:3000"
+    // The remote SSH server listens on listen_port and forwards
+    // connections to your local machine's bind_address:forward_port.
+    std::vector<std::string> remote_forwards;
+    
+    // Local port forwarding (ssh -L syntax)
+    // Format: "listen_port:remote_host:remote_port"
+    // Example: "3306:db.internal:3306"
+    std::vector<std::string> local_forwards;
 };
 
 // Connect, authenticate, and open a PTY channel.

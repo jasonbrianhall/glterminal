@@ -224,6 +224,10 @@ int main(int argc, char **argv) {
                 SDL_Log("Bad -D port (expected 1-65535): %s\n", argv[i]);
             continue;
         }
+        if ((strcmp(arg, "-c") == 0 || strcmp(arg, "--ssh-command") == 0) && i + 1 < argc) {
+            ssh_cfg.command = argv[++i];
+            continue;
+        }
 #endif // USESSH
 
         // NOTE: SDL renderer path is disabled — OpenGL 3.3+ is required.
@@ -262,6 +266,7 @@ int main(int argc, char **argv) {
             SDL_Log("  --ssh-password <pass>       Password auth (prefer agent or key)\n");
             SDL_Log("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
             SDL_Log("  --no-x11                    Disable X11 forwarding\n");
+            SDL_Log("  -c <command>                Execute command on remote (alias: --ssh-command)\n");
             SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
             SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
             SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
@@ -505,6 +510,13 @@ int main(int argc, char **argv) {
                     SDL_Delay(10);
                 }
             };
+
+            // Populate remote forwards from command-line -R args
+            for (auto &p : pf_remotes_pending) {
+                char fwd_spec[128];
+                snprintf(fwd_spec, sizeof(fwd_spec), "%d:%s:%d", p.lp, p.rh.c_str(), p.rp);
+                ssh_cfg.remote_forwards.push_back(fwd_spec);
+            }
 
             ssh_thread = std::thread([&]() {
                 ssh_conn_ok = ssh_connect(ssh_cfg, &term);
