@@ -57,8 +57,6 @@ public:
     FelixTerminalFrame() : wxFrame(nullptr, wxID_ANY, "Felix Terminal", 
                                    wxDefaultPosition, wxSize(950, 650)) {
         
-        CreateConfigDir();
-        
         wxPanel *mainPanel = new wxPanel(this);
         wxBoxSizer *mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
@@ -749,23 +747,16 @@ private:
         }
     }
 
-    void CreateConfigDir() {
-        wxString configDir = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + "felixterminal";
-        if (!wxDirExists(configDir)) {
-            wxMkdir(configDir);
-        }
-    }
-
     void LoadSessions() {
-        wxString configDir = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + "felixterminal";
-        wxDir dir(configDir);
-        wxString filename;
-        bool cont = dir.GetFirst(&filename, "*.cfg", wxDIR_FILES);
+        wxRegKey regKey(wxRegKey::HKEY_CURRENT_USER, "Software\\FelixTerminal\\Sessions");
+        if (!regKey.Exists()) return;
         
-        while (cont) {
-            wxString sessionName = filename.BeforeLast('.');
-            m_sessionList->InsertItem(m_sessionList->GetItemCount(), sessionName);
-            cont = dir.GetNext(&filename);
+        wxString sessionName;
+        long index = 0;
+        if (regKey.GetFirstKey(sessionName, index)) {
+            do {
+                m_sessionList->InsertItem(m_sessionList->GetItemCount(), sessionName);
+            } while (regKey.GetNextKey(sessionName, index));
         }
     }
 
@@ -814,11 +805,10 @@ private:
         }
 
         wxString sessionName = m_sessionList->GetItemText(sel);
-        wxString configPath = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + 
-                             "felixterminal" + wxFILE_SEP_PATH + sessionName + ".cfg";
+        wxRegKey regKey(wxRegKey::HKEY_CURRENT_USER, "Software\\FelixTerminal\\Sessions\\" + sessionName);
         
-        if (wxFileExists(configPath)) {
-            wxRemoveFile(configPath);
+        if (regKey.Exists()) {
+            regKey.DeleteSelf();
             m_sessionList->DeleteItem(sel);
             wxMessageBox("Session deleted!", "Success", wxOK | wxICON_INFORMATION);
         }
@@ -917,97 +907,112 @@ private:
 
     SessionConfig LoadSessionConfig(const wxString &name) {
         SessionConfig cfg;
-        wxString configPath = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + 
-                             "felixterminal" + wxFILE_SEP_PATH + name + ".cfg";
+        cfg.name = name;
         
-        wxTextFile file(configPath);
-        if (file.Exists()) {
-            file.Open();
-            for (size_t i = 0; i < file.GetLineCount(); i++) {
-                wxString line = file[i];
-                if (line.empty() || line[0] == '#') continue;
-                
-                wxString key = line.BeforeFirst('=');
-                wxString val = line.AfterFirst('=');
-                
-                if (key == "connType") cfg.connType = wxAtoi(val);
-                else if (key == "localShell") cfg.localShell = val;
-                else if (key == "telnetHost") cfg.telnetHost = val;
-                else if (key == "telnetPort") cfg.telnetPort = wxAtoi(val);
-                else if (key == "telnetTType") cfg.telnetTType = val;
-                else if (key == "telnetRaw") cfg.telnetRaw = (val == "1");
-                else if (key == "telnetSSL") cfg.telnetSSL = (val == "1");
-                else if (key == "serialPort") cfg.serialPort = val;
-                else if (key == "serialBaud") cfg.serialBaud = wxAtoi(val);
-                else if (key == "sshUser") cfg.sshUser = val;
-                else if (key == "sshHost") cfg.sshHost = val;
-                else if (key == "sshPort") cfg.sshPort = wxAtoi(val);
-                else if (key == "sshAuthMethod") cfg.sshAuthMethod = wxAtoi(val);
-                else if (key == "sshKeyPath") cfg.sshKeyPath = val;
-                else if (key == "sshKnownHosts") cfg.sshKnownHosts = val;
-                else if (key == "sshX11") cfg.sshX11 = (val == "1");
-                else if (key == "sshCommand") cfg.sshCommand = val;
-                else if (key.StartsWith("localPF_")) cfg.localPF.push_back(val);
-                else if (key.StartsWith("remotePF_")) cfg.remotePF.push_back(val);
-                else if (key.StartsWith("socks_")) cfg.socks.push_back(val);
-                else if (key == "webServerEnabled") cfg.webServerEnabled = (val == "1");
-                else if (key == "webServerAddr") cfg.webServerAddr = val;
-                else if (key == "webServerPort") cfg.webServerPort = wxAtoi(val);
-                else if (key == "webRootDir") cfg.webRootDir = val;
+        wxRegKey regKey(wxRegKey::HKEY_CURRENT_USER, "Software\\FelixTerminal\\Sessions\\" + name);
+        if (!regKey.Exists()) return cfg;  // Return empty config if key doesn't exist
+        
+        long lVal;
+        
+        if (regKey.QueryValue("connType", &lVal)) cfg.connType = lVal;
+        
+        wxString sVal;
+        if (regKey.QueryValue("localShell", sVal)) cfg.localShell = sVal;
+        
+        if (regKey.QueryValue("telnetHost", sVal)) cfg.telnetHost = sVal;
+        if (regKey.QueryValue("telnetPort", &lVal)) cfg.telnetPort = lVal;
+        if (regKey.QueryValue("telnetTType", sVal)) cfg.telnetTType = sVal;
+        if (regKey.QueryValue("telnetRaw", &lVal)) cfg.telnetRaw = (lVal != 0);
+        if (regKey.QueryValue("telnetSSL", &lVal)) cfg.telnetSSL = (lVal != 0);
+        
+        if (regKey.QueryValue("serialPort", sVal)) cfg.serialPort = sVal;
+        if (regKey.QueryValue("serialBaud", &lVal)) cfg.serialBaud = lVal;
+        
+        if (regKey.QueryValue("sshUser", sVal)) cfg.sshUser = sVal;
+        if (regKey.QueryValue("sshHost", sVal)) cfg.sshHost = sVal;
+        if (regKey.QueryValue("sshPort", &lVal)) cfg.sshPort = lVal;
+        if (regKey.QueryValue("sshAuthMethod", &lVal)) cfg.sshAuthMethod = lVal;
+        if (regKey.QueryValue("sshKeyPath", sVal)) cfg.sshKeyPath = sVal;
+        if (regKey.QueryValue("sshKnownHosts", sVal)) cfg.sshKnownHosts = sVal;
+        if (regKey.QueryValue("sshX11", &lVal)) cfg.sshX11 = (lVal != 0);
+        if (regKey.QueryValue("sshCommand", sVal)) cfg.sshCommand = sVal;
+        
+        // Parse port forwards and SOCKS from pipe-delimited strings
+        if (regKey.QueryValue("localPF", sVal)) {
+            wxArrayString parts = wxSplit(sVal, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.localPF.push_back(part);
             }
-            file.Close();
         }
+        if (regKey.QueryValue("remotePF", sVal)) {
+            wxArrayString parts = wxSplit(sVal, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.remotePF.push_back(part);
+            }
+        }
+        if (regKey.QueryValue("socks", sVal)) {
+            wxArrayString parts = wxSplit(sVal, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.socks.push_back(part);
+            }
+        }
+        
+        if (regKey.QueryValue("webServerEnabled", &lVal)) cfg.webServerEnabled = (lVal != 0);
+        if (regKey.QueryValue("webServerAddr", sVal)) cfg.webServerAddr = sVal;
+        if (regKey.QueryValue("webServerPort", &lVal)) cfg.webServerPort = lVal;
+        if (regKey.QueryValue("webRootDir", sVal)) cfg.webRootDir = sVal;
+        
         return cfg;
     }
 
     void SaveSessionConfig(const SessionConfig &cfg) {
-        wxString configPath = wxStandardPaths::Get().GetUserConfigDir() + wxFILE_SEP_PATH + 
-                             "felixterminal" + wxFILE_SEP_PATH + cfg.name + ".cfg";
+        wxRegKey regKey(wxRegKey::HKEY_CURRENT_USER, "Software\\FelixTerminal\\Sessions\\" + cfg.name);
+        if (!regKey.Exists()) regKey.Create();
         
-        wxTextFile file(configPath);
-        if (file.Exists()) file.Open();
-        else file.Create();
+        regKey.SetValue("connType", (long)cfg.connType);
+        regKey.SetValue("localShell", cfg.localShell);
         
-        file.Clear();
-        file.AddLine("# Felix Terminal Session Config");
-        file.AddLine(wxString::Format("connType=%d", cfg.connType));
-        file.AddLine("localShell=" + cfg.localShell);
+        regKey.SetValue("telnetHost", cfg.telnetHost);
+        regKey.SetValue("telnetPort", (long)cfg.telnetPort);
+        regKey.SetValue("telnetTType", cfg.telnetTType);
+        regKey.SetValue("telnetRaw", cfg.telnetRaw ? 1L : 0L);
+        regKey.SetValue("telnetSSL", cfg.telnetSSL ? 1L : 0L);
         
-        file.AddLine("telnetHost=" + cfg.telnetHost);
-        file.AddLine(wxString::Format("telnetPort=%d", cfg.telnetPort));
-        file.AddLine("telnetTType=" + cfg.telnetTType);
-        file.AddLine(wxString::Format("telnetRaw=%d", cfg.telnetRaw ? 1 : 0));
-        file.AddLine(wxString::Format("telnetSSL=%d", cfg.telnetSSL ? 1 : 0));
+        regKey.SetValue("serialPort", cfg.serialPort);
+        regKey.SetValue("serialBaud", (long)cfg.serialBaud);
         
-        file.AddLine("serialPort=" + cfg.serialPort);
-        file.AddLine(wxString::Format("serialBaud=%d", cfg.serialBaud));
+        regKey.SetValue("sshUser", cfg.sshUser);
+        regKey.SetValue("sshHost", cfg.sshHost);
+        regKey.SetValue("sshPort", (long)cfg.sshPort);
+        regKey.SetValue("sshAuthMethod", (long)cfg.sshAuthMethod);
+        regKey.SetValue("sshKeyPath", cfg.sshKeyPath);
+        regKey.SetValue("sshKnownHosts", cfg.sshKnownHosts);
+        regKey.SetValue("sshX11", cfg.sshX11 ? 1L : 0L);
+        regKey.SetValue("sshCommand", cfg.sshCommand);
         
-        file.AddLine("sshUser=" + cfg.sshUser);
-        file.AddLine("sshHost=" + cfg.sshHost);
-        file.AddLine(wxString::Format("sshPort=%d", cfg.sshPort));
-        file.AddLine(wxString::Format("sshAuthMethod=%d", cfg.sshAuthMethod));
-        file.AddLine("sshKeyPath=" + cfg.sshKeyPath);
-        file.AddLine("sshKnownHosts=" + cfg.sshKnownHosts);
-        file.AddLine(wxString::Format("sshX11=%d", cfg.sshX11 ? 1 : 0));
-        file.AddLine("sshCommand=" + cfg.sshCommand);
-        
+        // Store port forwards and SOCKS as concatenated strings
+        wxString localPFStr, remotePFStr, socksStr;
         for (size_t i = 0; i < cfg.localPF.size(); i++) {
-            file.AddLine(wxString::Format("localPF_%zu=%s", i, cfg.localPF[i]));
+            if (i > 0) localPFStr += "|";
+            localPFStr += cfg.localPF[i];
         }
         for (size_t i = 0; i < cfg.remotePF.size(); i++) {
-            file.AddLine(wxString::Format("remotePF_%zu=%s", i, cfg.remotePF[i]));
+            if (i > 0) remotePFStr += "|";
+            remotePFStr += cfg.remotePF[i];
         }
         for (size_t i = 0; i < cfg.socks.size(); i++) {
-            file.AddLine(wxString::Format("socks_%zu=%s", i, cfg.socks[i]));
+            if (i > 0) socksStr += "|";
+            socksStr += cfg.socks[i];
         }
         
-        file.AddLine(wxString::Format("webServerEnabled=%d", cfg.webServerEnabled ? 1 : 0));
-        file.AddLine("webServerAddr=" + cfg.webServerAddr);
-        file.AddLine(wxString::Format("webServerPort=%d", cfg.webServerPort));
-        file.AddLine("webRootDir=" + cfg.webRootDir);
+        if (!localPFStr.empty()) regKey.SetValue("localPF", localPFStr);
+        if (!remotePFStr.empty()) regKey.SetValue("remotePF", remotePFStr);
+        if (!socksStr.empty()) regKey.SetValue("socks", socksStr);
         
-        file.Write();
-        file.Close();
+        regKey.SetValue("webServerEnabled", cfg.webServerEnabled ? 1L : 0L);
+        regKey.SetValue("webServerAddr", cfg.webServerAddr);
+        regKey.SetValue("webServerPort", (long)cfg.webServerPort);
+        regKey.SetValue("webRootDir", cfg.webRootDir);
     }
 
     void LoadSessionToUI(const SessionConfig &cfg) {
