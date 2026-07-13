@@ -20,7 +20,6 @@
 //   cfg.key_path = "/home/alice/.ssh/id_ed25519";  // "" = try agent then password
 //   cfg.password = "";
 //   cfg.command = "";  // "" = interactive shell, else specify command like "/bin/sh"
-//   cfg.remote_forwards.push_back("8080:localhost:3000");  // optional -R forwarding
 //
 //   if (!ssh_connect(cfg, &term))  // blocks until authenticated
 //       return 1;
@@ -41,6 +40,7 @@
 #include "terminal.h"
 #include <string>
 #include <functional>
+#include <vector>
 
 struct SshConfig {
     std::string host;
@@ -73,21 +73,30 @@ struct SshConfig {
     std::function<std::string(const char *prompt)> prompt_host_key;
     bool x11_forward = true;  // forward $DISPLAY to the remote session
     
+    // ========================================================================
+    // COMMAND AND PORT FORWARDING ADDITIONS
+    // ========================================================================
+    
     // Command to execute on the remote server.
     // If empty (default), an interactive shell is started.
     // Examples: "/bin/bash", "/bin/sh", "python3", "echo hello"
+    // When a command is specified, PTY is still requested (can be disabled
+    // by servers), but the remote side executes your command in the shell.
     std::string command;
     
     // Remote port forwarding (ssh -R syntax)
-    // Format: "listen_port:bind_address:forward_port"
+    // Format: "local_listen_port:forward_host:forward_port"
     // Example: "8080:localhost:3000"
-    // The remote SSH server listens on listen_port and forwards
-    // connections to your local machine's bind_address:forward_port.
+    // The remote SSH server listens on local_listen_port and forwards
+    // connections to your local machine's forward_host:forward_port.
     std::vector<std::string> remote_forwards;
     
     // Local port forwarding (ssh -L syntax)
-    // Format: "listen_port:remote_host:remote_port"
+    // Format: "local_listen_port:remote_host:remote_port"
     // Example: "3306:db.internal:3306"
+    // Your local machine listens on local_listen_port and forwards
+    // connections to the remote server's remote_host:remote_port.
+    // Note: Requires background thread support to relay connections.
     std::vector<std::string> local_forwards;
 };
 
@@ -141,9 +150,5 @@ void ssh_session_unlock();
 // Call in child process before any SSH/SFTP operations.
 // Cleans up inherited libssh2 pointers and reinitializes for the child.
 void ssh_reset_after_fork();
-
-// Get remote forwards specs configured at connection time
-// Format: "listen_port:bind_addr:forward_port"
-const std::vector<std::string>& ssh_get_remote_forwards();
 
 #endif // USESSH

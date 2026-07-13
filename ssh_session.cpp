@@ -51,6 +51,7 @@ static LIBSSH2_CHANNEL *s_channel  = nullptr;
 static int              s_sock     = -1;   // TCP socket fd
 static bool             s_active   = false;
 static bool             s_have_pty = false;
+static std::vector<std::string> s_remote_forwards;  // Store remote forwards to register later
 
 // All libssh2 calls on this session must hold this mutex.
 // The SFTP transfer thread acquires it for the duration of a transfer;
@@ -1039,11 +1040,8 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
 #endif
 
     // Setup remote port forwarding (-R)
-    // The remote_forwards are just specs that get passed to pf_add_remote
-    // which already handles the actual libssh2 relay logic
-    for (const auto &fwd_spec : cfg.remote_forwards) {
-        SDL_Log("[SSH] queuing remote forward: %s\n", fwd_spec.c_str());
-    }
+    // Store for later retrieval via ssh_get_remote_forwards()
+    s_remote_forwards = cfg.remote_forwards;
 
     // Start shell or execute command
     if (!cfg.command.empty()) {
@@ -1210,11 +1208,17 @@ void ssh_reset_after_fork() {
     s_sock    = -1;
     s_active  = false;
     s_have_pty = false;
+    s_remote_forwards.clear();
     
     // Re-initialize libssh2 for the child process
     if (libssh2_init(0) != 0) {
         SDL_Log("[SSH] libssh2_init (post-fork) failed\n");
     }
+}
+
+// Get remote forwards specs that were configured at connection time
+const std::vector<std::string>& ssh_get_remote_forwards() {
+    return s_remote_forwards;
 }
 
 #endif // USESSH

@@ -608,6 +608,7 @@ bool pf_add_remote(int remote_port, const std::string &local_host, int local_por
     int bound_port = remote_port;
     LIBSSH2_LISTENER *listener = nullptr;
     int attempts = 0;
+    int last_errno = 0;
     while (attempts++ < 200) {
         listener = libssh2_channel_forward_listen_ex(
                        ssh_get_session(),
@@ -616,7 +617,12 @@ bool pf_add_remote(int remote_port, const std::string &local_host, int local_por
                        &bound_port,
                        16);
         if (listener) break;
-        if (libssh2_session_last_errno(ssh_get_session()) != LIBSSH2_ERROR_EAGAIN) break;
+        
+        last_errno = libssh2_session_last_errno(ssh_get_session());
+        // Retry on EAGAIN or other transient errors in early attempts
+        // (first ~50 attempts = ~250ms of retrying even on non-EAGAIN errors)
+        if (last_errno != LIBSSH2_ERROR_EAGAIN && attempts > 50) break;
+        
         ssh_session_unlock();
         SDL_Delay(5);
         ssh_session_lock();

@@ -210,8 +210,10 @@ int main(int argc, char **argv) {
         }
         if ((strcmp(arg, "-R") == 0 || strcmp(arg, "--forward-remote") == 0) && i + 1 < argc) {
             int lp, rp; std::string rh;
-            if (pf_parse_spec(argv[++i], &lp, &rh, &rp))
+            if (pf_parse_spec(argv[++i], &lp, &rh, &rp)) {
+                SDL_Log("[DEBUG] -R spec parsed: lp=%d rh=%s rp=%d\n", lp, rh.c_str(), rp);
                 pf_remotes_pending.push_back({lp, rh, rp});
+            }
             else
                 SDL_Log("Bad -R spec (expected remote_port:local_host:local_port): %s\n", argv[i]);
             continue;
@@ -266,7 +268,7 @@ int main(int argc, char **argv) {
             SDL_Log("  --ssh-password <pass>       Password auth (prefer agent or key)\n");
             SDL_Log("  --ssh-known-hosts <path>    Known hosts file (default: ~/.ssh/known_hosts)\n");
             SDL_Log("  --no-x11                    Disable X11 forwarding\n");
-            SDL_Log("  -c <command>                Execute command on remote (alias: --ssh-command)\n");
+            SDL_Log("  -c <command>                Execute remote command (alias: --ssh-command)\n");
             SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
             SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
             SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
@@ -441,6 +443,8 @@ int main(int argc, char **argv) {
     bool          ssh_conn_ok = false;
     std::atomic<bool> ssh_thread_done{false};
     std::atomic<bool> ssh_abort{false};  // set on quit to unblock prompt callback
+    bool          ssh_setup_deferred_forwards = false;  // apply -R/-D after session stabilizes
+    uint32_t      ssh_setup_forward_delay = 0;  // frames to wait before applying -R/-D
 
     // Helper: post a prompt request from the main thread to itself (SETUP phase).
     // SETUP prompts are driven directly by the main loop — no background thread yet.
@@ -510,13 +514,6 @@ int main(int argc, char **argv) {
                     SDL_Delay(10);
                 }
             };
-
-            // Populate remote forwards from command-line -R args
-            for (auto &p : pf_remotes_pending) {
-                char fwd_spec[128];
-                snprintf(fwd_spec, sizeof(fwd_spec), "%d:%s:%d", p.lp, p.rh.c_str(), p.rp);
-                ssh_cfg.remote_forwards.push_back(fwd_spec);
-            }
 
             ssh_thread = std::thread([&]() {
                 ssh_conn_ok = ssh_connect(ssh_cfg, &term);
@@ -816,12 +813,14 @@ int main(int argc, char **argv) {
                     sftp_init();
                     ssh_phase = SshPhase::ACTIVE;
                     SDL_StartTextInput();
+                    // Defer port forward setup to next frame to ensure session is fully initialized
+                    // (sftp_init may have temporarily set blocking mode)
                     for (auto &p : pf_locals_pending)
                         pf_add_local(p.lp, p.rh, p.rp);
-                    for (auto &p : pf_remotes_pending)
-                        pf_add_remote(p.lp, p.rh, p.rp);
-                    for (int port : pf_socks_pending)
-                        pf_add_socks(port);
+                    // Schedule remote/socks for later with a delay to let libssh2 stabilize
+                    ssh_setup_deferred_forwards = true;
+                    ssh_setup_forward_delay = 100;  // ~100ms at 60fps
+                    needs_render = true;
                 } else {
                     ssh_phase = SshPhase::FAILED;
                     const char *msg = "\r\nConnection failed. Press any key to close.\r\n";
@@ -872,6 +871,28 @@ int main(int argc, char **argv) {
             }
             (void)ssh_ready;
 #endif
+            
+            // Apply deferred -R/-D port forwards after SSH session has stabilized
+#ifdef USESSH
+            if (ssh_setup_deferred_forwards && ssh_phase == SshPhase::ACTIVE) {
+                if (ssh_setup_forward_delay > 0) {
+                    ssh_setup_forward_delay--;
+                } else {
+                    for (auto &p : pf_remotes_pending) {
+                        SDL_Log("[DEBUG] pf_add_remote (deferred): %d -> %s:%d\n", p.lp, p.rh.c_str(), p.rp);
+                        pf_add_remote(p.lp, p.rh, p.rp);
+                    }
+                    for (int port : pf_socks_pending) {
+                        SDL_Log("[DEBUG] pf_add_socks (deferred): %d\n", port);
+                        pf_add_socks(port);
+                    }
+                    pf_remotes_pending.clear();
+                    pf_socks_pending.clear();
+                    ssh_setup_deferred_forwards = false;
+                }
+            }
+#endif
+            
             if (got_data) {
                 needs_render = true;
                 bool new_lines = (term.sb_count != old_sb_count);
