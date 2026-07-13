@@ -319,6 +319,9 @@ int main(int argc, char **argv) {
             SDL_Log("  -L local_port:remote_host:remote_port   Local port forward\n");
             SDL_Log("  -R remote_port:local_host:local_port    Remote port forward\n");
             SDL_Log("  -D local_port                           SOCKS5 dynamic port forward\n");
+            SDL_Log("\nWeb Server Options:\n");
+            SDL_Log("  --webserver [listenaddress:port]        Listen address and port are optional but if listen address, port must be specified\n");
+            SDL_Log("  --web-root <directory>                  Root directory to serve (local mode only, default is /)\n");
 #endif
             SDL_Log("\nKeyboard shortcuts:\n");
             SDL_Log("  F2                          SFTP upload browser (SSH sessions only)\n");
@@ -330,10 +333,6 @@ int main(int argc, char **argv) {
             SDL_Log("  F8                          SSH Key Manager (additional function when in SSH mode)\n");
             SDL_Log("  F9                          Web Server (serves on http://localhost:53716 by default)\n");
             SDL_Log("                                  Works locally and with SSH supporting SFTP\n");
-#ifdef USESSH
-            SDL_Log("  --web-server [addr:port]    Start web server at boot (e.g. 127.0.0.1:8080 or 0.0.0.0:3000)\n");
-            SDL_Log("  --web-root <dir>            Directory to serve (local mode only)\n");
-#endif
             SDL_Log("  F11                         Toggle full screen\n");
             SDL_Log("  Ctrl+Scroll                 Resize font\n");
             SDL_Log("  Shift+PageUp/Down           Scroll scrollback buffer\n");
