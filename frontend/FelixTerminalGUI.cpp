@@ -844,9 +844,9 @@ private:
             socksStr += cfg.socks[i];
         }
         
-        if (!localPFStr.empty()) regKey.SetValue("localPF", localPFStr);
-        if (!remotePFStr.empty()) regKey.SetValue("remotePF", remotePFStr);
-        if (!socksStr.empty()) regKey.SetValue("socks", socksStr);
+        regKey.SetValue("localPF", localPFStr);
+        regKey.SetValue("remotePF", remotePFStr);
+        regKey.SetValue("socks", socksStr);
         
         regKey.SetValue("webServerEnabled", cfg.webServerEnabled ? 1L : 0L);
         regKey.SetValue("webServerAddr", cfg.webServerAddr);

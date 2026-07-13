@@ -522,7 +522,7 @@ frontend-linux: $(FRONTEND_LINUX)
 $(FRONTEND_LINUX): frontend/FelixTerminalGUI.cpp
 	@mkdir -p $(BUILD_DIR_LINUX)
 	@echo "Compiling FelixTerminalGUI (Linux)..."
-	$(CXX_LINUX) $(CXXFLAGS_FRONTEND_LINUX) $< -o $@ $(LDFLAGS_FRONTEND_LINUX)
+	$(CXX_LINUX) $(CXXFLAGS_FRONTEND_LINUX) -mwindows $< -o $@ $(LDFLAGS_FRONTEND_LINUX)
 
 frontend-windows: $(FRONTEND_WIN)
 	@echo "✓ FelixTerminalGUI.exe (Windows) built successfully"
@@ -531,17 +531,16 @@ frontend-windows: $(FRONTEND_WIN)
 $(FRONTEND_WIN): frontend/FelixTerminalGUI.cpp
 	@mkdir -p $(BUILD_DIR_WIN)
 	@echo "Compiling FelixTerminalGUI (Windows)..."
-	$(CXX_WIN) $(CXXFLAGS_FRONTEND_WIN) $< -o $@ $(LDFLAGS_FRONTEND_WIN)
+	$(CXX_WIN) $(CXXFLAGS_FRONTEND_WIN) -mwindows $< -o $@ $(LDFLAGS_FRONTEND_WIN)
 
 frontend-windows-dlls: $(FRONTEND_WIN)
-	@echo "Collecting Windows DLLs for FelixTerminalGUI (64-bit, wxWidgets 3.0 only)..."
+	@echo "Collecting Windows DLLs for FelixTerminalGUI (64-bit)..."
 	@if [ -f collect_dlls.sh ]; then \
 		./collect_dlls.sh $(FRONTEND_WIN) /usr/x86_64-w64-mingw32/sys-root/mingw/bin $(BUILD_DIR_WIN); \
 	else \
-		echo "collect_dlls.sh not found, copying DLLs manually..."; \
+		echo "Error: collect_dlls.sh not found in root directory"; \
+		exit 1; \
 	fi
-	@echo "Copying wxWidgets 3.0 DLLs (x86_64 only)..."
-	@find /usr/x86_64-w64-mingw32/sys-root/mingw/bin/ -name "wx*30u*.dll" -type f -exec cp -v {} $(BUILD_DIR_WIN)/ \; 2>/dev/null || true
 	@echo "✓ DLLs collected to $(BUILD_DIR_WIN)"
 
 frontend-all: frontend-windows frontend-windows-dlls
