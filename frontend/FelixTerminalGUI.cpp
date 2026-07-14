@@ -8,9 +8,11 @@
 #include <wx/dir.h>
 #include <wx/filefn.h>
 #include <wx/fileconf.h>
+#include <wx/mstream.h>
 #ifdef _WIN32
 #include <wx/msw/registry.h>
 #endif
+#include "favicon.h"
 #include <sstream>
 #include <vector>
 
@@ -61,6 +63,16 @@ public:
     FelixTerminalFrame() : wxFrame(nullptr, wxID_ANY, "Felix Terminal", 
                                    wxDefaultPosition, wxSize(950, 650)) {
         
+        // Set the icon from favicon data
+        wxMemoryInputStream istream(favicon_ico, favicon_ico_len);
+        wxImage img(istream, wxBITMAP_TYPE_ICO);
+        if (img.IsOk()) {
+            wxBitmap bmp(img);
+            wxIcon icon;
+            icon.CopyFromBitmap(bmp);
+            SetIcon(icon);
+        }
+        
         wxPanel *mainPanel = new wxPanel(this);
         wxBoxSizer *mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
@@ -71,6 +83,7 @@ public:
         m_sessionList = new wxListCtrl(mainPanel, wxID_ANY, wxDefaultPosition, wxSize(200, 400), wxLC_REPORT | wxLC_SINGLE_SEL);
         m_sessionList->AppendColumn("Session");
         m_sessionList->SetColumnWidth(0, 180);
+        m_sessionList->Bind(wxEVT_LIST_ITEM_ACTIVATED, &FelixTerminalFrame::OnLoadSession, this);
         leftSizer->Add(m_sessionList, 1, wxEXPAND | wxALL, 8);
 
         wxBoxSizer *btnSizer = new wxBoxSizer(wxVERTICAL);
@@ -160,12 +173,12 @@ private:
 
     // Connection
     wxChoice *m_connTypeChoice;
-    wxTextCtrl *m_localShellCtrl;
+    wxChoice *m_localShellChoice;
+    wxTextCtrl *m_localShellCustomCtrl;
     
     // Telnet
     wxTextCtrl *m_telnetHostCtrl;
     wxSpinCtrl *m_telnetPortSpin;
-    wxTextCtrl *m_telnetTTypeCtrl;
     wxCheckBox *m_telnetRawCheck;
     wxCheckBox *m_telnetSSLCheck;
     
@@ -180,7 +193,6 @@ private:
     wxChoice *m_sshAuthChoice;
     wxTextCtrl *m_sshKeyCtrl;
     wxButton *m_browseSshKeyBtn;
-    wxTextCtrl *m_sshKnownHostsCtrl;
     wxCheckBox *m_sshX11Check;
     wxTextCtrl *m_sshCommandCtrl;  // SSH command to execute
 
@@ -232,11 +244,35 @@ private:
         wxBoxSizer *shellSizer = new wxBoxSizer(wxHORIZONTAL);
         shellSizer->Add(new wxStaticText(panel, wxID_ANY, "Shell:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         
-        m_localShellCtrl = new wxTextCtrl(panel, wxID_ANY, "/bin/bash");
-        shellSizer->Add(m_localShellCtrl, 1, wxEXPAND);
-        shellBox->Add(shellSizer, 0, wxEXPAND | wxALL, 8);
-        sizer->Add(shellBox, 0, wxEXPAND | wxALL, 8);
+        m_localShellChoice = new wxChoice(panel, wxID_ANY);
         
+        #ifdef __WXMSW__
+        // Windows shells
+        m_localShellChoice->Append("cmd (Default)");
+        m_localShellChoice->Append("PowerShell");
+        m_localShellChoice->Append("Custom");
+        m_localShellChoice->SetSelection(0);
+        #else
+        // Linux/Unix shells
+        m_localShellChoice->Append("/bin/bash (Default)");
+        m_localShellChoice->Append("/bin/sh");
+        m_localShellChoice->Append("/bin/zsh");
+        m_localShellChoice->Append("Custom");
+        m_localShellChoice->SetSelection(0);
+        #endif
+        
+        m_localShellChoice->Bind(wxEVT_CHOICE, &FelixTerminalFrame::OnLocalShellChange, this);
+        shellSizer->Add(m_localShellChoice, 1, wxEXPAND);
+        shellBox->Add(shellSizer, 0, wxEXPAND | wxALL, 8);
+        
+        wxBoxSizer *customSizer = new wxBoxSizer(wxHORIZONTAL);
+        customSizer->Add(new wxStaticText(panel, wxID_ANY, "Custom:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        m_localShellCustomCtrl = new wxTextCtrl(panel, wxID_ANY, "");
+        m_localShellCustomCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
+        customSizer->Add(m_localShellCustomCtrl, 1, wxEXPAND);
+        shellBox->Add(customSizer, 0, wxEXPAND | wxALL, 8);
+        
+        sizer->Add(shellBox, 0, wxEXPAND | wxALL, 8);
         panel->SetSizer(sizer);
         notebook->AddPage(panel, "Local Shell");
     }
@@ -250,20 +286,16 @@ private:
         wxBoxSizer *hostSizer = new wxBoxSizer(wxHORIZONTAL);
         hostSizer->Add(new wxStaticText(panel, wxID_ANY, "Host:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_telnetHostCtrl = new wxTextCtrl(panel, wxID_ANY, "localhost");
+        m_telnetHostCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
         hostSizer->Add(m_telnetHostCtrl, 1, wxEXPAND);
         telnetBox->Add(hostSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *portSizer = new wxBoxSizer(wxHORIZONTAL);
         portSizer->Add(new wxStaticText(panel, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_telnetPortSpin = new wxSpinCtrl(panel, wxID_ANY, "23", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 65535, 23);
+        m_telnetPortSpin->Bind(wxEVT_SPINCTRL, &FelixTerminalFrame::OnUpdatePreview, this);
         portSizer->Add(m_telnetPortSpin, 1, wxEXPAND);
         telnetBox->Add(portSizer, 0, wxEXPAND | wxALL, 8);
-        
-        wxBoxSizer *ttypeSizer = new wxBoxSizer(wxHORIZONTAL);
-        ttypeSizer->Add(new wxStaticText(panel, wxID_ANY, "Terminal Type:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_telnetTTypeCtrl = new wxTextCtrl(panel, wxID_ANY, "xterm-256color");
-        ttypeSizer->Add(m_telnetTTypeCtrl, 1, wxEXPAND);
-        telnetBox->Add(ttypeSizer, 0, wxEXPAND | wxALL, 8);
         
         m_telnetRawCheck = new wxCheckBox(panel, wxID_ANY, "Raw Mode");
         m_telnetRawCheck->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnUpdatePreview, this);
@@ -286,7 +318,15 @@ private:
         
         wxBoxSizer *portSizer = new wxBoxSizer(wxHORIZONTAL);
         portSizer->Add(new wxStaticText(panel, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_serialPortCtrl = new wxTextCtrl(panel, wxID_ANY, "COM1");
+        
+        #ifdef __WXMSW__
+        wxString defaultPort = "COM1";
+        #else
+        wxString defaultPort = "/dev/ttyS0";
+        #endif
+        
+        m_serialPortCtrl = new wxTextCtrl(panel, wxID_ANY, defaultPort);
+        m_serialPortCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
         portSizer->Add(m_serialPortCtrl, 1, wxEXPAND);
         serialBox->Add(portSizer, 0, wxEXPAND | wxALL, 8);
         
@@ -302,6 +342,7 @@ private:
         m_serialBaudChoice->Append("57600");
         m_serialBaudChoice->Append("115200");
         m_serialBaudChoice->SetSelection(3);  // Default 9600
+        m_serialBaudChoice->Bind(wxEVT_CHOICE, &FelixTerminalFrame::OnUpdatePreview, this);
         baudSizer->Add(m_serialBaudChoice, 1, wxEXPAND);
         serialBox->Add(baudSizer, 0, wxEXPAND | wxALL, 8);
         
@@ -319,19 +360,22 @@ private:
         
         wxBoxSizer *userSizer = new wxBoxSizer(wxHORIZONTAL);
         userSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "User:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshUserCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "root");
+        m_sshUserCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, wxGetenv("USER"));
+        m_sshUserCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
         userSizer->Add(m_sshUserCtrl, 1, wxEXPAND);
         sshBox->Add(userSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *hostSizer = new wxBoxSizer(wxHORIZONTAL);
         hostSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Host:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_sshHostCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "localhost");
+        m_sshHostCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
         hostSizer->Add(m_sshHostCtrl, 1, wxEXPAND);
         sshBox->Add(hostSizer, 0, wxEXPAND | wxALL, 8);
         
         wxBoxSizer *portSizer = new wxBoxSizer(wxHORIZONTAL);
         portSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Port:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_sshPortSpin = new wxSpinCtrl(scrollPanel, wxID_ANY, "22", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 65535, 22);
+        m_sshPortSpin->Bind(wxEVT_SPINCTRL, &FelixTerminalFrame::OnUpdatePreview, this);
         portSizer->Add(m_sshPortSpin, 1, wxEXPAND);
         sshBox->Add(portSizer, 0, wxEXPAND | wxALL, 8);
         
@@ -355,12 +399,6 @@ private:
         keySizer->Add(m_browseSshKeyBtn, 0, wxEXPAND);
         sshBox->Add(keySizer, 0, wxEXPAND | wxALL, 8);
         
-        wxBoxSizer *knownHostsSizer = new wxBoxSizer(wxHORIZONTAL);
-        knownHostsSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Known Hosts:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_sshKnownHostsCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "");
-        knownHostsSizer->Add(m_sshKnownHostsCtrl, 1, wxEXPAND);
-        sshBox->Add(knownHostsSizer, 0, wxEXPAND | wxALL, 8);
-        
         m_sshX11Check = new wxCheckBox(scrollPanel, wxID_ANY, "X11 Forwarding");
         m_sshX11Check->SetValue(true);
         m_sshX11Check->Bind(wxEVT_CHECKBOX, &FelixTerminalFrame::OnUpdatePreview, this);
@@ -369,6 +407,7 @@ private:
         wxBoxSizer *cmdSizer = new wxBoxSizer(wxHORIZONTAL);
         cmdSizer->Add(new wxStaticText(scrollPanel, wxID_ANY, "Command:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         m_sshCommandCtrl = new wxTextCtrl(scrollPanel, wxID_ANY, "");
+        m_sshCommandCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
         cmdSizer->Add(m_sshCommandCtrl, 1, wxEXPAND);
         sshBox->Add(cmdSizer, 0, wxEXPAND | wxALL, 8);
         
@@ -477,6 +516,13 @@ private:
         UpdatePreview();
     }
 
+    void OnLocalShellChange(wxCommandEvent &event) {
+        int selection = m_localShellChoice->GetSelection();
+        bool isCustom = (selection == m_localShellChoice->GetCount() - 1);
+        m_localShellCustomCtrl->Enable(isCustom);
+        UpdatePreview();
+    }
+
     void OnSSHAuthChange(wxCommandEvent &event) {
         int selection = m_sshAuthChoice->GetSelection();
         m_sshKeyCtrl->Enable(selection == 1);  // Enable key path only for public key auth
@@ -489,7 +535,10 @@ private:
     }
 
     void OnBrowseSshKey(wxCommandEvent &event) {
-        wxFileDialog dlg(this, "Select SSH Key", "", "", "All files (*)|*", wxFD_OPEN);
+        wxString sshDir = wxGetHomeDir() + "/.ssh";
+        wxFileDialog dlg(this, "Select SSH private key file", sshDir, "", 
+                        "SSH Keys (id_*)|id_*|All files (*.*)|*.*|All files (*)|*", 
+                        wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         if (dlg.ShowModal() == wxID_OK) {
             m_sshKeyCtrl->SetValue(dlg.GetPath());
             UpdatePreview();
@@ -574,16 +623,35 @@ private:
         int connType = m_connTypeChoice->GetSelection();
         
         switch (connType) {
-            case 0: // Local Shell
-                cmd += "--local " + m_localShellCtrl->GetValue();
+            case 0: { // Local Shell
+                wxString shell;
+                int selection = m_localShellChoice->GetSelection();
+                if (selection == m_localShellChoice->GetCount() - 1) {
+                    // Custom option is the last one
+                    shell = m_localShellCustomCtrl->GetValue();
+                } else {
+                    // Extract the shell path from the choice string (everything before the space/paren)
+                    wxString choice = m_localShellChoice->GetStringSelection();
+                    int spacePos = choice.Find(' ');
+                    if (spacePos != wxNOT_FOUND) {
+                        shell = choice.Left(spacePos);
+                    } else {
+                        shell = choice;
+                    }
+                }
+                if (!shell.empty()) {
+                    cmd += "--local " + shell;
+                }
                 break;
+            }
             case 1: // Telnet
                 cmd += "--telnet " + m_telnetHostCtrl->GetValue() + ":" + wxString::Format("%d", m_telnetPortSpin->GetValue());
                 if (m_telnetRawCheck->GetValue()) cmd += " --raw";
                 if (m_telnetSSLCheck->GetValue()) cmd += " --ssl";
                 break;
             case 2: // Serial
-                cmd += "--serial " + m_serialPortCtrl->GetValue() + "," + m_serialBaudChoice->GetStringSelection();
+                cmd += "--serial " + m_serialPortCtrl->GetValue();
+                cmd += " --serial-baud " + m_serialBaudChoice->GetStringSelection();
                 break;
             case 3: // SSH
                 cmd += "--ssh " + m_sshUserCtrl->GetValue() + "@" + m_sshHostCtrl->GetValue() + ":" + wxString::Format("%d", m_sshPortSpin->GetValue());
@@ -623,11 +691,24 @@ private:
         SessionConfig cfg;
         cfg.name = name;
         cfg.connType = m_connTypeChoice->GetSelection();
-        cfg.localShell = m_localShellCtrl->GetValue();
+        
+        // Extract shell from choice
+        int selection = m_localShellChoice->GetSelection();
+        if (selection == m_localShellChoice->GetCount() - 1) {
+            // Custom option
+            cfg.localShell = m_localShellCustomCtrl->GetValue();
+        } else {
+            wxString choice = m_localShellChoice->GetStringSelection();
+            int spacePos = choice.Find(' ');
+            if (spacePos != wxNOT_FOUND) {
+                cfg.localShell = choice.Left(spacePos);
+            } else {
+                cfg.localShell = choice;
+            }
+        }
         
         cfg.telnetHost = m_telnetHostCtrl->GetValue();
         cfg.telnetPort = m_telnetPortSpin->GetValue();
-        cfg.telnetTType = m_telnetTTypeCtrl->GetValue();
         cfg.telnetRaw = m_telnetRawCheck->GetValue();
         cfg.telnetSSL = m_telnetSSLCheck->GetValue();
         
@@ -642,7 +723,6 @@ private:
         cfg.sshPort = m_sshPortSpin->GetValue();
         cfg.sshAuthMethod = m_sshAuthChoice->GetSelection();
         cfg.sshKeyPath = m_sshKeyCtrl->GetValue();
-        cfg.sshKnownHosts = m_sshKnownHostsCtrl->GetValue();
         cfg.sshX11 = m_sshX11Check->GetValue();
         cfg.sshCommand = m_sshCommandCtrl->GetValue();
         cfg.localPF = m_localPFEntries;
@@ -770,21 +850,27 @@ private:
         m_sessionNameCtrl->SetValue("New Session");
         m_connTypeChoice->SetSelection(0);
         
+        m_localShellChoice->SetSelection(0);
+        m_localShellCustomCtrl->SetValue("");
+        m_localShellCustomCtrl->Enable(false);
+        
         m_telnetHostCtrl->SetValue("localhost");
         m_telnetPortSpin->SetValue(23);
-        m_telnetTTypeCtrl->SetValue("xterm-256color");
         m_telnetRawCheck->SetValue(false);
         m_telnetSSLCheck->SetValue(false);
         
+        #ifdef __WXMSW__
         m_serialPortCtrl->SetValue("COM1");
+        #else
+        m_serialPortCtrl->SetValue("/dev/ttyS0");
+        #endif
         m_serialBaudChoice->SetSelection(3);
         
-        m_sshUserCtrl->SetValue("root");
+        m_sshUserCtrl->SetValue(wxGetenv("USER"));
         m_sshHostCtrl->SetValue("localhost");
         m_sshPortSpin->SetValue(22);
         m_sshAuthChoice->SetSelection(0);
         m_sshKeyCtrl->SetValue("");
-        m_sshKnownHostsCtrl->SetValue("");
         m_sshX11Check->SetValue(true);
         m_sshCommandCtrl->SetValue("");
         
@@ -1011,11 +1097,28 @@ private:
 
     void LoadSessionToUI(const SessionConfig &cfg) {
         m_connTypeChoice->SetSelection(cfg.connType);
-        m_localShellCtrl->SetValue(cfg.localShell);
+        
+        // Set local shell choice
+        bool found = false;
+        for (int i = 0; i < (int)m_localShellChoice->GetCount() - 1; i++) {
+            wxString choice = m_localShellChoice->GetString(i);
+            int spacePos = choice.Find(' ');
+            wxString shellPath = (spacePos != wxNOT_FOUND) ? choice.Left(spacePos) : choice;
+            if (shellPath == cfg.localShell) {
+                m_localShellChoice->SetSelection(i);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            // Custom shell
+            m_localShellChoice->SetSelection(m_localShellChoice->GetCount() - 1);
+            m_localShellCustomCtrl->SetValue(cfg.localShell);
+        }
+        m_localShellCustomCtrl->Enable(false);
         
         m_telnetHostCtrl->SetValue(cfg.telnetHost);
         m_telnetPortSpin->SetValue(cfg.telnetPort);
-        m_telnetTTypeCtrl->SetValue(cfg.telnetTType);
         m_telnetRawCheck->SetValue(cfg.telnetRaw);
         m_telnetSSLCheck->SetValue(cfg.telnetSSL);
         
@@ -1033,7 +1136,6 @@ private:
         m_sshPortSpin->SetValue(cfg.sshPort);
         m_sshAuthChoice->SetSelection(cfg.sshAuthMethod);
         m_sshKeyCtrl->SetValue(cfg.sshKeyPath);
-        m_sshKnownHostsCtrl->SetValue(cfg.sshKnownHosts);
         m_sshX11Check->SetValue(cfg.sshX11);
         m_sshCommandCtrl->SetValue(cfg.sshCommand);
         
@@ -1073,6 +1175,7 @@ private:
 class FelixApp : public wxApp {
 public:
     bool OnInit() override {
+        wxImage::AddHandler(new wxICOHandler());
         FelixTerminalFrame *frame = new FelixTerminalFrame();
         frame->Show();
         return true;
