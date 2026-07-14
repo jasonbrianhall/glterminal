@@ -3816,15 +3816,15 @@
             for (let i = 0; i < glob.length; i++) {
                 const char = glob[i];
                 if (char === '*') {
-                    regex += '[^/]*';
+                    regex += '.*';
                 } else if (char === '?') {
-                    regex += '[^/]';
+                    regex += '.';
                 } else {
                     regex += escapeRegex(char);
                 }
             }
             regex += '$';
-            return new RegExp(regex);
+            return new RegExp(regex, 'i');
         }
 
         async function downloadMultipleFiles(files, logger) {
@@ -4010,19 +4010,21 @@
                         addOutputLine('Usage: mget <pattern>');
                     } else {
                         const pattern = args.join(' ');
-                        const response = await fetch(currentPath, {
+                        const apiDir = currentPath.endsWith('/') ? currentPath : currentPath + '/';
+                        
+                        const response = await fetch('/api/listfiles', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ dir: currentPath })
+                            body: JSON.stringify({ dir: apiDir })
                         });
                         
                         if (response.ok) {
                             const data = await response.json();
                             const regex = globToRegex(pattern);
-                            const matchedFiles = data.entries
+                            const matchedFiles = (data.entries || [])
                                 .filter(e => e.type === 'file' && regex.test(e.name))
                                 .map(e => ({
-                                    path: currentPath.endsWith('/') ? currentPath + e.name : currentPath + '/' + e.name,
+                                    path: apiDir + e.name,
                                     name: e.name
                                 }));
                             
