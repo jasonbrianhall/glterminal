@@ -522,7 +522,7 @@ frontend-linux: $(FRONTEND_LINUX)
 $(FRONTEND_LINUX): frontend/FelixTerminalGUI.cpp
 	@mkdir -p $(BUILD_DIR_LINUX)
 	@echo "Compiling FelixTerminalGUI (Linux)..."
-	$(CXX_LINUX) $(CXXFLAGS_FRONTEND_LINUX) -mwindows $< -o $@ $(LDFLAGS_FRONTEND_LINUX)
+	$(CXX_LINUX) $(CXXFLAGS_FRONTEND_LINUX) $< -o $@ $(LDFLAGS_FRONTEND_LINUX)
 
 frontend-windows: $(FRONTEND_WIN)
 	@echo "✓ FelixTerminalGUI.exe (Windows) built successfully"

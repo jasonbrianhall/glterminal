@@ -1131,6 +1131,8 @@
                 <button id="slideshowBtn" class="slideshow-btn" style="display: none;">▶ Slideshow</button>
                 <button id="musicBtn" class="slideshow-btn" style="display: none;">♪ Play Music</button>
                 <button id="videoBtn" class="slideshow-btn" style="display: none;">▶ Play Video</button>
+                <button id="downloadBtn" class="slideshow-btn" style="display: none; background: #28a745;" title="Download selected files">⬇ Download</button>
+                <button id="selectAllBtn" class="slideshow-btn" style="display: none; background: #6c757d;" title="Select/Deselect all">☑ Select All</button>
                 <label class="new-window-toggle">
                     <input type="checkbox" id="showHiddenToggle">
                     Show hidden
@@ -1146,7 +1148,8 @@
             <table id="fileTable">
                 <thead>
                     <tr>
-                        <th data-col="name" style="width: 45%;">Name</th>
+                        <th style="width: 5%; text-align: center;"><input type="checkbox" id="selectAllCheckbox" style="cursor: pointer;"></th>
+                        <th data-col="name" style="width: 40%;">Name</th>
                         <th data-col="type" style="width: 15%;">Type</th>
                         <th data-col="size" style="width: 15%;">Size</th>
                         <th data-col="modified" style="width: 25%;">Modified</th>
@@ -3552,6 +3555,7 @@
                 row.classList.add('parent-dir');
                 const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
                 row.innerHTML = `
+                    <td></td>
                     <td><a href="${parentPath}">..</a></td>
                     <td class="type-directory">directory</td>
                     <td class="size-placeholder">-</td>
@@ -3585,7 +3589,12 @@
                 const sizeDisplay = entry.type === 'file' ? formatFileSize(entry.size) : '-';
                 const sizeClass = entry.type === 'file' ? '' : 'size-placeholder';
 
+                const checkboxCell = entry.type === 'file' 
+                    ? `<input type="checkbox" class="file-checkbox" data-filepath="${encodedEntryPath}" data-filename="${entry.name}" style="cursor: pointer;"></input>`
+                    : '';
+
                 row.innerHTML = `
+                    <td style="text-align: center;">${checkboxCell}</td>
                     <td>${nameCell}</td>
                     <td class="${typeClass}">${entry.type}</td>
                     <td class="${sizeClass}">${sizeDisplay}</td>
@@ -3631,6 +3640,70 @@
             });
         }
 
+        // Multi-file download functions
+        async function downloadSelectedFiles() {
+            const checkboxes = document.querySelectorAll('input.file-checkbox:checked');
+            const selectedFiles = Array.from(checkboxes).map(cb => ({
+                path: cb.getAttribute('data-filepath'),
+                name: cb.getAttribute('data-filename')
+            }));
+
+            if (selectedFiles.length === 0) {
+                alert('No files selected');
+                return;
+            }
+
+            const downloadBtn = document.getElementById('downloadBtn');
+            const originalText = downloadBtn.textContent;
+            downloadBtn.disabled = true;
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file = selectedFiles[i];
+                downloadBtn.textContent = `⬇ Downloading ${i + 1}/${selectedFiles.length}`;
+                await downloadFile(file.path, file.name);
+                if (i < selectedFiles.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = originalText;
+        }
+
+        async function downloadFile(filePath, fileName) {
+            try {
+                const response = await fetch(filePath);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = fileName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                console.error(`Failed to download ${fileName}:`, error);
+            }
+        }
+
+        function toggleAllCheckboxes(checked) {
+            document.querySelectorAll('input.file-checkbox').forEach(cb => {
+                cb.checked = checked;
+            });
+            updateDownloadButtonVisibility();
+        }
+
+        function updateDownloadButtonVisibility() {
+            const hasChecked = document.querySelectorAll('input.file-checkbox:checked').length > 0;
+            const downloadBtn = document.getElementById('downloadBtn');
+            const selectAllBtn = document.getElementById('selectAllBtn');
+            downloadBtn.style.display = hasChecked ? 'inline-block' : 'none';
+            selectAllBtn.style.display = document.querySelectorAll('input.file-checkbox').length > 0 ? 'inline-block' : 'none';
+        }
+
         document.querySelectorAll('th[data-col]').forEach(th => {
             th.addEventListener('click', () => sortByColumn(th.dataset.col));
         });
@@ -3661,6 +3734,27 @@
         // Initialize after all functions are defined
         updateBreadcrumb();
         loadFiles();
+
+        // Download and checkbox event listeners
+        document.getElementById('downloadBtn').addEventListener('click', downloadSelectedFiles);
+        document.getElementById('selectAllBtn').addEventListener('click', () => {
+            const allChecked = document.querySelectorAll('input.file-checkbox').length === 
+                              document.querySelectorAll('input.file-checkbox:checked').length;
+            toggleAllCheckboxes(!allChecked);
+        });
+        document.getElementById('selectAllCheckbox').addEventListener('change', (e) => {
+            toggleAllCheckboxes(e.target.checked);
+        });
+
+        // Add event listeners to checkboxes when table is rendered
+        const originalRenderTable = window.renderTable;
+        window.renderTable = function(entries) {
+            originalRenderTable(entries);
+            document.querySelectorAll('input.file-checkbox').forEach(cb => {
+                cb.addEventListener('change', updateDownloadButtonVisibility);
+            });
+            updateDownloadButtonVisibility();
+        };
 
         // Check for warpdrive cookie and auto-open if set
         if (document.cookie.includes('warpdrive_active=true')) {
@@ -3714,6 +3808,50 @@
             }
             consoleOutput.appendChild(line);
             consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+
+        function globToRegex(glob) {
+            const escapeRegex = (str) => str.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+            let regex = '^';
+            for (let i = 0; i < glob.length; i++) {
+                const char = glob[i];
+                if (char === '*') {
+                    regex += '[^/]*';
+                } else if (char === '?') {
+                    regex += '[^/]';
+                } else {
+                    regex += escapeRegex(char);
+                }
+            }
+            regex += '$';
+            return new RegExp(regex);
+        }
+
+        async function downloadMultipleFiles(files, logger) {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                logger(`[${i + 1}/${files.length}] Downloading: ${file.name}`);
+                try {
+                    const response = await fetch(file.path);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = file.name;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                } catch (error) {
+                    logger(`Error downloading ${file.name}: ${error.message}`);
+                }
+                if (i < files.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+            logger('Download complete');
         }
 
         function resolvePath(pathStr) {
@@ -3867,6 +4005,37 @@
                         window.open(filePath, '_blank');
                         addOutputLine('Downloading: ' + args.join(' '));
                     }
+                } else if (command === 'mget') {
+                    if (args.length === 0) {
+                        addOutputLine('Usage: mget <pattern>');
+                    } else {
+                        const pattern = args.join(' ');
+                        const response = await fetch(currentPath, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ dir: currentPath })
+                        });
+                        
+                        if (response.ok) {
+                            const data = await response.json();
+                            const regex = globToRegex(pattern);
+                            const matchedFiles = data.entries
+                                .filter(e => e.type === 'file' && regex.test(e.name))
+                                .map(e => ({
+                                    path: currentPath.endsWith('/') ? currentPath + e.name : currentPath + '/' + e.name,
+                                    name: e.name
+                                }));
+                            
+                            if (matchedFiles.length === 0) {
+                                addOutputLine('No files matched: ' + pattern);
+                            } else {
+                                addOutputLine(`Downloading ${matchedFiles.length} file(s)...`);
+                                downloadMultipleFiles(matchedFiles, addOutputLine);
+                            }
+                        } else {
+                            addOutputLine('Error: cannot read directory');
+                        }
+                    }
                 } else if (command === 'cd') {
                     if (args.length === 0) {
                         currentPath = '/';
@@ -3999,6 +4168,7 @@
                     addOutputLine('  pwd            - Print working directory');
                     addOutputLine('  cd [dir]       - Change directory (cd .. to go up, cd ~ for home)');
                     addOutputLine('  get <file>     - Download single file');
+                    addOutputLine('  mget <pattern> - Download multiple files (e.g., mget *.mp3)');
                     addOutputLine('  play <file>    - Play or preview file (converts aiff, ra, midi, voc, mp2, and a few other formats)');
                     addOutputLine('                       Images, text, and movies files open in an overlay; music is in-line');
                     addOutputLine('  info <file>    - Show file/directory info (size, type, modified date, file count)');
