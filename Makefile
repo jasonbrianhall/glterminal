@@ -576,7 +576,6 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 index.hpp: index.html
 	@echo "Generating index.html header..."
 	@xxd -i index.html > index.hpp
-	@xxd -i stargate.js > stargate.hpp
 	@xxd -i audioDetection.js > audioDetection.hpp
 	@xxd -i audioVisualizer.js >audioVisualizer.hpp
 	@xxd -i cdgPlayer.js > cdgPlayer.hpp
