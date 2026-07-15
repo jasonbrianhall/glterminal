@@ -576,6 +576,8 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 index.hpp: index.html
 	@echo "Generating index.html header..."
 	@xxd -i index.html > index.hpp
+	@xxd -i stargate.js > stargate.hpp
+
 	@echo "✓ Converted index.html"
 
 # ============================================================================

@@ -1,0 +1,3254 @@
+        let fileData = [];
+        let sortState = { col: null, dir: 1 };
+
+        // ---- "open in new window" preference, persisted as a cookie ----
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+            return match ? decodeURIComponent(match[1]) : null;
+        }
+
+        function setCookie(name, value, days) {
+            const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString();
+            document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`;
+        }
+
+        const storedPref = getCookie('openInNewWindow');
+        let openInNewWindow = storedPref === null ? true : storedPref === 'true';
+
+        const newWindowToggle = document.getElementById('newWindowToggle');
+        newWindowToggle.checked = openInNewWindow;
+        newWindowToggle.addEventListener('change', () => {
+            openInNewWindow = newWindowToggle.checked;
+            setCookie('openInNewWindow', openInNewWindow, 400);
+            // Re-render with the current sort so links pick up the new target immediately
+            renderTable(currentSorted);
+        });
+
+        // ---- theme picker, persisted as a cookie ----
+        const THEMES = [
+            { id: 'default', name: 'Default (Purple)' },
+            { id: 'ocean', name: 'Ocean' },
+            { id: 'sunset', name: 'Sunset' },
+            { id: 'forest', name: 'Forest' },
+            { id: 'rose', name: 'Rose' },
+            { id: 'autumn', name: 'Autumn' },
+            { id: 'mint', name: 'Mint' },
+            { id: 'grape', name: 'Grape' },
+            { id: 'steel', name: 'Steel' },
+            { id: 'coffee', name: 'Coffee' },
+            { id: 'candy', name: 'Candy' },
+            { id: 'sky', name: 'Sky' },
+            { id: 'lime', name: 'Lime' },
+            { id: 'graphite', name: 'Graphite' },
+            { id: 'midnight', name: 'Midnight' },
+            { id: 'dracula', name: 'Dracula' },
+            { id: 'nord', name: 'Nord' },
+            { id: 'monokai', name: 'Monokai' },
+            { id: 'cyberpunk', name: 'Cyberpunk' },
+            { id: 'highcontrast', name: 'High Contrast' },
+            { id: 'slate-blue', name: 'Slate Blue' },
+        ];
+
+        const themeSelect = document.getElementById('themeSelect');
+        themeSelect.innerHTML = THEMES.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+
+        function applyTheme(id) {
+            if (id === 'default') {
+                document.documentElement.removeAttribute('data-theme');
+            } else {
+                document.documentElement.setAttribute('data-theme', id);
+            }
+        }
+
+        const storedTheme = getCookie('theme') || 'default';
+        applyTheme(storedTheme);
+        themeSelect.value = storedTheme;
+
+        themeSelect.addEventListener('change', () => {
+            applyTheme(themeSelect.value);
+            setCookie('theme', themeSelect.value, 400);
+        });
+
+        let currentSorted = [];
+        let fileFilterTerm = '';
+        let showHiddenFiles = false;
+
+        const fileFilterInput = document.getElementById('fileFilter');
+        fileFilterInput.addEventListener('input', () => {
+            fileFilterTerm = fileFilterInput.value;
+            renderTable(currentSorted);
+        });
+
+        const showHiddenToggle = document.getElementById('showHiddenToggle');
+        showHiddenToggle.addEventListener('change', () => {
+            showHiddenFiles = showHiddenToggle.checked;
+            renderTable(currentSorted);
+        });
+
+        function getFilteredEntries(entries) {
+            const term = fileFilterTerm.trim().toLowerCase();
+            let filtered = entries;
+            
+            // Filter out hidden files if toggle is off
+            if (!showHiddenFiles) {
+                filtered = filtered.filter(e => !e.name.startsWith('.'));
+            }
+            
+            // Apply search term
+            if (!term) return filtered;
+            return filtered.filter(e => e.name.toLowerCase().includes(term));
+        }
+
+        // Collapses repeated slashes (e.g. "//home/jbhall/Music" -> "/home/jbhall/Music")
+        function getCurrentPath() {
+            return window.location.pathname.replace(/\/+/g, '/');
+        }
+
+        // ---- image detection + slideshow ----
+        const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico', 'tiff', 'tif'];
+
+        function isImageFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return IMAGE_EXTENSIONS.includes(ext);
+        }
+
+        function getImageEntries() {
+            const currentPath = getCurrentPath();
+            return fileData
+                .filter(isImageFile)
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(entry => {
+                    const entryPath = currentPath.endsWith('/')
+                        ? `${currentPath}${entry.name}`
+                        : `${currentPath}/${entry.name}`;
+                    return { name: entry.name, src: encodeParens(entryPath) };
+                });
+        }
+
+        // ---- audio detection + music player ----
+        // Native browser formats (no conversion needed)
+        const AUDIO_EXTENSIONS = [
+          'mp3',   // OS codec
+          'aac',   // OS codec
+          'm4a',   // AAC only
+          'mp4',   // AAC only
+          'wav',   // built-in
+          'ogg',   // built-in (Vorbis/Opus)
+          'flac',  // built-in
+          'opus',  // built-in
+          'webm',   // built-in (Opus/Vorbis)
+          'mkv',    // Matroska Movies (but just the audio part)
+        ];
+
+        // Formats that need conversion to WAV
+        const MIDI_EXTENSIONS = ['mid', 'midi', 'kar'];
+        const VOC_EXTENSIONS = ['voc'];
+        const AU_EXTENSIONS = ['au', 'snd'];
+        const AIFF_EXTENSIONS = ['aiff', 'aif'];
+        const CONVERTIBLE_AUDIO_EXTENSIONS = ['m4a', 'wma', 'mp2', 'mpa'];  // Converted to WAV on server
+
+        function isAudioFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return AUDIO_EXTENSIONS.includes(ext);
+        }
+
+        function isMidiFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return MIDI_EXTENSIONS.includes(ext);
+        }
+
+        function isVocFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return VOC_EXTENSIONS.includes(ext);
+        }
+
+        function isAuFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return AU_EXTENSIONS.includes(ext);
+        }
+
+        function isAiffFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return AIFF_EXTENSIONS.includes(ext);
+        }
+
+        function isConvertibleAudioFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return CONVERTIBLE_AUDIO_EXTENSIONS.includes(ext);
+        }
+
+        function isZipFile(entry) {
+            if (entry.type !== 'file') return false;
+            return entry.name.toLowerCase().endsWith('.zip');
+        }
+
+        function entryToTrack(entry, type) {
+            const currentPath = getCurrentPath();
+            const entryPath = currentPath.endsWith('/')
+                ? `${currentPath}${entry.name}`
+                : `${currentPath}/${entry.name}`;
+            return { name: entry.name, src: encodeParens(entryPath), type };
+        }
+
+        function getAudioEntries() {
+            // Look for standalone "song.mp3" + "song.cdg" pairs sitting next to each other
+            const cdgByBaseName = new Map();
+            fileData.forEach(entry => {
+                if (entry.type === 'file' && entry.name.toLowerCase().endsWith('.cdg')) {
+                    const base = entry.name.slice(0, -4).toLowerCase();
+                    cdgByBaseName.set(base, entry.name);
+                }
+            });
+
+            const audio = fileData.filter(isAudioFile).map(e => {
+                const track = entryToTrack(e, 'audio');
+                const dot = e.name.lastIndexOf('.');
+                const base = (dot === -1 ? e.name : e.name.slice(0, dot)).toLowerCase();
+                if (cdgByBaseName.has(base)) {
+                    track.hasCdg = true;
+                    track.cdgSrc = entryToTrack({ name: cdgByBaseName.get(base) }, 'cdg').src;
+                } else {
+                    track.hasCdg = false;
+                }
+                return track;
+            });
+
+            // Zip files are checked lazily (peeked async) since we'd need to fetch them to know
+            const zips = fileData.filter(isZipFile).map(e => {
+                const track = entryToTrack(e, 'zip');
+                track.hasCdg = null; // unknown until peeked
+                return track;
+            });
+
+            const midis = fileData.filter(isMidiFile).map(e => entryToTrack(e, 'midi'));
+
+            const vocs = fileData.filter(isVocFile).map(e => entryToTrack(e, 'voc'));
+
+            const aus = fileData.filter(isAuFile).map(e => entryToTrack(e, 'au'));
+
+            const aiffs = fileData.filter(isAiffFile).map(e => entryToTrack(e, 'aiff'));
+
+            const convertibles = fileData.filter(isConvertibleAudioFile).map(e => entryToTrack(e, 'convertible'));
+
+            return [...audio, ...zips, ...midis, ...vocs, ...aus, ...aiffs, ...convertibles].map((t, i) => ({ ...t, id: i }));
+        }
+
+        // ---- video detection ----
+        // Native browser video formats
+        const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v', 'mkv', 'avi', 'flv', 'wmv'];
+        const SUBTITLE_EXTENSIONS = ['vtt', 'srt'];
+
+        function isVideoFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return VIDEO_EXTENSIONS.includes(ext);
+        }
+
+        function getVideoEntries() {
+            // Look for standalone "movie.mp4" + "movie.vtt"/"movie.srt" pairs
+            const subsByBaseName = new Map();
+            fileData.forEach(entry => {
+                if (entry.type !== 'file') return;
+                const dot = entry.name.lastIndexOf('.');
+                if (dot === -1) return;
+                const ext = entry.name.slice(dot + 1).toLowerCase();
+                if (SUBTITLE_EXTENSIONS.includes(ext)) {
+                    subsByBaseName.set(entry.name.slice(0, dot).toLowerCase(), entry.name);
+                }
+            });
+
+            const videos = fileData.filter(isVideoFile).map(e => {
+                const track = entryToTrack(e, 'video');
+                const dot = e.name.lastIndexOf('.');
+                const base = (dot === -1 ? e.name : e.name.slice(0, dot)).toLowerCase();
+                if (subsByBaseName.has(base)) {
+                    track.hasSubs = true;
+                    track.subSrc = entryToTrack({ name: subsByBaseName.get(base) }, 'subtitle').src;
+                    track.subIsSrt = subsByBaseName.get(base).toLowerCase().endsWith('.srt');
+                } else {
+                    track.hasSubs = false;
+                }
+                return track;
+            });
+
+            return videos.map((t, i) => ({ ...t, id: i }));
+        }
+
+        const slideshowBtn = document.getElementById('slideshowBtn');
+        const slideshowOverlay = document.getElementById('slideshowOverlay');
+        const slideshowImg = document.getElementById('slideshowImg');
+        const slideshowCaption = document.getElementById('slideshowCaption');
+        let slideshowImages = [];
+        let slideshowIndex = 0;
+
+        function updateSlideshowButtonVisibility() {
+            const images = getImageEntries();
+            slideshowBtn.style.display = images.length > 0 ? 'inline-block' : 'none';
+            const audios = getAudioEntries();
+            musicBtn.style.display = audios.length > 0 ? 'inline-block' : 'none';
+            const videos = getVideoEntries();
+            videoBtn.style.display = videos.length > 0 ? 'inline-block' : 'none';
+        }
+
+        // ---- zoom/pan state ----
+        let zoomScale = 1;
+        let panX = 0;
+        let panY = 0;
+        const MIN_ZOOM = 1;
+        const MAX_ZOOM = 6;
+
+        function applyZoomTransform() {
+            slideshowImg.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+            slideshowImg.classList.toggle('zoomed', zoomScale > 1);
+        }
+
+        function resetZoom() {
+            zoomScale = 1;
+            panX = 0;
+            panY = 0;
+            applyZoomTransform();
+        }
+
+        function showSlide(index) {
+            if (slideshowImages.length === 0) return;
+            slideshowIndex = (index + slideshowImages.length) % slideshowImages.length;
+            const img = slideshowImages[slideshowIndex];
+            slideshowImg.src = img.src;
+            slideshowImg.alt = img.name;
+            slideshowCaption.textContent = `${img.name} (${slideshowIndex + 1}/${slideshowImages.length})`;
+            resetZoom();
+        }
+
+        function openSlideshow() {
+            slideshowImages = getImageEntries();
+            if (slideshowImages.length === 0) return;
+            slideshowOverlay.classList.add('active');
+            showSlide(0);
+            stopSlideshowAutoplay();
+            history.pushState({ ivOverlay: 'slideshow' }, '');
+        }
+
+        function closeSlideshow(fromPopState) {
+            slideshowOverlay.classList.remove('active');
+            slideshowImg.src = '';
+            resetZoom();
+            stopSlideshowAutoplay();
+            if (!fromPopState && history.state && history.state.ivOverlay === 'slideshow') {
+                history.back();
+            }
+        }
+
+        // ---- autoplay ----
+        const slideshowAutoplayBtn = document.getElementById('slideshowAutoplay');
+        let slideshowAutoplayHandle = null;
+
+        function startSlideshowAutoplay() {
+            if (slideshowAutoplayHandle) return;
+            slideshowAutoplayHandle = setInterval(() => showSlide(slideshowIndex + 1), 2000);
+            slideshowAutoplayBtn.classList.add('active');
+            slideshowAutoplayBtn.innerHTML = '&#10074;&#10074;';
+        }
+
+        function stopSlideshowAutoplay() {
+            if (slideshowAutoplayHandle) {
+                clearInterval(slideshowAutoplayHandle);
+                slideshowAutoplayHandle = null;
+            }
+            slideshowAutoplayBtn.classList.remove('active');
+            slideshowAutoplayBtn.innerHTML = '&#9658;';
+        }
+
+        slideshowAutoplayBtn.addEventListener('click', () => {
+            if (slideshowAutoplayHandle) stopSlideshowAutoplay();
+            else startSlideshowAutoplay();
+        });
+
+        window.addEventListener('popstate', (e) => {
+            if (slideshowOverlay.classList.contains('active') &&
+                (!e.state || e.state.ivOverlay !== 'slideshow')) {
+                closeSlideshow(true);
+            }
+        });
+
+        slideshowImg.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = slideshowImg.getBoundingClientRect();
+            // Cursor position relative to image center, in unscaled pixels
+            const cx = (e.clientX - rect.left - rect.width / 2) / zoomScale;
+            const cy = (e.clientY - rect.top - rect.height / 2) / zoomScale;
+
+            const zoomFactor = Math.exp(-e.deltaY * 0.0015);
+            const newScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomScale * zoomFactor));
+            const actualFactor = newScale / zoomScale;
+
+            // Adjust pan so the point under the cursor stays fixed
+            panX -= cx * (actualFactor - 1) * zoomScale;
+            panY -= cy * (actualFactor - 1) * zoomScale;
+            zoomScale = newScale;
+
+            if (zoomScale === MIN_ZOOM) {
+                panX = 0;
+                panY = 0;
+            }
+
+            applyZoomTransform();
+        }, { passive: false });
+
+        // Drag to pan when zoomed in
+        let isPanning = false;
+        let panStartX = 0;
+        let panStartY = 0;
+        let panOriginX = 0;
+        let panOriginY = 0;
+
+        slideshowImg.addEventListener('mousedown', (e) => {
+            if (zoomScale <= 1) return;
+            isPanning = true;
+            slideshowImg.classList.add('panning');
+            panStartX = e.clientX;
+            panStartY = e.clientY;
+            panOriginX = panX;
+            panOriginY = panY;
+            e.preventDefault();
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isPanning) return;
+            panX = panOriginX + (e.clientX - panStartX);
+            panY = panOriginY + (e.clientY - panStartY);
+            applyZoomTransform();
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isPanning) {
+                isPanning = false;
+                slideshowImg.classList.remove('panning');
+            }
+        });
+
+        // Double-click to toggle zoom
+        slideshowImg.addEventListener('dblclick', () => {
+            if (zoomScale > 1) {
+                resetZoom();
+            } else {
+                zoomScale = 2;
+                applyZoomTransform();
+            }
+        });
+
+        slideshowBtn.addEventListener('click', openSlideshow);
+        document.getElementById('slideshowClose').addEventListener('click', closeSlideshow);
+        document.getElementById('slideshowPrev').addEventListener('click', () => showSlide(slideshowIndex - 1));
+        document.getElementById('slideshowNext').addEventListener('click', () => showSlide(slideshowIndex + 1));
+
+        slideshowOverlay.addEventListener('click', (e) => {
+            if (e.target === slideshowOverlay) closeSlideshow();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (!slideshowOverlay.classList.contains('active')) return;
+            if (e.key === 'Escape') closeSlideshow();
+            else if (e.key === 'ArrowLeft') showSlide(slideshowIndex - 1);
+            else if (e.key === 'ArrowRight') showSlide(slideshowIndex + 1);
+        });
+
+        // ---- minimal self-contained ZIP reader + DEFLATE inflater (no external deps) ----
+        function inflateRaw(data, outSize) {
+            const out = new Uint8Array(outSize);
+            let outPos = 0;
+            let bytePos = 0, bitBuf = 0, bitCnt = 0;
+
+            function getBit() {
+                if (bitCnt === 0) {
+                    bitBuf = data[bytePos++];
+                    bitCnt = 8;
+                }
+                const bit = bitBuf & 1;
+                bitBuf >>= 1;
+                bitCnt--;
+                return bit;
+            }
+            function getBits(n) {
+                let val = 0;
+                for (let i = 0; i < n; i++) val |= getBit() << i;
+                return val >>> 0;
+            }
+            function alignByte() { bitCnt = 0; }
+
+            function construct(lengths, n) {
+                const counts = new Array(16).fill(0);
+                for (let i = 0; i < n; i++) counts[lengths[i]]++;
+                counts[0] = 0;
+                const offs = new Array(16).fill(0);
+                for (let i = 1; i < 16; i++) offs[i] = offs[i - 1] + counts[i - 1];
+                const symbols = new Array(n).fill(0);
+                for (let i = 0; i < n; i++) {
+                    if (lengths[i] !== 0) symbols[offs[lengths[i]]++] = i;
+                }
+                return { counts, symbols };
+            }
+
+            function decodeSymbol(tree) {
+                let code = 0, first = 0, index = 0;
+                for (let len = 1; len < 16; len++) {
+                    code |= getBit();
+                    const count = tree.counts[len];
+                    if (code - first < count) return tree.symbols[index + (code - first)];
+                    index += count;
+                    first += count;
+                    first <<= 1;
+                    code <<= 1;
+                }
+                throw new Error('invalid huffman code');
+            }
+
+            const LENGTH_BASE = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+            const LENGTH_EXTRA = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+            const DIST_BASE = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+            const DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+
+            let fixedLitLen = null, fixedDist = null;
+            function getFixedTrees() {
+                if (fixedLitLen) return [fixedLitLen, fixedDist];
+                const litLens = new Array(288);
+                let i = 0;
+                for (; i < 144; i++) litLens[i] = 8;
+                for (; i < 256; i++) litLens[i] = 9;
+                for (; i < 280; i++) litLens[i] = 7;
+                for (; i < 288; i++) litLens[i] = 8;
+                const distLens = new Array(30).fill(5);
+                fixedLitLen = construct(litLens, 288);
+                fixedDist = construct(distLens, 30);
+                return [fixedLitLen, fixedDist];
+            }
+
+            function inflateBlockData(litLenTree, distTree) {
+                while (true) {
+                    const sym = decodeSymbol(litLenTree);
+                    if (sym === 256) break;
+                    if (sym < 256) {
+                        out[outPos++] = sym;
+                    } else {
+                        const lenIdx = sym - 257;
+                        const length = LENGTH_BASE[lenIdx] + getBits(LENGTH_EXTRA[lenIdx]);
+                        const distSym = decodeSymbol(distTree);
+                        const dist = DIST_BASE[distSym] + getBits(DIST_EXTRA[distSym]);
+                        for (let i = 0; i < length; i++) {
+                            out[outPos] = out[outPos - dist];
+                            outPos++;
+                        }
+                    }
+                }
+            }
+
+            const CLC_ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+
+            let final = 0;
+            while (!final) {
+                final = getBit();
+                const type = getBits(2);
+                if (type === 0) {
+                    alignByte();
+                    const len = data[bytePos] | (data[bytePos + 1] << 8);
+                    bytePos += 4; // skip LEN + NLEN
+                    for (let i = 0; i < len; i++) out[outPos++] = data[bytePos++];
+                } else if (type === 1) {
+                    const [lt, dt] = getFixedTrees();
+                    inflateBlockData(lt, dt);
+                } else if (type === 2) {
+                    const hlit = getBits(5) + 257;
+                    const hdist = getBits(5) + 1;
+                    const hclen = getBits(4) + 4;
+                    const clLens = new Array(19).fill(0);
+                    for (let i = 0; i < hclen; i++) clLens[CLC_ORDER[i]] = getBits(3);
+                    const clTree = construct(clLens, 19);
+
+                    const lengths = new Array(hlit + hdist).fill(0);
+                    let i = 0;
+                    while (i < lengths.length) {
+                        const sym = decodeSymbol(clTree);
+                        if (sym < 16) {
+                            lengths[i++] = sym;
+                        } else if (sym === 16) {
+                            const rep = getBits(2) + 3;
+                            const prev = lengths[i - 1];
+                            for (let r = 0; r < rep; r++) lengths[i++] = prev;
+                        } else if (sym === 17) {
+                            const rep = getBits(3) + 3;
+                            for (let r = 0; r < rep; r++) lengths[i++] = 0;
+                        } else {
+                            const rep = getBits(7) + 11;
+                            for (let r = 0; r < rep; r++) lengths[i++] = 0;
+                        }
+                    }
+                    const litLenTree = construct(lengths.slice(0, hlit), hlit);
+                    const distTree = construct(lengths.slice(hlit), hdist);
+                    inflateBlockData(litLenTree, distTree);
+                } else {
+                    throw new Error('invalid deflate block type');
+                }
+            }
+
+            return out;
+        }
+
+        function readUint16LE(buf, off) { return buf[off] | (buf[off + 1] << 8); }
+        function readUint32LE(buf, off) {
+            return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0;
+        }
+
+        function parseZipEntries(bytes) {
+            const EOCD_SIG = 0x06054b50;
+            let eocdOffset = -1;
+            const minOffset = Math.max(0, bytes.length - 65557);
+            for (let i = bytes.length - 22; i >= minOffset; i--) {
+                if (readUint32LE(bytes, i) === EOCD_SIG) { eocdOffset = i; break; }
+            }
+            if (eocdOffset === -1) throw new Error('Not a valid zip file (EOCD not found)');
+
+            const totalEntries = readUint16LE(bytes, eocdOffset + 10);
+            let cdOffset = readUint32LE(bytes, eocdOffset + 16);
+
+            const entries = [];
+            const CFH_SIG = 0x02014b50;
+            for (let n = 0; n < totalEntries; n++) {
+                if (readUint32LE(bytes, cdOffset) !== CFH_SIG) break;
+                const compressionMethod = readUint16LE(bytes, cdOffset + 10);
+                const compressedSize = readUint32LE(bytes, cdOffset + 20);
+                const uncompressedSize = readUint32LE(bytes, cdOffset + 24);
+                const nameLen = readUint16LE(bytes, cdOffset + 28);
+                const extraLen = readUint16LE(bytes, cdOffset + 30);
+                const commentLen = readUint16LE(bytes, cdOffset + 32);
+                const localHeaderOffset = readUint32LE(bytes, cdOffset + 42);
+                const nameBytes = bytes.subarray(cdOffset + 46, cdOffset + 46 + nameLen);
+                const name = new TextDecoder().decode(nameBytes);
+
+                entries.push({ name, compressionMethod, compressedSize, uncompressedSize, localHeaderOffset });
+                cdOffset += 46 + nameLen + extraLen + commentLen;
+            }
+            return entries;
+        }
+
+        function extractZipEntry(bytes, entry) {
+            const LFH_SIG = 0x04034b50;
+            const off = entry.localHeaderOffset;
+            if (readUint32LE(bytes, off) !== LFH_SIG) throw new Error('Invalid local file header');
+            const nameLen = readUint16LE(bytes, off + 26);
+            const extraLen = readUint16LE(bytes, off + 28);
+            const dataStart = off + 30 + nameLen + extraLen;
+            const compressed = bytes.subarray(dataStart, dataStart + entry.compressedSize);
+
+            if (entry.compressionMethod === 0) {
+                return compressed.slice();
+            } else if (entry.compressionMethod === 8) {
+                return inflateRaw(compressed, entry.uncompressedSize);
+            } else {
+                throw new Error('Unsupported zip compression method: ' + entry.compressionMethod);
+            }
+        }
+
+        // Reads only entry names from a zip's central directory, given a possibly
+        // truncated tail buffer plus how many bytes were trimmed off the front.
+        function parseZipEntryNames(bytes, frontTrim) {
+            const EOCD_SIG = 0x06054b50;
+            let eocdOffset = -1;
+            const minOffset = Math.max(0, bytes.length - 65557);
+            for (let i = bytes.length - 22; i >= minOffset; i--) {
+                if (readUint32LE(bytes, i) === EOCD_SIG) { eocdOffset = i; break; }
+            }
+            if (eocdOffset === -1) return null;
+
+            const totalEntries = readUint16LE(bytes, eocdOffset + 10);
+            let cdOffset = readUint32LE(bytes, eocdOffset + 16) - frontTrim;
+
+            const names = [];
+            const CFH_SIG = 0x02014b50;
+            for (let n = 0; n < totalEntries; n++) {
+                if (cdOffset < 0 || cdOffset + 46 > bytes.length) return null;
+                if (readUint32LE(bytes, cdOffset) !== CFH_SIG) return null;
+                const nameLen = readUint16LE(bytes, cdOffset + 28);
+                const extraLen = readUint16LE(bytes, cdOffset + 30);
+                const commentLen = readUint16LE(bytes, cdOffset + 32);
+                names.push(new TextDecoder().decode(bytes.subarray(cdOffset + 46, cdOffset + 46 + nameLen)));
+                cdOffset += 46 + nameLen + extraLen + commentLen;
+            }
+            return names;
+        }
+
+        // Cheaply checks whether a zip contains a .cdg file, using a ranged
+        // request for just the tail of the file so we don't download the whole thing.
+        async function peekZipHasCdg(url) {
+            try {
+                const resp = await fetch(url, { headers: { Range: 'bytes=-65536' } });
+                if (!resp.ok) return null;
+                const buf = new Uint8Array(await resp.arrayBuffer());
+
+                let frontTrim = 0;
+                if (resp.status === 206) {
+                    const contentRange = resp.headers.get('Content-Range');
+                    const match = contentRange && contentRange.match(/bytes (\d+)-(\d+)\/(\d+)/);
+                    if (match) frontTrim = parseInt(match[1], 10);
+                }
+
+                const names = parseZipEntryNames(buf, frontTrim);
+                if (names === null) return null;
+                return names.some(n => n.toLowerCase().endsWith('.cdg'));
+            } catch (err) {
+                return null;
+            }
+        }
+
+        // ---- music player ----
+        // CD+G parser/renderer, ported from cdg.cpp
+        const CDG_WIDTH = 300;
+        const CDG_HEIGHT = 216;
+
+        function cdgCreateState(bytes) {
+            const packetCount = Math.floor(bytes.length / 24);
+            const packets = new Array(packetCount);
+            for (let i = 0; i < packetCount; i++) {
+                const off = i * 24;
+                packets[i] = {
+                    command: bytes[off] & 0x3F,
+                    instruction: bytes[off + 1] & 0x3F,
+                    data: bytes.subarray(off + 4, off + 20)
+                };
+            }
+            return {
+                packets,
+                packetCount,
+                currentPacket: 0,
+                screen: new Uint8Array(CDG_WIDTH * CDG_HEIGHT),
+                palette: new Array(16).fill(0x000000)
+            };
+        }
+
+        function cdgReset(state) {
+            state.screen.fill(0);
+            state.currentPacket = 0;
+        }
+
+        function cdgUpdate(state, timeSeconds) {
+            let target = Math.floor(timeSeconds * 300);
+            if (target < 0) target = 0;
+            if (target >= state.packetCount) target = state.packetCount - 1;
+            if (target < state.currentPacket) cdgReset(state);
+            while (state.currentPacket < target) {
+                cdgProcessPacket(state, state.packets[state.currentPacket]);
+                state.currentPacket++;
+            }
+        }
+
+        function cdgProcessPacket(state, packet) {
+            if ((packet.command & 0x3F) !== 0x09) return;
+            const instruction = packet.instruction & 0x3F;
+            const d = packet.data;
+
+            if (instruction === 1) { // memory preset
+                state.screen.fill(d[0] & 0x0F);
+            } else if (instruction === 6 || instruction === 38) { // tile block (+ XOR)
+                const xor = instruction === 38;
+                const color0 = d[0] & 0x0F, color1 = d[1] & 0x0F;
+                const row = d[2] & 0x1F, column = d[3] & 0x3F;
+                const pixelRow = row * 12, pixelCol = column * 6;
+                for (let y = 0; y < 12; y++) {
+                    const tileByte = d[4 + y];
+                    for (let x = 0; x < 6; x++) {
+                        const px = pixelCol + x, py = pixelRow + y;
+                        if (px >= 0 && px < CDG_WIDTH && py >= 0 && py < CDG_HEIGHT) {
+                            const bit = (tileByte >> (5 - x)) & 1;
+                            const color = bit ? color1 : color0;
+                            const idx = py * CDG_WIDTH + px;
+                            if (xor) state.screen[idx] ^= color; else state.screen[idx] = color;
+                        }
+                    }
+                }
+            } else if (instruction === 20 || instruction === 24) { // scroll preset / copy
+                const color = d[0] & 0x0F;
+                const hCmd = (d[1] & 0x30) >> 4;
+                const vCmd = (d[2] & 0x30) >> 4;
+                if (hCmd !== 0 || vCmd !== 0) {
+                    const wrap = instruction === 24;
+                    cdgScrollScreen(state, hCmd, vCmd, wrap ? -1 : color);
+                }
+            } else if (instruction === 30 || instruction === 31) { // load color table
+                const offset = instruction === 30 ? 0 : 8;
+                for (let i = 0; i < 8; i++) {
+                    const byte0 = d[2 * i] & 0x3F, byte1 = d[2 * i + 1] & 0x3F;
+                    const r = (byte0 >> 2) & 0x0F;
+                    const g = ((byte0 & 0x03) << 2) | ((byte1 >> 4) & 0x03);
+                    const b = byte1 & 0x0F;
+                    state.palette[offset + i] = ((r * 17) << 16) | ((g * 17) << 8) | (b * 17);
+                }
+            }
+            // border preset (2) and transparency (28) are ignored, as in most players
+        }
+
+        function cdgScrollScreen(state, hCmd, vCmd, fillColor) {
+            let hOffset = 0, vOffset = 0;
+            if (hCmd === 1) hOffset = 6; else if (hCmd === 2) hOffset = -6;
+            if (vCmd === 1) vOffset = 12; else if (vCmd === 2) vOffset = -12;
+            if (hOffset === 0 && vOffset === 0) return;
+
+            const temp = state.screen.slice();
+            const wrap = fillColor === -1;
+            for (let y = 0; y < CDG_HEIGHT; y++) {
+                for (let x = 0; x < CDG_WIDTH; x++) {
+                    let srcX = x - hOffset, srcY = y - vOffset;
+                    if (wrap) {
+                        srcX = ((srcX % CDG_WIDTH) + CDG_WIDTH) % CDG_WIDTH;
+                        srcY = ((srcY % CDG_HEIGHT) + CDG_HEIGHT) % CDG_HEIGHT;
+                        state.screen[y * CDG_WIDTH + x] = temp[srcY * CDG_WIDTH + srcX];
+                    } else if (srcX >= 0 && srcX < CDG_WIDTH && srcY >= 0 && srcY < CDG_HEIGHT) {
+                        state.screen[y * CDG_WIDTH + x] = temp[srcY * CDG_WIDTH + srcX];
+                    } else {
+                        state.screen[y * CDG_WIDTH + x] = fillColor;
+                    }
+                }
+            }
+        }
+
+        function cdgRenderFrame(state) {
+            const px = cdgImageData.data;
+            for (let i = 0; i < state.screen.length; i++) {
+                const rgb = state.palette[state.screen[i]];
+                const o = i * 4;
+                px[o] = (rgb >> 16) & 0xFF;
+                px[o + 1] = (rgb >> 8) & 0xFF;
+                px[o + 2] = rgb & 0xFF;
+                px[o + 3] = 255;
+            }
+            cdgCtx.putImageData(cdgImageData, 0, 0);
+        }
+
+        function cdgLoop() {
+            if (!cdgState) return;
+            cdgUpdate(cdgState, musicAudio.currentTime);
+            cdgRenderFrame(cdgState);
+            cdgAnimHandle = requestAnimationFrame(cdgLoop);
+        }
+
+        function showCdgVisual() {
+            musicArt.style.display = 'none';
+            hideVizVisual();
+            cdgCanvas.style.display = 'block';
+            cdgExportWrap.style.display = 'block';
+        }
+
+        function hideCdgVisual() {
+            cdgCanvas.style.display = 'none';
+            cdgExportWrap.style.display = 'none';
+            musicArt.style.display = 'flex';
+        }
+
+        function clearCdgState() {
+            if (cdgAnimHandle) cancelAnimationFrame(cdgAnimHandle);
+            cdgAnimHandle = null;
+            cdgState = null;
+            hideCdgVisual();
+        }
+
+        // Unzips a karaoke pack (matching .mp3 + .cdg inside a .zip) and returns
+        // a playable audio URL plus the raw CDG bytes, if present.
+        const AUDIO_MIME_TYPES = {
+            mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4',
+            flac: 'audio/flac', aac: 'audio/aac', wma: 'audio/x-ms-wma', opus: 'audio/opus'
+        };
+
+        async function loadKaraokeZip(track) {
+            const resp = await fetch(track.src);
+            const buf = new Uint8Array(await resp.arrayBuffer());
+            const entries = parseZipEntries(buf);
+
+            let audioEntry = null;
+            let cdgEntry = null;
+            for (const entry of entries) {
+                const lower = entry.name.toLowerCase();
+                if (!audioEntry && AUDIO_EXTENSIONS.some(ext => lower.endsWith('.' + ext))) {
+                    audioEntry = entry;
+                } else if (!cdgEntry && lower.endsWith('.cdg')) {
+                    cdgEntry = entry;
+                }
+            }
+
+            if (!audioEntry) throw new Error('No audio file found in zip');
+
+            const audioBytes = extractZipEntry(buf, audioEntry);
+            const ext = audioEntry.name.slice(audioEntry.name.lastIndexOf('.') + 1).toLowerCase();
+            const audioBlob = new Blob([audioBytes], { type: AUDIO_MIME_TYPES[ext] || 'application/octet-stream' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const cdgBytes = cdgEntry ? extractZipEntry(buf, cdgEntry) : null;
+            const displayName = audioEntry.name.split('/').pop();
+
+            return { audioUrl, cdgBytes, displayName };
+        }
+
+        const musicBtn = document.getElementById('musicBtn');
+        const musicOverlay = document.getElementById('musicOverlay');
+        const musicAudio = document.getElementById('musicAudio');
+        const musicTitle = document.getElementById('musicTitle');
+        const musicSearchInput = document.getElementById('musicSearch');
+        const musicTable = document.getElementById('musicTable');
+        const musicTableBody = document.getElementById('musicTableBody');
+        const musicSeek = document.getElementById('musicSeek');
+        const musicTimeCurrent = document.getElementById('musicTimeCurrent');
+        const musicTimeDuration = document.getElementById('musicTimeDuration');
+        const musicPlayPause = document.getElementById('musicPlayPause');
+        const musicShuffleBtn = document.getElementById('musicShuffle');
+        const musicRepeatBtn = document.getElementById('musicRepeat');
+        const musicArt = document.getElementById('musicArt');
+
+        const cdgCanvas = document.getElementById('cdgCanvas');
+        const cdgCtx = cdgCanvas.getContext('2d');
+        const cdgExportWrap = document.getElementById('cdgExportWrap');
+        const cdgExportBtn = document.getElementById('cdgExportBtn');
+        let cdgExportRecorder = null;
+        let isCdgExporting = false;
+        
+        cdgCanvas.style.cursor = 'pointer';
+        cdgCanvas.addEventListener('dblclick', () => {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                cdgCanvas.requestFullscreen();
+            }
+        });
+        const cdgImageData = cdgCtx.createImageData(CDG_WIDTH, CDG_HEIGHT);
+
+        // ---- audio-reactive visualizer (Web Audio API), used when a track has no CD+G ----
+        const vizWrap = document.getElementById('vizWrap');
+        const vizCanvas = document.getElementById('vizCanvas');
+        const vizCtx = vizCanvas.getContext('2d');
+        const vizModeBtn = document.getElementById('vizModeBtn');
+        const vizExportBtn = document.getElementById('vizExportBtn');
+        const VIZ_MODES = ['Symmetry', 'Radial', 'Scope', 'Starfield', 'Plasma', 'Fireworks', 'Matrix', 'Kaleidoscope'];
+        let vizMode = 0;
+        let vizAnimHandle = null;
+        let audioCtx = null, analyser = null, freqData = null, timeData = null;
+        let vizStars = null, vizSparks = [], vizLastBurst = -1, vizMatrixCols = null;
+        let exportDestNode = null;
+        let isExporting = false;
+        let activeRecorder = null;
+
+        vizModeBtn.textContent = `Viz: ${VIZ_MODES[vizMode]}`;
+        vizModeBtn.addEventListener('click', () => {
+            vizMode = (vizMode + 1) % VIZ_MODES.length;
+            vizModeBtn.textContent = `Viz: ${VIZ_MODES[vizMode]}`;
+        });
+
+        vizCanvas.addEventListener('dblclick', () => {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                vizCanvas.requestFullscreen();
+            }
+        });
+
+        function ensureAudioGraph() {
+            if (audioCtx) {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                return;
+            }
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaElementSource(musicAudio);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 512;
+            analyser.smoothingTimeConstant = 0.8;
+            source.connect(analyser);
+            analyser.connect(audioCtx.destination);
+            freqData = new Uint8Array(analyser.frequencyBinCount);
+            timeData = new Uint8Array(analyser.frequencyBinCount);
+        }
+
+        // Records the visualizer canvas + audio in real time (as long as the track itself)
+        // and downloads the result as MP4 (falling back to WebM if the browser can't mux MP4).
+        async function exportVisualizationVideo() {
+            if (isExporting) return;
+            if (!vizCanvas.captureStream || typeof MediaRecorder === 'undefined') {
+                alert('Video export is not supported in this browser.');
+                return;
+            }
+            if (!musicAudio.duration || !isFinite(musicAudio.duration)) {
+                alert('Track is not ready yet.');
+                return;
+            }
+
+            ensureAudioGraph();
+            if (!exportDestNode) {
+                exportDestNode = audioCtx.createMediaStreamDestination();
+                analyser.connect(exportDestNode);
+            }
+
+            const mimeCandidates = [
+                'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+                'video/mp4',
+                'video/webm;codecs=vp9,opus',
+                'video/webm;codecs=vp8,opus',
+                'video/webm'
+            ];
+            const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported(m));
+            if (!mimeType) {
+                alert('No supported recording format found in this browser.');
+                return;
+            }
+
+            const canvasStream = vizCanvas.captureStream(30);
+            const combinedStream = new MediaStream([
+                ...canvasStream.getVideoTracks(),
+                ...exportDestNode.stream.getAudioTracks()
+            ]);
+
+            const recordedChunks = [];
+            const recorder = new MediaRecorder(combinedStream, { mimeType });
+            activeRecorder = recorder;
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+
+            const ext = mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
+            const track = musicTracks.find(t => t.id === currentTrackId);
+            const baseName = (track ? track.name : 'visualization').replace(/\.[^.]+$/, '');
+
+            isExporting = true;
+            vizExportBtn.disabled = true;
+            vizModeBtn.disabled = true;
+
+            recorder.onstop = () => {
+                isExporting = false;
+                activeRecorder = null;
+                vizExportBtn.disabled = false;
+                vizModeBtn.disabled = false;
+                vizExportBtn.textContent = '\u2b07 Export';
+
+                const blob = new Blob(recordedChunks, { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${baseName}.${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+            };
+
+            const progressTick = () => {
+                if (recorder.state !== 'recording') return;
+                vizExportBtn.textContent = `Exporting ${formatTime(musicAudio.currentTime)} / ${formatTime(musicAudio.duration)}`;
+                requestAnimationFrame(progressTick);
+            };
+
+            const onEnded = () => {
+                musicAudio.removeEventListener('ended', onEnded);
+                if (recorder.state === 'recording') recorder.stop();
+            };
+            musicAudio.addEventListener('ended', onEnded);
+
+            musicAudio.currentTime = 0;
+            await musicAudio.play();
+            recorder.start();
+            progressTick();
+        }
+
+        vizExportBtn.addEventListener('click', exportVisualizationVideo);
+
+        // Export CDG as WebP video during playback (works same as visualization export)
+        async function exportCdgVideo() {
+            if (isCdgExporting) return;
+            if (!cdgCanvas.captureStream || typeof MediaRecorder === 'undefined') {
+                alert('Video export is not supported in this browser.');
+                return;
+            }
+            if (!musicAudio.duration || !isFinite(musicAudio.duration)) {
+                alert('Track is not ready yet.');
+                return;
+            }
+
+            ensureAudioGraph();
+            if (!exportDestNode) {
+                exportDestNode = audioCtx.createMediaStreamDestination();
+                analyser.connect(exportDestNode);
+            }
+
+            const mimeCandidates = [
+                'video/webp',
+                'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+                'video/mp4',
+                'video/webm;codecs=vp9,opus',
+                'video/webm'
+            ];
+            const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported(m));
+            if (!mimeType) {
+                alert('No supported recording format found in this browser.');
+                return;
+            }
+
+            const canvasStream = cdgCanvas.captureStream(30);
+            const combinedStream = new MediaStream([
+                ...canvasStream.getVideoTracks(),
+                ...exportDestNode.stream.getAudioTracks()
+            ]);
+
+            const recordedChunks = [];
+            const recorder = new MediaRecorder(combinedStream, { mimeType });
+            cdgExportRecorder = recorder;
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+
+            // Determine file extension based on mime type
+            let ext = 'webp';
+            if (mimeType.startsWith('video/mp4')) ext = 'mp4';
+            else if (mimeType.startsWith('video/webm')) ext = 'webm';
+
+            const track = musicTracks.find(t => t.id === currentTrackId);
+            const baseName = (track ? track.name : 'cdg-export').replace(/\.[^.]+$/, '');
+
+            isCdgExporting = true;
+            cdgExportBtn.disabled = true;
+
+            recorder.onstop = () => {
+                isCdgExporting = false;
+                cdgExportRecorder = null;
+                cdgExportBtn.disabled = false;
+                cdgExportBtn.textContent = '\u2b07 Export';
+
+                const blob = new Blob(recordedChunks, { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${baseName}.${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+            };
+
+            const progressTick = () => {
+                if (recorder.state !== 'recording') return;
+                cdgExportBtn.textContent = `Exporting ${formatTime(musicAudio.currentTime)} / ${formatTime(musicAudio.duration)}`;
+                requestAnimationFrame(progressTick);
+            };
+
+            const onEnded = () => {
+                musicAudio.removeEventListener('ended', onEnded);
+                if (recorder.state === 'recording') recorder.stop();
+            };
+            musicAudio.addEventListener('ended', onEnded);
+
+            musicAudio.currentTime = 0;
+            await musicAudio.play();
+            recorder.start();
+            progressTick();
+        }
+
+        cdgExportBtn.addEventListener('click', exportCdgVideo);
+
+        function vizHsl(hue, sat, light) {
+            return `hsl(${((hue % 1) + 1) % 1 * 360}, ${sat}%, ${light}%)`;
+        }
+
+        function drawVizSymmetry(w, h) {
+            const bars = 64, bw = w / bars, midY = h / 2;
+            for (let i = 0; i < bars; i++) {
+                const amp = freqData[i] / 255;
+                const barH = amp * h * 0.48;
+                vizCtx.fillStyle = vizHsl(i / bars, 90, 55);
+                vizCtx.fillRect(i * bw + 1, midY - barH, bw - 2, barH);
+                vizCtx.globalAlpha = 0.5;
+                vizCtx.fillRect(i * bw + 1, midY, bw - 2, barH);
+                vizCtx.globalAlpha = 1;
+            }
+        }
+
+        function drawVizRadial(w, h, t) {
+            const cx = w / 2, cy = h / 2;
+            const maxR = Math.min(w, h) * 0.46, innerR = maxR * 0.18;
+            const bars = 64, rot = t * 0.4;
+            for (let i = 0; i < bars; i++) {
+                const amp = freqData[i] / 255;
+                const angle = rot + (i / bars) * Math.PI * 2;
+                const outerR = innerR + amp * (maxR - innerR);
+                vizCtx.strokeStyle = vizHsl(i / bars + t * 0.02, 100, 55);
+                vizCtx.lineWidth = Math.max(2, w / bars * 0.5);
+                vizCtx.beginPath();
+                vizCtx.moveTo(cx + Math.cos(angle) * innerR, cy + Math.sin(angle) * innerR);
+                vizCtx.lineTo(cx + Math.cos(angle) * outerR, cy + Math.sin(angle) * outerR);
+                vizCtx.stroke();
+            }
+            const pulse = 0.4 + 0.6 * (freqData[0] / 255);
+            vizCtx.fillStyle = vizHsl(0.12, 90, 60);
+            vizCtx.beginPath();
+            vizCtx.arc(cx, cy, innerR * pulse, 0, Math.PI * 2);
+            vizCtx.fill();
+        }
+
+        function drawVizScope(w, h) {
+            vizCtx.strokeStyle = 'rgba(255,255,255,0.85)';
+            vizCtx.lineWidth = 2;
+            vizCtx.beginPath();
+            const slice = w / timeData.length;
+            for (let i = 0; i < timeData.length; i++) {
+                const v = timeData[i] / 128 - 1;
+                const x = i * slice, y = h / 2 + v * h * 0.45;
+                if (i === 0) vizCtx.moveTo(x, y); else vizCtx.lineTo(x, y);
+            }
+            vizCtx.stroke();
+        }
+
+        function drawVizStarfield(w, h) {
+            if (!vizStars) {
+                vizStars = [];
+                for (let i = 0; i < 200; i++) {
+                    vizStars.push({
+                        x: Math.random(), y: Math.random(),
+                        speed: 0.002 + Math.random() * 0.01,
+                        size: 1 + Math.random() * 3, hue: Math.random()
+                    });
+                }
+            }
+            const bass = freqData[0] / 255;
+            for (const s of vizStars) {
+                const dx = s.x - 0.5, dy = s.y - 0.5;
+                const dist = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                const speed = s.speed * (1 + bass * 3);
+                s.x += dx / dist * speed;
+                s.y += dy / dist * speed;
+                if (s.x < 0 || s.x > 1 || s.y < 0 || s.y > 1) {
+                    s.x = 0.5 + (Math.random() - 0.5) * 0.05;
+                    s.y = 0.5 + (Math.random() - 0.5) * 0.05;
+                    s.speed = 0.002 + Math.random() * 0.01;
+                }
+                const dist2 = Math.sqrt((s.x - 0.5) ** 2 + (s.y - 0.5) ** 2);
+                const bright = Math.min(1, dist2 * 3);
+                vizCtx.fillStyle = `hsla(${s.hue * 360}, 70%, 60%, ${bright})`;
+                const sz = s.size * (0.5 + dist2 * 2);
+                vizCtx.fillRect(s.x * w - sz / 2, s.y * h - sz / 2, sz, sz);
+            }
+        }
+
+        function drawVizPlasma(w, h, t) {
+            const cols = 48, rows = 27, cw = w / cols, ch = h / rows;
+            const bass = freqData[2] / 255;
+            for (let py = 0; py < rows; py++) {
+                for (let px = 0; px < cols; px++) {
+                    const nx = px / cols, ny = py / rows;
+                    let v = Math.sin(nx * 10 + t * 1.3) + Math.sin(ny * 10 - t * 1.1)
+                        + Math.sin((nx + ny) * 10 + t * 0.7)
+                        + Math.sin(Math.sqrt((nx - 0.5) ** 2 + (ny - 0.5) ** 2) * 20 - t * 2);
+                    v = (v / 4) * (0.6 + 0.4 * bass);
+                    vizCtx.fillStyle = vizHsl(v * 0.5 + 0.5 + t * 0.03, 85, 55);
+                    vizCtx.fillRect(px * cw, py * ch, cw + 1, ch + 1);
+                }
+            }
+        }
+
+        function drawVizFireworks(w, h, t) {
+            const bass = freqData[1] / 255;
+            if ((bass > 0.75 && t - vizLastBurst > 0.25) || t - vizLastBurst > 1.2) {
+                vizLastBurst = t;
+                const bx = Math.random() * w, by = h * (0.2 + Math.random() * 0.3);
+                const hue0 = Math.random();
+                const count = 40 + Math.floor(Math.random() * 30);
+                for (let i = 0; i < count; i++) {
+                    const ang = (i / count) * Math.PI * 2;
+                    const spd = 40 + Math.random() * 90;
+                    vizSparks.push({
+                        x: bx, y: by, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
+                        life: 1, hue: hue0 + Math.random() * 0.08
+                    });
+                }
+            }
+            const dt = 1 / 60;
+            for (const s of vizSparks) {
+                if (s.life <= 0) continue;
+                s.x += s.vx * dt;
+                s.y += s.vy * dt;
+                s.vy += 60 * dt;
+                s.life -= dt * 0.6;
+                if (s.y > h) s.life = 0;
+                if (s.life > 0) {
+                    vizCtx.fillStyle = `hsla(${(s.hue % 1) * 360}, 90%, 60%, ${Math.max(0, s.life)})`;
+                    vizCtx.fillRect(s.x - 1.5, s.y - 1.5, 3, 3);
+                }
+            }
+            vizSparks = vizSparks.filter(s => s.life > 0);
+            if (vizSparks.length > 4000) vizSparks.splice(0, vizSparks.length - 4000);
+        }
+
+        function drawVizMatrix(w, h) {
+            const cols = 28;
+            if (!vizMatrixCols) {
+                vizMatrixCols = [];
+                for (let i = 0; i < cols; i++) {
+                    vizMatrixCols.push({ y: -Math.random() * h, speed: 60 + Math.random() * 90 });
+                }
+            }
+            const colW = w / cols, charH = 16, trail = 14;
+            vizCtx.font = '14px monospace';
+            vizCtx.textBaseline = 'top';
+            for (let c = 0; c < cols; c++) {
+                const col = vizMatrixCols[c];
+                const bandVal = freqData[c % freqData.length] / 255;
+                col.y += (col.speed * (0.6 + 0.8 * bandVal)) / 60;
+                if (col.y - trail * charH > h) {
+                    col.y = -Math.random() * h * 0.5;
+                    col.speed = 60 + Math.random() * 90;
+                }
+                for (let k = 0; k < trail; k++) {
+                    const cy = col.y - k * charH;
+                    if (cy < 0 || cy > h) continue;
+                    const glyph = String.fromCharCode(33 + Math.floor(Math.random() * 90));
+                    const fade = 1 - k / trail;
+                    const light = k === 0 ? 90 : 30 + fade * 40;
+                    vizCtx.fillStyle = `hsl(120, 80%, ${light}%)`;
+                    vizCtx.fillText(glyph, c * colW, cy);
+                }
+            }
+        }
+
+        function drawVizKaleidoscope(w, h, t) {
+            const cx = w / 2, cy = h / 2;
+            const maxR = Math.min(w, h) * 0.48;
+            const segments = 8, segAngle = Math.PI * 2 / segments, rot = t * 0.25;
+            for (let i = 0; i < 64; i += 2) {
+                const amp = freqData[i] / 255;
+                const baseAngle = (i / 64) * segAngle;
+                const rr = amp * maxR;
+                vizCtx.fillStyle = vizHsl(i / 64 + t * 0.06, 95, 55);
+                for (let seg = 0; seg < segments; seg++) {
+                    let ang = rot + seg * segAngle + baseAngle;
+                    if (seg % 2 === 1) ang = rot + seg * segAngle + (segAngle - baseAngle);
+                    vizCtx.beginPath();
+                    vizCtx.arc(cx + Math.cos(ang) * rr, cy + Math.sin(ang) * rr, 3, 0, Math.PI * 2);
+                    vizCtx.fill();
+                }
+            }
+        }
+
+        function vizLoop() {
+            if (!analyser) return;
+            analyser.getByteFrequencyData(freqData);
+            analyser.getByteTimeDomainData(timeData);
+            const w = vizCanvas.width, h = vizCanvas.height;
+            const t = musicAudio.currentTime;
+            vizCtx.fillStyle = 'black';
+            vizCtx.fillRect(0, 0, w, h);
+            switch (vizMode) {
+                case 0: drawVizSymmetry(w, h); break;
+                case 1: drawVizRadial(w, h, t); break;
+                case 2: drawVizScope(w, h); break;
+                case 3: drawVizStarfield(w, h); break;
+                case 4: drawVizPlasma(w, h, t); break;
+                case 5: drawVizFireworks(w, h, t); break;
+                case 6: drawVizMatrix(w, h); break;
+                case 7: drawVizKaleidoscope(w, h, t); break;
+            }
+            vizAnimHandle = requestAnimationFrame(vizLoop);
+        }
+
+        function showVizVisual() {
+            musicArt.style.display = 'none';
+            vizWrap.style.display = 'block';
+            ensureAudioGraph();
+            if (!vizAnimHandle) vizLoop();
+        }
+
+        function hideVizVisual() {
+            vizWrap.style.display = 'none';
+            if (vizAnimHandle) cancelAnimationFrame(vizAnimHandle);
+            vizAnimHandle = null;
+        }
+
+        let musicTracks = [];
+        let currentTrackId = null;
+        let musicSearchTerm = '';
+        let musicSortState = { col: 'name', dir: 1 };
+        let shuffleOn = false;
+        let repeatOn = false;
+        let isSeeking = false;
+        let currentObjectUrl = null;
+        let cdgState = null;
+        let cdgAnimHandle = null;
+        let loadToken = 0;
+
+        function formatTime(sec) {
+            if (!isFinite(sec)) return '0:00';
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function getDisplayedTracks() {
+            let list = musicTracks;
+            const term = musicSearchTerm.trim().toLowerCase();
+            if (term) list = list.filter(t => t.name.toLowerCase().includes(term));
+
+            const { col, dir } = musicSortState;
+            list = [...list].sort((a, b) => {
+                let av, bv;
+                if (col === 'cdg') {
+                    av = a.hasCdg === true ? 1 : 0;
+                    bv = b.hasCdg === true ? 1 : 0;
+                } else if (col === 'type') {
+                    av = a.type; bv = b.type;
+                } else {
+                    av = a.name.toLowerCase(); bv = b.name.toLowerCase();
+                }
+                if (av < bv) return -1 * dir;
+                if (av > bv) return 1 * dir;
+                return 0;
+            });
+            return list;
+        }
+
+        function updateMusicSortHeaders() {
+            musicTable.querySelectorAll('th[data-col]').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.col === musicSortState.col) {
+                    th.classList.add(musicSortState.dir === 1 ? 'sort-asc' : 'sort-desc');
+                }
+            });
+        }
+
+        function renderMusicTable() {
+            const list = getDisplayedTracks();
+            musicTableBody.innerHTML = list.map(track => {
+                const cdgLabel = track.hasCdg === null ? '&hellip;' : (track.hasCdg ? '&#10003;' : '&#8212;');
+                return `<tr data-id="${track.id}" class="${track.id === currentTrackId ? 'playing' : ''}">` +
+                    `<td>${escapeHtml(track.name)}</td>` +
+                    `<td>${track.type}</td>` +
+                    `<td class="music-cdg-cell">${cdgLabel}</td>` +
+                    `</tr>`;
+            }).join('');
+            updateMusicSortHeaders();
+        }
+
+        musicTableBody.addEventListener('click', (e) => {
+            const row = e.target.closest('tr[data-id]');
+            if (row) playTrackById(parseInt(row.dataset.id, 10));
+        });
+
+        musicTable.querySelectorAll('th[data-col]').forEach(th => {
+            th.addEventListener('click', () => {
+                const col = th.dataset.col;
+                if (musicSortState.col === col) {
+                    musicSortState.dir *= -1;
+                } else {
+                    musicSortState = { col, dir: 1 };
+                }
+                renderMusicTable();
+            });
+        });
+
+        musicSearchInput.addEventListener('input', () => {
+            musicSearchTerm = musicSearchInput.value;
+            renderMusicTable();
+        });
+
+        async function playTrackById(id) {
+            if (isExporting) return;
+            const track = musicTracks.find(t => t.id === id);
+            if (!track) return;
+            currentTrackId = id;
+            const token = ++loadToken;
+
+            renderMusicTable();
+            clearCdgState();
+            if (currentObjectUrl) {
+                URL.revokeObjectURL(currentObjectUrl);
+                currentObjectUrl = null;
+            }
+            musicAudio.pause();
+
+            if (track.type === 'zip') {
+                musicTitle.textContent = `Loading ${track.name}...`;
+                try {
+                    const { audioUrl, cdgBytes, displayName } = await loadKaraokeZip(track);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = displayName;
+                    if (cdgBytes) {
+                        cdgState = cdgCreateState(cdgBytes);
+                        showCdgVisual();
+                        cdgLoop();
+                    } else {
+                        showVizVisual();
+                    }
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to load ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'midi') {
+                musicTitle.textContent = `Rendering ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Render-Midi': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to render ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'voc') {
+                musicTitle.textContent = `Converting ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Render-Voc': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to convert ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'au') {
+                musicTitle.textContent = `Converting ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Render-Au': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to convert ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'aiff') {
+                musicTitle.textContent = `Converting ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Render-Aiff': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to convert ${track.name}`;
+                    console.error(err);
+                }
+            } else if (track.type === 'convertible') {
+                musicTitle.textContent = `Converting ${track.name}...`;
+                try {
+                    const res = await fetch(track.src, { headers: { 'X-Convert-Audio': '1' } });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    if (token !== loadToken) { URL.revokeObjectURL(audioUrl); return; }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = track.name;
+                    showVizVisual();
+                    musicAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to convert ${track.name}`;
+                    console.error(err);
+                }
+            } else {
+                musicAudio.src = track.src;
+                musicTitle.textContent = track.name;
+                musicAudio.play();
+                if (track.cdgSrc) {
+                    try {
+                        const resp = await fetch(track.cdgSrc);
+                        const cdgBytes = new Uint8Array(await resp.arrayBuffer());
+                        if (token !== loadToken) return;
+                        cdgState = cdgCreateState(cdgBytes);
+                        showCdgVisual();
+                        cdgLoop();
+                    } catch (err) {
+                        console.error('Failed to load CD+G file', err);
+                        showVizVisual();
+                    }
+                } else {
+                    showVizVisual();
+                }
+            }
+        }
+
+        function nextTrack() {
+            const list = getDisplayedTracks();
+            if (list.length === 0) return;
+            if (shuffleOn) {
+                let idx = Math.floor(Math.random() * list.length);
+                if (list.length > 1 && list[idx].id === currentTrackId) idx = (idx + 1) % list.length;
+                playTrackById(list[idx].id);
+            } else {
+                const curIdx = list.findIndex(t => t.id === currentTrackId);
+                playTrackById(list[(curIdx + 1 + list.length) % list.length].id);
+            }
+        }
+
+        function prevTrack() {
+            const list = getDisplayedTracks();
+            if (list.length === 0) return;
+            // If more than 3s into the track, restart it instead of going back
+            const elapsed = musicAudio.currentTime;
+            if (elapsed > 3) {
+                musicAudio.currentTime = 0;
+                return;
+            }
+            const curIdx = list.findIndex(t => t.id === currentTrackId);
+            playTrackById(list[(curIdx - 1 + list.length) % list.length].id);
+        }
+
+        function openMusicPlayer() {
+            musicTracks = getAudioEntries();
+            if (musicTracks.length === 0) return;
+            musicSearchTerm = '';
+            musicSearchInput.value = '';
+            musicSortState = { col: 'name', dir: 1 };
+            musicOverlay.classList.add('active');
+
+            // Kick off async CD+G detection for zip tracks without blocking playback
+            musicTracks.filter(t => t.type === 'zip').forEach(t => {
+                peekZipHasCdg(t.src).then(has => {
+                    t.hasCdg = has;
+                    renderMusicTable();
+                });
+            });
+
+            const list = getDisplayedTracks();
+            renderMusicTable();
+            if (list.length > 0) playTrackById(list[0].id);
+        }
+
+        function closeMusicPlayer() {
+            if (activeRecorder && activeRecorder.state === 'recording') activeRecorder.stop();
+            musicOverlay.classList.remove('active');
+            musicAudio.pause();
+            musicAudio.src = '';
+            currentTrackId = null;
+            clearCdgState();
+            hideVizVisual();
+            if (currentObjectUrl) {
+                URL.revokeObjectURL(currentObjectUrl);
+                currentObjectUrl = null;
+            }
+        }
+
+        musicBtn.addEventListener('click', openMusicPlayer);
+        document.getElementById('musicClose').addEventListener('click', closeMusicPlayer);
+
+        musicOverlay.addEventListener('click', (e) => {
+            if (e.target === musicOverlay) closeMusicPlayer();
+        });
+
+        musicPlayPause.addEventListener('click', () => {
+            if (musicAudio.paused) {
+                musicAudio.play();
+            } else {
+                musicAudio.pause();
+            }
+        });
+
+        musicAudio.addEventListener('play', () => {
+            musicPlayPause.innerHTML = '&#10074;&#10074;';
+        });
+
+        musicAudio.addEventListener('pause', () => {
+            musicPlayPause.innerHTML = '&#9658;';
+        });
+
+        musicAudio.addEventListener('ended', () => {
+            if (isExporting) return;
+            if (repeatOn) {
+                musicAudio.currentTime = 0;
+                musicAudio.play();
+            } else {
+                nextTrack();
+            }
+        });
+
+        musicAudio.addEventListener('timeupdate', () => {
+            if (isSeeking) return;
+            musicTimeCurrent.textContent = formatTime(musicAudio.currentTime);
+            musicTimeDuration.textContent = formatTime(musicAudio.duration);
+            if (musicAudio.duration) {
+                musicSeek.value = (musicAudio.currentTime / musicAudio.duration) * 100;
+            }
+        });
+
+        musicAudio.addEventListener('loadedmetadata', () => {
+            musicTimeDuration.textContent = formatTime(musicAudio.duration);
+        });
+
+        musicSeek.addEventListener('input', () => {
+            isSeeking = true;
+            musicTimeCurrent.textContent = formatTime((musicSeek.value / 100) * musicAudio.duration);
+        });
+
+        musicSeek.addEventListener('change', () => {
+            if (musicAudio.duration) {
+                musicAudio.currentTime = (musicSeek.value / 100) * musicAudio.duration;
+            }
+            isSeeking = false;
+        });
+
+        document.getElementById('musicNext').addEventListener('click', nextTrack);
+        document.getElementById('musicPrev').addEventListener('click', prevTrack);
+        document.getElementById('musicUpBtn').addEventListener('click', prevTrack);
+        document.getElementById('musicDownBtn').addEventListener('click', nextTrack);
+
+        musicShuffleBtn.addEventListener('click', () => {
+            shuffleOn = !shuffleOn;
+            musicShuffleBtn.classList.toggle('active', shuffleOn);
+        });
+
+        musicRepeatBtn.addEventListener('click', () => {
+            repeatOn = !repeatOn;
+            musicRepeatBtn.classList.toggle('active', repeatOn);
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (!musicOverlay.classList.contains('active')) return;
+            if (e.key === 'Escape') { closeMusicPlayer(); return; }
+            if (document.activeElement === musicSearchInput) return;
+            if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                musicAudio.currentTime = Math.min(musicAudio.duration || Infinity, musicAudio.currentTime + 10);
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                musicAudio.currentTime = Math.max(0, musicAudio.currentTime - 10);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                prevTrack();
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                nextTrack();
+            } else if (e.key === ' ') {
+                e.preventDefault();
+                musicPlayPause.click();
+            } else if (e.key === 'v' || e.key === 'V') {
+                vizModeBtn.click();
+            }
+        });
+
+        // ---- video player ----
+        const videoBtn = document.getElementById('videoBtn');
+        const videoOverlay = document.getElementById('videoOverlay');
+        const videoElement = document.getElementById('videoElement');
+        const videoTitle = document.getElementById('videoTitle');
+        const videoSearchInput = document.getElementById('videoSearch');
+        const videoTable = document.getElementById('videoTable');
+        const videoTableBody = document.getElementById('videoTableBody');
+
+        let videoTracks = [];
+        let currentVideoTrackId = null;
+        let videoSearchTerm = '';
+        let videoSortState = { col: 'name', dir: 1 };
+        let currentSubtitleUrl = null;
+
+        // Converts SRT timestamps/format to WebVTT so the browser's native <track> can use it
+        function srtToVtt(srtText) {
+            const body = srtText
+                .replace(/\r/g, '')
+                .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+            return 'WEBVTT\n\n' + body;
+        }
+
+        function getDisplayedVideos() {
+            let list = videoTracks;
+            const term = videoSearchTerm.trim().toLowerCase();
+            if (term) list = list.filter(t => t.name.toLowerCase().includes(term));
+
+            const { col, dir } = videoSortState;
+            list = [...list].sort((a, b) => {
+                let av, bv;
+                if (col === 'subs') {
+                    av = a.hasSubs ? 1 : 0;
+                    bv = b.hasSubs ? 1 : 0;
+                } else if (col === 'type') {
+                    av = a.type; bv = b.type;
+                } else {
+                    av = a.name.toLowerCase(); bv = b.name.toLowerCase();
+                }
+                if (av < bv) return -1 * dir;
+                if (av > bv) return 1 * dir;
+                return 0;
+            });
+            return list;
+        }
+
+        function updateVideoSortHeaders() {
+            videoTable.querySelectorAll('th[data-col]').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.col === videoSortState.col) {
+                    th.classList.add(videoSortState.dir === 1 ? 'sort-asc' : 'sort-desc');
+                }
+            });
+        }
+
+        function renderVideoTable() {
+            const list = getDisplayedVideos();
+            videoTableBody.innerHTML = list.map(track => {
+                const subsLabel = track.hasSubs ? '&#10003;' : '&#8212;';
+                return `<tr data-id="${track.id}" class="${track.id === currentVideoTrackId ? 'playing' : ''}">` +
+                    `<td>${escapeHtml(track.name)}</td>` +
+                    `<td>${track.type}</td>` +
+                    `<td class="music-cdg-cell">${subsLabel}</td>` +
+                    `</tr>`;
+            }).join('');
+            updateVideoSortHeaders();
+        }
+
+        videoTableBody.addEventListener('click', (e) => {
+            const row = e.target.closest('tr[data-id]');
+            if (row) playVideoById(parseInt(row.dataset.id, 10));
+        });
+
+        videoTable.querySelectorAll('th[data-col]').forEach(th => {
+            th.addEventListener('click', () => {
+                const col = th.dataset.col;
+                if (videoSortState.col === col) {
+                    videoSortState.dir *= -1;
+                } else {
+                    videoSortState = { col, dir: 1 };
+                }
+                renderVideoTable();
+            });
+        });
+
+        videoSearchInput.addEventListener('input', () => {
+            videoSearchTerm = videoSearchInput.value;
+            renderVideoTable();
+        });
+
+        async function playVideoById(id) {
+            const track = videoTracks.find(t => t.id === id);
+            if (!track) return;
+            currentVideoTrackId = id;
+            renderVideoTable();
+
+            // Clear any existing subtitle track
+            videoElement.querySelectorAll('track').forEach(t => t.remove());
+            if (currentSubtitleUrl) {
+                URL.revokeObjectURL(currentSubtitleUrl);
+                currentSubtitleUrl = null;
+            }
+
+            videoElement.src = track.src;
+            videoTitle.textContent = track.name;
+            videoElement.play();
+
+            if (track.subSrc) {
+                try {
+                    const resp = await fetch(track.subSrc);
+                    let vttText = await resp.text();
+                    if (track.subIsSrt) vttText = srtToVtt(vttText);
+                    const blob = new Blob([vttText], { type: 'text/vtt' });
+                    currentSubtitleUrl = URL.createObjectURL(blob);
+                    const trackEl = document.createElement('track');
+                    trackEl.kind = 'subtitles';
+                    trackEl.label = 'Subtitles';
+                    trackEl.srclang = 'en';
+                    trackEl.src = currentSubtitleUrl;
+                    trackEl.default = true;
+                    videoElement.appendChild(trackEl);
+                } catch (err) {
+                    console.error('Failed to load subtitles', err);
+                }
+            }
+        }
+
+        function nextVideo() {
+            const list = getDisplayedVideos();
+            if (list.length === 0) return;
+            const curIdx = list.findIndex(t => t.id === currentVideoTrackId);
+            playVideoById(list[(curIdx + 1 + list.length) % list.length].id);
+        }
+
+        function prevVideo() {
+            const list = getDisplayedVideos();
+            if (list.length === 0) return;
+            const curIdx = list.findIndex(t => t.id === currentVideoTrackId);
+            playVideoById(list[(curIdx - 1 + list.length) % list.length].id);
+        }
+
+        function openVideoPlayer() {
+            videoTracks = getVideoEntries();
+            if (videoTracks.length === 0) return;
+            videoSearchTerm = '';
+            videoSearchInput.value = '';
+            videoSortState = { col: 'name', dir: 1 };
+            videoOverlay.classList.add('active');
+            renderVideoTable();
+            const list = getDisplayedVideos();
+            if (list.length > 0) playVideoById(list[0].id);
+        }
+
+        function closeVideoPlayer() {
+            videoOverlay.classList.remove('active');
+            videoElement.pause();
+            videoElement.removeAttribute('src');
+            videoElement.load();
+            videoElement.querySelectorAll('track').forEach(t => t.remove());
+            currentVideoTrackId = null;
+            if (currentSubtitleUrl) {
+                URL.revokeObjectURL(currentSubtitleUrl);
+                currentSubtitleUrl = null;
+            }
+        }
+
+        videoBtn.addEventListener('click', openVideoPlayer);
+        document.getElementById('videoClose').addEventListener('click', closeVideoPlayer);
+        document.getElementById('videoUpBtn').addEventListener('click', prevVideo);
+        document.getElementById('videoDownBtn').addEventListener('click', nextVideo);
+
+        videoOverlay.addEventListener('click', (e) => {
+            if (e.target === videoOverlay) closeVideoPlayer();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (!videoOverlay.classList.contains('active')) return;
+            if (e.key === 'Escape') { closeVideoPlayer(); return; }
+            if (document.activeElement === videoSearchInput) return;
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                prevVideo();
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                nextVideo();
+            }
+        });
+
+        // Cookie management for navigation history
+        function setCookie(name, value, days = 30) {
+            const date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            const expires = `expires=${date.toUTCString()}`;
+            document.cookie = `${name}=${encodeURIComponent(value)};${expires};path=/`;
+        }
+
+        function getCookie(name) {
+            const nameEQ = `${name}=`;
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                let c = cookies[i].trim();
+                if (c.indexOf(nameEQ) === 0) return decodeURIComponent(c.substring(nameEQ.length));
+            }
+            return null;
+        }
+
+        function getNavigationHistory() {
+            const history = getCookie('fileNavHistory');
+            return history ? JSON.parse(history) : [];
+        }
+
+        function addToHistory(path) {
+            let history = getNavigationHistory();
+            // Remove if already exists to avoid duplicates
+            history = history.filter(p => p !== path);
+            // Add to end
+            history.push(path);
+            // Keep only last 20 items
+            if (history.length > 20) history.shift();
+            setCookie('fileNavHistory', JSON.stringify(history));
+        }
+
+        function updateBreadcrumb() {
+            const breadcrumb = document.querySelector('.breadcrumb');
+            const currentPath = getCurrentPath();
+            breadcrumb.innerHTML = '';
+
+            // Home link
+            const homeLink = document.createElement('a');
+            homeLink.textContent = '🏠';
+            homeLink.style.cursor = 'pointer';
+            homeLink.title = 'Home';
+            homeLink.onclick = (e) => {
+                e.preventDefault();
+                if (globalHomePath) {
+                    const homePath = globalHomePath.split('/').map(encodeURIComponent).join('/');
+                    window.location.pathname = homePath;
+                }
+            };
+            breadcrumb.appendChild(homeLink);
+
+            // History dropdown
+            const history = getNavigationHistory();
+            if (history.length > 0) {
+                const separator = document.createElement('span');
+                separator.textContent = '|';
+                breadcrumb.appendChild(separator);
+
+                const historyBtn = document.createElement('a');
+                historyBtn.textContent = '📋 Recent';
+                historyBtn.style.position = 'relative';
+                historyBtn.style.cursor = 'pointer';
+                
+                const dropdown = document.createElement('div');
+                dropdown.style.display = 'none';
+                dropdown.style.position = 'absolute';
+                dropdown.style.top = '100%';
+                dropdown.style.left = '0';
+                dropdown.style.backgroundColor = 'var(--card-bg)';
+                dropdown.style.border = '1px solid var(--border-color)';
+                dropdown.style.borderRadius = '4px';
+                dropdown.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)';
+                dropdown.style.zIndex = '1000';
+                dropdown.style.minWidth = '200px';
+                dropdown.style.maxHeight = '300px';
+                dropdown.style.overflowY = 'auto';
+                
+                history.slice().reverse().forEach(path => {
+                    const item = document.createElement('div');
+                    item.style.padding = '8px 12px';
+                    item.style.borderBottom = '1px solid var(--border-color)';
+                    item.style.cursor = 'pointer';
+                    item.style.whiteSpace = 'nowrap';
+                    item.style.textOverflow = 'ellipsis';
+                    item.style.overflow = 'hidden';
+                    item.style.fontSize = '13px';
+                    item.textContent = path || '/';
+                    item.style.color = 'var(--text-main)';
+                    
+                    item.onmouseover = () => {
+                        item.style.backgroundColor = 'var(--parent-hover)';
+                    };
+                    item.onmouseout = () => {
+                        item.style.backgroundColor = 'transparent';
+                    };
+                    
+                    item.onclick = () => {
+                        window.location.pathname = path;
+                        dropdown.style.display = 'none';
+                    };
+                    
+                    dropdown.appendChild(item);
+                });
+
+                historyBtn.onmouseover = () => dropdown.style.display = 'block';
+                historyBtn.onmouseout = () => dropdown.style.display = 'none';
+                dropdown.onmouseover = () => dropdown.style.display = 'block';
+                dropdown.onmouseout = () => dropdown.style.display = 'none';
+
+                historyBtn.appendChild(dropdown);
+                breadcrumb.appendChild(historyBtn);
+            }
+        }
+
+        // File preview functionality
+        const IMAGE_EXTS = /\.(jpg|jpeg|png|gif|webp|svg)$/i;
+        const TEXT_EXTS = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|py|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i;
+        const MAX_PREVIEW_SIZE = 1024 * 1024; // 1MB limit
+
+        function closePreview() {
+            document.getElementById('previewModal').classList.remove('active');
+        }
+
+        function syntaxHighlight(text, ext) {
+            // Simple syntax highlighting for common patterns
+            let html = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+
+            // Keywords
+            const keywords = ['if', 'else', 'for', 'while', 'function', 'const', 'let', 'var', 'return', 'class', 'def', 'import', 'from', 'as', 'try', 'except', 'finally', 'with', 'yield', 'async', 'await', 'true', 'false', 'null', 'undefined', 'new', 'this', 'super', 'static', 'public', 'private', 'protected', 'package', 'interface', 'extends', 'implements', 'throws', 'synchronized'];
+            keywords.forEach(kw => {
+                html = html.replace(new RegExp(`\\b${kw}\\b`, 'g'), `<span class="syntax-keyword">${kw}</span>`);
+            });
+
+            // Strings (both single and double quotes)
+            html = html.replace(/(["'`])(?:(?=(\\?))\2.)*?\1/g, '<span class="syntax-string">$&</span>');
+
+            // Numbers
+            html = html.replace(/\b\d+\.?\d*\b/g, '<span class="syntax-number">$&</span>');
+
+            // Comments (# for Python/Bash, // for JS/Java, /* */ for multi-line)
+            html = html.replace(/^#.*/gm, '<span class="syntax-comment">$&</span>');
+            html = html.replace(/\/\/.*/g, '<span class="syntax-comment">$&</span>');
+
+            return html;
+        }
+
+        async function previewFile(filePath, fileName) {
+            // If open-in-new-window is enabled, just open the file normally
+            if (openInNewWindow) {
+                window.open(filePath, '_blank');
+                return;
+            }
+
+            const modal = document.getElementById('previewModal');
+            const title = document.getElementById('previewTitle');
+            const content = document.getElementById('previewContent');
+
+            title.textContent = fileName;
+            content.innerHTML = '<p>Loading...</p>';
+            modal.classList.add('active');
+
+            try {
+                const response = await fetch(filePath);
+                if (!response.ok) throw new Error('Failed to load file');
+
+                const blob = await response.blob();
+                const size = blob.size;
+
+                if (IMAGE_EXTS.test(fileName)) {
+                    // Image preview
+                    const url = URL.createObjectURL(blob);
+                    content.innerHTML = `<img src="${url}" class="preview-image" alt="${fileName}">`;
+                } else if (TEXT_EXTS.test(fileName)) {
+                    // Text preview
+                    let text = await blob.text();
+                    const isTruncated = size > MAX_PREVIEW_SIZE;
+
+                    if (isTruncated) {
+                        text = text.substring(0, MAX_PREVIEW_SIZE);
+                    }
+
+                    const ext = fileName.split('.').pop().toLowerCase();
+                    const highlighted = syntaxHighlight(text, ext);
+                    const lines = highlighted.split('\n');
+                    
+                    const CHUNK_SIZE = 500;
+                    let displayedLines = 0;
+
+                    let html = '';
+                    if (isTruncated) {
+                        html += '<div class="preview-size-warning">File is large (' + 
+                            (size / (1024 * 1024)).toFixed(2) + 'MB). Showing first 1MB.</div>';
+                    }
+                    
+                    html += '<div class="preview-code" id="previewCode">';
+
+                    // Load first chunk
+                    for (let i = 0; i < Math.min(CHUNK_SIZE, lines.length); i++) {
+                        const line = lines[i];
+                        html += `<div class="preview-code-line">
+                            <div class="preview-code-line-num">${i + 1}</div>
+                            <div class="preview-code-line-content">${line || '&nbsp;'}</div>
+                        </div>`;
+                        displayedLines++;
+                    }
+
+                    html += '</div>';
+                    content.innerHTML = html;
+
+                    // Setup infinite scroll for remaining lines
+                    if (displayedLines < lines.length) {
+                        const previewCode = content.querySelector('#previewCode');
+                        
+                        const loadMore = () => {
+                            const scrollTop = content.scrollTop;
+                            const scrollHeight = content.scrollHeight;
+                            const clientHeight = content.clientHeight;
+                            
+                            // Load more when user scrolls near bottom (within 200px)
+                            if (scrollHeight - scrollTop - clientHeight < 200 && displayedLines < lines.length) {
+                                let html = '';
+                                for (let i = displayedLines; i < Math.min(displayedLines + CHUNK_SIZE, lines.length); i++) {
+                                    const line = lines[i];
+                                    html += `<div class="preview-code-line">
+                                        <div class="preview-code-line-num">${i + 1}</div>
+                                        <div class="preview-code-line-content">${line || '&nbsp;'}</div>
+                                    </div>`;
+                                }
+                                previewCode.innerHTML += html;
+                                displayedLines = Math.min(displayedLines + CHUNK_SIZE, lines.length);
+                            }
+                        };
+
+                        content.addEventListener('scroll', loadMore);
+                    }
+                } else {
+                    // Unsupported file type
+                    const ext = fileName.split('.').pop().toLowerCase();
+                    content.innerHTML = `<p>Cannot preview ${fileName}</p>
+                        <p style="color: var(--text-secondary); font-size: 13px;">Type: ${ext}</p>
+                        <p style="color: var(--text-secondary); font-size: 13px;">Size: ${(size / 1024).toFixed(2)} KB</p>`;
+                }
+            } catch (err) {
+                content.innerHTML = `<p style="color: #d32f2f;">Error loading file: ${err.message}</p>`;
+            }
+        }
+
+        // Encode parentheses and square brackets in paths: ( -> %28, ) -> %29, [ -> %5B, ] -> %5D
+        function encodeParens(path) {
+            return path.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\[/g, '%5B').replace(/\]/g, '%5D');
+        }
+
+        let globalHomePath = null;
+        
+        async function loadFiles() {
+            const dir = getCurrentPath();
+            const encodedDir = encodeParens(dir);
+            
+            // Decode the path for display
+            const displayDir = decodeURIComponent(dir) || '/';
+            document.title = `Felix Stargate - ${displayDir}`;
+            document.getElementById('title').textContent = displayDir;
+
+            const response = await fetch('/api/listfiles', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dir: encodedDir })
+            });
+
+            const data = await response.json();
+            fileData = data.entries;
+            globalHomePath = data.home;
+            const homeBtn = document.getElementById('homeBtn');
+            if (globalHomePath) {
+                homeBtn.style.display = 'inline-block';
+            }
+            updateSlideshowButtonVisibility();
+
+            fileFilterTerm = '';
+            fileFilterInput.value = '';
+            
+            // Sort by name by default
+            sortState.col = 'name';
+            sortState.dir = 1;
+            const sorted = [...fileData].sort((a, b) => a.name.localeCompare(b.name));
+            currentSorted = sorted;
+
+            updateSortIndicators('name');
+            renderTable(sorted);
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        // Target window for file/link entries — driven by the "Open in new
+        // window" toggle rather than a fixed file-type whitelist.
+        function getFileTarget() {
+            return openInNewWindow ? '_blank' : '_self';
+        }
+
+        function renderTable(entries) {
+            const tbody = document.querySelector('#fileTable tbody');
+            tbody.innerHTML = '';
+
+            // Check if there are any hidden files and show/hide toggle accordingly
+            const hasHiddenFiles = entries.some(e => e.name.startsWith('.'));
+            document.getElementById('showHiddenToggle').parentElement.style.display = hasHiddenFiles ? '' : 'none';
+
+            // Save current path to history
+            addToHistory(getCurrentPath());
+
+            entries = getFilteredEntries(entries);
+
+            // Add parent directory link if not root
+            const currentPath = getCurrentPath();
+            const hasParentDir = currentPath !== '/' && currentPath !== '';
+            
+            if (hasParentDir) {
+                const row = document.createElement('tr');
+                row.classList.add('parent-dir');
+                const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+                row.innerHTML = `
+                    <td></td>
+                    <td><a href="${parentPath}">..</a></td>
+                    <td class="type-directory">directory</td>
+                    <td class="size-placeholder">-</td>
+                    <td class="size-placeholder">-</td>
+                `;
+                tbody.appendChild(row);
+            }
+
+            entries.forEach((entry) => {
+                const row = document.createElement('tr');
+                const entryPath = currentPath.endsWith('/') 
+                    ? `${currentPath}${entry.name}`
+                    : `${currentPath}/${entry.name}`;
+                const encodedEntryPath = encodeParens(entryPath);
+
+                let nameCell;
+                if (entry.type === 'directory') {
+                    nameCell = `<a href="${encodedEntryPath}">${entry.name}</a>`;
+                } else {
+                    // Check if file is previewable
+                    const isPreviewable = IMAGE_EXTS.test(entry.name) || TEXT_EXTS.test(entry.name);
+                    if (isPreviewable) {
+                        nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}" onclick="if(event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) { previewFile('${encodedEntryPath}', '${entry.name}'); return false; }">${entry.name}</a>`;
+                    } else {
+                        nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}">${entry.name}</a>`;
+                    }
+                }
+
+                const typeClass = entry.type === 'directory' ? 'type-directory' : 
+                                 entry.type === 'link' ? 'type-link' : '';
+                const sizeDisplay = entry.type === 'file' ? formatFileSize(entry.size) : '-';
+                const sizeClass = entry.type === 'file' ? '' : 'size-placeholder';
+
+                const checkboxCell = entry.type === 'file' 
+                    ? `<input type="checkbox" class="file-checkbox" data-filepath="${encodedEntryPath}" data-filename="${entry.name}" style="cursor: pointer;"></input>`
+                    : '';
+
+                row.innerHTML = `
+                    <td style="text-align: center;">${checkboxCell}</td>
+                    <td>${nameCell}</td>
+                    <td class="${typeClass}">${entry.type}</td>
+                    <td class="${sizeClass}">${sizeDisplay}</td>
+                    <td class="size-placeholder">${new Date(entry.modified * 1000).toLocaleString()}</td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            // Update breadcrumb after table is rendered
+            updateBreadcrumb();
+        }
+
+        function sortByColumn(col) {
+            if (sortState.col === col) {
+                sortState.dir *= -1;
+            } else {
+                sortState.col = col;
+                sortState.dir = 1;
+            }
+
+            const sorted = [...fileData].sort((a, b) => {
+                let x = a[col];
+                let y = b[col];
+
+                if (col === 'size' || col === 'modified') {
+                    return (x - y) * sortState.dir;
+                }
+
+                return x.localeCompare(y) * sortState.dir;
+            });
+
+            currentSorted = sorted;
+            updateSortIndicators(col);
+            renderTable(sorted);
+        }
+
+        function updateSortIndicators(col) {
+            document.querySelectorAll('th').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.col === col) {
+                    th.classList.add(sortState.dir === 1 ? 'sort-asc' : 'sort-desc');
+                }
+            });
+        }
+
+        // Multi-file download functions
+        async function downloadSelectedFiles() {
+            const checkboxes = document.querySelectorAll('input.file-checkbox:checked');
+            const selectedFiles = Array.from(checkboxes).map(cb => ({
+                path: cb.getAttribute('data-filepath'),
+                name: cb.getAttribute('data-filename')
+            }));
+
+            if (selectedFiles.length === 0) {
+                alert('No files selected');
+                return;
+            }
+
+            const downloadBtn = document.getElementById('downloadBtn');
+            const originalText = downloadBtn.textContent;
+            downloadBtn.disabled = true;
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file = selectedFiles[i];
+                downloadBtn.textContent = `⬇ Downloading ${i + 1}/${selectedFiles.length}`;
+                await downloadFile(file.path, file.name);
+                if (i < selectedFiles.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = originalText;
+        }
+
+        async function downloadFile(filePath, fileName) {
+            try {
+                const response = await fetch(filePath);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = fileName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                console.error(`Failed to download ${fileName}:`, error);
+            }
+        }
+
+        function toggleAllCheckboxes(checked) {
+            document.querySelectorAll('input.file-checkbox').forEach(cb => {
+                cb.checked = checked;
+            });
+            updateDownloadButtonVisibility();
+        }
+
+        function updateDownloadButtonVisibility() {
+            const hasChecked = document.querySelectorAll('input.file-checkbox:checked').length > 0;
+            const downloadBtn = document.getElementById('downloadBtn');
+            const selectAllBtn = document.getElementById('selectAllBtn');
+            downloadBtn.style.display = hasChecked ? 'inline-block' : 'none';
+            selectAllBtn.style.display = document.querySelectorAll('input.file-checkbox').length > 0 ? 'inline-block' : 'none';
+        }
+
+        document.querySelectorAll('th[data-col]').forEach(th => {
+            th.addEventListener('click', () => sortByColumn(th.dataset.col));
+        });
+
+        // Modal event listeners
+        const previewModal = document.getElementById('previewModal');
+        previewModal.addEventListener('click', (e) => {
+            if (e.target === previewModal) {
+                closePreview();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && previewModal.classList.contains('active')) {
+                closePreview();
+            }
+        });
+
+        // Initialize Home button before loading files
+        const homeBtn = document.getElementById('homeBtn');
+        homeBtn.onclick = () => {
+            if (globalHomePath) {
+                const homePath = globalHomePath.split('/').map(encodeURIComponent).join('/');
+                window.location.pathname = homePath;
+            }
+        };
+
+        // Initialize after all functions are defined
+        updateBreadcrumb();
+        loadFiles();
+
+        // Download and checkbox event listeners
+        document.getElementById('downloadBtn').addEventListener('click', downloadSelectedFiles);
+        document.getElementById('selectAllBtn').addEventListener('click', () => {
+            const allChecked = document.querySelectorAll('input.file-checkbox').length === 
+                              document.querySelectorAll('input.file-checkbox:checked').length;
+            toggleAllCheckboxes(!allChecked);
+        });
+        document.getElementById('selectAllCheckbox').addEventListener('change', (e) => {
+            toggleAllCheckboxes(e.target.checked);
+        });
+
+        // Add event listeners to checkboxes when table is rendered
+        const originalRenderTable = window.renderTable;
+        window.renderTable = function(entries) {
+            originalRenderTable(entries);
+            document.querySelectorAll('input.file-checkbox').forEach(cb => {
+                cb.addEventListener('change', updateDownloadButtonVisibility);
+            });
+            updateDownloadButtonVisibility();
+        };
+
+        // Check for warpdrive cookie and auto-open if set
+        if (document.cookie.includes('warpdrive_active=true')) {
+            setTimeout(() => {
+                document.getElementById('consoleBtn').click();
+            }, 500);
+        }
+
+        // Console functionality
+        const consoleModal = document.createElement('div');
+        consoleModal.className = 'console-modal';
+        consoleModal.innerHTML = `
+            <div class="console-container">
+                <div class="console-header">
+                    <h3>Felix Warpdrive</h3>
+                    <button class="console-close">×</button>
+                </div>
+                <div class="console-output" id="consoleOutput"></div>
+                <div class="console-input-line">
+                    <span class="console-prompt">$ </span>
+                    <input type="text" id="consoleInput" autofocus>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(consoleModal);
+
+        let currentPath = '/';
+        let homePath = '/';
+        let commandHistory = [];
+        let historyIndex = -1;
+
+        const consoleInput = document.getElementById('consoleInput');
+        const consoleOutput = document.getElementById('consoleOutput');
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
+        }
+
+        function addOutputLine(text, isCommand = false) {
+            const line = document.createElement('div');
+            line.className = 'console-output-line';
+            if (isCommand) {
+                line.classList.add('command');
+                line.textContent = '$ ' + text;
+            } else {
+                line.textContent = text;
+            }
+            consoleOutput.appendChild(line);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+
+        function globToRegex(glob) {
+            const escapeRegex = (str) => str.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+            let regex = '^';
+            for (let i = 0; i < glob.length; i++) {
+                const char = glob[i];
+                if (char === '*') {
+                    regex += '.*';
+                } else if (char === '?') {
+                    regex += '.';
+                } else {
+                    regex += escapeRegex(char);
+                }
+            }
+            regex += '$';
+            return new RegExp(regex, 'i');
+        }
+
+        async function downloadMultipleFiles(files, logger) {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                logger(`[${i + 1}/${files.length}] Downloading: ${file.name}`);
+                try {
+                    const response = await fetch(file.path);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = file.name;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                } catch (error) {
+                    logger(`Error downloading ${file.name}: ${error.message}`);
+                }
+                if (i < files.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+            logger('Download complete');
+        }
+
+        function resolvePath(pathStr) {
+            // Remember if input had trailing slash
+            const hadTrailingSlash = pathStr.endsWith('/');
+            
+            // Normalize path separators and split into components
+            const parts = pathStr.split('/').filter(p => p !== '');
+            const stack = [];
+            
+            for (const part of parts) {
+                if (part === '..') {
+                    if (stack.length > 0) {
+                        stack.pop();
+                    }
+                    // If we're at root, .. stays at root (no error)
+                } else if (part !== '.' && part !== '') {
+                    stack.push(part);
+                }
+            }
+            
+            // Reconstruct path
+            const resolved = '/' + stack.join('/');
+            
+            // Preserve trailing slash only if original had it
+            if (hadTrailingSlash && !resolved.endsWith('/')) {
+                return resolved + '/';
+            }
+            return resolved;
+        }
+
+        async function executeCommand(cmd) {
+            cmd = cmd.trim();
+            if (!cmd) return;
+
+            addOutputLine(cmd, true);
+            
+            // Add to history (keep last 100)
+            commandHistory.push(cmd);
+            if (commandHistory.length > 100) {
+                commandHistory.shift();
+            }
+            historyIndex = -1;
+
+            // Parse command with support for quoted arguments
+            const parts = [];
+            let current = '';
+            let inQuotes = false;
+            let quoteChar = '';
+            
+            for (let i = 0; i < cmd.length; i++) {
+                const char = cmd[i];
+                if ((char === '"' || char === "'") && !inQuotes) {
+                    inQuotes = true;
+                    quoteChar = char;
+                } else if (char === quoteChar && inQuotes) {
+                    inQuotes = false;
+                    quoteChar = '';
+                } else if (char === ' ' && !inQuotes) {
+                    if (current) {
+                        parts.push(current);
+                        current = '';
+                    }
+                } else {
+                    current += char;
+                }
+            }
+            if (current) {
+                parts.push(current);
+            }
+            
+            const command = parts[0];
+            const args = parts.slice(1);
+
+            try {
+                if (command === 'pwd') {
+                    addOutputLine(currentPath);
+                } else if (command === 'ls') {
+                    const pattern = args.join(' ') || '*';
+                    let dir = currentPath;
+                    let filename = pattern;
+                    
+                    // Check if pattern contains a directory separator
+                    if (pattern.includes('/')) {
+                        let targetDir = pattern.substring(0, pattern.lastIndexOf('/'));
+                        dir = pattern.startsWith('/') ? targetDir || '/' : currentPath + (currentPath.endsWith('/') ? '' : '/') + targetDir;
+                        filename = pattern.substring(pattern.lastIndexOf('/') + 1);
+                    }
+                    
+                    // Normalize dir - remove trailing slash for consistency, then add it back for API call
+                    if (dir.endsWith('/') && dir !== '/') {
+                        dir = dir.slice(0, -1);
+                    }
+                    const apiDir = dir.endsWith('/') ? dir : dir + '/';
+                    
+                    const response = await fetch('/api/listfiles', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ dir: apiDir })
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.entries && data.entries.length > 0) {
+                            const regex = new RegExp('^' + filename.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+                            const matches = data.entries.filter(e => regex.test(e.name)).sort((a, b) => a.name.localeCompare(b.name));
+                            
+                            if (matches.length === 0) {
+                                addOutputLine('(no matches)');
+                            } else if (matches.length === 1 && matches[0].type === 'directory') {
+                                // If single match is a directory, list its contents
+                                let subDir = dir + (dir.endsWith('/') ? '' : '/') + matches[0].name;
+                                // Normalize subDir - remove trailing slash for consistency, then add it back for API call
+                                if (subDir.endsWith('/')) {
+                                    subDir = subDir.slice(0, -1);
+                                }
+                                const apiSubDir = subDir.endsWith('/') ? subDir : subDir + '/';
+                                const subResponse = await fetch('/api/listfiles', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ dir: apiSubDir })
+                                });
+                                if (subResponse.ok) {
+                                    const subData = await subResponse.json();
+                                    if (subData.entries && subData.entries.length > 0) {
+                                        const sorted = [...subData.entries].sort((a, b) => a.name.localeCompare(b.name));
+                                        sorted.forEach(entry => {
+                                            const type = entry.type === 'directory' ? '/' : '';
+                                            addOutputLine(entry.name + type);
+                                        });
+                                    } else {
+                                        addOutputLine('(empty directory)');
+                                    }
+                                }
+                            } else {
+                                matches.forEach(entry => {
+                                    const type = entry.type === 'directory' ? '/' : '';
+                                    addOutputLine(entry.name + type);
+                                });
+                            }
+                        } else {
+                            addOutputLine('(empty directory)');
+                        }
+                    } else {
+                        addOutputLine('Error: directory not found');
+                    }
+                } else if (command === 'get') {
+                    if (args.length === 0) {
+                        addOutputLine('Usage: get <filename>');
+                    } else {
+                        const filePath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
+                        window.open(filePath, '_blank');
+                        addOutputLine('Downloading: ' + args.join(' '));
+                    }
+                } else if (command === 'mget') {
+                    if (args.length === 0) {
+                        addOutputLine('Usage: mget <pattern>');
+                    } else {
+                        const pattern = args.join(' ');
+                        const apiDir = currentPath.endsWith('/') ? currentPath : currentPath + '/';
+                        
+                        const response = await fetch('/api/listfiles', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ dir: apiDir })
+                        });
+                        
+                        if (response.ok) {
+                            const data = await response.json();
+                            const regex = globToRegex(pattern);
+                            const matchedFiles = (data.entries || [])
+                                .filter(e => e.type === 'file' && regex.test(e.name))
+                                .map(e => ({
+                                    path: apiDir + e.name,
+                                    name: e.name
+                                }));
+                            
+                            if (matchedFiles.length === 0) {
+                                addOutputLine('No files matched: ' + pattern);
+                            } else {
+                                addOutputLine(`Downloading ${matchedFiles.length} file(s)...`);
+                                downloadMultipleFiles(matchedFiles, addOutputLine);
+                            }
+                        } else {
+                            addOutputLine('Error: cannot read directory');
+                        }
+                    }
+                } else if (command === 'cd') {
+                    if (args.length === 0) {
+                        currentPath = '/';
+                    } else if (args[0] === '~') {
+                        currentPath = homePath.endsWith('/') ? homePath : homePath + '/';
+                    } else if (args[0].startsWith('~/')) {
+                        const subpath = args[0].substring(2);
+                        const newPath = homePath + (homePath.endsWith('/') ? '' : '/') + subpath;
+                        const response = await fetch(newPath, {
+                            method: 'HEAD'
+                        });
+                        if (response.ok) {
+                            const fileType = response.headers.get('Felix-file-type');
+                            if (fileType === 'dir') {
+                                currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                            } else if (fileType === 'file') {
+                                addOutputLine('Error: not a directory');
+                            } else {
+                                currentPath = newPath.endsWith('/') ? newPath : newPath + '/';
+                            }
+                        } else if (response.status === 403) {
+                            addOutputLine('Error: permission denied');
+                        } else {
+                            addOutputLine('Error: directory not found');
+                        }
+                    } else {
+                        // Resolve the path, handling .. and . components
+                        const inputPath = args.join(' ');
+                        let pathToResolve = inputPath.startsWith('/') ? inputPath : currentPath + (currentPath.endsWith('/') ? '' : '/') + inputPath;
+                        const newPath = resolvePath(pathToResolve);
+                        
+                        const response = await fetch(newPath, {
+                            method: 'HEAD'
+                        });
+                        if (response.ok) {
+                            const fileType = response.headers.get('Felix-file-type');
+                            if (fileType === 'dir') {
+                                currentPath = newPath;
+                            } else if (fileType === 'file') {
+                                addOutputLine('Error: not a directory');
+                            } else {
+                                currentPath = newPath;
+                            }
+                        } else if (response.status === 403) {
+                            addOutputLine('Error: permission denied');
+                        } else {
+                            addOutputLine('Error: directory not found');
+                        }
+                    }
+                } else if (command === 'info') {
+                    if (args.length === 0) {
+                        addOutputLine('Usage: info <file|directory>');
+                    } else {
+                        const inputPath = args.join(' ');
+                        let targetPath = inputPath.startsWith('/') ? inputPath : currentPath + (currentPath.endsWith('/') ? '' : '/') + inputPath;
+                        // Resolve path to handle .. and .
+                        targetPath = resolvePath(targetPath);
+                        
+                        const response = await fetch(targetPath, {
+                            method: 'HEAD'
+                        });
+                        if (response.ok) {
+                            const fileType = response.headers.get('Felix-file-type');
+                            const mimeType = response.headers.get('Content-Type');
+                            const size = response.headers.get('Content-Length');
+                            const modified = response.headers.get('Last-Modified');
+                            const fileCount = response.headers.get('Felix-file-count');
+                            
+                            if (fileType === 'dir') {
+                                addOutputLine('Directory: ' + inputPath);
+                                addOutputLine('  Path: ' + targetPath);
+                                if (fileCount) {
+                                    addOutputLine('  Files: ' + fileCount);
+                                }
+                            } else {
+                                addOutputLine('File: ' + inputPath);
+                                addOutputLine('  Path: ' + targetPath);
+                                if (mimeType) {
+                                    addOutputLine('  Type: ' + mimeType);
+                                }
+                                if (size) {
+                                    addOutputLine('  Size: ' + formatBytes(parseInt(size)));
+                                }
+                                if (modified) {
+                                    addOutputLine('  Modified: ' + new Date(modified).toLocaleString());
+                                }
+                            }
+                        } else if (response.status === 404) {
+                            addOutputLine('Error: file or directory not found');
+                        } else if (response.status === 403) {
+                            addOutputLine('Error: permission denied');
+                        } else {
+                            addOutputLine('Error: unable to get file info');
+                        }
+                    }
+                } else if (command === 'play') {
+                    if (args.length === 0) {
+                        addOutputLine('Usage: play <filename>');
+                    } else {
+                        const filePath = args.join(' ').startsWith('/') ? args.join(' ') : currentPath + (currentPath.endsWith('/') ? '' : '/') + args.join(' ');
+                        const filename = args.join(' ');
+                        
+                        // Check for video formats (open in new tab)
+                        const isVideo = /\.(mp4|webm|mkv|avi|mov)$/i.test(filename);
+                        
+                        // Check for image formats (open in new tab)
+                        const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(filename);
+                        
+                        // Check for audio formats (keep in console)
+                        const isNativeAudio = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(filename);
+                        const isConvertibleAudio = /\.(aiff|aif|ra|au|voc|wma|m4b|ape|ac3|mp2|mid)$/i.test(filename);
+                        
+                        const isPreviewable = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|py|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i.test(filename);
+                        if (isVideo || isImage) {
+                            checkFileExists(filePath, filename, isImage);
+                        } else if (isNativeAudio) {
+                            playAudio(filePath, filename);
+                        } else if (isConvertibleAudio) {
+                            playWithConverter(filePath, filename, getConverterHeader(filename));
+                        } else if (isPreviewable) {
+                            previewFile(filePath, filename);
+                            addOutputLine('Previewing: ' + filename);
+                        } else {
+                            addOutputLine('Error: File type not playable/previewable');
+                        }
+                    }
+                } else if (command === 'help') {
+                    addOutputLine('Commands:');
+                    addOutputLine('  ls [dir]       - List directory contents (sorted)');
+                    addOutputLine('  pwd            - Print working directory');
+                    addOutputLine('  cd [dir]       - Change directory (cd .. to go up, cd ~ for home)');
+                    addOutputLine('  get <file>     - Download single file');
+                    addOutputLine('  mget <pattern> - Download multiple files (e.g., mget *.mp3)');
+                    addOutputLine('  play <file>    - Play or preview file (converts aiff, ra, midi, voc, mp2, and a few other formats)');
+                    addOutputLine('                       Images, text, and movies files open in an overlay; music is in-line');
+                    addOutputLine('  info <file>    - Show file/directory info (size, type, modified date, file count)');
+                    addOutputLine('  help           - Show this help');
+                    addOutputLine('  clear          - Clear screen');
+                    addOutputLine('  exit, bye      - Close console');
+                } else if (command === 'clear') {
+                    consoleOutput.innerHTML = '';
+                } else if (command === 'exit' || command === 'bye') {
+                    consoleModal.classList.remove('active');
+                    // Clear cookie when warpdrive is closed
+                    document.cookie = "warpdrive_active=; path=/; max-age=0";
+                } else {
+                    addOutputLine('Command not found: ' + command);
+                }
+            } catch (error) {
+                addOutputLine('Error: ' + error.message);
+            }
+
+            consoleInput.value = '';
+        }
+
+        consoleInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                executeCommand(consoleInput.value);
+            }
+        });
+
+        consoleInput.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    consoleInput.value = commandHistory[commandHistory.length - 1 - historyIndex];
+                }
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    consoleInput.value = commandHistory[commandHistory.length - 1 - historyIndex];
+                } else if (historyIndex === 0) {
+                    historyIndex = -1;
+                    consoleInput.value = '';
+                }
+            } else if (e.key === 'Tab') {
+                e.preventDefault();
+                autocompleteFilename();
+            }
+        });
+
+        function getConverterHeader(filename) {
+            if (/\.mid$/i.test(filename)) return 'X-Render-Midi';
+            if (/\.aiff?$/i.test(filename)) return 'X-Render-Aiff';
+            if (/\.au$/i.test(filename)) return 'X-Render-Au';
+            if (/\.voc$/i.test(filename)) return 'X-Render-Voc';
+            if (/\.ra$/i.test(filename)) return 'X-Convert-Audio';
+            return 'X-Convert-Audio'; // Default for wma, m4b, ape, ac3, mp2
+        }
+
+        function checkFileExists(filePath, filename, isImage) {
+            fetch(filePath, { method: 'HEAD' }).then(res => {
+                if (res.ok) {
+                    if (isImage) {
+                        playImage(filePath, filename);
+                    } else {
+                        playVideo(filePath, filename);
+                    }
+                } else if (res.status === 404) {
+                    addOutputLine('Error: File not found');
+                } else {
+                    addOutputLine(`Error: HTTP ${res.status}`);
+                }
+            }).catch(err => {
+                addOutputLine('Error: Failed to open ' + filename);
+                console.error(err);
+            });
+        }
+
+        function playImage(filePath, filename) {
+            try {
+                addOutputLine('Viewing: ' + filename);
+                
+                // Create overlay
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10000; cursor: pointer;';
+                
+                const img = document.createElement('img');
+                img.src = filePath;
+                img.style.cssText = 'max-width: 90%; max-height: 90%; object-fit: contain; cursor: auto;';
+                
+                overlay.appendChild(img);
+                document.body.appendChild(overlay);
+                
+                // Close on click
+                overlay.addEventListener('click', () => overlay.remove());
+                
+                // Close on escape key
+                const closeOnEscape = (e) => {
+                    if (e.key === 'Escape') {
+                        overlay.remove();
+                        document.removeEventListener('keydown', closeOnEscape);
+                    }
+                };
+                document.addEventListener('keydown', closeOnEscape);
+            } catch (error) {
+                addOutputLine('Error: Failed to open ' + filename);
+                console.error(error);
+            }
+        }
+
+        function playVideo(filePath, filename) {
+            try {
+                addOutputLine('Playing: ' + filename);
+                
+                // Create overlay
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; align-items: center; justify-content: center; z-index: 10000; cursor: pointer;';
+                
+                const video = document.createElement('video');
+                video.src = filePath;
+                video.style.cssText = 'max-width: 90%; max-height: 90%; cursor: auto;';
+                video.controls = true;
+                video.autoplay = true;
+                
+                overlay.appendChild(video);
+                document.body.appendChild(overlay);
+                
+                // Close on click (outside video)
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) overlay.remove();
+                });
+                
+                // Close on escape key
+                const closeOnEscape = (e) => {
+                    if (e.key === 'Escape') {
+                        overlay.remove();
+                        document.removeEventListener('keydown', closeOnEscape);
+                    }
+                };
+                document.addEventListener('keydown', closeOnEscape);
+            } catch (error) {
+                addOutputLine('Error: Failed to open ' + filename);
+                console.error(error);
+            }
+        }
+
+        function playAudio(filePath, filename) {
+            try {
+                addOutputLine('Playing: ' + filename);
+                
+                // URL encode the file path to handle special characters
+                const encodedPath = filePath.split('/').map(part => encodeURIComponent(part)).join('/');
+                
+                // Create player element in console
+                const playerDiv = document.createElement('div');
+                playerDiv.style.cssText = 'margin: 10px 0; padding: 10px; background: var(--thead-bg); border-radius: 4px; border: 1px solid var(--border-color);';
+                playerDiv.innerHTML = `
+                    <div style="color: var(--text-main); margin-bottom: 8px; font-weight: bold;">${filename}</div>
+                    <audio controls style="width: 100%; margin-top: 5px;">
+                        <source src="${encodedPath}">
+                        Your browser does not support the audio element.
+                    </audio>
+                `;
+                consoleOutput.appendChild(playerDiv);
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+                
+                // Auto-play and handle errors
+                const audio = playerDiv.querySelector('audio');
+                audio.onerror = () => {
+                    playerDiv.remove();
+                    addOutputLine('Error: File not found');
+                };
+                audio.play().catch(e => {
+                    console.error('Playback error:', e);
+                });
+            } catch (error) {
+                addOutputLine('Error: Failed to play ' + filename);
+                console.error(error);
+            }
+        }
+
+        async function playWithConverter(filePath, filename, header) {
+            try {
+                addOutputLine('Converting and playing: ' + filename);
+                const headers = { [header]: '1' };
+                // URL encode the file path to handle special characters
+                const encodedPath = filePath.split('/').map(part => encodeURIComponent(part)).join('/');
+                const res = await fetch(encodedPath, { 
+                    method: 'GET',
+                    headers: headers 
+                });
+                if (!res.ok) {
+                    if (res.status === 404) {
+                        addOutputLine('Error: File not found');
+                    } else {
+                        addOutputLine(`Error: HTTP ${res.status}`);
+                    }
+                    return;
+                }
+                const blob = await res.blob();
+                const audioUrl = URL.createObjectURL(blob);
+                
+                // Create player element in console
+                const playerDiv = document.createElement('div');
+                playerDiv.style.cssText = 'margin: 10px 0; padding: 10px; background: var(--thead-bg); border-radius: 4px; border: 1px solid var(--border-color);';
+                playerDiv.innerHTML = `
+                    <div style="color: var(--text-main); margin-bottom: 8px; font-weight: bold;">${filename}</div>
+                    <audio controls style="width: 100%; margin-top: 5px;">
+                        <source src="${audioUrl}" type="audio/wav">
+                        Your browser does not support the audio element.
+                    </audio>
+                `;
+                consoleOutput.appendChild(playerDiv);
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+                
+                // Auto-play
+                const audio = playerDiv.querySelector('audio');
+                audio.play().catch(e => {
+                    console.error('Playback error:', e);
+                });
+            } catch (error) {
+                addOutputLine('Error: Failed to convert/play ' + filename);
+                console.error(error);
+            }
+        }
+
+        async function autocompleteFilename() {
+            const input = consoleInput.value;
+            if (!input) return;
+
+            // Split into command and arguments
+            const trimmedInput = input.trim();
+            const spaceIndex = trimmedInput.indexOf(' ');
+            if (spaceIndex === -1) return; // No filename argument yet
+            
+            const command = trimmedInput.substring(0, spaceIndex);
+            const filenameArg = trimmedInput.substring(spaceIndex + 1);
+            
+            // Determine directory and partial filename
+            let dir = currentPath;
+            let partial = filenameArg;
+            
+            // Handle quoted strings
+            let isQuoted = false;
+            let quoteChar = '';
+            if ((filenameArg.startsWith('"') || filenameArg.startsWith("'"))) {
+                isQuoted = true;
+                quoteChar = filenameArg[0];
+                partial = filenameArg.substring(1);
+            }
+            
+            if (partial.includes('/')) {
+                const lastSlash = partial.lastIndexOf('/');
+                dir = partial.substring(0, lastSlash) || '/';
+                partial = partial.substring(lastSlash + 1);
+            }
+
+            try {
+                const response = await fetch('/api/listfiles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dir: dir })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const matches = data.entries
+                        .filter(e => e.name.toLowerCase().startsWith(partial.toLowerCase()))
+                        .sort((a, b) => a.name.localeCompare(b.name));
+
+                    if (matches.length === 1) {
+                        // Single match: complete it
+                        const suffix = matches[0].type === 'directory' ? '/' : '';
+                        let fullFilename = matches[0].name + suffix;
+                        
+                        // Reconstruct the path if we had a directory component
+                        if (partial !== filenameArg) {
+                            const dirPart = filenameArg.substring(0, filenameArg.lastIndexOf('/') + 1);
+                            fullFilename = dirPart + fullFilename;
+                        }
+                        
+                        // Add quotes if it has spaces or special chars and wasn't already quoted
+                        if (!isQuoted && /[\s'"()[\]{}]/.test(fullFilename)) {
+                            fullFilename = '"' + fullFilename + '"';
+                        }
+                        
+                        const newValue = command + ' ' + fullFilename;
+                        consoleInput.value = newValue;
+                    } else if (matches.length > 1) {
+                        // Multiple matches: find common prefix
+                        let commonPrefix = matches[0].name;
+                        for (let i = 1; i < matches.length; i++) {
+                            let j = 0;
+                            while (j < commonPrefix.length && j < matches[i].name.length && 
+                                   commonPrefix[j].toLowerCase() === matches[i].name[j].toLowerCase()) {
+                                j++;
+                            }
+                            commonPrefix = commonPrefix.substring(0, j);
+                        }
+
+                        if (commonPrefix.length > partial.length) {
+                            let completion = (partial !== filenameArg ? filenameArg.substring(0, filenameArg.lastIndexOf('/') + 1) : '') + commonPrefix;
+                            const newValue = command + ' ' + completion;
+                            consoleInput.value = newValue;
+                        } else {
+                            // Show matches
+                            addOutputLine(matches.map(m => m.name + (m.type === 'directory' ? '/' : '')).join('  '));
+                        }
+                    }
+                }
+            } catch (error) {
+                addOutputLine('Error: ' + error.message);
+            }
+        }
+
+        document.getElementById('consoleBtn').addEventListener('click', () => {
+            consoleModal.classList.add('active');
+            consoleInput.focus();
+            homePath = globalHomePath || '/';
+            currentPath = getCurrentPath();
+            if (!currentPath.endsWith('/')) currentPath += '/';
+            addOutputLine('Type "help" for commands');
+            // Set cookie when warpdrive is opened
+            document.cookie = "warpdrive_active=true; path=/; max-age=" + (365 * 24 * 60 * 60);
+        });
+
+        consoleModal.querySelector('.console-close').addEventListener('click', () => {
+            consoleModal.classList.remove('active');
+            // Clear cookie when warpdrive is closed
+            document.cookie = "warpdrive_active=; path=/; max-age=0";
+        });
+
+        consoleModal.addEventListener('click', (e) => {
+            if (e.target === consoleModal) {
+                consoleModal.classList.remove('active');
+                // Clear cookie when warpdrive is closed
+                document.cookie = "warpdrive_active=; path=/; max-age=0";
+            }
+        });

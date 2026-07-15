@@ -5,6 +5,7 @@
 #include "sftp_overlay.h"
 
 #include "index.hpp"  // Embedded index.html (renamed so it doesn't get checked in with git add *.h)
+#include "stargate.hpp"
 #include "404.h" // Embedded 404.html
 #include "favicon.h" // Embedded favicon.ico
 #include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
@@ -425,6 +426,21 @@ static std::string http_response_headers(int status_code, const char *content_ty
     return buf;
 }
 
+// Response headers for public/static files with aggressive caching
+// Embedded files are immutable, so we can cache them for a very long time (1 year)
+static std::string http_public_file_headers(const char *content_type, size_t content_length) {
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: public, max-age=31536000, immutable\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        content_type, content_length);
+    return buf;
+}
+
 // Response builder for a 302 redirect (e.g. normalizing double slashes in a path).
 static std::string http_redirect_response(const char *location) {
     char buf[1536];
@@ -624,6 +640,73 @@ static std::string get_404() {
 
 static std::string get_favicon() {
     return std::string((const char *)favicon_ico, favicon_ico_len);
+}
+
+static std::string get_stargate() {
+    return std::string((const char *)stargate_js, stargate_js_len);
+}
+
+// ============================================================================
+// Public Files Enumeration
+// ============================================================================
+
+enum class PublicFile {
+    STARGATE_JS,
+    // Add more public files here later (CSS, other JS, etc.)
+    UNKNOWN
+};
+
+// Maps URL path to public file type
+static PublicFile resolve_public_file(const char *path) {
+    SDL_Log("[PublicFile] Resolving path: '%s'", path);
+    if (strcmp(path, "/public/stargate.js") == 0) {
+        SDL_Log("[PublicFile] Matched STARGATE_JS");
+        return PublicFile::STARGATE_JS;
+    }
+    SDL_Log("[PublicFile] No match found");
+    return PublicFile::UNKNOWN;
+}
+
+// Retrieves embedded file content by type
+static std::string get_public_file_content(PublicFile file) {
+    switch (file) {
+        case PublicFile::STARGATE_JS:
+            return std::string((const char *)stargate_js, stargate_js_len);
+        default:
+            return "";
+    }
+}
+
+// Gets MIME type for public file
+static const char *get_public_file_mime_type(PublicFile file) {
+    switch (file) {
+        case PublicFile::STARGATE_JS:
+            return "application/javascript";
+        default:
+            return "application/octet-stream";
+    }
+}
+
+// Serves a public file response with aggressive caching for static assets
+// Embedded files are immutable, so browsers can safely cache them long-term
+static void serve_public_file(int client_socket, int tunnel_id, PublicFile file) {
+    if (file == PublicFile::UNKNOWN) {
+        std::string data = get_404();
+        std::string response = http_response_headers(404, "text/html", data.length());
+        response += data;
+        socket_send_safe(client_socket, response.c_str(), response.length());
+        SDL_Log("[Tunnel %d] Public file not found", tunnel_id);
+        return;
+    }
+
+    std::string content = get_public_file_content(file);
+    const char *mime_type = get_public_file_mime_type(file);
+    
+    // Use aggressive caching headers for static embedded assets
+    std::string response = http_public_file_headers(mime_type, content.length());
+    socket_send_safe(client_socket, response.c_str(), response.length());
+    socket_send_safe(client_socket, content.c_str(), content.length());
+    SDL_Log("[Tunnel %d] Served public file (%zu bytes) with 1-year cache", tunnel_id, content.length());
 }
 
 // Case-insensitive string comparison for extensions
@@ -950,6 +1033,14 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
                                        const char *buffer, int bytes_read) {
     (void)bytes_read;
 
+    // Serve /public/* files from embedded content (don't list in directory)
+    if (strcmp(method, "GET") == 0 && strstr(path, "/public/") == path) {
+        PublicFile file = resolve_public_file(path);
+        serve_public_file(client_socket, tunnel_id, file);
+        SDL_Log("[Tunnel %d] Served public file (local mode)", tunnel_id);
+        return;
+    }
+
     if (strcmp(method, "GET") == 0 || strcmp(method, "HEAD") == 0) {
         std::string decoded_path = url_decode(path);
         bool is_head_request = (strcmp(method, "HEAD") == 0);
@@ -1183,6 +1274,11 @@ static void handle_http_request(int client_socket, int tunnel_id) {
     char method[16] = {};
     char path[1024] = {};
     sscanf(buffer, "%15s %1023s", method, path);
+    
+    // Strip query string and fragment from path (keep just the path part)
+    char *query_or_fragment = strchr(path, '?');
+    if (!query_or_fragment) query_or_fragment = strchr(path, '#');
+    if (query_or_fragment) *query_or_fragment = '\0';
 
     // If the path contains double (or more) slashes, e.g.
     // "//home/jbhall/Music", redirect to the normalized single-slash form
@@ -1205,6 +1301,13 @@ static void handle_http_request(int client_socket, int tunnel_id) {
         socket_send_safe(client_socket, response.c_str(), response.length());
         closesocket(client_socket);
         SDL_Log("[Tunnel %d] Served embedded favicon.ico", tunnel_id);
+        return;
+    }
+
+    if (strcmp(method, "GET") == 0 && strstr(path, "/public/") == path) {
+        PublicFile file = resolve_public_file(path);
+        serve_public_file(client_socket, tunnel_id, file);
+        closesocket(client_socket);
         return;
     }
 
