@@ -577,6 +577,20 @@ index.hpp: index.html
 	@echo "Generating index.html header..."
 	@xxd -i index.html > index.hpp
 	@xxd -i stargate.js > stargate.hpp
+	@xxd -i audioDetection.js > audioDetection.hpp
+	@xxd -i audioVisualizer.js >audioVisualizer.hpp
+	@xxd -i cdgPlayer.js > cdgPlayer.hpp
+	@xxd -i cookies.js > cookies.hpp
+	@xxd -i fileFilter.js > fileFilter.hpp
+	@xxd -i imageDetection.js > imageDetection.hpp
+	@xxd -i panDragHandlers.js > panDragHandlers.hpp
+	@xxd -i slideshowAutoplay.js > slideshowAutoplay.hpp
+	@xxd -i theme.js > theme.hpp
+	@xxd -i videoDetection.js > videoDetection.hpp
+	@xxd -i videoPlayer.js > videoPlayer.hpp
+	@xxd -i zipReader.js > zipReader.hpp
+	@xxd -i zoomPan.js > zoomPan.hpp
+
 
 	@echo "✓ Converted index.html"
 
