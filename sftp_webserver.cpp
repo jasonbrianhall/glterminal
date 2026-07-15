@@ -5,7 +5,19 @@
 #include "sftp_overlay.h"
 
 #include "index.hpp"  // Embedded index.html (renamed so it doesn't get checked in with git add *.h)
-#include "stargate.hpp"
+#include "cookies.hpp"
+#include "theme.hpp"
+#include "fileFilter.hpp"
+#include "imageDetection.hpp"
+#include "audioDetection.hpp"
+#include "videoDetection.hpp"
+#include "zoomPan.hpp"
+#include "slideshowAutoplay.hpp"
+#include "panDragHandlers.hpp"
+#include "zipReader.hpp"
+#include "cdgPlayer.hpp"
+#include "audioVisualizer.hpp"
+#include "videoPlayer.hpp"
 #include "404.h" // Embedded 404.html
 #include "favicon.h" // Embedded favicon.ico
 #include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
@@ -642,36 +654,74 @@ static std::string get_favicon() {
     return std::string((const char *)favicon_ico, favicon_ico_len);
 }
 
-static std::string get_stargate() {
-    return std::string((const char *)stargate_js, stargate_js_len);
-}
-
 // ============================================================================
 // Public Files Enumeration
 // ============================================================================
 
 enum class PublicFile {
-    STARGATE_JS,
-    // Add more public files here later (CSS, other JS, etc.)
+    COOKIES_JS,
+    THEME_JS,
+    FILE_FILTER_JS,
+    IMAGE_DETECTION_JS,
+    AUDIO_DETECTION_JS,
+    VIDEO_DETECTION_JS,
+    ZOOM_PAN_JS,
+    SLIDESHOW_AUTOPLAY_JS,
+    PAN_DRAG_HANDLERS_JS,
+    ZIP_READER_JS,
+    CDG_PLAYER_JS,
+    AUDIO_VISUALIZER_JS,
+    VIDEO_PLAYER_JS,
     UNKNOWN
 };
 
 // Maps URL path to public file type
 static PublicFile resolve_public_file(const char *path) {
-    SDL_Log("[PublicFile] Resolving path: '%s'", path);
-    if (strcmp(path, "/public/stargate.js") == 0) {
-        SDL_Log("[PublicFile] Matched STARGATE_JS");
-        return PublicFile::STARGATE_JS;
-    }
-    SDL_Log("[PublicFile] No match found");
+    if (strcmp(path, "/public/cookies.js") == 0) return PublicFile::COOKIES_JS;
+    if (strcmp(path, "/public/theme.js") == 0) return PublicFile::THEME_JS;
+    if (strcmp(path, "/public/fileFilter.js") == 0) return PublicFile::FILE_FILTER_JS;
+    if (strcmp(path, "/public/imageDetection.js") == 0) return PublicFile::IMAGE_DETECTION_JS;
+    if (strcmp(path, "/public/audioDetection.js") == 0) return PublicFile::AUDIO_DETECTION_JS;
+    if (strcmp(path, "/public/videoDetection.js") == 0) return PublicFile::VIDEO_DETECTION_JS;
+    if (strcmp(path, "/public/zoomPan.js") == 0) return PublicFile::ZOOM_PAN_JS;
+    if (strcmp(path, "/public/slideshowAutoplay.js") == 0) return PublicFile::SLIDESHOW_AUTOPLAY_JS;
+    if (strcmp(path, "/public/panDragHandlers.js") == 0) return PublicFile::PAN_DRAG_HANDLERS_JS;
+    if (strcmp(path, "/public/zipReader.js") == 0) return PublicFile::ZIP_READER_JS;
+    if (strcmp(path, "/public/cdgPlayer.js") == 0) return PublicFile::CDG_PLAYER_JS;
+    if (strcmp(path, "/public/audioVisualizer.js") == 0) return PublicFile::AUDIO_VISUALIZER_JS;
+    if (strcmp(path, "/public/videoPlayer.js") == 0) return PublicFile::VIDEO_PLAYER_JS;
     return PublicFile::UNKNOWN;
 }
 
 // Retrieves embedded file content by type
 static std::string get_public_file_content(PublicFile file) {
     switch (file) {
-        case PublicFile::STARGATE_JS:
-            return std::string((const char *)stargate_js, stargate_js_len);
+        case PublicFile::COOKIES_JS:
+            return std::string((const char *)cookies_js, cookies_js_len);
+        case PublicFile::THEME_JS:
+            return std::string((const char *)theme_js, theme_js_len);
+        case PublicFile::FILE_FILTER_JS:
+            return std::string((const char *)fileFilter_js, fileFilter_js_len);
+        case PublicFile::IMAGE_DETECTION_JS:
+            return std::string((const char *)imageDetection_js, imageDetection_js_len);
+        case PublicFile::AUDIO_DETECTION_JS:
+            return std::string((const char *)audioDetection_js, audioDetection_js_len);
+        case PublicFile::VIDEO_DETECTION_JS:
+            return std::string((const char *)videoDetection_js, videoDetection_js_len);
+        case PublicFile::ZOOM_PAN_JS:
+            return std::string((const char *)zoomPan_js, zoomPan_js_len);
+        case PublicFile::SLIDESHOW_AUTOPLAY_JS:
+            return std::string((const char *)slideshowAutoplay_js, slideshowAutoplay_js_len);
+        case PublicFile::PAN_DRAG_HANDLERS_JS:
+            return std::string((const char *)panDragHandlers_js, panDragHandlers_js_len);
+        case PublicFile::ZIP_READER_JS:
+            return std::string((const char *)zipReader_js, zipReader_js_len);
+        case PublicFile::CDG_PLAYER_JS:
+            return std::string((const char *)cdgPlayer_js, cdgPlayer_js_len);
+        case PublicFile::AUDIO_VISUALIZER_JS:
+            return std::string((const char *)audioVisualizer_js, audioVisualizer_js_len);
+        case PublicFile::VIDEO_PLAYER_JS:
+            return std::string((const char *)videoPlayer_js, videoPlayer_js_len);
         default:
             return "";
     }
@@ -680,7 +730,19 @@ static std::string get_public_file_content(PublicFile file) {
 // Gets MIME type for public file
 static const char *get_public_file_mime_type(PublicFile file) {
     switch (file) {
-        case PublicFile::STARGATE_JS:
+        case PublicFile::COOKIES_JS:
+        case PublicFile::THEME_JS:
+        case PublicFile::FILE_FILTER_JS:
+        case PublicFile::IMAGE_DETECTION_JS:
+        case PublicFile::AUDIO_DETECTION_JS:
+        case PublicFile::VIDEO_DETECTION_JS:
+        case PublicFile::ZOOM_PAN_JS:
+        case PublicFile::SLIDESHOW_AUTOPLAY_JS:
+        case PublicFile::PAN_DRAG_HANDLERS_JS:
+        case PublicFile::ZIP_READER_JS:
+        case PublicFile::CDG_PLAYER_JS:
+        case PublicFile::AUDIO_VISUALIZER_JS:
+        case PublicFile::VIDEO_PLAYER_JS:
             return "application/javascript";
         default:
             return "application/octet-stream";
@@ -1296,11 +1358,11 @@ static void handle_http_request(int client_socket, int tunnel_id) {
 
     if (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0) {
         std::string data = get_favicon();
-        std::string response = http_response_headers(200, "image/x-icon", data.length());
+        std::string response = http_public_file_headers("image/x-icon", data.length());
         response += data;
         socket_send_safe(client_socket, response.c_str(), response.length());
         closesocket(client_socket);
-        SDL_Log("[Tunnel %d] Served embedded favicon.ico", tunnel_id);
+        SDL_Log("[Tunnel %d] Served embedded favicon.ico with 1-year cache", tunnel_id);
         return;
     }
 
