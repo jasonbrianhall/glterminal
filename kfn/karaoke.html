@@ -666,8 +666,9 @@
             progressFill.style.width = (time.currentTime / time.duration) * 100 + '%';
 
             if (autoAdvance && lyrics.length > 0) {
-                let nextIdx = currentLineIndex;
-                for (let i = currentLineIndex; i < syncTimes.length; i++) {
+                // Search from the beginning to find the correct lyric index
+                let nextIdx = 0;
+                for (let i = 0; i < syncTimes.length; i++) {
                     if (currentMs >= (syncTimes[i] + syncOffset)) {
                         nextIdx = i;
                     } else {
