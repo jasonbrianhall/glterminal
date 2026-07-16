@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KFN File Loader</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; padding: 20px; }
+    .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    h1 { margin-bottom: 20px; color: #333; }
+    .upload-section { margin-bottom: 30px; padding: 20px; background: #f9f9f9; border-radius: 4px; border: 2px dashed #ddd; }
+    input[type="file"] { padding: 8px; cursor: pointer; }
+    .status { margin-top: 15px; font-size: 0.9em; color: #666; }
+    .error { padding: 12px; background: #fee; color: #c00; border-radius: 4px; margin: 15px 0; border-left: 4px solid #c00; }
+    .success { padding: 12px; background: #efe; color: #0a0; border-radius: 4px; margin: 15px 0; border-left: 4px solid #0a0; }
+    .file-list { display: grid; gap: 12px; }
+    .file-item { border: 1px solid #ddd; padding: 15px; border-radius: 4px; background: #fafafa; }
+    .file-name { font-weight: bold; font-size: 1.1em; margin-bottom: 8px; word-break: break-all; }
+    .file-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; font-size: 0.85em; }
+    .meta-item { color: #666; }
+    .meta-label { color: #999; font-size: 0.8em; text-transform: uppercase; }
+    .success-meta { background: #f0f8ff; padding: 8px; border-radius: 3px; border-left: 3px solid #0066cc; }
+    .error-meta { background: #fef5f5; padding: 8px; border-radius: 3px; border-left: 3px solid #c00; color: #c00; }
+    .btn { padding: 8px 12px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.9em; }
+    .btn:hover { background: #0052a3; }
+    .loading { color: #0066cc; font-style: italic; }
+    .key-status { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.8em; margin-left: 10px; }
+    .key-found { background: #efe; color: #0a0; }
+    .key-missing { background: #ffd; color: #660; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>KFN File Loader</h1>
+    
+    <div class="upload-section">
+      <input type="file" id="fileInput" accept=".kfn">
+      <div class="status">
+        <span id="filename" style="display:none;">File: <strong id="filenameText"></strong></span>
+        <span id="keyStatus" class="key-status" style="display:none;"></span>
+      </div>
+    </div>
+
+    <div id="loading" class="loading" style="display:none;">Loading and decrypting...</div>
+    <div id="error" class="error" style="display:none;"></div>
+    <div id="success" class="success" style="display:none;"></div>
+    
+    <div id="fileList" class="file-list"></div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <script src="kfn-loader.js"></script>
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const loading = document.getElementById('loading');
+    const error = document.getElementById('error');
+    const success = document.getElementById('success');
+    const fileList = document.getElementById('fileList');
+    const filenameSpan = document.getElementById('filename');
+    const filenameText = document.getElementById('filenameText');
+    const keyStatus = document.getElementById('keyStatus');
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    function getTypeName(type) {
+      const types = {
+        1: 'SONGTEXT',
+        2: 'MUSIC',
+        3: 'IMAGE',
+        4: 'FONT',
+        5: 'VIDEO'
+      };
+      return types[type] || 'UNKNOWN';
+    }
+
+    function downloadFile(filename, data) {
+      const blob = new Blob([data]);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      loading.style.display = 'block';
+      error.style.display = 'none';
+      success.style.display = 'none';
+      fileList.innerHTML = '';
+      filenameSpan.style.display = 'inline';
+      filenameText.textContent = file.name;
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const dumper = new KFNDumper(arrayBuffer);
+
+        const entries = dumper.list();
+        console.log(`Found ${entries.length} entries`);
+        console.log(`AES Key: ${dumper.aesKey ? 'Found' : 'Not found'}`);
+
+        if (dumper.aesKey) {
+          keyStatus.className = 'key-status key-found';
+          keyStatus.textContent = '🔓 Key Found';
+        } else {
+          keyStatus.className = 'key-status key-missing';
+          keyStatus.textContent = '⚠ No Key';
+        }
+        keyStatus.style.display = 'inline-block';
+
+        const extracted = await dumper.extractAll();
+        
+        success.textContent = `✓ Loaded ${Object.keys(extracted).length} files`;
+        success.style.display = 'block';
+
+        Object.entries(extracted).forEach(([filename, info]) => {
+          const item = document.createElement('div');
+          item.className = 'file-item';
+
+          if (info.error) {
+            item.innerHTML = `
+              <div class="file-name">${filename}</div>
+              <div class="error-meta">❌ ${info.error}</div>
+            `;
+          } else {
+            item.innerHTML = `
+              <div style="display: flex; justify-content: space-between; align-items: start; gap: 15px;">
+                <div style="flex: 1;">
+                  <div class="file-name">${filename}</div>
+                  <div class="file-meta">
+                    <div class="meta-item success-meta">
+                      <div class="meta-label">Type</div>
+                      ${getTypeName(info.type)}
+                    </div>
+                    <div class="meta-item success-meta">
+                      <div class="meta-label">Size</div>
+                      ${formatBytes(info.data.length)}
+                    </div>
+                    <div class="meta-item success-meta">
+                      <div class="meta-label">Encrypted</div>
+                      ${info.encrypted ? '🔒 Yes' : '🔓 No'}
+                    </div>
+                  </div>
+                </div>
+                <button class="btn" onclick="downloadFile('${filename}', window.extractedData['${filename}'].data)">Download</button>
+              </div>
+            `;
+          }
+
+          fileList.appendChild(item);
+        });
+
+        window.extractedData = extracted;
+      } catch (err) {
+        error.textContent = '❌ ' + err.message;
+        error.style.display = 'block';
+        console.error(err);
+      } finally {
+        loading.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>
