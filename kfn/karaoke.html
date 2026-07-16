@@ -501,7 +501,7 @@
 
         async function loadKFN(file) {
             try {
-                lyricsDisplay.innerHTML = '<div class="loading">Loading KFN file...</div>';
+                lyricsDisplay.innerHTML = '';
                 const arrayBuffer = await file.arrayBuffer();
                 const dumper = new KFNDumper(arrayBuffer);
                 const extracted = await dumper.extractAll();
@@ -592,15 +592,11 @@
                 allTimings.push(...syncMap[i]);
             }
             
-            // Parse all words and lines sequentially
+            // Parse all words and lines sequentially, consuming timings in order
             let timingIdx = 0;
             for (let i = 0; textMap[i] !== undefined; i++) {
                 const line = textMap[i];
-                
-                // Skip blank/empty lines
-                if (line.trim() === '_' || line.trim().length === 0) {
-                    continue;
-                }
+                const timingCount = syncMap[i] ? syncMap[i].length : 0;
                 
                 // Split on "/" first to get syllables, then on spaces
                 const syllables = line.split('/').filter(s => s.length > 0);
