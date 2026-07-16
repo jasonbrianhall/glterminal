@@ -239,8 +239,7 @@
             </div>
             
             <div class="controls">
-                <button class="btn-primary" id="playBtn">▶ Play</button>
-                <button class="btn-primary" id="pauseBtn">⏸ Pause</button>
+                <button class="btn-primary" id="playPauseBtn">▶ Play</button>
                 <button class="btn-secondary" id="resetBtn">↻ Reset</button>
                 <button class="btn-secondary" id="uploadNewBtn">📁 New Song</button>
             </div>
@@ -434,8 +433,7 @@
         const fileInput = document.getElementById('fileInput');
         const playerSection = document.getElementById('playerSection');
         const lyricsDisplay = document.getElementById('lyricsDisplay');
-        const playBtn = document.getElementById('playBtn');
-        const pauseBtn = document.getElementById('pauseBtn');
+        const playPauseBtn = document.getElementById('playPauseBtn');
         const resetBtn = document.getElementById('resetBtn');
         const uploadNewBtn = document.getElementById('uploadNewBtn');
         const progressBar = document.getElementById('progressBar');
@@ -654,7 +652,13 @@
         }
 
         function updateSync() {
-            const time = audioVocal || audioBacking;
+            // Use whichever audio is playing for sync timing
+            let time = null;
+            if (audioVocal && !audioVocal.paused) {
+                time = audioVocal;
+            } else if (audioBacking && !audioBacking.paused) {
+                time = audioBacking;
+            }
             if (!time) return;
 
             const currentMs = time.currentTime * 1000;
@@ -724,15 +728,19 @@
         }
 
         // Controls
-        playBtn.addEventListener('click', () => {
-            if (audioVocal && !vocalMuted) audioVocal.play();
-            if (audioBacking && !backingMuted) audioBacking.play();
-            autoAdvance = true;
-        });
-
-        pauseBtn.addEventListener('click', () => {
-            if (audioVocal) audioVocal.pause();
-            if (audioBacking) audioBacking.pause();
+        playPauseBtn.addEventListener('click', () => {
+            const isPlaying = (audioVocal && !audioVocal.paused) || (audioBacking && !audioBacking.paused);
+            
+            if (isPlaying) {
+                if (audioVocal) audioVocal.pause();
+                if (audioBacking) audioBacking.pause();
+                playPauseBtn.textContent = '▶ Play';
+            } else {
+                if (audioVocal && !vocalMuted) audioVocal.play();
+                if (audioBacking && !backingMuted) audioBacking.play();
+                playPauseBtn.textContent = '⏸ Pause';
+                autoAdvance = true;
+            }
         });
 
         resetBtn.addEventListener('click', () => {
@@ -774,7 +782,10 @@
                     if (audioBacking && !audioBacking.paused) {
                         audioVocal.currentTime = audioBacking.currentTime;
                     }
-                    audioVocal.play();
+                    // Resume audio if something is playing
+                    if ((audioVocal && !audioVocal.paused) || (audioBacking && !audioBacking.paused) || autoAdvance) {
+                        audioVocal.play();
+                    }
                     e.target.classList.remove('muted');
                     e.target.textContent = '🎤 Mute Vocal';
                 }
@@ -792,7 +803,10 @@
                     if (audioVocal && !audioVocal.paused) {
                         audioBacking.currentTime = audioVocal.currentTime;
                     }
-                    audioBacking.play();
+                    // Resume audio if something is playing
+                    if ((audioVocal && !audioVocal.paused) || (audioBacking && !audioBacking.paused) || autoAdvance) {
+                        audioBacking.play();
+                    }
                     e.target.classList.remove('muted');
                     e.target.textContent = '🎵 Mute Backing';
                 }
@@ -810,22 +824,38 @@
             const rect = progressBar.getBoundingClientRect();
             const percent = (e.clientX - rect.left) / rect.width;
             const time = percent * audio.duration;
+            
             if (audioVocal) audioVocal.currentTime = time;
             if (audioBacking) audioBacking.currentTime = time;
+            
+            // Update lyrics immediately
+            updateSync();
         });
 
         // Keyboard
         document.addEventListener('keydown', (e) => {
             if (e.code === 'Space') {
                 e.preventDefault();
-                if ((audioVocal && !audioVocal.paused) || (audioBacking && !audioBacking.paused)) {
-                    pauseBtn.click();
-                } else {
-                    playBtn.click();
-                }
+                playPauseBtn.click();
             }
-            if (e.code === 'ArrowRight') currentLineIndex = Math.min(currentLineIndex + 1, lyrics.length - 1);
-            if (e.code === 'ArrowLeft') currentLineIndex = Math.max(currentLineIndex - 1, 0);
+            if (e.code === 'ArrowRight') {
+                currentLineIndex = Math.min(currentLineIndex + 1, lyrics.length - 1);
+                if (syncTimes[currentLineIndex] !== undefined) {
+                    const seekTime = (syncTimes[currentLineIndex] - syncOffset) / 1000;
+                    if (audioVocal) audioVocal.currentTime = seekTime;
+                    if (audioBacking) audioBacking.currentTime = seekTime;
+                }
+                updateSync();
+            }
+            if (e.code === 'ArrowLeft') {
+                currentLineIndex = Math.max(currentLineIndex - 1, 0);
+                if (syncTimes[currentLineIndex] !== undefined) {
+                    const seekTime = (syncTimes[currentLineIndex] - syncOffset) / 1000;
+                    if (audioVocal) audioVocal.currentTime = seekTime;
+                    if (audioBacking) audioBacking.currentTime = seekTime;
+                }
+                updateSync();
+            }
             updateLyricsDisplay();
         });
     </script>
