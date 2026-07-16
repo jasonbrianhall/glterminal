@@ -557,14 +557,27 @@
             let artist = 'Unknown Artist';
             const textMap = {};
             const syncMap = {};
+            let currentSection = '';
 
             for (let line of lines) {
+                line = line.trim();
+                
+                // Handle section headers like [general]
+                if (line.startsWith('[') && line.endsWith(']')) {
+                    currentSection = line.slice(1, -1).toLowerCase();
+                    continue;
+                }
+                
                 const match = line.match(/^([^=]+)=(.*)$/);
                 if (!match) continue;
                 const [, key, value] = match;
 
-                if (key === 'title') title = value;
-                if (key === 'artist') artist = value;
+                // Look for title and artist in [general] section or top-level
+                if (currentSection === 'general' || currentSection === '') {
+                    if (key.toLowerCase() === 'title') title = value;
+                    if (key.toLowerCase() === 'artist') artist = value;
+                }
+                
                 if (key.match(/^text\d+$/)) {
                     const idx = parseInt(key.match(/\d+/)[0]);
                     textMap[idx] = value; // Keep both "/" and spaces
