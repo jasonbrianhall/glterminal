@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Karaoke Player</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 800px;
+            padding: 40px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 16px;
+        }
+        
+        .upload-section {
+            background: #f5f5f5;
+            border: 2px dashed #ddd;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .upload-section:hover {
+            border-color: #667eea;
+            background: #f9f9ff;
+        }
+        
+        .upload-section input {
+            display: none;
+        }
+        
+        .upload-section p {
+            color: #666;
+            margin-bottom: 10px;
+        }
+        
+        .lyrics-display {
+            background: #1a1a1a;
+            color: #fff;
+            border-radius: 10px;
+            padding: 40px 20px;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 24px;
+            line-height: 1.6;
+        }
+        
+        .current-line {
+            color: #fff;
+            font-weight: bold;
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+        
+        .next-line {
+            color: #999;
+            font-size: 18px;
+            opacity: 0.6;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            flex: 1;
+            min-width: 100px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+        
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+        
+        .btn-secondary {
+            background: #ddd;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #ccc;
+        }
+        
+        .btn-secondary.muted {
+            background: #ffb6c6;
+            color: #c00;
+        }
+        
+        .progress-section {
+            margin-bottom: 20px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+            cursor: pointer;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: #667eea;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+        
+        .time-display {
+            display: flex;
+            justify-content: space-between;
+            color: #666;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        
+        .info-section {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .info-section h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .info-section p {
+            color: #666;
+            font-size: 14px;
+            margin: 5px 0;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .loading {
+            color: #999;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 Karaoke Player</h1>
+            <p>Upload .KFN file OR Song.ini + audio file to get started</p>
+        </div>
+        
+        <div class="upload-section" id="uploadArea">
+            <p>📁 Click or drag files here</p>
+            <p style="font-size: 12px; color: #999;">Upload .KFN file OR Song.ini + audio file (MP3, OGG, WAV)</p>
+            <input type="file" id="fileInput" multiple accept=".kfn,.ini,.mp3,.ogg,.wav,.m4a">
+        </div>
+        
+        <div id="playerSection" class="hidden">
+            <div class="info-section">
+                <h3>Now Playing</h3>
+                <p id="songTitle">-</p>
+                <p id="songArtist">-</p>
+            </div>
+            
+            <div class="lyrics-display" id="lyricsDisplay">
+                <div class="loading">Loading...</div>
+            </div>
+            
+            <div class="progress-section">
+                <div class="progress-bar" id="progressBar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="time-display">
+                    <span id="currentTime">0:00</span>
+                    <span id="duration">0:00</span>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <button class="btn-primary" id="playBtn">▶ Play</button>
+                <button class="btn-primary" id="pauseBtn">⏸ Pause</button>
+                <button class="btn-secondary" id="resetBtn">↻ Reset</button>
+                <button class="btn-secondary" id="uploadNewBtn">📁 New Song</button>
+            </div>
+
+            <div class="controls">
+                <button class="btn-secondary" id="toggleVocalBtn" style="display:none;">🎤 Mute Vocal</button>
+                <button class="btn-secondary" id="toggleBackingBtn" style="display:none;">🎵 Mute Backing</button>
+            </div>
+            
+            <div class="controls">
+                <label style="flex: 1; color: #666; font-size: 14px;">
+                    Sync Offset: <span id="syncOffsetValue">0</span>ms
+                    <input type="range" id="syncOffsetSlider" min="-500" max="500" value="0" style="width: 100%; margin-top: 5px;">
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script>
+        // KFN Loader
+        const ENTRY_TYPES = {
+            SONGTEXT: 1,
+            MUSIC: 2,
+            IMAGE: 3,
+            FONT: 4,
+            VIDEO: 5
+        };
+
+        class KFNDumper {
+            constructor(arrayBuffer) {
+                this.buffer = new Uint8Array(arrayBuffer);
+                this.offset = 0;
+                this.aesKey = null;
+            }
+
+            readByte() {
+                if (this.offset >= this.buffer.length) {
+                    throw new Error('Unexpected end of file');
+                }
+                return this.buffer[this.offset++];
+            }
+
+            readDword() {
+                const b1 = this.readByte();
+                const b2 = this.readByte();
+                const b3 = this.readByte();
+                const b4 = this.readByte();
+                return b1 | (b2 << 8) | (b3 << 16) | (b4 << 24);
+            }
+
+            readBytes(length) {
+                if (this.offset + length > this.buffer.length) {
+                    throw new Error(`Cannot read ${length} bytes: not enough data`);
+                }
+                const data = this.buffer.slice(this.offset, this.offset + length);
+                this.offset += length;
+                return data;
+            }
+
+            readString(length) {
+                const bytes = this.readBytes(length);
+                const decoder = new TextDecoder('utf-8');
+                return decoder.decode(bytes);
+            }
+
+            list() {
+                this.offset = 0;
+                const entries = [];
+
+                const sig = this.readString(4);
+                if (sig !== 'KFNB') {
+                    throw new Error('Invalid KFN file signature');
+                }
+
+                while (true) {
+                    const headerSig = this.readString(4);
+                    const type = this.readByte();
+                    const lenOrValue = this.readDword();
+                    let buf = null;
+
+                    if (type === 2) {
+                        buf = this.readBytes(lenOrValue);
+                    }
+
+                    if (headerSig === 'FLID' && buf !== null) {
+                        this.aesKey = buf;
+                    }
+
+                    if (headerSig === 'ENDH') {
+                        break;
+                    }
+                }
+
+                const numFiles = this.readDword();
+
+                for (let i = 0; i < numFiles; i++) {
+                    const filenameLen = this.readDword();
+                    const filename = this.readString(filenameLen);
+
+                    const entry = {
+                        filename,
+                        type: this.readDword(),
+                        lengthOut: this.readDword(),
+                        offset: this.readDword(),
+                        lengthIn: this.readDword(),
+                        flags: this.readDword()
+                    };
+
+                    entries.push(entry);
+                }
+
+                const dirEnd = this.offset;
+                entries.forEach(entry => {
+                    entry.offset += dirEnd;
+                });
+
+                return entries;
+            }
+
+            async extract(entry) {
+                if ((entry.flags & 0x01) && !this.aesKey) {
+                    throw new Error('Encryption key is unknown');
+                }
+
+                const data = this.buffer.slice(entry.offset, entry.offset + entry.lengthIn);
+
+                if (entry.flags & 0x01) {
+                    return await this.decryptAES128ECB(data, this.aesKey, entry.lengthOut);
+                }
+
+                return data.slice(0, entry.lengthOut);
+            }
+
+            async decryptAES128ECB(encryptedData, key, outputLength) {
+                if (!window.CryptoJS) {
+                    throw new Error('CryptoJS library not loaded');
+                }
+
+                const keyWordArray = window.CryptoJS.enc.Hex.parse(
+                    Array.from(key).map(b => b.toString(16).padStart(2, '0')).join('')
+                );
+                
+                const encryptedWordArray = window.CryptoJS.enc.Hex.parse(
+                    Array.from(encryptedData).map(b => b.toString(16).padStart(2, '0')).join('')
+                );
+
+                const decrypted = window.CryptoJS.AES.decrypt(
+                    { ciphertext: encryptedWordArray },
+                    keyWordArray,
+                    { mode: window.CryptoJS.mode.ECB, padding: window.CryptoJS.pad.NoPadding }
+                );
+
+                const decryptedBytes = new Uint8Array(decrypted.sigBytes);
+                for (let i = 0; i < decrypted.sigBytes; i++) {
+                    decryptedBytes[i] = (decrypted.words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
+                }
+
+                return decryptedBytes.slice(0, outputLength);
+            }
+
+            async extractAll() {
+                const entries = this.list();
+                const result = {};
+
+                for (const entry of entries) {
+                    try {
+                        result[entry.filename] = {
+                            data: await this.extract(entry),
+                            type: entry.type,
+                            typeName: Object.keys(ENTRY_TYPES).find(
+                                key => ENTRY_TYPES[key] === entry.type
+                            ) || 'UNKNOWN',
+                            encrypted: (entry.flags & 0x01) !== 0,
+                            metadata: entry
+                        };
+                    } catch (error) {
+                        result[entry.filename] = {
+                            error: error.message,
+                            metadata: entry
+                        };
+                    }
+                }
+
+                return result;
+            }
+        }
+
+        // UI Elements
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const playerSection = document.getElementById('playerSection');
+        const lyricsDisplay = document.getElementById('lyricsDisplay');
+        const playBtn = document.getElementById('playBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const uploadNewBtn = document.getElementById('uploadNewBtn');
+        const progressBar = document.getElementById('progressBar');
+        const progressFill = document.getElementById('progressFill');
+        const currentTimeEl = document.getElementById('currentTime');
+        const durationEl = document.getElementById('duration');
+        const songTitleEl = document.getElementById('songTitle');
+        const songArtistEl = document.getElementById('songArtist');
+        const toggleVocalBtn = document.getElementById('toggleVocalBtn');
+        const toggleBackingBtn = document.getElementById('toggleBackingBtn');
+
+        // Audio players
+        let audioVocal = null;
+        let audioBacking = null;
+        let lyrics = [];
+        let syncTimes = [];
+        let currentLineIndex = 0;
+        let autoAdvance = true;
+        let syncOffset = 0;
+        let vocalMuted = false;
+        let backingMuted = false;
+
+        // File handling
+        uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.background = '#f0f0ff';
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.background = '';
+        });
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.background = '';
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+        function handleFiles(files) {
+            let kfnFile = null;
+            let iniFile = null;
+            const audioFiles = [];
+
+            for (let file of files) {
+                const name = file.name.toLowerCase();
+                if (name.endsWith('.kfn')) {
+                    kfnFile = file;
+                } else if (name === 'song.ini') {
+                    iniFile = file;
+                } else if (/\.(mp3|ogg|wav|m4a)$/i.test(name)) {
+                    audioFiles.push(file);
+                }
+            }
+
+            if (kfnFile) {
+                loadKFN(kfnFile);
+            } else {
+                if (iniFile) parseSongIni(iniFile);
+                audioFiles.forEach((f, idx) => loadAudioFile(f, idx));
+            }
+        }
+
+        async function loadKFN(file) {
+            try {
+                lyricsDisplay.innerHTML = '<div class="loading">Loading KFN file...</div>';
+                const arrayBuffer = await file.arrayBuffer();
+                const dumper = new KFNDumper(arrayBuffer);
+                const extracted = await dumper.extractAll();
+
+                let songIniData = null;
+                const audioData = [];
+
+                for (const [filename, info] of Object.entries(extracted)) {
+                    if (!info.error) {
+                        if (filename.toLowerCase() === 'song.ini') {
+                            songIniData = info.data;
+                        } else if (/\.(mp3|ogg|wav|m4a|aac)$/i.test(filename)) {
+                            audioData.push({ filename, data: info.data });
+                        }
+                    }
+                }
+
+                if (songIniData) {
+                    parseSongIniBuffer(songIniData);
+                }
+
+                audioData.forEach((audio, idx) => loadAudioBlob(audio.data, audio.filename, idx));
+
+                if (audioData.length === 0) {
+                    lyricsDisplay.innerHTML = '<div class="loading">No audio found</div>';
+                }
+
+                playerSection.classList.remove('hidden');
+            } catch (error) {
+                lyricsDisplay.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
+            }
+        }
+
+        function parseSongIni(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                parseSongIniContent(e.target.result);
+                updateLyricsDisplay();
+                if (audioVocal || audioBacking) playerSection.classList.remove('hidden');
+            };
+            reader.readAsText(file);
+        }
+
+        function parseSongIniBuffer(buffer) {
+            const decoder = new TextDecoder('utf-8');
+            parseSongIniContent(decoder.decode(buffer));
+        }
+
+        function parseSongIniContent(content) {
+            const lines = content.split(/\r?\n/);
+            let title = 'Unknown Song';
+            let artist = 'Unknown Artist';
+            const textMap = {};
+            const syncMap = {};
+
+            for (let line of lines) {
+                const match = line.match(/^([^=]+)=(.*)$/);
+                if (!match) continue;
+                const [, key, value] = match;
+
+                if (key === 'title') title = value;
+                if (key === 'artist') artist = value;
+                if (key.match(/^text\d+$/)) {
+                    const idx = parseInt(key.match(/\d+/)[0]);
+                    textMap[idx] = value.replace(/\//g, '');
+                }
+                if (key.match(/^sync\d+$/)) {
+                    const idx = parseInt(key.match(/\d+/)[0]);
+                    // Convert centiseconds to milliseconds
+                    syncMap[idx] = value.split(',').map(v => parseInt(v) * 10);
+                }
+            }
+
+            songTitleEl.textContent = title;
+            songArtistEl.textContent = artist;
+
+            syncTimes = [];
+            for (let i = 0; syncMap[i]; i++) {
+                syncTimes.push(...syncMap[i]);
+            }
+
+            lyrics = [];
+            for (let i = 0; textMap[i]; i++) {
+                lyrics.push(textMap[i]);
+            }
+        }
+
+        function loadAudioFile(file, index) {
+            const url = URL.createObjectURL(file);
+            createAudioElement(url, file.name, index);
+        }
+
+        function loadAudioBlob(blob, filename, index) {
+            const url = URL.createObjectURL(new Blob([blob]));
+            createAudioElement(url, filename, index);
+        }
+
+        function createAudioElement(url, filename, index) {
+            const audio = new Audio(url);
+            const isVocal = !filename.toLowerCase().includes('instru') && !filename.toLowerCase().includes('beat');
+
+            audio.addEventListener('loadedmetadata', () => {
+                durationEl.textContent = formatTime(audio.duration);
+            });
+
+            audio.addEventListener('timeupdate', updateSync);
+            audio.addEventListener('ended', () => {
+                autoAdvance = false;
+                updateLyricsDisplay();
+            });
+
+            if (isVocal && !audioVocal) {
+                audioVocal = audio;
+                toggleVocalBtn.style.display = 'block';
+            } else if (!isVocal && !audioBacking) {
+                audioBacking = audio;
+                toggleBackingBtn.style.display = 'block';
+            }
+        }
+
+        function updateSync() {
+            const time = audioVocal || audioBacking;
+            if (!time) return;
+
+            const currentMs = time.currentTime * 1000;
+            currentTimeEl.textContent = formatTime(time.currentTime);
+            progressFill.style.width = (time.currentTime / time.duration) * 100 + '%';
+
+            if (autoAdvance && lyrics.length > 0) {
+                let nextIdx = currentLineIndex;
+                for (let i = currentLineIndex; i < syncTimes.length; i++) {
+                    if (currentMs >= (syncTimes[i] + syncOffset)) {
+                        nextIdx = i;
+                    } else {
+                        break;
+                    }
+                }
+                if (nextIdx !== currentLineIndex) {
+                    currentLineIndex = nextIdx;
+                    updateLyricsDisplay();
+                }
+            }
+        }
+
+        function updateLyricsDisplay() {
+            if (lyrics.length === 0) {
+                lyricsDisplay.innerHTML = '<div class="loading">No lyrics</div>';
+                return;
+            }
+            const current = lyrics[currentLineIndex] || '';
+            const next = currentLineIndex + 1 < lyrics.length ? lyrics[currentLineIndex + 1] : '';
+            lyricsDisplay.innerHTML = `
+                <div class="current-line">${current}</div>
+                ${next ? `<div class="next-line">${next}</div>` : ''}
+            `;
+        }
+
+        function formatTime(sec) {
+            if (!sec || isNaN(sec)) return '0:00';
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60);
+            return `${m}:${s.toString().padStart(2, '0')}`;
+        }
+
+        // Controls
+        playBtn.addEventListener('click', () => {
+            if (audioVocal && !vocalMuted) audioVocal.play();
+            if (audioBacking && !backingMuted) audioBacking.play();
+            autoAdvance = true;
+        });
+
+        pauseBtn.addEventListener('click', () => {
+            if (audioVocal) audioVocal.pause();
+            if (audioBacking) audioBacking.pause();
+        });
+
+        resetBtn.addEventListener('click', () => {
+            if (audioVocal) audioVocal.currentTime = 0;
+            if (audioBacking) audioBacking.currentTime = 0;
+            currentLineIndex = 0;
+            autoAdvance = false;
+            updateLyricsDisplay();
+        });
+
+        uploadNewBtn.addEventListener('click', () => {
+            currentLineIndex = 0;
+            lyrics = [];
+            syncTimes = [];
+            syncOffset = 0;
+            if (audioVocal) audioVocal.pause();
+            if (audioBacking) audioBacking.pause();
+            audioVocal = null;
+            audioBacking = null;
+            vocalMuted = false;
+            backingMuted = false;
+            toggleVocalBtn.classList.remove('muted');
+            toggleBackingBtn.classList.remove('muted');
+            toggleVocalBtn.textContent = '🎤 Mute Vocal';
+            toggleBackingBtn.textContent = '🎵 Mute Backing';
+            playerSection.classList.add('hidden');
+            uploadArea.classList.remove('hidden');
+            fileInput.value = '';
+        });
+
+        toggleVocalBtn.addEventListener('click', (e) => {
+            vocalMuted = !vocalMuted;
+            if (audioVocal) {
+                if (vocalMuted) {
+                    audioVocal.pause();
+                    e.target.classList.add('muted');
+                    e.target.textContent = '🎤 Unmute Vocal';
+                } else {
+                    if (audioBacking && !audioBacking.paused) {
+                        audioVocal.currentTime = audioBacking.currentTime;
+                    }
+                    audioVocal.play();
+                    e.target.classList.remove('muted');
+                    e.target.textContent = '🎤 Mute Vocal';
+                }
+            }
+        });
+
+        toggleBackingBtn.addEventListener('click', (e) => {
+            backingMuted = !backingMuted;
+            if (audioBacking) {
+                if (backingMuted) {
+                    audioBacking.pause();
+                    e.target.classList.add('muted');
+                    e.target.textContent = '🎵 Unmute Backing';
+                } else {
+                    if (audioVocal && !audioVocal.paused) {
+                        audioBacking.currentTime = audioVocal.currentTime;
+                    }
+                    audioBacking.play();
+                    e.target.classList.remove('muted');
+                    e.target.textContent = '🎵 Mute Backing';
+                }
+            }
+        });
+
+        document.getElementById('syncOffsetSlider').addEventListener('input', (e) => {
+            syncOffset = parseInt(e.target.value);
+            document.getElementById('syncOffsetValue').textContent = syncOffset;
+        });
+
+        progressBar.addEventListener('click', (e) => {
+            const audio = audioVocal || audioBacking;
+            if (!audio) return;
+            const rect = progressBar.getBoundingClientRect();
+            const percent = (e.clientX - rect.left) / rect.width;
+            const time = percent * audio.duration;
+            if (audioVocal) audioVocal.currentTime = time;
+            if (audioBacking) audioBacking.currentTime = time;
+        });
+
+        // Keyboard
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if ((audioVocal && !audioVocal.paused) || (audioBacking && !audioBacking.paused)) {
+                    pauseBtn.click();
+                } else {
+                    playBtn.click();
+                }
+            }
+            if (e.code === 'ArrowRight') currentLineIndex = Math.min(currentLineIndex + 1, lyrics.length - 1);
+            if (e.code === 'ArrowLeft') currentLineIndex = Math.max(currentLineIndex - 1, 0);
+            updateLyricsDisplay();
+        });
+    </script>
+</body>
+</html>
