@@ -550,6 +550,9 @@
             parseSongIniContent(decoder.decode(buffer));
         }
 
+        let lyricsLines = []; // Store line data for display
+        let lineIndices = []; // Track which lyrics index each line starts at
+        
         function parseSongIniContent(content) {
             const lines = content.split(/\r?\n/);
             let title = 'Unknown Song';
@@ -566,7 +569,7 @@
                 if (key === 'artist') artist = value;
                 if (key.match(/^text\d+$/)) {
                     const idx = parseInt(key.match(/\d+/)[0]);
-                    textMap[idx] = value.replace(/\//g, '');
+                    textMap[idx] = value; // Keep both "/" and spaces
                 }
                 if (key.match(/^sync\d+$/)) {
                     const idx = parseInt(key.match(/\d+/)[0]);
@@ -579,13 +582,45 @@
             songArtistEl.textContent = artist;
 
             syncTimes = [];
-            for (let i = 0; syncMap[i]; i++) {
-                syncTimes.push(...syncMap[i]);
-            }
-
             lyrics = [];
-            for (let i = 0; textMap[i]; i++) {
-                lyrics.push(textMap[i]);
+            lyricsLines = [];
+            lineIndices = [];
+            
+            // First collect all timings in order
+            const allTimings = [];
+            for (let i = 0; syncMap[i] !== undefined; i++) {
+                allTimings.push(...syncMap[i]);
+            }
+            
+            // Parse all words and lines sequentially
+            let timingIdx = 0;
+            for (let i = 0; textMap[i] !== undefined; i++) {
+                const line = textMap[i];
+                
+                // Skip blank/empty lines
+                if (line.trim() === '_' || line.trim().length === 0) {
+                    continue;
+                }
+                
+                // Split on "/" first to get syllables, then on spaces
+                const syllables = line.split('/').filter(s => s.length > 0);
+                const words = [];
+                
+                for (let syl of syllables) {
+                    const parts = syl.split(/\s+/).filter(p => p.length > 0);
+                    words.push(...parts);
+                }
+                
+                if (words.length > 0) {
+                    lineIndices.push(lyrics.length); // Track where this line starts
+                    lyricsLines.push(line.replace(/\//g, '')); // Store full line without "/"
+                    
+                    for (let j = 0; j < words.length; j++) {
+                        lyrics.push(words[j]);
+                        syncTimes.push(allTimings[timingIdx] !== undefined ? allTimings[timingIdx] : 0);
+                        timingIdx++;
+                    }
+                }
             }
         }
 
@@ -651,11 +686,37 @@
                 lyricsDisplay.innerHTML = '<div class="loading">No lyrics</div>';
                 return;
             }
-            const current = lyrics[currentLineIndex] || '';
-            const next = currentLineIndex + 1 < lyrics.length ? lyrics[currentLineIndex + 1] : '';
+            
+            // Find which line the current syllable belongs to
+            let currentLineIdx = 0;
+            let lineStartIdx = 0;
+            
+            for (let i = 0; i < lineIndices.length; i++) {
+                if (i === lineIndices.length - 1 || currentLineIndex < lineIndices[i + 1]) {
+                    currentLineIdx = i;
+                    lineStartIdx = lineIndices[i];
+                    break;
+                }
+            }
+            
+            // Get syllables for current line
+            const nextLineStart = (currentLineIdx + 1 < lineIndices.length) ? lineIndices[currentLineIdx + 1] : lyrics.length;
+            const currentLineSyllables = lyrics.slice(lineStartIdx, nextLineStart);
+            const wordInLine = currentLineIndex - lineStartIdx;
+            
+            const highlightedLine = currentLineSyllables.map((syl, idx) => 
+                idx === wordInLine ? `<span style="background: #667eea; padding: 2px 4px; border-radius: 3px;">${syl}</span>` : syl
+            ).join(' ');
+            
+            // Get next line
+            let nextLineText = '';
+            if (currentLineIdx + 1 < lyricsLines.length) {
+                nextLineText = lyricsLines[currentLineIdx + 1];
+            }
+            
             lyricsDisplay.innerHTML = `
-                <div class="current-line">${current}</div>
-                ${next ? `<div class="next-line">${next}</div>` : ''}
+                <div class="current-line">${highlightedLine}</div>
+                ${nextLineText ? `<div class="next-line">${nextLineText}</div>` : ''}
             `;
         }
 
