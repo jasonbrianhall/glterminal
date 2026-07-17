@@ -16,11 +16,15 @@
 #include "../sdl_renderer.h"
 #include "../ft_font.h"
 
+#include "miniz.h"
+#include "miniz_zip.h"
+
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <strings.h>   // strcasecmp
 #include <ctype.h>
 #include <algorithm>
 #include <map>
@@ -211,13 +215,159 @@ void iv_kfn_stop() {
     g_iv.kfn_backing_muted  = false;
 }
 
-bool iv_kfn_load(const char *kfn_path, const char *label) {
-    iv_kfn_stop();
-    iv_stop_audio();
-    iv_cdg_free();
-    iv_free_tex();
-    iv_ensure_mixer();
+// Picks vocal (primary) and backing track filenames out of a list of
+// audio-like names, using the same "instru"/"beat" heuristic as the JS
+// player's createAudioElement() isVocal check. Shared by both container
+// formats below.
+static void iv_kfn_classify_tracks(const std::vector<std::string> &names,
+                                    std::string &vocal, std::string &backing) {
+    vocal.clear();
+    backing.clear();
+    for (auto &name : names) {
+        const char *dot  = strrchr(name.c_str(), '/');
+        const char *base = dot ? dot + 1 : name.c_str();
+        std::string lower = kfn_lower(base);
+        bool looksBacking = lower.find("instru") != std::string::npos ||
+                             lower.find("beat")   != std::string::npos;
+        if (looksBacking) { if (backing.empty()) backing = name; }
+        else               { if (vocal.empty())  vocal   = name; }
+    }
+    if (vocal.empty()) { vocal = backing; backing.clear(); }  // only one track total
+    if (backing == vocal) backing.clear();
+}
 
+// Starts playback given already-extracted temp file paths (vocal required,
+// backing optional). Shared tail for the v1 (zip) and v2 (KFNB) loaders —
+// vocal rides the normal music/chunk pipeline, backing gets its own channel.
+static bool iv_kfn_start_playback(const std::string &tmp_vocal,
+                                   const std::string &tmp_backing,
+                                   const char *label) {
+    iv_play_audio(tmp_vocal.c_str(), label, false);
+    if (!g_iv.audio_playing) {
+        iv_delete_tempfile(tmp_vocal.c_str());
+        return false;
+    }
+    g_iv.kfn_tmp_vocal = tmp_vocal;
+
+    if (!tmp_backing.empty()) {
+        g_iv.kfn_chunk_backing = Mix_LoadWAV(tmp_backing.c_str());
+        if (g_iv.kfn_chunk_backing) {
+            g_iv.kfn_tmp_backing = tmp_backing;
+            g_iv.kfn_channel_backing = Mix_PlayChannel(-1, g_iv.kfn_chunk_backing, 0);
+            if (g_iv.kfn_channel_backing >= 0)
+                Mix_Volume(g_iv.kfn_channel_backing, (int)(g_iv.volume * 128.0f));
+        } else {
+            iv_delete_tempfile(tmp_backing.c_str());
+        }
+    }
+
+    g_iv.kfn_active       = true;
+    g_iv.kfn_current_word = 0;
+    g_iv.error[0] = '\0';
+    return true;
+}
+
+static std::string kfn_ext_of(const std::string &name) {
+    size_t dot = name.find_last_of('.');
+    return (dot == std::string::npos) ? std::string(".mp3") : name.substr(dot);
+}
+
+// True if this .kfn is actually a plain ZIP (older/v1 KaraFun packages —
+// same song.ini + audio layout, just a standard ZIP container instead of
+// the custom KFNB binary format). Sniffs the standard ZIP local-file-header
+// / end-of-central-directory signatures.
+static bool iv_kfn_is_v1_zip(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    unsigned char sig[4] = {};
+    size_t n = fread(sig, 1, sizeof(sig), f);
+    fclose(f);
+    if (n < 4 || sig[0] != 'P' || sig[1] != 'K') return false;
+    return (sig[2] == 0x03 && sig[3] == 0x04) ||   // local file header
+           (sig[2] == 0x05 && sig[3] == 0x06) ||   // empty archive (EOCD)
+           (sig[2] == 0x07 && sig[3] == 0x08);      // spanned archive
+}
+
+// v1 loader: KFN-as-ZIP, no encryption, so this is just a normal zip
+// extraction using the same miniz helpers as fc_zip.cpp.
+static bool iv_kfn_load_v1_zip(const char *kfn_path, const char *label) {
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    if (!mz_zip_reader_init_file(&zip, kfn_path, 0)) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "KFN: cannot open zip archive");
+        return false;
+    }
+
+    mz_uint n = mz_zip_reader_get_num_files(&zip);
+    std::string ini_entry;
+    std::vector<std::string> audio_entries;
+
+    for (mz_uint i = 0; i < n; i++) {
+        if (mz_zip_reader_is_file_a_directory(&zip, i)) continue;
+        char fname[512] = {};
+        mz_zip_reader_get_filename(&zip, i, fname, sizeof(fname));
+        const char *slash = strrchr(fname, '/');
+        const char *base  = slash ? slash + 1 : fname;
+
+        if (ini_entry.empty() && strcasecmp(base, "song.ini") == 0) {
+            ini_entry = fname;
+        } else if (iv_kfn_is_audio_name(base)) {
+            audio_entries.push_back(fname);
+        }
+    }
+    mz_zip_reader_end(&zip);
+
+    if (ini_entry.empty()) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "KFN: no song.ini inside archive");
+        return false;
+    }
+
+    size_t ini_sz = 0;
+    unsigned char *ini_buf = iv_extract_zip_entry(kfn_path, ini_entry.c_str(), ini_sz);
+    if (!ini_buf) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "KFN: failed to extract song.ini");
+        return false;
+    }
+    iv_kfn_parse_ini(std::string((const char *)ini_buf, ini_sz));
+    free(ini_buf);
+
+    if (audio_entries.empty()) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "KFN: no audio tracks found");
+        return false;
+    }
+
+    std::string vocal_name, backing_name;
+    iv_kfn_classify_tracks(audio_entries, vocal_name, backing_name);
+
+    size_t vsz = 0;
+    unsigned char *vbuf = iv_extract_zip_entry(kfn_path, vocal_name.c_str(), vsz);
+    if (!vbuf) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "KFN: failed to extract %s", vocal_name.c_str());
+        return false;
+    }
+    std::string tmp_vocal = iv_write_tempfile(vbuf, vsz, kfn_ext_of(vocal_name).c_str());
+    free(vbuf);
+    if (tmp_vocal.empty()) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "KFN: cannot write temp file");
+        return false;
+    }
+
+    std::string tmp_backing;
+    if (!backing_name.empty()) {
+        size_t bsz = 0;
+        unsigned char *bbuf = iv_extract_zip_entry(kfn_path, backing_name.c_str(), bsz);
+        if (bbuf) {
+            tmp_backing = iv_write_tempfile(bbuf, bsz, kfn_ext_of(backing_name).c_str());
+            free(bbuf);
+        }
+    }
+
+    return iv_kfn_start_playback(tmp_vocal, tmp_backing, label);
+}
+
+// v2 loader: the custom KFNB binary container, with optional per-entry
+// AES-128-ECB encryption (see kfn.h / kfn.cpp).
+static bool iv_kfn_load_v2_binary(const char *kfn_path, const char *label) {
     KFNArchive archive;
     if (!archive.open(kfn_path)) {
         snprintf(g_iv.error, sizeof(g_iv.error), "KFN: %s", archive.lastError().c_str());
@@ -238,66 +388,49 @@ bool iv_kfn_load(const char *kfn_path, const char *label) {
     iv_kfn_parse_ini(std::string((const char *)ini_buf, ini_sz));
     free(ini_buf);
 
-    // Classify audio entries: anything with "instru" or "beat" in the name
-    // is the backing track (same heuristic as createAudioElement's isVocal
-    // check); the first remaining track is the vocal/primary track.
-    const KFNEntry *vocal_entry = nullptr, *backing_entry = nullptr;
+    std::vector<std::string> audio_names;
+    std::map<std::string, const KFNEntry *> byName;
     for (auto &e : archive.entries()) {
         if (!iv_kfn_is_audio_name(e.filename)) continue;
-        std::string lower = kfn_lower(e.filename);
-        bool looksBacking = lower.find("instru") != std::string::npos ||
-                             lower.find("beat")   != std::string::npos;
-        if (looksBacking) { if (!backing_entry) backing_entry = &e; }
-        else               { if (!vocal_entry)  vocal_entry  = &e; }
+        audio_names.push_back(e.filename);
+        byName[e.filename] = &e;
     }
-    if (!vocal_entry) vocal_entry = backing_entry;  // only one track total
-    if (backing_entry == vocal_entry) backing_entry = nullptr;
-
-    if (!vocal_entry) {
+    if (audio_names.empty()) {
         snprintf(g_iv.error, sizeof(g_iv.error), "KFN: no audio tracks found");
         return false;
     }
 
-    auto ext_of = [](const std::string &name) -> std::string {
-        size_t dot = name.find_last_of('.');
-        return (dot == std::string::npos) ? std::string(".mp3") : name.substr(dot);
-    };
+    std::string vocal_name, backing_name;
+    iv_kfn_classify_tracks(audio_names, vocal_name, backing_name);
 
-    std::string tmp_vocal = archive.extractToTemp(*vocal_entry, ext_of(vocal_entry->filename).c_str());
+    const KFNEntry *vocal_entry = byName[vocal_name];
+    std::string tmp_vocal = archive.extractToTemp(*vocal_entry, kfn_ext_of(vocal_name).c_str());
     if (tmp_vocal.empty()) {
         snprintf(g_iv.error, sizeof(g_iv.error), "KFN: failed to extract %s (%s)",
-                 vocal_entry->filename.c_str(), archive.lastError().c_str());
+                 vocal_name.c_str(), archive.lastError().c_str());
         return false;
     }
 
-    // Play the vocal/primary track through the normal pipeline so
-    // pause/resume/stop/repeat/the progress bar all keep working.
-    iv_play_audio(tmp_vocal.c_str(), label, false);
-    if (!g_iv.audio_playing) {
-        iv_delete_tempfile(tmp_vocal.c_str());
-        return false;
-    }
-    g_iv.kfn_tmp_vocal = tmp_vocal;
-
-    if (backing_entry) {
-        std::string tmp_backing = archive.extractToTemp(*backing_entry, ext_of(backing_entry->filename).c_str());
-        if (!tmp_backing.empty()) {
-            g_iv.kfn_chunk_backing = Mix_LoadWAV(tmp_backing.c_str());
-            if (g_iv.kfn_chunk_backing) {
-                g_iv.kfn_tmp_backing = tmp_backing;
-                g_iv.kfn_channel_backing = Mix_PlayChannel(-1, g_iv.kfn_chunk_backing, 0);
-                if (g_iv.kfn_channel_backing >= 0)
-                    Mix_Volume(g_iv.kfn_channel_backing, (int)(g_iv.volume * 128.0f));
-            } else {
-                iv_delete_tempfile(tmp_backing.c_str());
-            }
-        }
+    std::string tmp_backing;
+    if (!backing_name.empty()) {
+        const KFNEntry *backing_entry = byName[backing_name];
+        tmp_backing = archive.extractToTemp(*backing_entry, kfn_ext_of(backing_name).c_str());
     }
 
-    g_iv.kfn_active       = true;
-    g_iv.kfn_current_word = 0;
-    g_iv.error[0] = '\0';
-    return true;
+    return iv_kfn_start_playback(tmp_vocal, tmp_backing, label);
+}
+
+bool iv_kfn_load(const char *kfn_path, const char *label) {
+    iv_kfn_stop();
+    iv_stop_audio();
+    iv_cdg_free();
+    iv_free_tex();
+    iv_ensure_mixer();
+
+    if (iv_kfn_is_v1_zip(kfn_path)) {
+        return iv_kfn_load_v1_zip(kfn_path, label);
+    }
+    return iv_kfn_load_v2_binary(kfn_path, label);
 }
 
 // ============================================================================
