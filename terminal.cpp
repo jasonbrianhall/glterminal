@@ -201,6 +201,92 @@ static void dispatch_csi(Terminal *t) {
         if (final == 'l' && mode == 25) t->cursor_on = false;
         break;
     }
+    case 'M': {
+        // DL - delete line(s): remove n lines at cursor row, pulling rows
+        // below up and blanking the bottom of the scroll region.
+        int n = atoi(p); if (n < 1) n = 1;
+        int bot = SDL_min(t->scroll_bot, t->rows - 1);
+        if (t->cur_row >= t->scroll_top && t->cur_row <= bot) {
+            int save_top = t->scroll_top;
+            t->scroll_top = t->cur_row;
+            for (int i = 0; i < n; i++) scroll_up(t);
+            t->scroll_top = save_top;
+        }
+        break;
+    }
+    case 'L': {
+        // IL - insert line(s): push rows at/after cursor down, blanking
+        // n lines at the cursor row within the scroll region.
+        int n = atoi(p); if (n < 1) n = 1;
+        int bot = SDL_min(t->scroll_bot, t->rows - 1);
+        if (t->cur_row >= t->scroll_top && t->cur_row <= bot) {
+            int save_top = t->scroll_top;
+            t->scroll_top = t->cur_row;
+            for (int i = 0; i < n; i++) scroll_down(t);
+            t->scroll_top = save_top;
+        }
+        break;
+    }
+    case 'P': {
+        // DCH - delete character(s): shift cells after cursor left,
+        // blank the vacated cells at end of line.
+        int n = atoi(p); if (n < 1) n = 1;
+        int row = t->cur_row, col = t->cur_col;
+        if (col < t->cols) {
+            int count = t->cols - col;
+            if (n > count) n = count;
+            int remain = count - n;
+            if (remain > 0)
+                memmove(&CELL(t,row,col), &CELL(t,row,col+n), sizeof(Cell)*remain);
+            for (int c = t->cols - n; c < t->cols; c++)
+                CELL(t,row,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
+            term_dirty_row(t, row);
+        }
+        break;
+    }
+    case '@': {
+        // ICH - insert character(s): shift cells at/after cursor right,
+        // blank n cells at the cursor.
+        int n = atoi(p); if (n < 1) n = 1;
+        int row = t->cur_row, col = t->cur_col;
+        if (col < t->cols) {
+            int count = t->cols - col;
+            if (n > count) n = count;
+            int remain = count - n;
+            if (remain > 0)
+                memmove(&CELL(t,row,col+n), &CELL(t,row,col), sizeof(Cell)*remain);
+            for (int c = col; c < col + n && c < t->cols; c++)
+                CELL(t,row,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
+            term_dirty_row(t, row);
+        }
+        break;
+    }
+    case 'X': {
+        // ECH - erase character(s): blank n cells from cursor, no shifting.
+        int n = atoi(p); if (n < 1) n = 1;
+        int row = t->cur_row;
+        for (int c = t->cur_col; c < t->cur_col + n && c < t->cols; c++)
+            CELL(t,row,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
+        term_dirty_row(t, row);
+        break;
+    }
+    case 'r': {
+        // DECSTBM - set scroll region (1-based, inclusive). No args = full screen.
+        int top = 1, bot = t->rows;
+        if (p[0]) sscanf(p, "%d;%d", &top, &bot);
+        top = SDL_clamp(top, 1, t->rows) - 1;
+        bot = SDL_clamp(bot, 1, t->rows) - 1;
+        if (top < bot) {
+            t->scroll_top = top;
+            t->scroll_bot = bot;
+        } else {
+            t->scroll_top = 0;
+            t->scroll_bot = t->rows - 1;
+        }
+        t->cur_row = t->scroll_top;
+        t->cur_col = 0;
+        break;
+    }
     }
     t->csi_len = 0;
 }
