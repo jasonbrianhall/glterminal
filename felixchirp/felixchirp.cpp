@@ -531,9 +531,13 @@ void iv_tick(double /*dt*/) {
                 // No repeat: just stop
                 g_iv.audio_playing  = false;
                 g_iv.audio_position = 0.0;
+                if (g_iv.kfn_active) iv_kfn_stop();
             }
         }
     }
+
+    // Advance KFN lyric sync (word index) using the audio_position updated above.
+    iv_kfn_tick();
 
     // Update video playback and pull frames
     if (g_iv.video_playing && !g_iv.video_paused && g_iv.video_pipeline) {
@@ -963,7 +967,30 @@ void iv_enter_selected() {
                  (g_iv.remote || g_iv.path[0] == '/') ? "/" : "\\",
                  e.name);
 
-        if (e.is_audio) {
+        if (e.is_kfn) {
+            if (g_iv.remote) {
+                // Download the whole package to a temp file first — the KFN
+                // reader needs random (seekable) file access.
+                size_t sz = 0;
+                unsigned char *buf = iv_download_remote(fullpath, sz);
+                if (buf) {
+                    std::string tmp = iv_write_tempfile(buf, sz, ".kfn");
+                    free(buf);
+                    if (!tmp.empty()) {
+                        iv_kfn_load(tmp.c_str(), e.name);
+                        iv_delete_tempfile(tmp.c_str());  // audio tracks are already
+                                                           // extracted to their own temp files
+                    } else {
+                        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot write temp file");
+                    }
+                } else {
+                    snprintf(g_iv.error, sizeof(g_iv.error), "Failed to download: %s", e.name);
+                }
+            } else {
+                iv_kfn_load(fullpath, e.name);
+            }
+
+        } else if (e.is_audio) {
             if (g_iv.remote) {
                 // Download to temp file — SDL_mixer can't read from SSH paths
                 size_t sz = 0;
@@ -1446,6 +1473,8 @@ void iv_render(int win_w, int win_h) {
                 nr = 0.50f; ng = 0.85f; nb = 1.00f; // cyan — audio only
             } else if (e.is_cdg) {
                 nr = 0.80f; ng = 0.60f; nb = 1.00f; // purple — CDG graphics
+            } else if (e.is_kfn) {
+                nr = 1.00f; ng = 0.55f; nb = 0.80f; // pink — KaraFun package
             } else {
                 nr = 0.82f; ng = 0.82f; nb = 0.92f;
             }
@@ -1462,6 +1491,7 @@ void iv_render(int win_w, int win_h) {
                                  e.is_zip  ? "[ZIP] " :
                                  e.is_audio ? (e.has_cdg_pair ? "[CDG] " : "[AUD] ") :
                                  e.is_cdg  ? "[.CDG]" :
+                                 e.is_kfn  ? "[KFN] " :
                                              "      ";
             // Calculate how many characters fit in the panel (approx, monospace)
             // Reserve ~7 chars on right for the size column + padding
@@ -1504,8 +1534,12 @@ void iv_render(int win_w, int win_h) {
         float iw = (float)img_w,  ih = (float)content_h;
 
         draw_rect(ix, iy, iw, ih, 0.04f, 0.04f, 0.06f, 1.f);
-        
-        if (g_iv.cdg_display && (g_use_sdl_renderer ? (bool)g_iv.sdl_cdg_tex : (bool)g_iv.cdg_tex)) {
+
+        if (g_iv.kfn_active && (g_iv.audio_playing || g_iv.audio_paused)) {
+            // KaraFun lyric display — word-synced karaoke text instead of CDG graphics.
+            iv_kfn_render(ix, iy, iw, ih);
+
+        } else if (g_iv.cdg_display && (g_use_sdl_renderer ? (bool)g_iv.sdl_cdg_tex : (bool)g_iv.cdg_tex)) {
             // CD+G display — render palette texture directly
             float scale = std::min(iw / (float)CDG_WIDTH, ih / (float)CDG_HEIGHT);
             float dw = CDG_WIDTH * scale, dh = CDG_HEIGHT * scale;
@@ -1961,7 +1995,11 @@ void iv_render(int win_w, int win_h) {
         draw_rect(0, st_y+1, (float)win_w, (float)status_h-1, 0.09f, 0.09f, 0.13f, 1.f);
 
         char status[512];
-        if (g_iv.cdg_display != nullptr) {
+        if (g_iv.kfn_active && (g_iv.audio_playing || g_iv.audio_paused)) {
+            snprintf(status, sizeof(status), "  \xe2\x99\xab %s \xe2\x80\x94 %s   %.1fs%s",
+                     g_iv.kfn_artist.c_str(), g_iv.kfn_title.c_str(), g_iv.audio_position,
+                     g_iv.audio_paused ? "  [PAUSED]" : "");
+        } else if (g_iv.cdg_display != nullptr) {
             int pkt = g_iv.cdg_display->current_packet, tot = g_iv.cdg_display->packet_count;
             snprintf(status, sizeof(status), "  \xe2\x99\xab %s   CD+G: packet %d/%d  (%.1fs)",
                      g_iv.audio_label, pkt, tot, g_iv.audio_position);
@@ -1974,16 +2012,17 @@ void iv_render(int win_w, int win_h) {
                      g_iv.img_label, g_iv.tex_w, g_iv.tex_h);
         } else {
             int n = (int)g_iv.entries.size();
-            int imgs = 0, audio = 0, cdgs = 0;
+            int imgs = 0, audio = 0, cdgs = 0, kfns = 0;
             for (auto &e : g_iv.entries) {
                 if (!e.is_dir && !e.is_zip) {
                     if (e.is_audio) audio++;
                     else if (e.is_cdg) cdgs++;
+                    else if (e.is_kfn) kfns++;
                     else imgs++;
                 }
             }
-            snprintf(status, sizeof(status), "  %d items  (%d images, %d audio, %d cdg)",
-                     n, imgs, audio, cdgs);
+            snprintf(status, sizeof(status), "  %d items  (%d images, %d audio, %d cdg, %d kfn)",
+                     n, imgs, audio, cdgs, kfns);
         }
         iv_draw_text(status, (float)IV_PAD, st_y + status_h * 0.72f,
                      0.60f, 0.70f, 0.85f, 1.f);

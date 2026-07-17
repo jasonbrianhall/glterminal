@@ -172,6 +172,7 @@ void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
 
 void iv_close() {
     iv_stop_audio();
+    iv_kfn_stop();
     iv_video_stop();
     iv_cdg_free();
     iv_free_tex();
@@ -252,11 +253,13 @@ void iv_list_local(const char *path, std::vector<IVEntry> &out) {
         bool audio = is_audio_ext(e.name);
         bool video = is_video_ext(e.name) && g_video_capable;
         bool cdg   = is_cdg_ext(e.name);
-        if (e.is_dir || img || txt || md || zip || audio || video || cdg) {
+        bool kfn   = is_kfn_ext(e.name);
+        if (e.is_dir || img || txt || md || zip || audio || video || cdg || kfn) {
             if (zip)   { e.is_zip = true; e.has_cdg_pair = zip_contains_cdg_pair(full); }
             if (audio) { e.is_audio = true; e.has_cdg_pair = has_paired_cdg(path, e.name); }
             if (video) { e.is_video = true; }
             if (cdg)   e.is_cdg = true;
+            if (kfn)   e.is_kfn = true;
             out.push_back(e);
         }
     }
@@ -277,7 +280,8 @@ void iv_list_local(const char *path, std::vector<IVEntry> &out) {
         e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         e.size   = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
         if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name) ||
-            is_audio_ext(e.name) || (is_video_ext(e.name) && g_video_capable) || is_cdg_ext(e.name)) {
+            is_audio_ext(e.name) || (is_video_ext(e.name) && g_video_capable) ||
+            is_cdg_ext(e.name) || is_kfn_ext(e.name)) {
             if (is_zip_ext(e.name)) {
                 e.is_zip = true;
                 char full[4096]; snprintf(full, sizeof(full), "%s\\%s", path, e.name);
@@ -287,6 +291,7 @@ void iv_list_local(const char *path, std::vector<IVEntry> &out) {
                 e.has_cdg_pair = has_paired_cdg(path, e.name); }
             if (is_video_ext(e.name) && g_video_capable) { e.is_video = true; }
             if (is_cdg_ext(e.name))   e.is_cdg = true;
+            if (is_kfn_ext(e.name))   e.is_kfn = true;
             out.push_back(e);
         }
     } while (FindNextFileA(h, &fd));
@@ -338,7 +343,8 @@ void iv_list_remote(const char *path, std::vector<IVEntry> &out) {
             bool zip   = is_zip_ext(name);
             bool video = is_video_ext(name) && g_video_capable;
             bool cdg   = is_cdg_ext(name);
-            if (!is_dir && !img && !txt && !md && !audio && !zip && !video && !cdg) continue;
+            bool kfn   = is_kfn_ext(name);
+            if (!is_dir && !img && !txt && !md && !audio && !zip && !video && !cdg && !kfn) continue;
             IVEntry e{};
             strncpy(e.name, name, sizeof(e.name)-1);
             e.is_dir = is_dir;
@@ -347,6 +353,7 @@ void iv_list_remote(const char *path, std::vector<IVEntry> &out) {
             if (zip)   e.is_zip   = true;
             if (video) e.is_video = true;
             if (cdg)   e.is_cdg   = true;
+            if (kfn)   e.is_kfn   = true;
             // Note: has_cdg_pair and zip CDG peek not done for remote listings
             // (would require extra SFTP round-trips per file)
             out.push_back(e);

@@ -25,6 +25,9 @@
                              ".aiff",".aif",".voc", \
                              ".mod",".xm",".it",".s3m",".669",".med",".mtm" }
 #define IV_VIDEO_EXTS      { ".mp4",".mkv",".webm",".avi",".mov",".flv",".m4v",".wmv",".3gp" }
+// KaraFun karaoke package: a self-contained mini-archive (song.ini + audio
+// track(s) + word-level synced lyrics), see kfn.h/fc_kfn.cpp.
+#define IV_KFN_EXTS        { ".kfn" }
 
 // ============================================================================
 // TEXT & MARKDOWN SUPPORT STRUCTURES
@@ -60,6 +63,7 @@ struct IVEntry {
     bool     is_audio       = false;
     bool     is_video       = false;
     bool     is_cdg         = false;
+    bool     is_kfn         = false;
     bool     has_cdg_pair   = false;
     char     zip_path[4096] = {};
     char     zip_entry[512] = {};
@@ -123,6 +127,25 @@ struct ImageViewer {
     unsigned int cdg_tex          = 0;        // GL texture 300x216, updated each frame
     SDL_Texture *sdl_cdg_tex      = nullptr;  // SDL renderer path (replaces cdg_tex)
 
+    // KaraFun (.kfn) karaoke — see kfn.h / fc_kfn.cpp
+    // The vocal/primary track plays through the normal music/chunk fields
+    // above (audio_playing, audio_position, etc); only the optional second
+    // "backing" track and the lyric-sync state live here.
+    bool         kfn_active          = false;
+    std::string  kfn_title;
+    std::string  kfn_artist;
+    std::vector<std::string> kfn_lyrics;         // word-level syllables, in order
+    std::vector<std::string> kfn_lyrics_lines;   // display text per line (no '/')
+    std::vector<int>         kfn_line_indices;   // kfn_lyrics index where each line starts
+    std::vector<double>      kfn_sync_times;     // seconds (from song start) per word
+    int          kfn_current_word    = 0;
+    std::string  kfn_tmp_vocal;                  // temp files, deleted on stop
+    std::string  kfn_tmp_backing;
+    Mix_Chunk   *kfn_chunk_backing   = nullptr;
+    int          kfn_channel_backing = -1;
+    bool         kfn_vocal_muted     = false;
+    bool         kfn_backing_muted   = false;
+
     // Video playback (GStreamer)
     bool       video_playing      = false;
     bool       video_paused       = false;
@@ -169,6 +192,7 @@ void iv_list_zip(const char *zip_filepath, std::vector<IVEntry> &out);
 bool is_image_ext(const char *name);
 bool is_zip_ext(const char *name);
 bool is_cdg_ext(const char *name);
+bool is_kfn_ext(const char *name);
 bool is_text_ext(const char *name);
 bool is_markdown_ext(const char *name);
 bool is_video_ext(const char *name);
@@ -193,3 +217,11 @@ void iv_ensure_mixer();
 bool is_chunk_ext(const char *name);
 void iv_play_audio(const char *audio_path, const char *label, bool load_cdg);
 void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex, float x, float y, float w, float h);
+
+// KaraFun (.kfn) karaoke — see fc_kfn.cpp
+bool iv_kfn_load(const char *kfn_path, const char *label);
+void iv_kfn_stop();
+void iv_kfn_tick();
+void iv_kfn_render(float ix, float iy, float iw, float ih);
+void iv_kfn_toggle_vocal_mute();
+void iv_kfn_toggle_backing_mute();

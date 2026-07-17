@@ -90,11 +90,13 @@ bool iv_keydown(SDL_Keycode sym) {
         if (g_iv.audio_playing) {
             if (g_iv.music)                       Mix_PauseMusic();
             else if (g_iv.chunk_channel >= 0)     Mix_Pause(g_iv.chunk_channel);
+            if (g_iv.kfn_channel_backing >= 0)     Mix_Pause(g_iv.kfn_channel_backing);
             g_iv.audio_paused  = true;
             g_iv.audio_playing = false;
         } else if (g_iv.audio_paused) {
             if (g_iv.music)                       Mix_ResumeMusic();
             else if (g_iv.chunk_channel >= 0)     Mix_Resume(g_iv.chunk_channel);
+            if (g_iv.kfn_channel_backing >= 0)     Mix_Resume(g_iv.kfn_channel_backing);
             g_iv.audio_playing = true;
             g_iv.audio_paused  = false;
             // Adjust start_ticks to account for paused time
@@ -118,6 +120,7 @@ bool iv_keydown(SDL_Keycode sym) {
 
     case SDLK_s:
         if (g_iv.audio_playing || g_iv.audio_paused) {
+            if (g_iv.kfn_active) iv_kfn_stop();
             iv_stop_audio();
             iv_cdg_free();
             return true;
@@ -173,17 +176,35 @@ bool iv_keydown(SDL_Keycode sym) {
         // Increase volume
         g_iv.volume += 0.05f;
         if (g_iv.volume > 1.0f) g_iv.volume = 1.0f;
-        if (g_iv.music) Mix_VolumeMusic((int)(g_iv.volume * 128.0f));
-        if (g_iv.chunk_channel >= 0) Mix_Volume(g_iv.chunk_channel, (int)(g_iv.volume * 128.0f));
+        if (g_iv.music && !g_iv.kfn_vocal_muted) Mix_VolumeMusic((int)(g_iv.volume * 128.0f));
+        if (g_iv.chunk_channel >= 0 && !g_iv.kfn_vocal_muted) Mix_Volume(g_iv.chunk_channel, (int)(g_iv.volume * 128.0f));
+        if (g_iv.kfn_channel_backing >= 0 && !g_iv.kfn_backing_muted) Mix_Volume(g_iv.kfn_channel_backing, (int)(g_iv.volume * 128.0f));
         return true;
 
     case SDLK_MINUS:
         // Decrease volume
         g_iv.volume -= 0.05f;
         if (g_iv.volume < 0.0f) g_iv.volume = 0.0f;
-        if (g_iv.music) Mix_VolumeMusic((int)(g_iv.volume * 128.0f));
-        if (g_iv.chunk_channel >= 0) Mix_Volume(g_iv.chunk_channel, (int)(g_iv.volume * 128.0f));
+        if (g_iv.music && !g_iv.kfn_vocal_muted) Mix_VolumeMusic((int)(g_iv.volume * 128.0f));
+        if (g_iv.chunk_channel >= 0 && !g_iv.kfn_vocal_muted) Mix_Volume(g_iv.chunk_channel, (int)(g_iv.volume * 128.0f));
+        if (g_iv.kfn_channel_backing >= 0 && !g_iv.kfn_backing_muted) Mix_Volume(g_iv.kfn_channel_backing, (int)(g_iv.volume * 128.0f));
         return true;
+
+    case SDLK_k:
+        // Mute/unmute the vocal (primary) track — KaraFun songs only
+        if (g_iv.kfn_active) {
+            iv_kfn_toggle_vocal_mute();
+            return true;
+        }
+        goto first_letter_jump;
+
+    case SDLK_b:
+        // Mute/unmute the backing track — KaraFun songs only
+        if (g_iv.kfn_active && g_iv.kfn_channel_backing >= 0) {
+            iv_kfn_toggle_backing_mute();
+            return true;
+        }
+        goto first_letter_jump;
 
     case SDLK_PERIOD:
         // Cycle repeat mode: OFF -> ONE -> ALL -> OFF

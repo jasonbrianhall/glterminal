@@ -227,6 +227,7 @@ SRCS_COMMON = felixterminal.cpp     gl_renderer.cpp       \
               ssh_key_manager.cpp   serial_session.cpp    \
               felixchirp/fc_file.cpp felixchirp/fc_text.cpp  \
               felixchirp/fc_input.cpp felixchirp/fc_zip.cpp \
+              felixchirp/fc_kfn.cpp   felixchirp/kfn.cpp    \
               sftp_webserver.cpp      midi_render.cpp       \
               dbopl.cpp               dbopl_wrapper.cpp     \
               instruments.cpp         voc_render.cpp        \
@@ -591,8 +592,7 @@ index.hpp: index.html
 	@xxd -i videoPlayer.js > videoPlayer.hpp
 	@xxd -i zipReader.js > zipReader.hpp
 	@xxd -i zoomPan.js > zoomPan.hpp
-
-
+	@xxd -i crypto-js.min.js > crypto-js.hpp
 	@echo "✓ Converted index.html"
 
 # ============================================================================
