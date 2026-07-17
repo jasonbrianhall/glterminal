@@ -6,6 +6,7 @@
 #include "basic_graphics.h"
 
 #include <SDL2/SDL.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
@@ -285,6 +286,48 @@ static void dispatch_csi(Terminal *t) {
         }
         t->cur_row = t->scroll_top;
         t->cur_col = 0;
+        break;
+    }
+    case 'c': {
+        // DA - device attributes. '>' prefix = secondary (DA2), else primary (DA1).
+        char resp[32];
+        int len;
+        if (p[0] == '>')
+            len = snprintf(resp, sizeof(resp), "\x1b[>1;100;0c");
+        else
+            len = snprintf(resp, sizeof(resp), "\x1b[?1;2c");
+        term_write(t, resp, len);
+        break;
+    }
+    case 'n': {
+        // DSR - device status report
+        int n = atoi(p);
+        char resp[32];
+        if (n == 6) {
+            int len = snprintf(resp, sizeof(resp), "\x1b[%d;%dR", t->cur_row+1, t->cur_col+1);
+            term_write(t, resp, len);
+        } else if (n == 5) {
+            const char *ok = "\x1b[0n";
+            term_write(t, ok, (int)strlen(ok));
+        }
+        break;
+    }
+    case 't': {
+        // Window manipulation - only report queries are answered; the rest
+        // (raise/lower/iconify/move/resize) are no-ops since we're windowed.
+        int op = atoi(p);
+        char resp[64];
+        int len = 0;
+        if (op == 18) {
+            // Report text area size in characters
+            len = snprintf(resp, sizeof(resp), "\x1b[8;%d;%dt", t->rows, t->cols);
+        } else if (op == 14) {
+            // Report text area size in pixels
+            int px_w = (int)(t->cols * t->cell_w);
+            int px_h = (int)(t->rows * t->cell_h);
+            len = snprintf(resp, sizeof(resp), "\x1b[4;%d;%dt", px_h, px_w);
+        }
+        if (len > 0) term_write(t, resp, len);
         break;
     }
     }
