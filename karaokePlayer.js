@@ -122,14 +122,45 @@
             kfnTrackControls.classList.remove('controls-hidden');
         }
 
+        // Reuses the standalone audio visualizer (vizWrap/vizCanvas, defined in
+        // audioVisualizer.js) as an animated background behind the karaoke lyrics,
+        // by temporarily moving it into the kfn-viz-bg slot. Its own mode-switch
+        // button comes along with it, so the visualization can still be cycled
+        // while lyrics are showing. Remembers its original spot so it can be
+        // moved back for plain (non-karaoke) tracks.
+        let vizWrapHomeParent = null;
+        let vizWrapHomeNextSibling = null;
+
+        function attachVizAsKfnBackground() {
+            if (!vizWrapHomeParent) {
+                vizWrapHomeParent = vizWrap.parentNode;
+                vizWrapHomeNextSibling = vizWrap.nextSibling;
+            }
+            if (vizWrap.parentNode !== kfnVizBg) kfnVizBg.appendChild(vizWrap);
+            showVizVisual();
+        }
+
+        function detachVizFromKfnBackground() {
+            if (vizWrap.parentNode !== kfnVizBg) return;
+            if (vizWrapHomeParent) {
+                if (vizWrapHomeNextSibling) {
+                    vizWrapHomeParent.insertBefore(vizWrap, vizWrapHomeNextSibling);
+                } else {
+                    vizWrapHomeParent.appendChild(vizWrap);
+                }
+            }
+            hideVizVisual();
+        }
+
         function showKfnVisual() {
             musicArt.style.display = 'none';
-            hideVizVisual();
             kfnLyricsWrap.style.display = 'flex';
+            attachVizAsKfnBackground();
             showKfnTrackControls();
         }
 
         function hideKfnVisual() {
+            detachVizFromKfnBackground();
             kfnLyricsWrap.style.display = 'none';
             musicArt.style.display = 'flex';
             stopKfnControlsIdleWatch();
@@ -161,6 +192,7 @@
         const kfnMuteVocalBtn = document.getElementById('kfnMuteVocalBtn');
         const kfnMuteBackingBtn = document.getElementById('kfnMuteBackingBtn');
         const kfnTrackControls = document.getElementById('kfnTrackControls');
+        const kfnVizBg = document.getElementById('kfnVizBg');
 
         kfnMuteVocalBtn.addEventListener('click', () => {
             musicAudio.muted = !musicAudio.muted;
@@ -176,7 +208,7 @@
         });
 
         kfnLyricsWrap.addEventListener('dblclick', (e) => {
-            if (e.target.closest('.kfn-track-controls')) return;
+            if (e.target.closest('.kfn-track-controls, .viz-btn-row')) return;
             if (document.fullscreenElement) {
                 document.exitFullscreen();
             } else {

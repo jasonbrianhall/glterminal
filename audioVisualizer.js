@@ -19,6 +19,11 @@
         });
 
         vizCanvas.addEventListener('dblclick', () => {
+            // When borrowed as the karaoke lyrics background (see
+            // attachVizAsKfnBackground in karaokePlayer.js), fullscreen is
+            // handled by kfnLyricsWrap's own dblclick handler instead, so the
+            // lyric text (which lives outside this canvas) comes along too.
+            if (vizCanvas.closest('.kfn-viz-bg')) return;
             if (document.fullscreenElement) {
                 document.exitFullscreen();
             } else {
@@ -38,6 +43,13 @@
             analyser.smoothingTimeConstant = 0.8;
             source.connect(analyser);
             analyser.connect(audioCtx.destination);
+            // Karaoke backing (instrumental) plays through its own <audio>
+            // element (musicBackingAudio, see karaokePlayer.js). Route it into
+            // the same analyser so the visualizer reacts to the full mix
+            // instead of just the vocal track. Once routed through Web Audio,
+            // its output only reaches speakers via this connection.
+            const backingSource = audioCtx.createMediaElementSource(musicBackingAudio);
+            backingSource.connect(analyser);
             freqData = new Uint8Array(analyser.frequencyBinCount);
             timeData = new Uint8Array(analyser.frequencyBinCount);
         }
