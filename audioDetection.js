@@ -12,6 +12,9 @@
           'mkv',    // Matroska Movies (but just the audio part)
         ];
 
+        // Karaoke container format (audio + synced lyrics), parsed client-side
+        const KFN_EXTENSIONS = ['kfn'];
+
         // Formats that need conversion to WAV
         const MIDI_EXTENSIONS = ['mid', 'midi', 'kar'];
         const VOC_EXTENSIONS = ['voc'];
@@ -33,6 +36,14 @@
             if (dot === -1) return false;
             const ext = entry.name.slice(dot + 1).toLowerCase();
             return MIDI_EXTENSIONS.includes(ext);
+        }
+
+        function isKfnFile(entry) {
+            if (entry.type !== 'file') return false;
+            const dot = entry.name.lastIndexOf('.');
+            if (dot === -1) return false;
+            const ext = entry.name.slice(dot + 1).toLowerCase();
+            return KFN_EXTENSIONS.includes(ext);
         }
 
         function isVocFile(entry) {
@@ -120,7 +131,9 @@
 
             const convertibles = fileData.filter(isConvertibleAudioFile).map(e => entryToTrack(e, 'convertible'));
 
-            return [...audio, ...zips, ...midis, ...vocs, ...aus, ...aiffs, ...convertibles].map((t, i) => ({ ...t, id: i }));
+            const kfns = fileData.filter(isKfnFile).map(e => entryToTrack(e, 'kfn'));
+
+            return [...audio, ...zips, ...midis, ...vocs, ...aus, ...aiffs, ...convertibles, ...kfns].map((t, i) => ({ ...t, id: i }));
         }
 
         // ---- video detection ----

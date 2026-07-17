@@ -582,6 +582,8 @@ index.hpp: index.html
 	@xxd -i cookies.js > cookies.hpp
 	@xxd -i fileFilter.js > fileFilter.hpp
 	@xxd -i imageDetection.js > imageDetection.hpp
+	@xxd -i karaokePlayer.js > karaokePlayer.hpp
+	@xxd -i karaoke-library.js > karaoke-library.hpp
 	@xxd -i panDragHandlers.js > panDragHandlers.hpp
 	@xxd -i slideshowAutoplay.js > slideshowAutoplay.hpp
 	@xxd -i theme.js > theme.hpp

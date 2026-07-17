@@ -18,6 +18,8 @@
 #include "cdgPlayer.hpp"
 #include "audioVisualizer.hpp"
 #include "videoPlayer.hpp"
+#include "karaokePlayer.hpp"
+#include "karaoke-library.hpp" // Embedded karaoke-library.js (dynamically imported by karaokePlayer.js)
 #include "404.h" // Embedded 404.html
 #include "favicon.h" // Embedded favicon.ico
 #include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
@@ -672,6 +674,8 @@ enum class PublicFile {
     CDG_PLAYER_JS,
     AUDIO_VISUALIZER_JS,
     VIDEO_PLAYER_JS,
+    KARAOKEPLAYER_JS,
+    KARAOKE_LIBRARY_JS,
     UNKNOWN
 };
 
@@ -690,6 +694,9 @@ static PublicFile resolve_public_file(const char *path) {
     if (strcmp(path, "/public/cdgPlayer.js") == 0) return PublicFile::CDG_PLAYER_JS;
     if (strcmp(path, "/public/audioVisualizer.js") == 0) return PublicFile::AUDIO_VISUALIZER_JS;
     if (strcmp(path, "/public/videoPlayer.js") == 0) return PublicFile::VIDEO_PLAYER_JS;
+    if (strcmp(path, "/public/karaokePlayer.js") == 0) return PublicFile::KARAOKEPLAYER_JS;
+    if (strcmp(path, "/public/karaoke-library.js") == 0) return PublicFile::KARAOKE_LIBRARY_JS;
+
     return PublicFile::UNKNOWN;
 }
 
@@ -722,6 +729,11 @@ static std::string get_public_file_content(PublicFile file) {
             return std::string((const char *)audioVisualizer_js, audioVisualizer_js_len);
         case PublicFile::VIDEO_PLAYER_JS:
             return std::string((const char *)videoPlayer_js, videoPlayer_js_len);
+        case PublicFile::KARAOKEPLAYER_JS:
+            return std::string((const char *)karaokePlayer_js, karaokePlayer_js_len);
+        case PublicFile::KARAOKE_LIBRARY_JS:
+            return std::string((const char *)karaoke_library_js, karaoke_library_js_len);
+
         default:
             return "";
     }
@@ -743,6 +755,8 @@ static const char *get_public_file_mime_type(PublicFile file) {
         case PublicFile::CDG_PLAYER_JS:
         case PublicFile::AUDIO_VISUALIZER_JS:
         case PublicFile::VIDEO_PLAYER_JS:
+        case PublicFile::KARAOKEPLAYER_JS:
+        case PublicFile::KARAOKE_LIBRARY_JS:
             return "application/javascript";
         default:
             return "application/octet-stream";

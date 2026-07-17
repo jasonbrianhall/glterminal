@@ -445,6 +445,7 @@
         let repeatOn = false;
         let isSeeking = false;
         let currentObjectUrl = null;
+        let currentBackingObjectUrl = null;
         let cdgState = null;
         let cdgAnimHandle = null;
         let loadToken = 0;
@@ -538,9 +539,14 @@
 
             renderMusicTable();
             clearCdgState();
+            clearKfnState();
             if (currentObjectUrl) {
                 URL.revokeObjectURL(currentObjectUrl);
                 currentObjectUrl = null;
+            }
+            if (currentBackingObjectUrl) {
+                URL.revokeObjectURL(currentBackingObjectUrl);
+                currentBackingObjectUrl = null;
             }
             musicAudio.pause();
 
@@ -655,6 +661,41 @@
                     musicTitle.textContent = `Failed to convert ${track.name}`;
                     console.error(err);
                 }
+            } else if (track.type === 'kfn') {
+                musicTitle.textContent = `Loading ${track.name}...`;
+                try {
+                    const { audioUrl, backingAudioUrl, title, artist, lyrics, lyricsLines, syncTimes, lineIndices } = await loadKaraokeKfn(track);
+                    if (token !== loadToken) {
+                        URL.revokeObjectURL(audioUrl);
+                        if (backingAudioUrl) URL.revokeObjectURL(backingAudioUrl);
+                        return;
+                    }
+                    currentObjectUrl = audioUrl;
+                    musicAudio.src = audioUrl;
+                    musicTitle.textContent = title ? (artist ? `${title} - ${artist}` : title) : track.name;
+
+                    kfnHasBacking = !!backingAudioUrl;
+                    kfnMuteBackingBtn.style.display = kfnHasBacking ? '' : 'none';
+                    if (backingAudioUrl) {
+                        currentBackingObjectUrl = backingAudioUrl;
+                        musicBackingAudio.src = backingAudioUrl;
+                    }
+
+                    kfnActive = true;
+                    if (lyrics.length > 0) {
+                        kfnLyricsData = { lyrics, lyricsLines, syncTimes, lineIndices };
+                        showKfnVisual();
+                    } else {
+                        showVizVisual();
+                    }
+                    kfnLoop();
+                    musicAudio.play();
+                    if (kfnHasBacking) musicBackingAudio.play();
+                } catch (err) {
+                    if (token !== loadToken) return;
+                    musicTitle.textContent = `Failed to load ${track.name}`;
+                    console.error(err);
+                }
             } else {
                 musicAudio.src = track.src;
                 musicTitle.textContent = track.name;
@@ -731,10 +772,15 @@
             musicAudio.src = '';
             currentTrackId = null;
             clearCdgState();
+            clearKfnState();
             hideVizVisual();
             if (currentObjectUrl) {
                 URL.revokeObjectURL(currentObjectUrl);
                 currentObjectUrl = null;
+            }
+            if (currentBackingObjectUrl) {
+                URL.revokeObjectURL(currentBackingObjectUrl);
+                currentBackingObjectUrl = null;
             }
         }
 

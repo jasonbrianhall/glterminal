@@ -827,6 +827,59 @@
             object-fit: contain;
         }
 
+        .kfn-lyrics-wrap {
+            width: 100%;
+            max-width: 480px;
+            aspect-ratio: 300 / 216;
+            min-height: 140px;
+            border-radius: 8px;
+            background: black;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 20px;
+            gap: 14px;
+            cursor: pointer;
+        }
+
+        .kfn-lyrics-wrap:fullscreen {
+            width: 100vw;
+            height: 100vh;
+            max-width: none;
+        }
+
+        .kfn-lyrics-wrap:fullscreen .kfn-lyrics-current {
+            font-size: 48px;
+        }
+
+        .kfn-lyrics-wrap:fullscreen .kfn-lyrics-next {
+            font-size: 28px;
+        }
+
+        .kfn-lyrics-current {
+            font-size: 22px;
+            font-weight: 700;
+            color: white;
+            line-height: 1.5;
+        }
+
+        .kfn-lyrics-next {
+            font-size: 15px;
+            color: rgba(255, 255, 255, 0.55);
+        }
+
+        .kfn-syllable {
+            padding: 1px 3px;
+            border-radius: 3px;
+        }
+
+        .kfn-syllable.kfn-highlighted {
+            background: var(--accent);
+            font-weight: 700;
+        }
+
         .viz-wrap {
             position: relative;
             width: 100%;
@@ -876,6 +929,18 @@
         .viz-mode-btn:disabled {
             opacity: 0.6;
             cursor: default;
+        }
+
+        .kfn-track-controls {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .kfn-track-controls .viz-mode-btn.muted {
+            background: rgba(220, 50, 50, 0.55);
+            border-color: rgba(255, 120, 120, 0.6);
+            color: white;
         }
 
         .cdg-export-wrap {
@@ -1178,6 +1243,14 @@
         <div class="music-player">
             <div class="music-art" id="musicArt">&#9835;</div>
             <canvas class="cdg-canvas" id="cdgCanvas" width="300" height="216" style="display: none;"></canvas>
+            <div class="kfn-lyrics-wrap" id="kfnLyricsWrap" style="display: none;">
+                <div class="kfn-lyrics-current" id="kfnLyricsCurrent"></div>
+                <div class="kfn-lyrics-next" id="kfnLyricsNext"></div>
+                <div class="kfn-track-controls" id="kfnTrackControls">
+                    <button id="kfnMuteVocalBtn" class="viz-mode-btn" title="Mute vocal track">&#127908; Vocal</button>
+                    <button id="kfnMuteBackingBtn" class="viz-mode-btn" title="Mute backing track">&#127925; Backing</button>
+                </div>
+            </div>
             <div class="viz-wrap" id="vizWrap" style="display: none;">
                 <canvas class="viz-canvas" id="vizCanvas" width="480" height="270"></canvas>
                 <div class="viz-btn-row">
@@ -1218,6 +1291,7 @@
             </div>
         </div>
         <audio id="musicAudio"></audio>
+        <audio id="musicBackingAudio"></audio>
     </div>
 
     <div class="video-overlay" id="videoOverlay">
@@ -1276,6 +1350,8 @@
 <!-- Tier 5: Audio utilities -->
 <script src="/public/zipReader.js"></script>
 <script src="/public/cdgPlayer.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+<script src="/public/karaokePlayer.js"></script>
 <script src="/public/audioVisualizer.js"></script>
 
 <!-- Tier 6: Video player -->
