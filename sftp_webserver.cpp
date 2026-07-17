@@ -20,6 +20,7 @@
 #include "videoPlayer.hpp"
 #include "karaokePlayer.hpp"
 #include "karaoke-library.hpp" // Embedded karaoke-library.js (dynamically imported by karaokePlayer.js)
+#include "crypto-js.hpp"   // Crypto JS for Karaoke
 #include "404.h" // Embedded 404.html
 #include "favicon.h" // Embedded favicon.ico
 #include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
@@ -676,6 +677,7 @@ enum class PublicFile {
     VIDEO_PLAYER_JS,
     KARAOKEPLAYER_JS,
     KARAOKE_LIBRARY_JS,
+    CRYPTO_JS,
     UNKNOWN
 };
 
@@ -696,6 +698,7 @@ static PublicFile resolve_public_file(const char *path) {
     if (strcmp(path, "/public/videoPlayer.js") == 0) return PublicFile::VIDEO_PLAYER_JS;
     if (strcmp(path, "/public/karaokePlayer.js") == 0) return PublicFile::KARAOKEPLAYER_JS;
     if (strcmp(path, "/public/karaoke-library.js") == 0) return PublicFile::KARAOKE_LIBRARY_JS;
+    if (strcmp(path, "/public/crypto-js.min.js") == 0) return PublicFile::CRYPTO_JS;
 
     return PublicFile::UNKNOWN;
 }
@@ -733,7 +736,8 @@ static std::string get_public_file_content(PublicFile file) {
             return std::string((const char *)karaokePlayer_js, karaokePlayer_js_len);
         case PublicFile::KARAOKE_LIBRARY_JS:
             return std::string((const char *)karaoke_library_js, karaoke_library_js_len);
-
+        case PublicFile::CRYPTO_JS:
+            return std::string((const char *)crypto_js_min_js, crypto_js_min_js_len);
         default:
             return "";
     }
@@ -757,6 +761,7 @@ static const char *get_public_file_mime_type(PublicFile file) {
         case PublicFile::VIDEO_PLAYER_JS:
         case PublicFile::KARAOKEPLAYER_JS:
         case PublicFile::KARAOKE_LIBRARY_JS:
+        case PublicFile::CRYPTO_JS:
             return "application/javascript";
         default:
             return "application/octet-stream";
