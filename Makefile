@@ -574,27 +574,28 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 # ============================================================================
 # Gzip index.html and convert to C header (saves ~100KB in binary)
 # Automatically regenerated when index.hpptml changes
-index.hpp: index.html
+index.hpp: web/index.html
 	@echo "Generating index.html header..."
-	@xxd -i web/404.html > 404.hpp
-	@xxd -i web/index.html > index.hpp
-	@xxd -i web/audioDetection.js > audioDetection.hpp
-	@xxd -i web/audioVisualizer.js >audioVisualizer.hpp
-	@xxd -i web/cdgPlayer.js > cdgPlayer.hpp
-	@xxd -i web/cookies.js > cookies.hpp
-	@xxd -i web/fileFilter.js > fileFilter.hpp
-	@xxd -i web/imageDetection.js > imageDetection.hpp
-	@xxd -i web/karaokePlayer.js > karaokePlayer.hpp
-	@xxd -i web/karaoke-library.js > karaoke-library.hpp
-	@xxd -i web/panDragHandlers.js > panDragHandlers.hpp
-	@xxd -i web/slideshowAutoplay.js > slideshowAutoplay.hpp
-	@xxd -i web/theme.js > theme.hpp
-	@xxd -i web/videoDetection.js > videoDetection.hpp
-	@xxd -i web/videoPlayer.js > videoPlayer.hpp
-	@xxd -i web/zipReader.js > zipReader.hpp
-	@xxd -i web/zoomPan.js > zoomPan.hpp
-	@xxd -i web/crypto-js.min.js > crypto-js.hpp
+	@xxd -i -n 404_html web/404.html > 404.hpp
+	@xxd -i -n index_html web/index.html > index.hpp
+	@xxd -i -n audioDetection_js web/audioDetection.js > audioDetection.hpp
+	@xxd -i -n audioVisualizer_js web/audioVisualizer.js > audioVisualizer.hpp
+	@xxd -i -n cdgPlayer_js web/cdgPlayer.js > cdgPlayer.hpp
+	@xxd -i -n cookies_js web/cookies.js > cookies.hpp
+	@xxd -i -n fileFilter_js web/fileFilter.js > fileFilter.hpp
+	@xxd -i -n imageDetection_js web/imageDetection.js > imageDetection.hpp
+	@xxd -i -n karaokePlayer_js web/karaokePlayer.js > karaokePlayer.hpp
+	@xxd -i -n karaoke_library_js web/karaoke-library.js > karaoke-library.hpp
+	@xxd -i -n panDragHandlers_js web/panDragHandlers.js > panDragHandlers.hpp
+	@xxd -i -n slideshowAutoplay_js web/slideshowAutoplay.js > slideshowAutoplay.hpp
+	@xxd -i -n theme_js web/theme.js > theme.hpp
+	@xxd -i -n videoDetection_js web/videoDetection.js > videoDetection.hpp
+	@xxd -i -n videoPlayer_js web/videoPlayer.js > videoPlayer.hpp
+	@xxd -i -n zipReader_js web/zipReader.js > zipReader.hpp
+	@xxd -i -n zoomPan_js web/zoomPan.js > zoomPan.hpp
+	@xxd -i -n crypto_js_min_js web/crypto-js.min.js > crypto-js.hpp
 	@echo "✓ Converted web/index.html"
+
 
 # ============================================================================
 # DEPENDENCY FILES
