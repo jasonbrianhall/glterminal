@@ -11,6 +11,8 @@
 #include <strings.h>   // strcasecmp
 #ifndef _WIN32
 #  include <unistd.h>
+#else
+#  include <windows.h>
 #endif
 
 bool KFNArchive::readByte(uint8_t &b) {
