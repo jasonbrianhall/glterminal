@@ -242,7 +242,7 @@ void iv_stop_audio() {
     // Every "switch to something else" path (new song, video, image, text,
     // or an explicit stop) routes through here to tear down the current
     // track — so the KFN backing track has to be torn down here too, or
-    // switching away from a KaraFun song leaves its backing Mix_Chunk
+    // switching away from a kfn song leaves its backing Mix_Chunk
     // orphaned and playing forever. iv_kfn_stop() is a no-op if there's
     // no active KFN session, so this is safe to call unconditionally.
     if (g_iv.kfn_active) iv_kfn_stop();
@@ -1668,7 +1668,7 @@ void iv_render(int win_w, int win_h) {
             } else if (e.is_cdg) {
                 nr = 0.80f; ng = 0.60f; nb = 1.00f; // purple — CDG graphics
             } else if (e.is_kfn) {
-                nr = 1.00f; ng = 0.55f; nb = 0.80f; // pink — KaraFun package
+                nr = 1.00f; ng = 0.55f; nb = 0.80f; // pink — kfn package
             } else {
                 nr = 0.82f; ng = 0.82f; nb = 0.92f;
             }
@@ -1730,7 +1730,7 @@ void iv_render(int win_w, int win_h) {
         draw_rect(ix, iy, iw, ih, 0.04f, 0.04f, 0.06f, 1.f);
 
         if (g_iv.kfn_active && (g_iv.audio_playing || g_iv.audio_paused)) {
-            // KaraFun lyric display — word-synced karaoke text instead of CDG graphics.
+            // kfn lyric display — word-synced karaoke text instead of CDG graphics.
             iv_kfn_render(ix, iy, iw, ih);
 
         } else if (g_iv.cdg_display && (g_use_sdl_renderer ? (bool)g_iv.sdl_cdg_tex : (bool)g_iv.cdg_tex)) {

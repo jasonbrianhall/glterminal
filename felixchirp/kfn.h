@@ -1,5 +1,5 @@
 #pragma once
-// .kfn (KaraFun) container reader — C++ port of kfn_dumper.c for felixchirp.
+// .kfn (kfn) container reader — C++ port of kfn_dumper.c for felixchirp.
 //
 // Format recap:
 //   4 bytes   "KFNB" signature

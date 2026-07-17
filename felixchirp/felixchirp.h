@@ -25,7 +25,7 @@
                              ".aiff",".aif",".voc", \
                              ".mod",".xm",".it",".s3m",".669",".med",".mtm" }
 #define IV_VIDEO_EXTS      { ".mp4",".mkv",".webm",".avi",".mov",".flv",".m4v",".wmv",".3gp" }
-// KaraFun karaoke package: a self-contained mini-archive (song.ini + audio
+// kfn karaoke package: a self-contained mini-archive (song.ini + audio
 // track(s) + word-level synced lyrics), see kfn.h/fc_kfn.cpp.
 #define IV_KFN_EXTS        { ".kfn" }
 
@@ -127,7 +127,7 @@ struct ImageViewer {
     unsigned int cdg_tex          = 0;        // GL texture 300x216, updated each frame
     SDL_Texture *sdl_cdg_tex      = nullptr;  // SDL renderer path (replaces cdg_tex)
 
-    // KaraFun (.kfn) karaoke — see kfn.h / fc_kfn.cpp
+    // kfn (.kfn) karaoke — see kfn.h / fc_kfn.cpp
     // The vocal/primary track plays through the normal music/chunk fields
     // above (audio_playing, audio_position, etc); only the optional second
     // "backing" track and the lyric-sync state live here.
@@ -219,7 +219,7 @@ void iv_play_audio(const char *audio_path, const char *label, bool load_cdg);
 void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex, float x, float y, float w, float h);
 void iv_draw_visualizer(float viz_x, float viz_top, float viz_w, float viz_h, float alpha_mul);
 
-// KaraFun (.kfn) karaoke — see fc_kfn.cpp
+// kfn (.kfn) karaoke — see fc_kfn.cpp
 bool iv_kfn_load(const char *kfn_path, const char *label);
 void iv_kfn_stop();
 void iv_kfn_tick();

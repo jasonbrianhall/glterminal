@@ -191,7 +191,7 @@ bool iv_keydown(SDL_Keycode sym) {
         return true;
 
     case SDLK_k:
-        // Mute/unmute the vocal (primary) track — KaraFun songs only
+        // Mute/unmute the vocal (primary) track — kfn songs only
         if (g_iv.kfn_active) {
             iv_kfn_toggle_vocal_mute();
             return true;
@@ -199,7 +199,7 @@ bool iv_keydown(SDL_Keycode sym) {
         goto first_letter_jump;
 
     case SDLK_b:
-        // Mute/unmute the backing track — KaraFun songs only
+        // Mute/unmute the backing track — kfn songs only
         if (g_iv.kfn_active && g_iv.kfn_channel_backing >= 0) {
             iv_kfn_toggle_backing_mute();
             return true;

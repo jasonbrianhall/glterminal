@@ -1,4 +1,4 @@
-// KaraFun (.kfn) support for felixchirp.
+// kfn (.kfn) support for felixchirp.
 //
 // This is the C++ port of karaoke-library.js's KaraokePlayer, adapted to
 // felixchirp's existing audio pipeline instead of HTMLAudioElement:
@@ -272,7 +272,7 @@ static std::string kfn_ext_of(const std::string &name) {
     return (dot == std::string::npos) ? std::string(".mp3") : name.substr(dot);
 }
 
-// True if this .kfn is actually a plain ZIP (older/v1 KaraFun packages —
+// True if this .kfn is actually a plain ZIP (older/v1 kfn packages —
 // same song.ini + audio layout, just a standard ZIP container instead of
 // the custom KFNB binary format). Sniffs the standard ZIP local-file-header
 // / end-of-central-directory signatures.
