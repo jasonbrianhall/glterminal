@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Karaoke Player Example</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 800px;
+            padding: 40px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 16px;
+        }
+        
+        .upload-section {
+            background: #f5f5f5;
+            border: 2px dashed #ddd;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: block;
+            position: relative;
+        }
+        
+        .upload-section:hover {
+            border-color: #667eea;
+            background: #f9f9ff;
+        }
+        
+        .upload-section input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .upload-section p {
+            color: #666;
+            margin-bottom: 10px;
+        }
+        
+        .lyrics-display {
+            background: #1a1a1a;
+            color: #fff;
+            border-radius: 10px;
+            padding: 40px 20px;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 24px;
+            line-height: 1.6;
+        }
+        
+        .current-line {
+            color: #fff;
+            font-weight: bold;
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+        
+        .next-line {
+            color: #999;
+            font-size: 18px;
+            opacity: 0.6;
+        }
+        
+        .syllable {
+            display: inline;
+            padding: 2px 4px;
+            border-radius: 3px;
+            margin: 0 2px;
+        }
+        
+        .syllable.highlighted {
+            background: #667eea;
+            font-weight: bold;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            flex: 1;
+            min-width: 100px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+        
+        .btn-secondary {
+            background: #ddd;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #ccc;
+        }
+        
+        .btn-secondary.muted {
+            background: #ffb6c6;
+            color: #c00;
+        }
+        
+        .progress-section {
+            margin-bottom: 20px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+            cursor: pointer;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: #667eea;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+        
+        .time-display {
+            display: flex;
+            justify-content: space-between;
+            color: #666;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        
+        .info-section {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .info-section h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .info-section p {
+            color: #666;
+            font-size: 14px;
+            margin: 5px 0;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .loading {
+            color: #999;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 Karaoke Player</h1>
+            <p>Upload .KFN file to get started</p>
+        </div>
+        
+        <label for="fileInput" class="upload-section" id="uploadArea">
+            <p>📁 Click or drag files here</p>
+            <p style="font-size: 12px; color: #999;">Upload .KFN file</p>
+            <input type="file" id="fileInput" accept=".kfn">
+        </label>
+        
+        <div id="playerSection" class="hidden">
+            <div class="info-section">
+                <h3>Now Playing</h3>
+                <p id="songTitle">-</p>
+                <p id="songArtist">-</p>
+            </div>
+            
+            <div class="lyrics-display" id="lyricsDisplay">
+                <div class="loading">Loading...</div>
+            </div>
+            
+            <div class="progress-section">
+                <div class="progress-bar" id="progressBar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="time-display">
+                    <span id="currentTime">0:00</span>
+                    <span id="duration">0:00</span>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <button class="btn-primary" id="playPauseBtn">▶ Play</button>
+                <button class="btn-secondary" id="resetBtn">⏮ Reset</button>
+                <button class="btn-secondary" id="uploadNewBtn">📁 Upload New</button>
+            </div>
+            
+            <div class="controls">
+                <button class="btn-secondary" id="toggleVocalBtn" style="display: none;">🎤 Mute Vocal</button>
+                <button class="btn-secondary" id="toggleBackingBtn" style="display: none;">🎵 Mute Backing</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script type="module">
+        import KaraokePlayer from './karaoke-library.js';
+
+        // Initialize player
+        const player = new KaraokePlayer({
+            onLyricsUpdate: (data) => {
+                // Update progress bar always
+                if (data.duration > 0) {
+                    progressFill.style.width = (data.currentTime / data.duration) * 100 + '%';
+                    currentTimeEl.textContent = player.formatTime(data.currentTime);
+                }
+                
+                // Only update lyrics if we have them
+                if (!data.currentLine) {
+                    return;
+                }
+
+                const currentLineHTML = data.currentLine
+                    .map(syl => `<span class="syllable ${syl.isHighlighted ? 'highlighted' : ''}">${syl.text}</span>`)
+                    .join(' ');
+
+                let html = `<div class="current-line">${currentLineHTML}</div>`;
+                if (data.nextLine) {
+                    html += `<div class="next-line">${data.nextLine}</div>`;
+                }
+
+                lyricsDisplay.innerHTML = html;
+            },
+            onPlaybackStateChange: (state) => {
+                playPauseBtn.textContent = state.isPlaying ? '⏸ Pause' : '▶ Play';
+            },
+            onMetadataLoaded: (metadata) => {
+                songTitleEl.textContent = metadata.title || 'Unknown';
+                songArtistEl.textContent = metadata.artist || 'Unknown';
+            },
+            onAudioLoaded: (data) => {
+                durationEl.textContent = player.formatTime(data.duration);
+                if (data.isVocal) {
+                    toggleVocalBtn.style.display = 'block';
+                } else {
+                    toggleBackingBtn.style.display = 'block';
+                }
+                // Auto-play when both audio tracks are loaded (or if we only have one)
+                if ((player.audioVocal && player.audioBacking) || (player.audioVocal || player.audioBacking)) {
+                    if (!player.isPlaying()) {
+                        player.play();
+                    }
+                }
+            },
+            onSyncOffsetChange: (data) => {
+                syncOffsetValue.textContent = data.offset;
+            }
+        });
+
+        // DOM elements
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const playerSection = document.getElementById('playerSection');
+        const lyricsDisplay = document.getElementById('lyricsDisplay');
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const uploadNewBtn = document.getElementById('uploadNewBtn');
+        const progressBar = document.getElementById('progressBar');
+        const progressFill = document.getElementById('progressFill');
+        const currentTimeEl = document.getElementById('currentTime');
+        const durationEl = document.getElementById('duration');
+        const songTitleEl = document.getElementById('songTitle');
+        const songArtistEl = document.getElementById('songArtist');
+        const toggleVocalBtn = document.getElementById('toggleVocalBtn');
+        const toggleBackingBtn = document.getElementById('toggleBackingBtn');
+        const syncOffsetSlider = document.getElementById('syncOffsetSlider');
+        const syncOffsetValue = document.getElementById('syncOffsetValue');
+
+        // File handling
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#667eea';
+            uploadArea.style.background = '#f9f9ff';
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.borderColor = '#ddd';
+            uploadArea.style.background = '#f5f5f5';
+        });
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#ddd';
+            uploadArea.style.background = '#f5f5f5';
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+
+        function handleFiles(files) {
+            const filesArray = Array.from(files);
+            const kfnFile = filesArray.find(f => f.name.toLowerCase().endsWith('.kfn'));
+
+            if (kfnFile) {
+                handleKFN(kfnFile);
+            } else {
+                alert('Please upload a .KFN file');
+            }
+        }
+
+        async function handleKFN(kfnFile) {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    await player.parseKFN(e.target.result);
+                    playerSection.classList.remove('hidden');
+                    uploadArea.classList.add('hidden');
+                    player.currentLineIndex = 0;
+                    player.updateLyricsDisplay();
+                } catch (error) {
+                    alert('Error parsing KFN file: ' + error.message);
+                    console.error(error);
+                }
+            };
+            reader.onerror = () => {
+                alert('Error reading file');
+            };
+            reader.readAsArrayBuffer(kfnFile);
+        }
+
+        // Controls
+        playPauseBtn.addEventListener('click', () => player.toggle());
+        resetBtn.addEventListener('click', () => player.reset());
+        uploadNewBtn.addEventListener('click', () => {
+            player.reset();
+            playerSection.classList.add('hidden');
+            uploadArea.classList.remove('hidden');
+            fileInput.value = '';
+            toggleVocalBtn.style.display = 'none';
+            toggleBackingBtn.style.display = 'none';
+            toggleVocalBtn.classList.remove('muted');
+            toggleBackingBtn.classList.remove('muted');
+            toggleVocalBtn.textContent = '🎤 Mute Vocal';
+            toggleBackingBtn.textContent = '🎵 Mute Backing';
+        });
+
+        toggleVocalBtn.addEventListener('click', (e) => {
+            player.toggleVocal();
+            if (player.vocalMuted) {
+                e.target.classList.add('muted');
+                e.target.textContent = '🎤 Unmute Vocal';
+            } else {
+                e.target.classList.remove('muted');
+                e.target.textContent = '🎤 Mute Vocal';
+            }
+        });
+
+        toggleBackingBtn.addEventListener('click', (e) => {
+            player.toggleBacking();
+            if (player.backingMuted) {
+                e.target.classList.add('muted');
+                e.target.textContent = '🎵 Unmute Backing';
+            } else {
+                e.target.classList.remove('muted');
+                e.target.textContent = '🎵 Mute Backing';
+            }
+        });
+
+        progressBar.addEventListener('click', (e) => {
+            const rect = progressBar.getBoundingClientRect();
+            const percent = (e.clientX - rect.left) / rect.width;
+            player.seekByPercent(percent);
+        });
+
+        // Keyboard
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                player.toggle();
+            }
+            if (e.code === 'ArrowRight') {
+                player.nextLine();
+            }
+            if (e.code === 'ArrowLeft') {
+                player.previousLine();
+            }
+        });
+    </script>
+</body>
+</html>
