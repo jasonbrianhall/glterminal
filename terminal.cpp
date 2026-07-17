@@ -388,7 +388,7 @@ void term_feed(Terminal *t, const char *data, int size) {
         case PS_CSI:
             if (ch >= '0' && ch <= '9') {
                 if (t->csi_len < (int)sizeof(t->csi) - 1) t->csi[t->csi_len++] = (char)ch;
-            } else if (ch == ';' || ch == '?' || ch == '>' || ch == '<') {
+            } else if (ch == ';' || ch == '?' || ch == '>' || ch == '<' || ch == '=') {
                 if (t->csi_len < (int)sizeof(t->csi) - 1) t->csi[t->csi_len++] = (char)ch;
             } else if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
                 if (t->csi_len < (int)sizeof(t->csi) - 1) t->csi[t->csi_len++] = (char)ch;
