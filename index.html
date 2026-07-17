@@ -935,6 +935,13 @@
             display: flex;
             gap: 8px;
             margin-top: 4px;
+            opacity: 1;
+            transition: opacity 0.4s ease;
+        }
+
+        .kfn-track-controls.controls-hidden {
+            opacity: 0;
+            pointer-events: none;
         }
 
         .kfn-track-controls .viz-mode-btn.muted {

@@ -103,15 +103,36 @@
             kfnAnimHandle = requestAnimationFrame(kfnLoop);
         }
 
+        // Hides the vocal/backing mute buttons after a period of mouse
+        // inactivity, mirroring typical video-player control behavior.
+        const KFN_CONTROLS_IDLE_MS = 2000;
+        let kfnControlsIdleTimer = null;
+
+        function showKfnTrackControls() {
+            kfnTrackControls.classList.remove('controls-hidden');
+            if (kfnControlsIdleTimer) clearTimeout(kfnControlsIdleTimer);
+            kfnControlsIdleTimer = setTimeout(() => {
+                kfnTrackControls.classList.add('controls-hidden');
+            }, KFN_CONTROLS_IDLE_MS);
+        }
+
+        function stopKfnControlsIdleWatch() {
+            if (kfnControlsIdleTimer) clearTimeout(kfnControlsIdleTimer);
+            kfnControlsIdleTimer = null;
+            kfnTrackControls.classList.remove('controls-hidden');
+        }
+
         function showKfnVisual() {
             musicArt.style.display = 'none';
             hideVizVisual();
             kfnLyricsWrap.style.display = 'flex';
+            showKfnTrackControls();
         }
 
         function hideKfnVisual() {
             kfnLyricsWrap.style.display = 'none';
             musicArt.style.display = 'flex';
+            stopKfnControlsIdleWatch();
         }
 
         function clearKfnState() {
@@ -139,6 +160,7 @@
         const musicBackingAudio = document.getElementById('musicBackingAudio');
         const kfnMuteVocalBtn = document.getElementById('kfnMuteVocalBtn');
         const kfnMuteBackingBtn = document.getElementById('kfnMuteBackingBtn');
+        const kfnTrackControls = document.getElementById('kfnTrackControls');
 
         kfnMuteVocalBtn.addEventListener('click', () => {
             musicAudio.muted = !musicAudio.muted;
@@ -161,6 +183,8 @@
                 kfnLyricsWrap.requestFullscreen();
             }
         });
+
+        kfnLyricsWrap.addEventListener('mousemove', showKfnTrackControls);
 
         // musicAudio (vocal) is the transport's source of truth — every
         // play/pause path (button, spacebar, repeat, playTrackById) ends up
