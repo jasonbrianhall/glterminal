@@ -239,6 +239,14 @@ void iv_free_tex() {
 // ============================================================================
 
 void iv_stop_audio() {
+    // Every "switch to something else" path (new song, video, image, text,
+    // or an explicit stop) routes through here to tear down the current
+    // track — so the KFN backing track has to be torn down here too, or
+    // switching away from a KaraFun song leaves its backing Mix_Chunk
+    // orphaned and playing forever. iv_kfn_stop() is a no-op if there's
+    // no active KFN session, so this is safe to call unconditionally.
+    if (g_iv.kfn_active) iv_kfn_stop();
+
     if (g_iv.music) {
         Mix_HaltMusic();
         Mix_FreeMusic(g_iv.music);
@@ -1359,6 +1367,192 @@ void iv_draw_image_rotated(float cx, float cy, float w, float h, int angle_deg) 
     glUseProgram(prev_prog);
 }
 
+// ============================================================================
+// AUDIO VISUALIZER  (multi-mode, reused by plain-audio playback and by the
+// KFN lyric display, which layers it underneath the karaoke text)
+// ============================================================================
+
+void iv_draw_visualizer(float viz_x, float viz_top, float viz_w, float viz_h, float alpha_mul) {
+    const int NUM_BANDS = 128;
+    const int NUM_VIS   = 4;
+    double bands[NUM_BANDS];
+    double t = g_iv.audio_position;
+    float viz_bot = viz_top + viz_h;
+    float viz_mid = viz_top + viz_h * 0.5f;
+
+    // Sine-bank pseudo-spectrum (no FFT available here)
+    for (int i = 0; i < NUM_BANDS; i++) {
+        double freq  = 0.4 + i * 0.18;
+        double phase = t * freq * 6.2832;
+        double v = 0.5 + 0.5  * sin(phase + i * 0.4)
+                       + 0.25 * sin(phase * 2.1 + i * 0.7)
+                       + 0.10 * sin(phase * 3.3 + i * 1.1);
+        bands[i] = v / 1.85;
+    }
+
+    // ── Helper: HSV→RGB ───────────────────────────────────────────
+    auto hsv_rgb = [](float hue, float sat, float val,
+                       float &r, float &g2, float &b) {
+        int   hi = (int)(hue * 6.f) % 6;
+        float f  = hue * 6.f - (int)(hue * 6.f);
+        float p  = val * (1.f - sat);
+        float q  = val * (1.f - f * sat);
+        float tv = val * (1.f - (1.f - f) * sat);
+        switch (hi) {
+            case 0: r=val; g2=tv;  b=p;   break;
+            case 1: r=q;   g2=val; b=p;   break;
+            case 2: r=p;   g2=val; b=tv;  break;
+            case 3: r=p;   g2=q;   b=val; break;
+            case 4: r=tv;  g2=p;   b=val; break;
+            default:r=val; g2=p;   b=q;   break;
+        }
+    };
+
+    int mode = g_iv.vis_mode % NUM_VIS;
+
+    if (mode == 0) {
+        // ── 0: Symmetry Cascade ──────────────────────────────────
+        float band_pw = viz_w / NUM_BANDS;
+        float max_half = viz_h * 0.48f;
+        for (int i = 0; i < NUM_BANDS; i++) {
+            float amp = (float)bands[i];
+            float h   = amp * max_half;
+            float bx  = viz_x + i * band_pw;
+            float hue = (float)i / NUM_BANDS;
+            float r, g2, b;
+            hsv_rgb(hue, fminf(1.f, amp*2.f), 1.f, r, g2, b);
+            draw_rect(bx+1.f, viz_mid - h, band_pw-2.f, h,
+                      r, g2, b, alpha_mul * 0.90f);
+            draw_rect(bx+1.f, viz_mid,     band_pw-2.f, h,
+                      r, g2, b, alpha_mul * 0.50f);
+        }
+
+    } else if (mode == 1) {
+        // ── 1: Radial Burst ──────────────────────────────────────
+        float cx2  = viz_x + viz_w * 0.5f;
+        float cy2  = viz_top + viz_h * 0.5f;
+        float maxR = fminf(viz_w, viz_h) * 0.46f;
+        float innerR = maxR * 0.18f;
+        // Rotating spoke angle driven by time
+        float rot = (float)(fmod(t * 0.4, 6.2832));
+        for (int i = 0; i < NUM_BANDS; i++) {
+            float angle = rot + (float)i / NUM_BANDS * 6.2832f;
+            float amp   = (float)bands[i];
+            float outerR = innerR + amp * (maxR - innerR);
+            float x1 = cx2 + cosf(angle) * innerR;
+            float y1 = cy2 + sinf(angle) * innerR;
+            float x2 = cx2 + cosf(angle) * outerR;
+            float y2 = cy2 + sinf(angle) * outerR;
+            float hue = fmodf((float)i / NUM_BANDS + (float)t * 0.05f, 1.f);
+            float r, g2, b;
+            hsv_rgb(hue, 1.f, 1.f, r, g2, b);
+            // Draw as a thin rect along the spoke direction
+            float dx2 = x2 - x1, dy2 = y2 - y1;
+            float len = sqrtf(dx2*dx2 + dy2*dy2);
+            if (len < 1.f) continue;
+            float nx2 = -dy2/len * 2.f, ny2 = dx2/len * 2.f;
+            // 4-corner quad — draw as two axis-rects (approximation)
+            // Use screen-aligned rect at spoke position
+            float spoke_w = fmaxf(2.f, viz_w / NUM_BANDS * 0.7f);
+            float sx = x1 + (x2-x1)*0.5f - spoke_w*0.5f;
+            float sy = fminf(y1, y2);
+            float sw = spoke_w;
+            float sh = fmaxf(2.f, fabsf(y2-y1));
+            draw_rect(sx, sy, sw, sh, r, g2, b, alpha_mul * 0.85f);
+            (void)nx2; (void)ny2;
+        }
+        // Centre pulse circle (simulated with a filled rect square)
+        float pulse = 0.4f + 0.6f * (float)bands[0];
+        float pr = innerR * pulse;
+        draw_rect(cx2 - pr, cy2 - pr*0.5f, pr*2.f, pr,
+                  1.f, 0.8f, 0.3f, alpha_mul * 0.6f);
+
+    } else if (mode == 2) {
+        // ── 2: Oscilloscope ──────────────────────────────────────
+        // Draw grid
+        draw_rect(viz_x, viz_mid - 0.5f, viz_w, 1.f,
+                  0.25f, 0.25f, 0.35f, 0.5f);
+        for (int gi = 1; gi < 4; gi++) {
+            float gy = viz_top + viz_h * gi / 4.f;
+            draw_rect(viz_x, gy, viz_w, 1.f, 0.20f, 0.20f, 0.28f, 0.4f);
+        }
+        // Draw waveform as a series of thin vertical rects connecting samples
+        const int SCOPE_PTS = 128;
+        float prev_y = viz_mid;
+        for (int i = 0; i < SCOPE_PTS; i++) {
+            float fi   = (float)i / (SCOPE_PTS - 1);
+            // Build a sample from overlapping sine bands
+            double phase = t * 6.2832 * (1.0 + fi * 4.0) + fi * 12.0;
+            float sample = 0.f;
+            for (int b = 0; b < 6; b++)
+                sample += (float)(bands[b * 8] * sin(phase * (b+1) * 0.7 + b));
+            sample /= 6.f;
+            float sy2 = viz_mid - sample * viz_h * 0.44f;
+            sy2 = fmaxf(viz_top, fminf(viz_bot, sy2));
+            float sx2 = viz_x + fi * viz_w;
+            float hue = fmodf(fi + (float)t * 0.08f, 1.f);
+            float r, g2, b;
+            hsv_rgb(hue, 0.7f, 1.f, r, g2, b);
+            float seg_h = fabsf(sy2 - prev_y) + 2.f;
+            float seg_y = fminf(sy2, prev_y);
+            draw_rect(sx2, seg_y, fmaxf(2.f, viz_w / SCOPE_PTS + 1.f),
+                      seg_h, r, g2, b, alpha_mul * 0.90f);
+            prev_y = sy2;
+        }
+
+    } else {
+        // ── 3: Starfield ─────────────────────────────────────────
+        // Persistent star state
+        static struct Star {
+            float x, y, speed, size, hue;
+            bool  alive;
+        } stars[200] = {};
+        static bool stars_init = false;
+        if (!stars_init) {
+            for (auto &s : stars) {
+                s.x     = (float)rand() / RAND_MAX;
+                s.y     = (float)rand() / RAND_MAX;
+                s.speed = 0.01f + (float)rand()/RAND_MAX * 0.04f;
+                s.size  = 1.f + (float)rand()/RAND_MAX * 3.f;
+                s.hue   = (float)rand()/RAND_MAX;
+                s.alive = true;
+            }
+            stars_init = true;
+        }
+        // Update: move stars outward from centre, reset when off-screen
+        float beat = (float)(0.5 + 0.5 * sin(t * 4.0));  // pulse
+        for (auto &s : stars) {
+            float dx2 = s.x - 0.5f, dy2 = s.y - 0.5f;
+            float dist = sqrtf(dx2*dx2 + dy2*dy2) + 0.001f;
+            float speed = s.speed * (1.f + beat * (float)bands[(int)(s.hue*47)]);
+            s.x += dx2 / dist * speed;
+            s.y += dy2 / dist * speed;
+            s.hue = fmodf(s.hue + 0.002f, 1.f);
+            if (s.x < 0 || s.x > 1 || s.y < 0 || s.y > 1) {
+                // Reset near centre
+                s.x     = 0.5f + ((float)rand()/RAND_MAX - 0.5f) * 0.08f;
+                s.y     = 0.5f + ((float)rand()/RAND_MAX - 0.5f) * 0.08f;
+                s.speed = 0.005f + (float)rand()/RAND_MAX * 0.035f;
+                s.size  = 1.f + (float)rand()/RAND_MAX * 4.f;
+                s.hue   = (float)rand()/RAND_MAX;
+            }
+        }
+        // Draw stars
+        for (auto &s : stars) {
+            float sx2 = viz_x + s.x * viz_w;
+            float sy2 = viz_top + s.y * viz_h;
+            float dx2 = s.x - 0.5f, dy2 = s.y - 0.5f;
+            float dist = sqrtf(dx2*dx2 + dy2*dy2);
+            float brightness = fminf(1.f, dist * 3.f);
+            float r, g2, b;
+            hsv_rgb(s.hue, 0.6f, brightness, r, g2, b);
+            float sz = s.size * (0.5f + dist * 2.f);
+            draw_rect(sx2 - sz*0.5f, sy2 - sz*0.5f, sz, sz,
+                      r, g2, b, alpha_mul * brightness * 0.90f);
+        }
+    }
+}
+
 void iv_render(int win_w, int win_h) {
     if (!g_iv.visible) return;
 
@@ -1561,38 +1755,8 @@ void iv_render(int win_w, int win_h) {
 
         } else if (g_iv.audio_playing || g_iv.audio_paused) {
             // ── Audio-only display: multi-mode visualizer ─────────────────
-            const int NUM_BANDS = 128;
-            double bands[NUM_BANDS];
             double t = g_iv.audio_position;
             float  alpha_mul = g_iv.audio_paused ? 0.35f : 1.0f;
-
-            // Sine-bank pseudo-spectrum (no FFT available here)
-            for (int i = 0; i < NUM_BANDS; i++) {
-                double freq  = 0.4 + i * 0.18;
-                double phase = t * freq * 6.2832;
-                double v = 0.5 + 0.5  * sin(phase + i * 0.4)
-                               + 0.25 * sin(phase * 2.1 + i * 0.7)
-                               + 0.10 * sin(phase * 3.3 + i * 1.1);
-                bands[i] = v / 1.85;
-            }
-
-            // ── Helper: HSV→RGB ───────────────────────────────────────────
-            auto hsv_rgb = [](float hue, float sat, float val,
-                               float &r, float &g2, float &b) {
-                int   hi = (int)(hue * 6.f) % 6;
-                float f  = hue * 6.f - (int)(hue * 6.f);
-                float p  = val * (1.f - sat);
-                float q  = val * (1.f - f * sat);
-                float tv = val * (1.f - (1.f - f) * sat);
-                switch (hi) {
-                    case 0: r=val; g2=tv;  b=p;   break;
-                    case 1: r=q;   g2=val; b=p;   break;
-                    case 2: r=p;   g2=val; b=tv;  break;
-                    case 3: r=p;   g2=q;   b=val; break;
-                    case 4: r=tv;  g2=p;   b=val; break;
-                    default:r=val; g2=p;   b=q;   break;
-                }
-            };
 
             // ── Visualizer button (top-right of display area) ─────────────
             static const char *vis_names[] = {
@@ -1678,159 +1842,10 @@ void iv_render(int win_w, int win_h) {
             float viz_top = lbl_y + rh * 1.8f;
             float viz_bot = bar_y - (float)rh * 0.5f;
             float viz_h   = viz_bot - viz_top;
-            float viz_mid = viz_top + viz_h * 0.5f;
             float viz_w   = iw * 0.96f;
             float viz_x   = ix + (iw - viz_w) * 0.5f;
 
-            int mode = g_iv.vis_mode % NUM_VIS;
-
-            if (mode == 0) {
-                // ── 0: Symmetry Cascade ──────────────────────────────────
-                float band_pw = viz_w / NUM_BANDS;
-                float max_half = viz_h * 0.48f;
-                for (int i = 0; i < NUM_BANDS; i++) {
-                    float amp = (float)bands[i];
-                    float h   = amp * max_half;
-                    float bx  = viz_x + i * band_pw;
-                    float hue = (float)i / NUM_BANDS;
-                    float r, g2, b;
-                    hsv_rgb(hue, fminf(1.f, amp*2.f), 1.f, r, g2, b);
-                    draw_rect(bx+1.f, viz_mid - h, band_pw-2.f, h,
-                              r, g2, b, alpha_mul * 0.90f);
-                    draw_rect(bx+1.f, viz_mid,     band_pw-2.f, h,
-                              r, g2, b, alpha_mul * 0.50f);
-                }
-
-            } else if (mode == 1) {
-                // ── 1: Radial Burst ──────────────────────────────────────
-                float cx2  = viz_x + viz_w * 0.5f;
-                float cy2  = viz_top + viz_h * 0.5f;
-                float maxR = fminf(viz_w, viz_h) * 0.46f;
-                float innerR = maxR * 0.18f;
-                // Rotating spoke angle driven by time
-                float rot = (float)(fmod(t * 0.4, 6.2832));
-                for (int i = 0; i < NUM_BANDS; i++) {
-                    float angle = rot + (float)i / NUM_BANDS * 6.2832f;
-                    float amp   = (float)bands[i];
-                    float outerR = innerR + amp * (maxR - innerR);
-                    float x1 = cx2 + cosf(angle) * innerR;
-                    float y1 = cy2 + sinf(angle) * innerR;
-                    float x2 = cx2 + cosf(angle) * outerR;
-                    float y2 = cy2 + sinf(angle) * outerR;
-                    float hue = fmodf((float)i / NUM_BANDS + (float)t * 0.05f, 1.f);
-                    float r, g2, b;
-                    hsv_rgb(hue, 1.f, 1.f, r, g2, b);
-                    // Draw as a thin rect along the spoke direction
-                    float dx2 = x2 - x1, dy2 = y2 - y1;
-                    float len = sqrtf(dx2*dx2 + dy2*dy2);
-                    if (len < 1.f) continue;
-                    float nx2 = -dy2/len * 2.f, ny2 = dx2/len * 2.f;
-                    // 4-corner quad — draw as two axis-rects (approximation)
-                    // Use screen-aligned rect at spoke position
-                    float spoke_w = fmaxf(2.f, viz_w / NUM_BANDS * 0.7f);
-                    float sx = x1 + (x2-x1)*0.5f - spoke_w*0.5f;
-                    float sy = fminf(y1, y2);
-                    float sw = spoke_w;
-                    float sh = fmaxf(2.f, fabsf(y2-y1));
-                    draw_rect(sx, sy, sw, sh, r, g2, b, alpha_mul * 0.85f);
-                    (void)nx2; (void)ny2;
-                }
-                // Centre pulse circle (simulated with a filled rect square)
-                float pulse = 0.4f + 0.6f * (float)bands[0];
-                float pr = innerR * pulse;
-                draw_rect(cx2 - pr, cy2 - pr*0.5f, pr*2.f, pr,
-                          1.f, 0.8f, 0.3f, alpha_mul * 0.6f);
-
-            } else if (mode == 2) {
-                // ── 2: Oscilloscope ──────────────────────────────────────
-                // Draw grid
-                draw_rect(viz_x, viz_mid - 0.5f, viz_w, 1.f,
-                          0.25f, 0.25f, 0.35f, 0.5f);
-                for (int gi = 1; gi < 4; gi++) {
-                    float gy = viz_top + viz_h * gi / 4.f;
-                    draw_rect(viz_x, gy, viz_w, 1.f, 0.20f, 0.20f, 0.28f, 0.4f);
-                }
-                // Draw waveform as a series of thin vertical rects connecting samples
-                const int SCOPE_PTS = 128;
-                float prev_y = viz_mid;
-                for (int i = 0; i < SCOPE_PTS; i++) {
-                    float fi   = (float)i / (SCOPE_PTS - 1);
-                    // Build a sample from overlapping sine bands
-                    double phase = t * 6.2832 * (1.0 + fi * 4.0) + fi * 12.0;
-                    float sample = 0.f;
-                    for (int b = 0; b < 6; b++)
-                        sample += (float)(bands[b * 8] * sin(phase * (b+1) * 0.7 + b));
-                    sample /= 6.f;
-                    float sy2 = viz_mid - sample * viz_h * 0.44f;
-                    sy2 = fmaxf(viz_top, fminf(viz_bot, sy2));
-                    float sx2 = viz_x + fi * viz_w;
-                    float hue = fmodf(fi + (float)t * 0.08f, 1.f);
-                    float r, g2, b;
-                    hsv_rgb(hue, 0.7f, 1.f, r, g2, b);
-                    float seg_h = fabsf(sy2 - prev_y) + 2.f;
-                    float seg_y = fminf(sy2, prev_y);
-                    draw_rect(sx2, seg_y, fmaxf(2.f, viz_w / SCOPE_PTS + 1.f),
-                              seg_h, r, g2, b, alpha_mul * 0.90f);
-                    prev_y = sy2;
-                }
-
-            } else {
-                // ── 3: Starfield ─────────────────────────────────────────
-                // Persistent star state
-                static struct Star {
-                    float x, y, speed, size, hue;
-                    bool  alive;
-                } stars[200] = {};
-                static bool stars_init = false;
-                if (!stars_init) {
-                    for (auto &s : stars) {
-                        s.x     = (float)rand() / RAND_MAX;
-                        s.y     = (float)rand() / RAND_MAX;
-                        s.speed = 0.01f + (float)rand()/RAND_MAX * 0.04f;
-                        s.size  = 1.f + (float)rand()/RAND_MAX * 3.f;
-                        s.hue   = (float)rand()/RAND_MAX;
-                        s.alive = true;
-                    }
-                    stars_init = true;
-                }
-                // Update: move stars outward from centre, reset when off-screen
-                float beat = (float)(0.5 + 0.5 * sin(t * 4.0));  // pulse
-                for (auto &s : stars) {
-                    float dx2 = s.x - 0.5f, dy2 = s.y - 0.5f;
-                    float dist = sqrtf(dx2*dx2 + dy2*dy2) + 0.001f;
-                    float speed = s.speed * (1.f + beat * (float)bands[(int)(s.hue*47)]);
-                    s.x += dx2 / dist * speed;
-                    s.y += dy2 / dist * speed;
-                    s.hue = fmodf(s.hue + 0.002f, 1.f);
-                    if (s.x < 0 || s.x > 1 || s.y < 0 || s.y > 1) {
-                        // Reset near centre
-                        s.x     = 0.5f + ((float)rand()/RAND_MAX - 0.5f) * 0.08f;
-                        s.y     = 0.5f + ((float)rand()/RAND_MAX - 0.5f) * 0.08f;
-                        s.speed = 0.005f + (float)rand()/RAND_MAX * 0.035f;
-                        s.size  = 1.f + (float)rand()/RAND_MAX * 4.f;
-                        s.hue   = (float)rand()/RAND_MAX;
-                    }
-                }
-                // Draw stars
-                for (auto &s : stars) {
-                    float sx2 = viz_x + s.x * viz_w;
-                    float sy2 = viz_top + s.y * viz_h;
-                    float dx2 = s.x - 0.5f, dy2 = s.y - 0.5f;
-                    float dist = sqrtf(dx2*dx2 + dy2*dy2);
-                    float brightness = fminf(1.f, dist * 3.f);
-                    float r, g2, b;
-                    hsv_rgb(s.hue, 0.6f, brightness, r, g2, b);
-                    float sz = s.size * (0.5f + dist * 2.f);
-                    draw_rect(sx2 - sz*0.5f, sy2 - sz*0.5f, sz, sz,
-                              r, g2, b, alpha_mul * brightness * 0.90f);
-                }
-                // Vignette hint text
-                const char *sft = "Starfield";
-                iv_draw_text(sft,
-                             viz_x + viz_w - strlen(sft)*g_font_size*0.6f - IV_PAD,
-                             viz_top + IV_PAD,
-                             0.30f, 0.35f, 0.50f, 0.5f);
-            }
+            iv_draw_visualizer(viz_x, viz_top, viz_w, viz_h, alpha_mul);
 
         } else if (g_iv.video_playing && g_iv.tex) {
             // ── Video display (like CD+G) ──────────────────────────────────

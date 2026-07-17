@@ -337,6 +337,15 @@ void iv_kfn_render(float ix, float iy, float iw, float ih) {
                      lbl_y + rh, 1.00f, 0.75f, 0.30f, 1.f);
     }
 
+    // Layer the audio visualizer underneath the lyrics, dimmed, the way the
+    // original web player showed it running behind the karaoke text.
+    float viz_top = lbl_y + rh * 1.6f;
+    float viz_bot = iy + ih - (float)rh * 2.6f;
+    if (viz_bot > viz_top) {
+        iv_draw_visualizer(ix + iw * 0.03f, viz_top, iw * 0.94f, viz_bot - viz_top,
+                            alpha_mul * (g_iv.audio_paused ? 0.18f : 0.35f));
+    }
+
     // Locate the current lyric line from kfn_current_word.
     int lineIdx = 0, lineStart = 0;
     int nLines = (int)g_iv.kfn_line_indices.size();
@@ -349,12 +358,17 @@ void iv_kfn_render(float ix, float iy, float iw, float ih) {
     }
     int lineEnd = (lineIdx + 1 < nLines) ? g_iv.kfn_line_indices[lineIdx + 1] : (int)g_iv.kfn_lyrics.size();
 
+    // Lyrics render well above normal UI text size so they read from
+    // across the room, same as a typical karaoke screen.
+    int cur_font  = (int)(g_font_size * 2.0f);
+    int next_font = (int)(g_font_size * 1.25f);
+
     float line_y = iy + ih * 0.42f;
     if (!g_iv.kfn_lyrics.empty()) {
         // Rough centering: estimate line width from character count first.
         int totalChars = 0;
         for (int w = lineStart; w < lineEnd; w++) totalChars += (int)g_iv.kfn_lyrics[w].size() + 1;
-        float x = ix + iw * 0.5f - totalChars * g_font_size * 0.3f;
+        float x = ix + iw * 0.5f - totalChars * cur_font * 0.3f;
 
         for (int w = lineStart; w < lineEnd; w++) {
             float r, g, b;
@@ -362,20 +376,20 @@ void iv_kfn_render(float ix, float iy, float iw, float ih) {
             else if (w < g_iv.kfn_current_word)  { r = 0.55f; g = 0.85f; b = 1.00f; } // already sung
             else                                  { r = 0.75f; g = 0.75f; b = 0.85f; } // upcoming
             std::string word = g_iv.kfn_lyrics[w] + " ";
-            iv_draw_text(word.c_str(), x, line_y, r, g, b, alpha_mul);
-            x += word.size() * g_font_size * 0.6f;
+            draw_text(word.c_str(), x, line_y, cur_font, cur_font, r, g, b, alpha_mul);
+            x += word.size() * cur_font * 0.6f;
         }
     } else {
         const char *msg = "(no synced lyrics in this file)";
-        iv_draw_text(msg, ix + iw * 0.5f - strlen(msg) * g_font_size * 0.3f,
-                     line_y, 0.6f, 0.6f, 0.7f, alpha_mul);
+        draw_text(msg, ix + iw * 0.5f - strlen(msg) * cur_font * 0.3f,
+                  line_y, cur_font, cur_font, 0.6f, 0.6f, 0.7f, alpha_mul);
     }
 
     if (lineIdx + 1 < (int)g_iv.kfn_lyrics_lines.size()) {
         const std::string &next = g_iv.kfn_lyrics_lines[lineIdx + 1];
-        float ny = line_y + rh * 1.6f;
-        iv_draw_text(next.c_str(), ix + iw * 0.5f - next.size() * g_font_size * 0.28f,
-                     ny, 0.45f, 0.50f, 0.60f, alpha_mul * 0.85f);
+        float ny = line_y + rh * 2.0f;
+        draw_text(next.c_str(), ix + iw * 0.5f - next.size() * next_font * 0.28f,
+                  ny, next_font, next_font, 0.45f, 0.50f, 0.60f, alpha_mul * 0.85f);
     }
 
     // Progress bar (mirrors the plain-audio layout in iv_render)

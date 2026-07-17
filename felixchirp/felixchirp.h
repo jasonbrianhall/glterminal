@@ -217,6 +217,7 @@ void iv_ensure_mixer();
 bool is_chunk_ext(const char *name);
 void iv_play_audio(const char *audio_path, const char *label, bool load_cdg);
 void iv_draw_image_tex(SDL_Texture *sdl_tex, unsigned int gl_tex, float x, float y, float w, float h);
+void iv_draw_visualizer(float viz_x, float viz_top, float viz_w, float viz_h, float alpha_mul);
 
 // KaraFun (.kfn) karaoke — see fc_kfn.cpp
 bool iv_kfn_load(const char *kfn_path, const char *label);
