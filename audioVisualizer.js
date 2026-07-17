@@ -415,6 +415,103 @@
             }
         }
 
+        // Burns the current karaoke lyric line onto the visualizer canvas so it's
+        // actually part of the pixels captureStream() sees. The DOM overlay
+        // (kfnLyricsCurrent/kfnLyricsNext in karaokePlayer.js) looks right on
+        // screen but lives outside the canvas, so exportVisualizationVideo()
+        // never picks it up — this mirrors that same word/line logic but draws
+        // with fillText instead of setting innerHTML.
+        function wrapLyricWords(words, maxWidth) {
+            const spaceWidth = vizCtx.measureText(' ').width;
+            const rows = [];
+            let row = [], rowWidth = 0;
+            words.forEach((word, idx) => {
+                const width = vizCtx.measureText(word).width;
+                const addWidth = row.length === 0 ? width : width + spaceWidth;
+                if (rowWidth + addWidth > maxWidth && row.length > 0) {
+                    rows.push(row);
+                    row = [{ word, idx }];
+                    rowWidth = width;
+                } else {
+                    row.push({ word, idx });
+                    rowWidth += addWidth;
+                }
+            });
+            if (row.length) rows.push(row);
+            return rows;
+        }
+
+        function drawLyricRow(row, activeIdx, y, spaceWidth, highlightColor) {
+            const totalWidth = row.reduce((sum, item, i) =>
+                sum + vizCtx.measureText(item.word).width + (i > 0 ? spaceWidth : 0), 0);
+            let x = (vizCanvas.width - totalWidth) / 2;
+            row.forEach(item => {
+                const wordWidth = vizCtx.measureText(item.word).width;
+                if (item.idx === activeIdx) {
+                    const savedShadow = vizCtx.shadowBlur;
+                    vizCtx.shadowBlur = 0;
+                    vizCtx.fillStyle = highlightColor;
+                    vizCtx.fillRect(x - 3, y - 18, wordWidth + 6, 24);
+                    vizCtx.shadowBlur = savedShadow;
+                }
+                vizCtx.fillStyle = 'white';
+                vizCtx.fillText(item.word, x, y);
+                x += wordWidth + spaceWidth;
+            });
+        }
+
+        function drawKfnLyricsOnCanvas(w, h) {
+            if (!kfnLyricsData || kfnLyricsData.lyrics.length === 0) return;
+            const { lyrics, lyricsLines, syncTimes, lineIndices } = kfnLyricsData;
+            const wordIdx = kfnFindWordIndex(syncTimes, musicAudio.currentTime * 1000);
+
+            let lineIdx = 0, lineStart = 0;
+            for (let i = 0; i < lineIndices.length; i++) {
+                if (i === lineIndices.length - 1 || wordIdx < lineIndices[i + 1]) {
+                    lineIdx = i;
+                    lineStart = lineIndices[i];
+                    break;
+                }
+            }
+            const nextLineStart = (lineIdx + 1 < lineIndices.length) ? lineIndices[lineIdx + 1] : lyrics.length;
+            const wordInLine = wordIdx - lineStart;
+            const currentWords = lyrics.slice(lineStart, nextLineStart);
+            const nextText = (lineIdx + 1 < lyricsLines.length) ? lyricsLines[lineIdx + 1].replace(/\//g, '') : '';
+
+            const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#667eea';
+            const maxWidth = w - 40;
+
+            // Dark scrim so the text stays legible over bright visualizer modes
+            vizCtx.save();
+            vizCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+            vizCtx.fillRect(0, h * 0.62, w, h * 0.38);
+            vizCtx.restore();
+
+            vizCtx.textAlign = 'left';
+            vizCtx.textBaseline = 'alphabetic';
+            vizCtx.shadowColor = 'rgba(0,0,0,0.9)';
+            vizCtx.shadowBlur = 6;
+
+            vizCtx.font = 'bold 20px sans-serif';
+            const spaceWidth = vizCtx.measureText(' ').width;
+            const lineHeight = 26;
+            const rows = wrapLyricWords(currentWords, maxWidth);
+            let y = h * 0.78 - (rows.length - 1) * lineHeight;
+            rows.forEach(row => {
+                drawLyricRow(row, wordInLine, y, spaceWidth, accentColor);
+                y += lineHeight;
+            });
+
+            if (nextText) {
+                vizCtx.font = '14px sans-serif';
+                vizCtx.fillStyle = 'rgba(255,255,255,0.7)';
+                const nextWidth = vizCtx.measureText(nextText).width;
+                vizCtx.fillText(nextText, (w - nextWidth) / 2, y);
+            }
+
+            vizCtx.shadowBlur = 0;
+        }
+
         function vizLoop() {
             if (!analyser) return;
             analyser.getByteFrequencyData(freqData);
@@ -433,6 +530,7 @@
                 case 6: drawVizMatrix(w, h); break;
                 case 7: drawVizKaleidoscope(w, h, t); break;
             }
+            if (kfnActive) drawKfnLyricsOnCanvas(w, h);
             vizAnimHandle = requestAnimationFrame(vizLoop);
         }
 
