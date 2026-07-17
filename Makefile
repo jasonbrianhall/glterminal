@@ -576,24 +576,25 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 # Automatically regenerated when index.hpptml changes
 index.hpp: index.html
 	@echo "Generating index.html header..."
-	@xxd -i index.html > index.hpp
-	@xxd -i audioDetection.js > audioDetection.hpp
-	@xxd -i audioVisualizer.js >audioVisualizer.hpp
-	@xxd -i cdgPlayer.js > cdgPlayer.hpp
-	@xxd -i cookies.js > cookies.hpp
-	@xxd -i fileFilter.js > fileFilter.hpp
-	@xxd -i imageDetection.js > imageDetection.hpp
-	@xxd -i karaokePlayer.js > karaokePlayer.hpp
-	@xxd -i karaoke-library.js > karaoke-library.hpp
-	@xxd -i panDragHandlers.js > panDragHandlers.hpp
-	@xxd -i slideshowAutoplay.js > slideshowAutoplay.hpp
-	@xxd -i theme.js > theme.hpp
-	@xxd -i videoDetection.js > videoDetection.hpp
-	@xxd -i videoPlayer.js > videoPlayer.hpp
-	@xxd -i zipReader.js > zipReader.hpp
-	@xxd -i zoomPan.js > zoomPan.hpp
-	@xxd -i crypto-js.min.js > crypto-js.hpp
-	@echo "✓ Converted index.html"
+	@xxd -i web/404.html > 404.hpp
+	@xxd -i web/index.html > index.hpp
+	@xxd -i web/audioDetection.js > audioDetection.hpp
+	@xxd -i web/audioVisualizer.js >audioVisualizer.hpp
+	@xxd -i web/cdgPlayer.js > cdgPlayer.hpp
+	@xxd -i web/cookies.js > cookies.hpp
+	@xxd -i web/fileFilter.js > fileFilter.hpp
+	@xxd -i web/imageDetection.js > imageDetection.hpp
+	@xxd -i web/karaokePlayer.js > karaokePlayer.hpp
+	@xxd -i web/karaoke-library.js > karaoke-library.hpp
+	@xxd -i web/panDragHandlers.js > panDragHandlers.hpp
+	@xxd -i web/slideshowAutoplay.js > slideshowAutoplay.hpp
+	@xxd -i web/theme.js > theme.hpp
+	@xxd -i web/videoDetection.js > videoDetection.hpp
+	@xxd -i web/videoPlayer.js > videoPlayer.hpp
+	@xxd -i web/zipReader.js > zipReader.hpp
+	@xxd -i web/zoomPan.js > zoomPan.hpp
+	@xxd -i web/crypto-js.min.js > crypto-js.hpp
+	@echo "✓ Converted web/index.html"
 
 # ============================================================================
 # DEPENDENCY FILES

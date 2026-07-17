@@ -21,7 +21,7 @@
 #include "karaokePlayer.hpp"
 #include "karaoke-library.hpp" // Embedded karaoke-library.js (dynamically imported by karaokePlayer.js)
 #include "crypto-js.hpp"   // Crypto JS for Karaoke
-#include "404.h" // Embedded 404.html
+#include "404.hpp" // Embedded 404.html
 #include "favicon.h" // Embedded favicon.ico
 #include "midi_render.h" // In-process MIDI -> WAV synth (OPL3 via DBOPL)
 #include "voc_render.h"  // In-process VOC -> WAV converter
