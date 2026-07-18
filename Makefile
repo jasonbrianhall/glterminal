@@ -166,17 +166,20 @@ CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_COMMON) \
                        $(GSTREAMER_CFLAGS_LINUX) $(FFMPEG_CFLAGS_LINUX) \
                        $(SSH_CFLAGS_LINUX) \
                        -Iwopr \
-                       -DLINUX $(SSH_DEFINE) -DDEBUG -g -O1 -fsanitize=address -fsanitize=undefined -DDONTUSEGMP
+                       -DLINUX $(SSH_DEFINE) -DDEBUG -g -O0 -fno-omit-frame-pointer \
+                       -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=address,undefined \
+                       -DDONTUSEGMP
 
 LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(GLEW_LIBS_LINUX) $(FREETYPE_LIBS_LINUX) \
                        $(GSTREAMER_LIBS_LINUX) $(FFMPEG_LIBS_LINUX) \
                        $(SSH_LIBS_LINUX) \
                        -lGL -lpng -lz -lm -pthread -lstdc++ -lSDL2_mixer $(CODEC_LIBS_LINUX) -lssl -lcrypto -lwebp \
-                       -fsanitize=address -fsanitize=undefined
+                       -fsanitize=address -fsanitize=undefined -rdynamic
 
 # C flags for miniz .c files (no -std=c++17, no -Wextra pedantry on C)
 CFLAGS_LINUX       = $(CFLAGS_COMMON) -DLINUX -O2 
-CFLAGS_LINUX_DEBUG = $(CFLAGS_COMMON) -DLINUX -DDEBUG -g -O0
+CFLAGS_LINUX_DEBUG = $(CFLAGS_COMMON) -DLINUX -DDEBUG -g -O0 -fno-omit-frame-pointer \
+                     -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=address,undefined
 
 # ============================================================================
 # WINDOWS FLAGS
