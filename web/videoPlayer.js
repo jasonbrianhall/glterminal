@@ -1112,6 +1112,12 @@
                         // Check for audio formats (keep in console)
                         const isNativeAudio = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(filename);
                         const isConvertibleAudio = /\.(aiff|aif|ra|au|voc|wma|m4b|ape|ac3|mp2|mid)$/i.test(filename);
+
+                        // CD+G karaoke packs (zip) and KFN karaoke files use the full
+                        // music overlay (CD+G canvas / synced lyrics), not the plain
+                        // inline <audio> player.
+                        const isKaraokeZip = /\.zip$/i.test(filename);
+                        const isKfn = /\.kfn$/i.test(filename);
                         
                         const isPreviewable = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|py|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i.test(filename);
                         if (isVideo || isImage) {
@@ -1120,6 +1126,9 @@
                             playAudio(filePath, filename);
                         } else if (isConvertibleAudio) {
                             playWithConverter(filePath, filename, getConverterHeader(filename));
+                        } else if (isKaraokeZip || isKfn) {
+                            addOutputLine('Attempting to play karaoke file.');
+                            playKaraokeTrack(filePath, filename, isKaraokeZip ? 'zip' : 'kfn');
                         } else if (isPreviewable) {
                             previewFile(filePath, filename);
                             addOutputLine('Previewing: ' + filename);
@@ -1136,6 +1145,7 @@
                     addOutputLine('  mget <pattern> - Download multiple files (e.g., mget *.mp3)');
                     addOutputLine('  play <file>    - Play or preview file (converts aiff, ra, midi, voc, mp2, and a few other formats)');
                     addOutputLine('                       Images, text, and movies files open in an overlay; music is in-line');
+                    addOutputLine('                       CD+G packs (.zip) and .kfn karaoke files open in the music overlay');
                     addOutputLine('  info <file>    - Show file/directory info (size, type, modified date, file count)');
                     addOutputLine('  help           - Show this help');
                     addOutputLine('  clear          - Clear screen');
@@ -1278,6 +1288,32 @@
                 addOutputLine('Error: Failed to open ' + filename);
                 console.error(error);
             }
+        }
+
+        // Hands a .zip (CD+G pack) or .kfn file off to the full music overlay,
+        // so it gets the same CD+G canvas / synced-lyrics rendering as tracks
+        // played from the file browser's music player, instead of the plain
+        // inline <audio> element used for ordinary audio files.
+        function playKaraokeTrack(filePath, filename, type) {
+            const encodedPath = filePath.split('/').map(part => encodeURIComponent(part)).join('/');
+            musicTracks = [{ name: filename, src: encodedPath, type, id: 0, hasCdg: type === 'zip' ? null : false }];
+            currentTrackId = null;
+            musicSearchTerm = '';
+            musicSearchInput.value = '';
+            musicOverlay.classList.add('active');
+
+            if (type === 'zip') {
+                peekZipHasCdg(encodedPath).then(has => {
+                    const track = musicTracks.find(t => t.id === 0);
+                    if (track) {
+                        track.hasCdg = has;
+                        renderMusicTable();
+                    }
+                });
+            }
+
+            renderMusicTable();
+            playTrackById(0);
         }
 
         function playAudio(filePath, filename) {
