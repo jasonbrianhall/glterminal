@@ -574,8 +574,20 @@ flt-collect-dlls: $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 # ============================================================================
 # Gzip index.html and convert to C header (saves ~100KB in binary)
 # Automatically regenerated when index.hpptml changes
-index.hpp: web/index.html
-	@echo "Generating index.html header..."
+WEB_ASSETS = web/404.html web/index.html web/audioDetection.js web/audioVisualizer.js \
+             web/cdgPlayer.js web/cookies.js web/fileFilter.js web/imageDetection.js \
+             web/karaokePlayer.js web/karaoke-library.js web/panDragHandlers.js \
+             web/slideshowAutoplay.js web/theme.js web/videoDetection.js web/videoPlayer.js \
+             web/zipReader.js web/zoomPan.js web/crypto-js.min.js
+
+ASSET_HEADERS = 404.hpp index.hpp audioDetection.hpp audioVisualizer.hpp cdgPlayer.hpp \
+                cookies.hpp fileFilter.hpp imageDetection.hpp karaokePlayer.hpp \
+                karaoke-library.hpp panDragHandlers.hpp slideshowAutoplay.hpp theme.hpp \
+                videoDetection.hpp videoPlayer.hpp zipReader.hpp zoomPan.hpp crypto-js.hpp
+
+index.hpp: $(WEB_ASSETS)
+	@echo "Generating web asset headers..."
+	@rm -f $(ASSET_HEADERS)
 	@xxd -i -n 404_html web/404.html > 404.hpp
 	@xxd -i -n index_html web/index.html > index.hpp
 	@xxd -i -n audioDetection_js web/audioDetection.js > audioDetection.hpp
@@ -594,7 +606,7 @@ index.hpp: web/index.html
 	@xxd -i -n zipReader_js web/zipReader.js > zipReader.hpp
 	@xxd -i -n zoomPan_js web/zoomPan.js > zoomPan.hpp
 	@xxd -i -n crypto_js_min_js web/crypto-js.min.js > crypto-js.hpp
-	@echo "✓ Converted web/index.html"
+	@echo "✓ Converted web assets"
 
 
 # ============================================================================
@@ -631,6 +643,7 @@ clean:
 	rm -f $(BUILD_DIR_WIN)/$(EXECUTABLE_WIN)
 	rm -f $(BUILD_DIR_WIN_DEBUG)/$(EXECUTABLE_WIN_DEBUG)
 	rm -f $(FRONTEND_LINUX) $(FRONTEND_WIN)
+	rm -f $(ASSET_HEADERS)
 
 clean-all:
 	rm -rf $(BUILD_DIR)
