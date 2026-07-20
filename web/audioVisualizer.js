@@ -9,7 +9,7 @@
         let audioCtx = null, analyser = null, freqData = null, timeData = null;
         let vizStars = null, vizSparks = [], vizLastBurst = -1, vizMatrixCols = null;
         let exportDestNode = null;
-        let isExporting = false;
+        window.isExporting = false;  // Global so karaokePlayer can access it
         let activeRecorder = null;
 
         vizModeBtn.textContent = `Viz: ${VIZ_MODES[vizMode]}`;
@@ -57,7 +57,7 @@
         // Records the visualizer canvas + audio in real time (as long as the track itself)
         // and downloads the result as MP4 (falling back to WebM if the browser can't mux MP4).
         async function exportVisualizationVideo() {
-            if (isExporting) return;
+            if (window.isExporting) return;
             if (!vizCanvas.captureStream || typeof MediaRecorder === 'undefined') {
                 alert('Video export is not supported in this browser.');
                 return;
@@ -101,12 +101,24 @@
             const track = musicTracks.find(t => t.id === currentTrackId);
             const baseName = (track ? track.name : 'visualization').replace(/\.[^.]+$/, '');
 
-            isExporting = true;
+            window.isExporting = true;
             vizExportBtn.disabled = true;
             vizModeBtn.disabled = true;
+            // Hide only the text overlays so canvas continues rendering but without text duplicates
+            if (kfnActive) {
+                kfnLyricsCurrent.style.visibility = 'hidden';
+                kfnLyricsNext.style.visibility = 'hidden';
+                kfnTrackControls.style.visibility = 'hidden';
+            }
 
             recorder.onstop = () => {
-                isExporting = false;
+                window.isExporting = false;
+                // Restore text overlays
+                if (kfnActive) {
+                    kfnLyricsCurrent.style.visibility = 'visible';
+                    kfnLyricsNext.style.visibility = 'visible';
+                    kfnTrackControls.style.visibility = 'visible';
+                }
                 activeRecorder = null;
                 vizExportBtn.disabled = false;
                 vizModeBtn.disabled = false;
@@ -145,7 +157,7 @@
 
         // Export CDG as WebP video during playback (works same as visualization export)
         async function exportCdgVideo() {
-            if (isCdgExporting) return;
+            if (window.isExporting) return;
             if (!cdgCanvas.captureStream || typeof MediaRecorder === 'undefined') {
                 alert('Video export is not supported in this browser.');
                 return;
@@ -496,7 +508,8 @@
             const spaceWidth = vizCtx.measureText(' ').width;
             const lineHeight = 26;
             const rows = wrapLyricWords(currentWords, maxWidth);
-            let y = h * 0.78 - (rows.length - 1) * lineHeight;
+            // Center the text vertically like the DOM overlay does
+            let y = (h / 2) - ((rows.length - 1) * lineHeight) / 2;
             rows.forEach(row => {
                 drawLyricRow(row, wordInLine, y, spaceWidth, accentColor);
                 y += lineHeight;
@@ -506,7 +519,7 @@
                 vizCtx.font = '14px sans-serif';
                 vizCtx.fillStyle = 'rgba(255,255,255,0.7)';
                 const nextWidth = vizCtx.measureText(nextText).width;
-                vizCtx.fillText(nextText, (w - nextWidth) / 2, y);
+                vizCtx.fillText(nextText, (w - nextWidth) / 2, y + 10);
             }
 
             vizCtx.shadowBlur = 0;
@@ -530,8 +543,10 @@
                 case 6: drawVizMatrix(w, h); break;
                 case 7: drawVizKaleidoscope(w, h, t); break;
             }
-            // Only draw lyrics on canvas during export; otherwise show DOM overlay
-            if (kfnActive && isExporting) drawKfnLyricsOnCanvas(w, h);
+            // Draw lyrics on canvas only during export (when DOM overlay is hidden)
+            if (kfnActive && window.isExporting) {
+                drawKfnLyricsOnCanvas(w, h);
+            }
             vizAnimHandle = requestAnimationFrame(vizLoop);
         }
 

@@ -64,7 +64,7 @@
         function kfnRenderFrame() {
             if (!kfnLyricsData || kfnLyricsData.lyrics.length === 0) return;
             // Don't update DOM during export; only canvas text should appear
-            if (isExporting) return;
+            if (window.isExporting) return;
             
             const { lyrics, lyricsLines, syncTimes, lineIndices } = kfnLyricsData;
             const wordIdx = kfnFindWordIndex(syncTimes, musicAudio.currentTime * 1000);
