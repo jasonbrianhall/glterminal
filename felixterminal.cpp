@@ -48,6 +48,7 @@ float       g_opacity     = 1.0f;
 bool        g_blink_text_on = true;
 bool        g_autoscroll_enabled = true;  // true = autoscroll ON, false = autoscroll OFF
 bool        g_line_numbers_enabled = false;  // Toggle for line numbering in scrollback
+bool        g_menu_copy_pending = false;  // Flag to prevent MOUSEUP from overwriting menu copy
 SDL_Window *g_sdl_window  = nullptr;
 std::vector<FontEntry> g_font_list;
 // Current window size exposed to terminal.cpp for basic_handle_osc coordinate mapping.
@@ -1771,9 +1772,12 @@ int main(int argc, char **argv) {
                     break;
                 }
                 if (ev.button.button == SDL_BUTTON_RIGHT) {
+                    SDL_Log("DEBUG: RIGHT CLICK - opening menu");
                     SDL_GetWindowSize(window, &win_w, &win_h);
                     menu_open(&g_menu, ev.button.x, ev.button.y, win_w, win_h);
+                    break;
                 } else if (ev.button.button == SDL_BUTTON_LEFT) {
+                    SDL_Log("DEBUG: LEFT CLICK");
                     // Ctrl+click opens URL
                     if (!g_menu.visible) {
                         SDL_Keymod mod = SDL_GetModState();
@@ -1838,15 +1842,16 @@ int main(int argc, char **argv) {
                             g_menu.visible = false;
                         } else {
                             int hit = menu_hit(&g_menu, ev.button.x, ev.button.y);
+                            SDL_Log("DEBUG: Menu hit result: %d", hit);
                             bool is_sub_parent = (hit==MENU_ID_THEMES || hit==MENU_ID_OPACITY ||
                                                   hit==MENU_ID_RENDER_MODE || hit==MENU_ID_ENTERTAINMENT ||
                                                   hit==MENU_ID_NEW_TERMINAL || hit==MENU_ID_FONTS ||
                                                   hit==MENU_ID_ADV_OPTIONS);
                             if (!is_sub_parent) g_menu.visible = false;
                             switch (hit) {
-                            case MENU_ID_COPY:      term_copy_selection(&term); break;
-                            case MENU_ID_COPY_HTML: term_copy_selection_html(&term); break;
-                            case MENU_ID_COPY_ANSI: term_copy_selection_ansi(&term); break;
+                            case MENU_ID_COPY:      SDL_Log("DEBUG: COPY selected, sel_exists=%d, sel_active=%d", term.sel_exists, term.sel_active); g_menu_copy_pending = true; term_copy_selection(&term); break;
+                            case MENU_ID_COPY_HTML: SDL_Log("DEBUG: COPY_HTML selected, sel_exists=%d, sel_active=%d", term.sel_exists, term.sel_active); g_menu_copy_pending = true; term_copy_selection_html(&term); break;
+                            case MENU_ID_COPY_ANSI: SDL_Log("DEBUG: COPY_ANSI selected, sel_exists=%d, sel_active=%d", term.sel_exists, term.sel_active); g_menu_copy_pending = true; term_copy_selection_ansi(&term); break;
                             case MENU_ID_PASTE:     term_paste(&term); break;
                             case MENU_ID_RESET:
                                 for(int row=0;row<term.rows;row++)
@@ -1945,6 +1950,7 @@ int main(int argc, char **argv) {
                             }
                         } else {
                             // Single click: start selection
+                            SDL_Log("DEBUG: Single left click at r=%d c=%d - clearing sel_exists", r, c);
                             term.sel_start_row = term.sel_end_row = r;
                             term.sel_start_col = term.sel_end_col = c;
                             term.sel_active = true;
@@ -2089,18 +2095,30 @@ int main(int argc, char **argv) {
                         TERM_WRITE(seq, slen);
                     }
                 } else if (ev.button.button == SDL_BUTTON_LEFT && term.sel_active) {
-                    pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2,
-                                  &term.sel_end_row, &term.sel_end_col);
-                    term.sel_active = false;
-                    bool same = (term.sel_start_row == term.sel_end_row &&
-                                 term.sel_start_col == term.sel_end_col);
-                    term.sel_exists = !same;
-                    if (term.sel_exists) term_copy_selection(&term);
-                    term_dirty_all(&term);
+                    SDL_Log("DEBUG: MOUSEUP - LEFT button with sel_active=true, menu_visible=%d, menu_copy_pending=%d", g_menu.visible, g_menu_copy_pending);
+                    if (g_menu_copy_pending) {
+                        SDL_Log("DEBUG: MOUSEUP - skipping copy because menu copy is pending");
+                        g_menu_copy_pending = false;
+                    } else {
+                        pixel_to_cell(&term, ev.button.x, ev.button.y, 2, 2,
+                                      &term.sel_end_row, &term.sel_end_col);
+                        term.sel_active = false;
+                        bool same = (term.sel_start_row == term.sel_end_row &&
+                                     term.sel_start_col == term.sel_end_col);
+                        term.sel_exists = !same;
+                        if (term.sel_exists) { SDL_Log("DEBUG: MOUSEUP calling term_copy_selection (plain text)"); term_copy_selection(&term); }
+                        term_dirty_all(&term);
+                    }
                 } else if (ev.button.button == SDL_BUTTON_LEFT && term.sel_exists) {
                     // Double-click word selection already set - just copy and keep selection
-                    term_copy_selection(&term);
-                    term_dirty_all(&term);
+                    SDL_Log("DEBUG: MOUSEUP - LEFT button with sel_exists=true, menu_visible=%d, menu_copy_pending=%d", g_menu.visible, g_menu_copy_pending);
+                    if (g_menu_copy_pending) {
+                        SDL_Log("DEBUG: MOUSEUP - skipping copy because menu copy is pending");
+                        g_menu_copy_pending = false;
+                    } else {
+                        term_copy_selection(&term);
+                        term_dirty_all(&term);
+                    }
                 }
                 break;
             }
