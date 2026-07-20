@@ -138,6 +138,43 @@
             playVideoById(list[(curIdx - 1 + list.length) % list.length].id);
         }
 
+        function isMusicPlayableFile(entry) {
+            return isAudioFile(entry) || isMidiFile(entry) || isVocFile(entry) ||
+                   isAuFile(entry) || isAiffFile(entry) || isConvertibleAudioFile(entry) || isKfnFile(entry);
+            // .zip is deliberately excluded here — not every zip is a karaoke pack,
+            // so a bare click shouldn't assume that. The Music library button still
+            // lists and lazily peeks zips for CD+G content.
+        }
+
+        function openMusicFromTable(filePath, name) {
+            // If open-in-new-window is enabled, just open the file normally
+            if (openInNewWindow) {
+                window.open(filePath, '_blank');
+                return;
+            }
+
+            musicTracks = getAudioEntries();
+            if (musicTracks.length === 0) return;
+
+            musicSearchTerm = '';
+            musicSearchInput.value = '';
+            musicSortState = { col: 'name', dir: 1 };
+            musicOverlay.classList.add('active');
+
+            // Kick off async CD+G detection for zip tracks without blocking playback
+            musicTracks.filter(t => t.type === 'zip').forEach(t => {
+                peekZipHasCdg(t.src).then(has => {
+                    t.hasCdg = has;
+                    renderMusicTable();
+                });
+            });
+
+            renderMusicTable();
+
+            const track = musicTracks.find(t => t.name === name);
+            playTrackById(track ? track.id : musicTracks[0].id);
+        }
+
         function openVideoFromTable(filePath, name) {
             // If open-in-new-window is enabled, just open the file normally
             if (openInNewWindow) {
@@ -589,6 +626,8 @@
                         nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}" onclick="if(event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) { previewFile('${encodedEntryPath}', '${entry.name}'); return false; }">${entry.name}</a>`;
                     } else if (isVideoFile(entry)) {
                         nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}" onclick="if(event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) { openVideoFromTable('${encodedEntryPath}', '${entry.name}'); return false; }">${entry.name}</a>`;
+                    } else if (isMusicPlayableFile(entry)) {
+                        nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}" onclick="if(event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) { openMusicFromTable('${encodedEntryPath}', '${entry.name}'); return false; }">${entry.name}</a>`;
                     } else {
                         nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}">${entry.name}</a>`;
                     }
