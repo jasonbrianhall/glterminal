@@ -46,17 +46,15 @@ struct AVCodecContextDeleter {
     }
 };
 
-// FIXED: Proper AVIOContext deleter with buffer management
+// FIXED: Only free the context, NOT the buffer
+// FFmpeg's avformat_open_input takes ownership of the buffer
 struct AVIOContextDeleter {
-    uint8_t* buffer = nullptr;
     void operator()(AVIOContext* ctx) {
         if (ctx) {
-            // Detach buffer before freeing context to prevent double-free
-            ctx->buffer = nullptr;
+            // CRITICAL: Do NOT free ctx->buffer here
+            // avformat_open_input may have already freed it
+            // avio_context_free only frees the context structure
             avio_context_free(&ctx);
-        }
-        if (buffer) {
-            av_freep(&buffer);
         }
     }
 };
@@ -168,33 +166,36 @@ bool convertM4aToWavInMemory(const std::vector<uint8_t>& m4a_data, std::vector<u
         return false;
     }
     
-    // FIXED: Use custom deleter that tracks the buffer
-    AVIOContextPtr avio_ctx(avio_alloc_context(avio_buffer, avio_buffer_size, 0, &mem_ctx, 
-                                              memory_read, nullptr, memory_seek),
-                           AVIOContextDeleter());
-    if (!avio_ctx) {
+    // Create AVIO context - FFmpeg will own the buffer
+    AVIOContext* avio_ctx_raw = avio_alloc_context(avio_buffer, avio_buffer_size, 0, &mem_ctx, 
+                                                   memory_read, nullptr, memory_seek);
+    if (!avio_ctx_raw) {
         printf("Failed to create AVIO context\n");
+        // If avio_alloc_context fails, we must free the buffer ourselves
         av_freep(&avio_buffer);
         return false;
     }
-    // Store buffer pointer in deleter for proper cleanup
-    static_cast<AVIOContextDeleter&>(avio_ctx.get_deleter()).buffer = avio_buffer;
+    
+    // Wrap in unique_ptr - will call avio_context_free (but NOT free buffer)
+    AVIOContextPtr avio_ctx(avio_ctx_raw);
     
     // Allocate format context
     AVFormatContext* format_ctx_raw = avformat_alloc_context();
     if (!format_ctx_raw) {
         printf("Failed to allocate format context\n");
+        // avio_ctx will be freed here via unique_ptr
         return false;
     }
     
     format_ctx_raw->pb = avio_ctx.get();
     AVFormatContextPtr format_ctx(format_ctx_raw);
     
-    // FIXED: Simplified open_input without the manual release/reset dance
+    // Open input - FFmpeg takes ownership of pb (AVIO context)
+    // Do NOT release format_ctx before this call
     if (avformat_open_input(&format_ctx_raw, nullptr, nullptr, nullptr) < 0) {
         printf("Failed to open M4A data\n");
-        // avformat_open_input will have closed the context on failure
-        format_ctx.release();  // Don't double-close
+        // avformat_open_input freed pb on failure, but format_ctx_raw is still owned by format_ctx
+        // Just return - unique_ptrs will clean up properly
         return false;
     }
     
@@ -298,7 +299,7 @@ bool convertM4aToWavInMemory(const std::vector<uint8_t>& m4a_data, std::vector<u
     append_bytes((uint8_t*)"RIFF", 4);
     size_t riff_size_pos = wav_data.size();
     uint32_t placeholder = 0;
-    append_bytes((uint8_t*)&placeholder, 4); // File size (will update later)
+    append_bytes((uint8_t*)&placeholder, 4);
     append_bytes((uint8_t*)"WAVE", 4);
     
     // fmt chunk
@@ -322,7 +323,7 @@ bool convertM4aToWavInMemory(const std::vector<uint8_t>& m4a_data, std::vector<u
     // data chunk
     append_bytes((uint8_t*)"data", 4);
     size_t data_size_pos = wav_data.size();
-    append_bytes((uint8_t*)&placeholder, 4); // Data size (will update later)
+    append_bytes((uint8_t*)&placeholder, 4);
     size_t audio_data_start = wav_data.size();
     
     // Allocate output buffer for resampling
