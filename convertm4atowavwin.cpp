@@ -18,6 +18,52 @@
 #pragma comment(lib, "mfreadwrite.lib")
 #pragma comment(lib, "mfuuid.lib")
 
+// RAII wrapper for COM objects
+template<typename T>
+class COMPtr {
+    T* ptr = nullptr;
+public:
+    COMPtr() = default;
+    explicit COMPtr(T* p) : ptr(p) {}
+    ~COMPtr() { 
+        if (ptr) {
+            ptr->Release(); 
+            ptr = nullptr;
+        }
+    }
+    
+    T* get() const { return ptr; }
+    T** operator&() { 
+        if (ptr) {
+            ptr->Release();
+            ptr = nullptr;
+        }
+        return &ptr; 
+    }
+    T* operator->() { return ptr; }
+    operator bool() const { return ptr != nullptr; }
+    
+    // Move semantics
+    COMPtr(COMPtr&& other) noexcept : ptr(other.release()) {}
+    COMPtr& operator=(COMPtr&& other) noexcept {
+        if (this != &other) {
+            if (ptr) ptr->Release();
+            ptr = other.release();
+        }
+        return *this;
+    }
+    
+    // No copy
+    COMPtr(const COMPtr&) = delete;
+    COMPtr& operator=(const COMPtr&) = delete;
+    
+    T* release() {
+        T* temp = ptr;
+        ptr = nullptr;
+        return temp;
+    }
+};
+
 // Media Foundation initialization helper
 static bool g_mf_initialized = false;
 
@@ -75,31 +121,29 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
         return false;
     }
     
-    // Convert filename to wide string
     std::wstring wide_filename = stringToWString(input_filename);
     
     HRESULT hr;
-    IMFSourceReader* pReader = nullptr;
+    COMPtr<IMFSourceReader> pReader;
     
-    // Create source reader from file - works for both M4A and WMA
+    // Create source reader from file
     hr = MFCreateSourceReaderFromURL(wide_filename.c_str(), nullptr, &pReader);
     if (FAILED(hr)) {
         printf("Cannot open audio file: %s (Error: 0x%lx)\n", input_filename, hr);
         return false;
     }
     
-    // GET ORIGINAL FORMAT INFORMATION FIRST
-    IMFMediaType* pOriginalType = nullptr;
+    // Get original format information
+    COMPtr<IMFMediaType> pOriginalType;
     hr = pReader->GetNativeMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, &pOriginalType);
     if (FAILED(hr)) {
         printf("Failed to get original media type\n");
-        pReader->Release();
         return false;
     }
     
     // Extract original audio parameters
-    UINT32 originalSampleRate = 44100; // default fallback
-    UINT32 originalChannels = 2;       // default fallback
+    UINT32 originalSampleRate = 44100;
+    UINT32 originalChannels = 2;
     
     pOriginalType->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &originalSampleRate);
     pOriginalType->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &originalChannels);
@@ -109,13 +153,11 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
                           isM4aFile(input_filename) ? "M4A" : "Audio";
     printf("Original %s: %d Hz, %d channels\n", fileType, originalSampleRate, originalChannels);
     
-    // Configure source reader for PCM output WITH ORIGINAL SAMPLE RATE
-    IMFMediaType* pType = nullptr;
+    // Configure source reader for PCM output
+    COMPtr<IMFMediaType> pType;
     hr = MFCreateMediaType(&pType);
     if (FAILED(hr)) {
         printf("Failed to create media type\n");
-        pOriginalType->Release();
-        pReader->Release();
         return false;
     }
     
@@ -134,40 +176,32 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
     }
     
     if (SUCCEEDED(hr)) {
-        hr = pReader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, pType);
+        hr = pReader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, pType.get());
     }
     
     if (FAILED(hr)) {
         printf("Failed to configure source reader\n");
-        pOriginalType->Release();
-        pType->Release();
-        pReader->Release();
         return false;
     }
     
     // Verify the configured format
-    IMFMediaType* pCurrentType = nullptr;
+    COMPtr<IMFMediaType> pCurrentType;
     hr = pReader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, &pCurrentType);
     if (FAILED(hr)) {
         printf("Failed to get current media type\n");
-        pOriginalType->Release();
-        pType->Release();
-        pReader->Release();
         return false;
     }
     
-    UINT32 sampleRate = originalSampleRate;  // Use original sample rate
-    UINT32 channels = originalChannels;      // Use original channel count
+    UINT32 sampleRate = originalSampleRate;
+    UINT32 channels = originalChannels;
     UINT32 bitsPerSample = 16;
     
-    // Double-check the configured values
     pCurrentType->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &sampleRate);
     pCurrentType->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels);
     pCurrentType->GetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, &bitsPerSample);
     
     printf("Output format: %d Hz, %d channels, %d bits per sample\n", sampleRate, channels, bitsPerSample);
     
-    // Warn if there's a mismatch
     if (sampleRate != originalSampleRate) {
         printf("WARNING: Sample rate mismatch! Original: %d, Output: %d\n", originalSampleRate, sampleRate);
     }
@@ -176,21 +210,23 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
     FILE* wav_file = fopen(wav_filename, "wb");
     if (!wav_file) {
         printf("Cannot create WAV file: %s\n", wav_filename);
-        pCurrentType->Release();
-        pOriginalType->Release();
-        pType->Release();
-        pReader->Release();
         return false;
     }
     
-    // Write initial WAV header (we'll update sizes later)
+    // RAII wrapper for file handle
+    struct FileGuard {
+        FILE* f;
+        FileGuard(FILE* file) : f(file) {}
+        ~FileGuard() { if (f) fclose(f); }
+    } file_guard(wav_file);
+    
+    // Write initial WAV header
     long riff_size_pos, data_size_pos;
     
-    // RIFF header
     fwrite("RIFF", 1, 4, wav_file);
     riff_size_pos = ftell(wav_file);
     uint32_t placeholder = 0;
-    fwrite(&placeholder, 4, 1, wav_file); // File size (will update later)
+    fwrite(&placeholder, 4, 1, wav_file);
     fwrite("WAVE", 1, 4, wav_file);
     
     // fmt chunk
@@ -211,7 +247,7 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
     // data chunk header
     fwrite("data", 1, 4, wav_file);
     data_size_pos = ftell(wav_file);
-    fwrite(&placeholder, 4, 1, wav_file); // Data size (will update later)
+    fwrite(&placeholder, 4, 1, wav_file);
     
     long audio_data_start = ftell(wav_file);
     
@@ -221,7 +257,7 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
     while (SUCCEEDED(hr)) {
         DWORD flags = 0;
         LONGLONG timestamp = 0;
-        IMFSample* pSample = nullptr;
+        COMPtr<IMFSample> pSample;
         
         hr = pReader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, 
                                 nullptr, &flags, &timestamp, &pSample);
@@ -233,7 +269,7 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
         }
         
         if (pSample) {
-            IMFMediaBuffer* pBuffer = nullptr;
+            COMPtr<IMFMediaBuffer> pBuffer;
             hr = pSample->ConvertToContiguousBuffer(&pBuffer);
             if (SUCCEEDED(hr)) {
                 BYTE* pData = nullptr;
@@ -245,30 +281,20 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
                     total_bytes_written += currentLength;
                     pBuffer->Unlock();
                 }
-                pBuffer->Release();
+                // pBuffer released automatically via COMPtr
             }
-            pSample->Release();
+            // pSample released automatically via COMPtr
         }
     }
     
     // Update WAV header with actual sizes
-    uint32_t file_size = total_bytes_written + 36; // Audio data + header size - 8
+    uint32_t file_size = total_bytes_written + 36;
     
-    // Update RIFF chunk size
     fseek(wav_file, riff_size_pos, SEEK_SET);
     fwrite(&file_size, 4, 1, wav_file);
     
-    // Update data chunk size
     fseek(wav_file, data_size_pos, SEEK_SET);
     fwrite(&total_bytes_written, 4, 1, wav_file);
-    
-    fclose(wav_file);
-    
-    // Cleanup
-    pCurrentType->Release();
-    pOriginalType->Release();
-    pType->Release();
-    pReader->Release();
     
     printf("%s conversion complete\n", fileType);
     return true;
@@ -276,8 +302,6 @@ static bool convertAudioToWav(const char* input_filename, const char* wav_filena
 
 // Memory-based conversion for any supported audio format
 bool convertAudioToWavInMemory(const std::vector<uint8_t>& audio_data, std::vector<uint8_t>& wav_data, const char* file_extension) {
-    // Media Foundation requires actual file access for audio files
-    // Create a temporary file for the conversion process
     char temp_path[MAX_PATH];
     char temp_audio_file[MAX_PATH];
     
@@ -286,6 +310,14 @@ bool convertAudioToWavInMemory(const std::vector<uint8_t>& audio_data, std::vect
         printf("Failed to create temporary file path\n");
         return false;
     }
+    
+    // RAII wrapper for temp file cleanup
+    struct TempFileGuard {
+        char filename[MAX_PATH];
+        bool keep = false;
+        TempFileGuard(const char* f) { strcpy_s(filename, sizeof(filename), f); }
+        ~TempFileGuard() { if (!keep) DeleteFileA(filename); }
+    } temp_guard(temp_audio_file);
     
     // Write audio data to temporary file
     FILE* temp_file = fopen(temp_audio_file, "wb");
@@ -297,7 +329,6 @@ bool convertAudioToWavInMemory(const std::vector<uint8_t>& audio_data, std::vect
     if (fwrite(audio_data.data(), 1, audio_data.size(), temp_file) != audio_data.size()) {
         printf("Failed to write audio data to temporary file\n");
         fclose(temp_file);
-        DeleteFileA(temp_audio_file);
         return false;
     }
     fclose(temp_file);
@@ -306,9 +337,15 @@ bool convertAudioToWavInMemory(const std::vector<uint8_t>& audio_data, std::vect
     char temp_wav_file[MAX_PATH];
     if (GetTempFileNameA(temp_path, "wav", 0, temp_wav_file) == 0) {
         printf("Failed to create temporary WAV file path\n");
-        DeleteFileA(temp_audio_file);
         return false;
     }
+    
+    struct TempWavGuard {
+        char filename[MAX_PATH];
+        bool keep = false;
+        TempWavGuard(const char* f) { strcpy_s(filename, sizeof(filename), f); }
+        ~TempWavGuard() { if (!keep) DeleteFileA(filename); }
+    } wav_guard(temp_wav_file);
     
     // Convert using file-based method
     bool success = convertAudioToWav(temp_audio_file, temp_wav_file);
@@ -334,10 +371,6 @@ bool convertAudioToWavInMemory(const std::vector<uint8_t>& audio_data, std::vect
             printf("Failed to read converted WAV file\n");
         }
     }
-    
-    // Clean up temporary files
-    DeleteFileA(temp_audio_file);
-    DeleteFileA(temp_wav_file);
     
     return success;
 }
@@ -368,7 +401,6 @@ bool convert_audio_to_wav(AudioPlayer *player, const char* filename) {
 
 // Internal generic audio converter for Windows Media Foundation
 bool convert_audio_to_wav_internal(AudioPlayer *player, const char* filename) {
-    // Check cache first
     const char* cached_file = get_cached_conversion(&player->conversion_cache, filename);
     if (cached_file) {
         strncpy(player->temp_wav_file, cached_file, sizeof(player->temp_wav_file) - 1);
@@ -376,7 +408,6 @@ bool convert_audio_to_wav_internal(AudioPlayer *player, const char* filename) {
         return true;
     }
     
-    // Determine file type
     bool isWma = isWmaFile(filename);
     bool isM4a = isM4aFile(filename);
     
@@ -385,7 +416,6 @@ bool convert_audio_to_wav_internal(AudioPlayer *player, const char* filename) {
         return false;
     }
     
-    // Generate a unique virtual filename
     static int virtual_counter = 0;
     char virtual_filename[256];
     const char* prefix = isWma ? "virtual_wma" : "virtual_m4a";
@@ -443,19 +473,18 @@ bool convert_audio_to_wav_internal(AudioPlayer *player, const char* filename) {
         return false;
     }
     
-    // Add to cache after successful conversion
     add_to_conversion_cache(&player->conversion_cache, filename, virtual_filename);
     
     printf("Audio conversion to virtual file complete\n");
     return true;
 }
 
-// Windows-specific M4A converter (calls generic function)
+// Windows-specific M4A converter
 bool convert_m4a_to_wav(AudioPlayer *player, const char* filename) {
     return convert_audio_to_wav_internal(player, filename);
 }
 
-// Windows-specific WMA converter (calls generic function)
+// Windows-specific WMA converter
 bool convert_wma_to_wav(AudioPlayer *player, const char* filename) {
     return convert_audio_to_wav_internal(player, filename);
 }
