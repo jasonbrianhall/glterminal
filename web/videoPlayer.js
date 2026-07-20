@@ -233,7 +233,7 @@
                 e.preventDefault();
                 if (globalHomePath) {
                     const homePath = globalHomePath.split('/').map(encodeURIComponent).join('/');
-                    window.location.pathname = homePath;
+                    navigateTo(homePath);
                 }
             };
             breadcrumb.appendChild(homeLink);
@@ -284,7 +284,7 @@
                     };
                     
                     item.onclick = () => {
-                        window.location.pathname = path;
+                        navigateTo(path);
                         dropdown.style.display = 'none';
                     };
                     
@@ -444,8 +444,27 @@
         }
 
         let globalHomePath = null;
-        
+        let currentLoadedPath = null;
+
+        function navigateTo(path) {
+            if (path === getCurrentPath()) return;
+            history.pushState({}, '', path);
+            loadFiles();
+        }
+
+        function handleDirClick(e, path) {
+            // let ctrl/cmd/shift/middle-click fall through to normal browser handling (open in new tab)
+            if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+            e.preventDefault();
+            navigateTo(path);
+        }
+
+        window.addEventListener('popstate', () => {
+            if (getCurrentPath() !== currentLoadedPath) loadFiles();
+        });
+
         async function loadFiles() {
+            currentLoadedPath = getCurrentPath();
             const dir = getCurrentPath();
             const encodedDir = encodeParens(dir);
             
@@ -519,7 +538,7 @@
                 const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
                 row.innerHTML = `
                     <td></td>
-                    <td><a href="${parentPath}">..</a></td>
+                    <td><a href="${parentPath}" onclick="handleDirClick(event, '${parentPath}')">..</a></td>
                     <td class="type-directory">directory</td>
                     <td class="size-placeholder">-</td>
                     <td class="size-placeholder">-</td>
@@ -536,7 +555,7 @@
 
                 let nameCell;
                 if (entry.type === 'directory') {
-                    nameCell = `<a href="${encodedEntryPath}">${entry.name}</a>`;
+                    nameCell = `<a href="${encodedEntryPath}" onclick="handleDirClick(event, '${encodedEntryPath}')">${entry.name}</a>`;
                 } else {
                     // Check if file is previewable
                     const isPreviewable = IMAGE_EXTS.test(entry.name) || TEXT_EXTS.test(entry.name);
@@ -690,7 +709,7 @@
         homeBtn.onclick = () => {
             if (globalHomePath) {
                 const homePath = globalHomePath.split('/').map(encodeURIComponent).join('/');
-                window.location.pathname = homePath;
+                navigateTo(homePath);
             }
         };
 
