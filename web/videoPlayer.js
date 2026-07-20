@@ -138,6 +138,26 @@
             playVideoById(list[(curIdx - 1 + list.length) % list.length].id);
         }
 
+        function openVideoFromTable(filePath, name) {
+            // If open-in-new-window is enabled, just open the file normally
+            if (openInNewWindow) {
+                window.open(filePath, '_blank');
+                return;
+            }
+
+            videoTracks = getVideoEntries();
+            if (videoTracks.length === 0) return;
+
+            videoSearchTerm = '';
+            videoSearchInput.value = '';
+            videoSortState = { col: 'name', dir: 1 };
+            videoOverlay.classList.add('active');
+            renderVideoTable();
+
+            const track = videoTracks.find(t => t.name === name);
+            playVideoById(track ? track.id : videoTracks[0].id);
+        }
+
         function openVideoPlayer() {
             videoTracks = getVideoEntries();
             if (videoTracks.length === 0) return;
@@ -567,6 +587,8 @@
                     const isPreviewable = IMAGE_EXTS.test(entry.name) || TEXT_EXTS.test(entry.name) || PDF_EXTS.test(entry.name);
                     if (isPreviewable) {
                         nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}" onclick="if(event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) { previewFile('${encodedEntryPath}', '${entry.name}'); return false; }">${entry.name}</a>`;
+                    } else if (isVideoFile(entry)) {
+                        nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}" onclick="if(event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) { openVideoFromTable('${encodedEntryPath}', '${entry.name}'); return false; }">${entry.name}</a>`;
                     } else {
                         nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}">${entry.name}</a>`;
                     }
