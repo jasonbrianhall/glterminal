@@ -530,7 +530,8 @@
                 case 6: drawVizMatrix(w, h); break;
                 case 7: drawVizKaleidoscope(w, h, t); break;
             }
-            if (kfnActive) drawKfnLyricsOnCanvas(w, h);
+            // Only draw lyrics on canvas during export; otherwise show DOM overlay
+            if (kfnActive && isExporting) drawKfnLyricsOnCanvas(w, h);
             vizAnimHandle = requestAnimationFrame(vizLoop);
         }
 
