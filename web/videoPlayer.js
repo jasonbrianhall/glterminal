@@ -304,6 +304,7 @@
         // File preview functionality
         const IMAGE_EXTS = /\.(jpg|jpeg|png|gif|webp|svg)$/i;
         const TEXT_EXTS = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|py|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i;
+        const PDF_EXTS = /\.(pdf)$/i;
         const MAX_PREVIEW_SIZE = 1024 * 1024; // 1MB limit
 
         function closePreview() {
@@ -363,6 +364,11 @@
                     // Image preview
                     const url = URL.createObjectURL(blob);
                     content.innerHTML = `<img src="${url}" class="preview-image" alt="${fileName}">`;
+                } else if (PDF_EXTS.test(fileName)) {
+                    // PDF preview via the browser's built-in PDF viewer, no library needed
+                    const pdfBlob = blob.type === 'application/pdf' ? blob : blob.slice(0, blob.size, 'application/pdf');
+                    const url = URL.createObjectURL(pdfBlob);
+                    content.innerHTML = `<iframe src="${url}" class="preview-pdf" title="${fileName}"></iframe>`;
                 } else if (TEXT_EXTS.test(fileName)) {
                     // Text preview
                     let text = await blob.text();
@@ -558,7 +564,7 @@
                     nameCell = `<a href="${encodedEntryPath}" onclick="handleDirClick(event, '${encodedEntryPath}')">${entry.name}</a>`;
                 } else {
                     // Check if file is previewable
-                    const isPreviewable = IMAGE_EXTS.test(entry.name) || TEXT_EXTS.test(entry.name);
+                    const isPreviewable = IMAGE_EXTS.test(entry.name) || TEXT_EXTS.test(entry.name) || PDF_EXTS.test(entry.name);
                     if (isPreviewable) {
                         nameCell = `<a href="${encodedEntryPath}" target="${getFileTarget()}" onclick="if(event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) { previewFile('${encodedEntryPath}', '${entry.name}'); return false; }">${entry.name}</a>`;
                     } else {
@@ -1138,7 +1144,7 @@
                         const isKaraokeZip = /\.zip$/i.test(filename);
                         const isKfn = /\.kfn$/i.test(filename);
                         
-                        const isPreviewable = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|py|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql)$/i.test(filename);
+                        const isPreviewable = /\.(txt|log|csv|json|xml|yaml|yml|toml|ini|conf|config|env|md|py|js|go|java|c|cpp|h|py|hpp|sh|rb|php|ts|jsx|tsx|vue|css|html|sql|pdf)$/i.test(filename);
                         if (isVideo || isImage) {
                             checkFileExists(filePath, filename, isImage);
                         } else if (isNativeAudio) {
