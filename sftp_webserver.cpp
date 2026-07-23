@@ -1104,6 +1104,195 @@ static std::string url_decode(const std::string &str) {
 }
 
 // ============================================================================
+// Streaming ZIP creation for POST /api/mget — builds the archive with
+// miniz's callback-based writer so member files are compressed and written
+// straight out over the socket as HTTP chunks. Nothing beyond a small
+// in-flight buffer is ever held in memory, even for large/many-file zips.
+// ============================================================================
+
+// miniz write callback: wraps each chunk of zip output in HTTP chunked
+// framing ("<hex-size>\r\n<data>\r\n") and sends it immediately.
+struct ZipSocketWriteCtx {
+    int socket;
+    bool failed = false;
+};
+
+static size_t zip_socket_write_cb(void *pOpaque, mz_uint64 file_ofs, const void *pBuf, size_t n) {
+    (void)file_ofs;
+    ZipSocketWriteCtx *ctx = (ZipSocketWriteCtx *)pOpaque;
+    if (ctx->failed) return 0;
+
+    char size_line[32];
+    int size_line_len = snprintf(size_line, sizeof(size_line), "%zx\r\n", n);
+    if (socket_send_safe(ctx->socket, size_line, size_line_len) <= 0) { ctx->failed = true; return 0; }
+    if (n > 0 && socket_send_safe(ctx->socket, (const char *)pBuf, (int)n) <= 0) { ctx->failed = true; return 0; }
+    if (socket_send_safe(ctx->socket, "\r\n", 2) <= 0) { ctx->failed = true; return 0; }
+    return n;
+}
+
+// miniz read callback backed by a local FILE* (local filesystem mode).
+static size_t zip_local_read_cb(void *pOpaque, mz_uint64 file_ofs, void *pBuf, size_t n) {
+    FILE *f = (FILE *)pOpaque;
+#ifdef _WIN32
+    _fseeki64(f, (int64_t)file_ofs, SEEK_SET);
+#else
+    fseeko(f, (off_t)file_ofs, SEEK_SET);
+#endif
+    return fread(pBuf, 1, n, f);
+}
+
+// miniz read callback backed by an open SFTP handle. Reads happen
+// sequentially in practice (single-pass compression), so this only seeks
+// when miniz asks for an offset other than the one already reached.
+struct SftpZipReadCtx {
+    LIBSSH2_SFTP_HANDLE *handle;
+    LIBSSH2_SESSION *sess;
+    uint64_t pos = 0;
+};
+
+static size_t zip_sftp_read_cb(void *pOpaque, mz_uint64 file_ofs, void *pBuf, size_t n) {
+    SftpZipReadCtx *ctx = (SftpZipReadCtx *)pOpaque;
+    if (file_ofs != ctx->pos) {
+        SftpOp op(ctx->sess);
+        libssh2_sftp_seek64(ctx->handle, file_ofs);
+        ctx->pos = file_ofs;
+    }
+    size_t total = 0;
+    while (total < n) {
+        int r;
+        { SftpOp op(ctx->sess); r = libssh2_sftp_read(ctx->handle, (char *)pBuf + total, n - total); }
+        if (r <= 0) break;
+        total += (size_t)r;
+    }
+    ctx->pos += total;
+    return total;
+}
+
+// Just the filename portion of a path, used as the in-zip entry name so
+// mget'd files land flat in the archive rather than nested under their
+// full server-side path.
+static std::string zip_entry_name(const std::string &path) {
+    size_t slash = path.find_last_of('/');
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+// Parses {"files": ["...", "..."]} into decoded paths — same lightweight
+// scan the DELETE handler already uses for its "files" array.
+static std::vector<std::string> parse_files_array(const char *body) {
+    std::vector<std::string> out;
+    const char *files_ptr = body ? strstr(body, "\"files\":") : nullptr;
+    if (!files_ptr) return out;
+    files_ptr = strchr(files_ptr, '[');
+    while (files_ptr && *files_ptr && *files_ptr != ']') {
+        const char *path_start = strchr(files_ptr, '"');
+        if (!path_start) break;
+        path_start++;
+        const char *path_end = strchr(path_start, '"');
+        if (!path_end) break;
+        out.push_back(url_decode(std::string(path_start, path_end)));
+        files_ptr = path_end + 1;
+    }
+    return out;
+}
+
+// Chunked zip response headers, shared by local and SFTP mode.
+static bool send_mget_zip_headers(int client_socket) {
+    std::string response =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/zip\r\n"
+        "Content-Disposition: attachment; filename=\"download.zip\"\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    return socket_send_safe(client_socket, response.c_str(), (int)response.length()) > 0;
+}
+
+// Builds & streams the mget zip for local-filesystem mode.
+static void handle_mget_local(int client_socket, int tunnel_id, const std::vector<std::string> &requested) {
+    if (!send_mget_zip_headers(client_socket)) return;
+
+    ZipSocketWriteCtx write_ctx{ client_socket };
+    mz_zip_archive zip = {};
+    zip.m_pWrite = zip_socket_write_cb;
+    zip.m_pIO_opaque = &write_ctx;
+    mz_zip_writer_init(&zip, 0);
+
+    int added = 0;
+    for (const auto &req_path : requested) {
+        if (write_ctx.failed) break;
+        std::string fs_path;
+        if (!local_resolve_path(req_path, fs_path)) continue;
+
+        FILE *f = fopen(fs_path.c_str(), "rb");
+        if (!f) { SDL_Log("[Tunnel %d] mget: skip unreadable %s", tunnel_id, fs_path.c_str()); continue; }
+
+        struct stat st;
+        bool have_stat = (stat(fs_path.c_str(), &st) == 0);
+        uint64_t size = have_stat ? (uint64_t)st.st_size : 0;
+        std::string entry_name = zip_entry_name(req_path);
+
+        MZ_TIME_T mtime = have_stat ? (MZ_TIME_T)st.st_mtime : (MZ_TIME_T)0;
+        mz_bool ok = mz_zip_writer_add_read_buf_callback(
+            &zip, entry_name.c_str(), zip_local_read_cb, f, size,
+            have_stat ? &mtime : nullptr, nullptr, 0, MZ_DEFAULT_COMPRESSION, nullptr, 0, nullptr, 0);
+        fclose(f);
+        if (ok) added++;
+        else SDL_Log("[Tunnel %d] mget: failed to add %s to zip", tunnel_id, fs_path.c_str());
+    }
+
+    if (!write_ctx.failed) mz_zip_writer_finalize_archive(&zip);
+    mz_zip_writer_end(&zip);
+    if (!write_ctx.failed) socket_send_safe(client_socket, "0\r\n\r\n", 5);
+    SDL_Log("[Tunnel %d] mget (local): zipped %d/%zu file(s)", tunnel_id, added, requested.size());
+}
+
+// Builds & streams the mget zip for SFTP-backed remote mode.
+static void handle_mget_remote(int client_socket, int tunnel_id, LIBSSH2_SESSION *sess,
+                                LIBSSH2_SFTP *sftp, const std::vector<std::string> &requested) {
+    if (!send_mget_zip_headers(client_socket)) return;
+
+    ZipSocketWriteCtx write_ctx{ client_socket };
+    mz_zip_archive zip = {};
+    zip.m_pWrite = zip_socket_write_cb;
+    zip.m_pIO_opaque = &write_ctx;
+    mz_zip_writer_init(&zip, 0);
+
+    int added = 0;
+    for (const auto &req_path : requested) {
+        if (write_ctx.failed) break;
+
+        LIBSSH2_SFTP_ATTRIBUTES attrs;
+        LIBSSH2_SFTP_HANDLE *handle;
+        int stat_rc;
+        {
+            SftpOp op(sess);
+            stat_rc = libssh2_sftp_stat(sftp, req_path.c_str(), &attrs);
+            handle = libssh2_sftp_open(sftp, req_path.c_str(), LIBSSH2_FXF_READ, LIBSSH2_SFTP_S_IRUSR);
+        }
+        if (!handle) { SDL_Log("[Tunnel %d] mget: skip unreadable %s", tunnel_id, req_path.c_str()); continue; }
+
+        uint64_t size = (stat_rc == 0 && (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE)) ? attrs.filesize : 0;
+        bool have_mtime = (stat_rc == 0 && (attrs.flags & LIBSSH2_SFTP_ATTR_ACMODTIME));
+        std::string entry_name = zip_entry_name(req_path);
+        SftpZipReadCtx read_ctx{ handle, sess };
+
+        MZ_TIME_T mtime = have_mtime ? (MZ_TIME_T)attrs.mtime : (MZ_TIME_T)0;
+        mz_bool ok = mz_zip_writer_add_read_buf_callback(
+            &zip, entry_name.c_str(), zip_sftp_read_cb, &read_ctx, size,
+            have_mtime ? &mtime : nullptr, nullptr, 0, MZ_DEFAULT_COMPRESSION, nullptr, 0, nullptr, 0);
+
+        { SftpOp op(sess); libssh2_sftp_close_handle(handle); }
+        if (ok) added++;
+        else SDL_Log("[Tunnel %d] mget: failed to add %s to zip", tunnel_id, req_path.c_str());
+    }
+
+    if (!write_ctx.failed) mz_zip_writer_finalize_archive(&zip);
+    mz_zip_writer_end(&zip);
+    if (!write_ctx.failed) socket_send_safe(client_socket, "0\r\n\r\n", 5);
+    SDL_Log("[Tunnel %d] mget (remote): zipped %d/%zu file(s)", tunnel_id, added, requested.size());
+}
+
+// ============================================================================
 // HTTP Request Handler
 // ============================================================================
 
@@ -1328,6 +1517,16 @@ static void handle_http_request_local(int client_socket, int tunnel_id,
         std::string response = http_response_headers(200, "application/json", json.length());
         response += json;
         socket_send_safe(client_socket, response.c_str(), response.length());
+    }
+    else if (strcmp(method, "POST") == 0 && strstr(path, "/api/mget") != nullptr) {
+        char *body_start = strstr((char *)buffer, "\r\n\r\n");
+        if (!body_start) body_start = strstr((char *)buffer, "\n\n");
+        if (body_start && *body_start == '\n') body_start += 2;
+        else if (body_start) body_start += 4;
+        else body_start = (char *)buffer;
+
+        std::vector<std::string> requested = parse_files_array(body_start);
+        handle_mget_local(client_socket, tunnel_id, requested);
     }
     else {
         std::string response = http_response_headers(400, "text/plain", 18);
@@ -1809,6 +2008,15 @@ static void handle_http_request(int client_socket, int tunnel_id) {
                 }
             }
         }
+    }
+    else if (strcmp(method, "POST") == 0 && strstr(path, "/api/mget") != nullptr) {
+        char *body_start = strstr(buffer, "\r\n\r\n");
+        if (!body_start) body_start = strstr(buffer, "\n\n");
+        if (body_start && *body_start == '\n') body_start += 2;
+        else if (body_start) body_start += 4;
+
+        std::vector<std::string> requested = parse_files_array(body_start);
+        handle_mget_remote(client_socket, tunnel_id, sess, sftp, requested);
     }
     else if (strcmp(method, "POST") == 0 && strstr(path, "/api/listfiles") != nullptr) {
         char *body_start = strstr(buffer, "\r\n\r\n");

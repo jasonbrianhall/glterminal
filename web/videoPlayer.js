@@ -876,6 +876,35 @@
             return new RegExp(regex, 'i');
         }
 
+        // Sends the matched file list to /api/mget, which streams back a
+        // single chunked zip built on the fly server-side, and saves that
+        // zip as one download (instead of one fetch+link-click per file).
+        async function downloadFilesAsZip(files, logger) {
+            logger(`Requesting zip of ${files.length} file(s)...`);
+            try {
+                const response = await fetch('/api/mget', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ files: files.map(f => f.path) })
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+                link.download = `felixstargate-${stamp}.zip`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                logger(`Downloaded zip: ${files.length} file(s)`);
+            } catch (error) {
+                logger(`Error building zip: ${error.message}`);
+            }
+        }
+
         async function downloadMultipleFiles(files, logger) {
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
@@ -1080,8 +1109,7 @@
                             if (matchedFiles.length === 0) {
                                 addOutputLine('No files matched: ' + pattern);
                             } else {
-                                addOutputLine(`Downloading ${matchedFiles.length} file(s)...`);
-                                downloadMultipleFiles(matchedFiles, addOutputLine);
+                                downloadFilesAsZip(matchedFiles, addOutputLine);
                             }
                         } else {
                             addOutputLine('Error: cannot read directory');
