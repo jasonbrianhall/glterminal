@@ -1564,13 +1564,15 @@ int main(int argc, char **argv) {
                         SDL_Log("[WebServer] File browser stopped\n");
                     } else if (use_ssh && ssh_active()) {
                         if (sftp_webserver_start()) {
-                            SDL_Log("[WebServer] Remote file browser: http://localhost:%d\n",
-                                    sftp_webserver_get_port());
+                            std::string url = "http://localhost:" + std::to_string(sftp_webserver_get_port());
+                            SDL_Log("[WebServer] Remote file browser: %s\n", url.c_str());
+                            open_url(url);
                         }
                     } else {
                         if (sftp_webserver_start_local("/")) {
-                            SDL_Log("[WebServer] Local file browser: http://localhost:%d\n",
-                                    sftp_webserver_get_port());
+                            std::string url = "http://localhost:" + std::to_string(sftp_webserver_get_port());
+                            SDL_Log("[WebServer] Local file browser: %s\n", url.c_str());
+                            open_url(url);
                         }
                     }
                     break;
