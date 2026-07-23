@@ -108,6 +108,10 @@ static inline void term_clear_dirty(Terminal *t) {
 // ============================================================================
 
 void term_init(Terminal *t);
+// RIS (ESC c) and the UI "Reset" action: clears the screen/attributes back
+// to defaults WITHOUT touching pty_fd/child or reallocating at the wrong
+// size — unlike term_init(), which is for first-time setup only.
+void term_soft_reset(Terminal *t);
 void term_resize(Terminal *t, int win_w, int win_h);
 void term_set_font_size(Terminal *t, int new_size, int win_w, int win_h);
 void term_update_cell_dims(Terminal *t);  // Update cell dimensions without resizing grid

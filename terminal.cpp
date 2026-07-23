@@ -390,8 +390,9 @@ void term_feed(Terminal *t, const char *data, int size) {
             } else if (ch == 'W') {
                 t->state = PS_SOS;
             } else if (ch == 'c') {
-                // RIS — reset terminal
-                term_init(t);
+                // RIS — reset terminal (do NOT call term_init here: that
+                // wipes pty_fd/child and kills the live shell connection)
+                term_soft_reset(t);
                 t->state = PS_NORMAL;
             } else if (ch == 'M') {
                 // RI — reverse index (move up)
@@ -579,6 +580,56 @@ void term_init(Terminal *t) {
 
     term_dirty_all(t);
     //SDL_Log("[Term] init: %dx%d cells %.0fx%.0f px\n", t->cols, t->rows, t->cell_w, t->cell_h);
+}
+
+// Real terminal reset (RIS / the UI "Reset" action) — clears the grid and
+// puts attributes/modes back to defaults, but does NOT touch pty_fd/child
+// (the shell is still alive and connected) and does NOT resize the grid to
+// the compiled-in default. term_init() is for first-time construction only;
+// reusing it here previously clobbered pty_fd to -1, which silently killed
+// all keyboard input after hitting Reset.
+void term_soft_reset(Terminal *t) {
+    for (int i = 0; i < t->cols * t->rows; i++)
+        t->cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+
+    if (t->alt_cells) {
+        free(t->alt_cells);
+        t->alt_cells = nullptr;
+    }
+    t->in_alt_screen = false;
+
+    t->cur_row = t->cur_col = 0;
+    t->cur_fg  = TCOLOR_PALETTE(7);
+    t->cur_bg  = TCOLOR_PALETTE(0);
+    t->cur_attrs = 0;
+
+    t->scroll_top = 0;
+    t->scroll_bot = t->rows - 1;
+
+    t->state    = PS_NORMAL;
+    t->csi_len  = 0;
+    t->osc_len  = 0;
+    t->apc_len  = 0;
+    t->apc_esc_pending = false;
+
+    t->cursor_on            = true;
+    t->cursor_blink_enabled = true;
+    t->autowrap             = true;
+    t->mouse_report         = false;
+    t->bracketed_paste      = false;
+    t->app_cursor_keys      = false;
+    t->mouse_sgr            = false;
+
+    t->saved7_row = t->saved7_col = 0;
+    t->saved7_fg  = TCOLOR_PALETTE(7);
+    t->saved7_bg  = TCOLOR_PALETTE(0);
+    t->saved7_attrs = 0;
+
+    t->sel_active = false;
+    t->sel_exists = false;
+    t->sb_offset  = 0;
+
+    term_dirty_all(t);
 }
 
 void term_free(Terminal *t) {

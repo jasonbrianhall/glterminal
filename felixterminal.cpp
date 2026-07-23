@@ -1853,12 +1853,8 @@ int main(int argc, char **argv) {
                             case MENU_ID_COPY_ANSI: g_menu_copy_pending = true; term_copy_selection_ansi(&term); break;
                             case MENU_ID_PASTE:     term_paste(&term); break;
                             case MENU_ID_RESET:
-                                for(int row=0;row<term.rows;row++)
-                                    for(int col=0;col<term.cols;col++)
-                                        CELL(&term,row,col)={' ',TCOLOR_PALETTE(7),TCOLOR_PALETTE(0),0,{0,0,0}};
-                                term.cur_row=term.cur_col=0;
-                                term.scroll_top=0; term.scroll_bot=term.rows-1;
-                                term.state=PS_NORMAL;
+                                term_soft_reset(&term);
+                                needs_render = true;
 #ifdef WIN32
                                 TERM_WRITE("cls\r\n",5);
 #else
