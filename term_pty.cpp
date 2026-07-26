@@ -1,3 +1,4 @@
+#ifndef _WIN32
 #include "term_pty.h"
 
 #include <SDL2/SDL.h>
@@ -87,3 +88,4 @@ void term_write(Terminal *t, const char *s, int n) {
     if (g_term_write_override) { g_term_write_override(t, s, n); return; }
     if (t->pty_fd >= 0) { ssize_t r = write(t->pty_fd, s, n); (void)r; }
 }
+#endif

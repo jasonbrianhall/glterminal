@@ -1,3 +1,4 @@
+#ifdef _WIN32
 #include "term_pty.h"
 #include "terminal.h"
 
@@ -192,3 +193,4 @@ void term_pty_resize(int cols, int rows) {
     COORD size = { (SHORT)cols, (SHORT)rows };
     ResizePseudoConsole(s_hPC, size);
 }
+#endif
