@@ -2085,7 +2085,7 @@ static void webserver_thread_func() {
     }
 #endif
 
-    g_listen_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    g_listen_socket = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
     if (g_listen_socket == INVALID_SOCKET) {
         SDL_Log("[WebServer] socket() failed: %s", strerror(errno));
         return;
@@ -2094,12 +2094,25 @@ static void webserver_thread_func() {
     int reuse = 1;
     setsockopt(g_listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
 
-    struct sockaddr_in addr;
+    // Dual-stack: accept IPv4 connections on the same IPv6 socket (Linux/BSD
+    // default to v6-only unless told otherwise; Windows defaults to dual-stack
+    // already, but we set this explicitly either way).
+    int v6only = 0;
+    setsockopt(g_listen_socket, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&v6only, sizeof(v6only));
+
+    struct sockaddr_in6 addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    
+    addr.sin6_family = AF_INET6;
+
+    // Accept plain IPv4 bind addresses (e.g. "0.0.0.0", "127.0.0.1") by
+    // mapping them into IPv6 form, since the listen socket is now AF_INET6.
+    std::string bind_str = g_webserver_bind_addr;
+    if (bind_str.find(':') == std::string::npos) {
+        bind_str = (bind_str == "0.0.0.0") ? "::" : ("::ffff:" + bind_str);
+    }
+
     // Parse bind address
-    if (inet_pton(AF_INET, g_webserver_bind_addr.c_str(), &addr.sin_addr) <= 0) {
+    if (inet_pton(AF_INET6, bind_str.c_str(), &addr.sin6_addr) <= 0) {
         SDL_Log("[WebServer] Invalid bind address: %s", g_webserver_bind_addr.c_str());
         closesocket(g_listen_socket);
         return;
@@ -2111,7 +2124,7 @@ static void webserver_thread_func() {
     int max_attempts = g_webserver_use_auto_port ? 100 : 1;
     
     for (int attempt = 0; attempt < max_attempts; attempt++) {
-        addr.sin_port = htons(port);
+        addr.sin6_port = htons(port);
         bind_result = bind(g_listen_socket, (struct sockaddr *)&addr, sizeof(addr));
         if (bind_result == 0) {
             g_webserver_port = port;  // Store the port we're using
@@ -2154,7 +2167,7 @@ static void webserver_thread_func() {
     SDL_Log("[WebServer] Listening on %s:%d", g_webserver_bind_addr.c_str(), g_webserver_port);
 
     while (!g_webserver_should_exit.load()) {
-        struct sockaddr_in client_addr;
+        struct sockaddr_in6 client_addr;
         memset(&client_addr, 0, sizeof(client_addr));
         socklen_t addr_len = sizeof(client_addr);
 
