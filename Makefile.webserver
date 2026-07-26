@@ -26,6 +26,22 @@ LDFLAGS  := $(SDL2_LIBS) $(SSH2_LIBS) $(FFMPEG_LIBS) -lssl -lcrypto -lpng -lz -l
             -s -Wl,--gc-sections -flto
 
 # ============================================================================
+# DEBUG FLAGS  (ASan + UBSan, matching the felixterminal Makefile's `debug` build)
+# -O0 -g keeps symbols/line info intact; -fno-omit-frame-pointer + -rdynamic
+# keep stack traces readable; sanitizers abort on first error (no -recover).
+# ============================================================================
+CXXFLAGS_DEBUG := -Wall -Wextra -std=c++17 -DDONTUSEGMP -DLINUX -DUSESSH -Dwebserver -DDEBUG \
+                   $(SDL2_CFLAGS) $(SSH2_CFLAGS) $(FFMPEG_CFLAGS) \
+                   -g -O0 -fno-omit-frame-pointer \
+                   -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=address,undefined
+
+CFLAGS_DEBUG   := -Wall -Wextra -DDEBUG -g -O0 -fno-omit-frame-pointer \
+                   -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=address,undefined
+
+LDFLAGS_DEBUG  := $(SDL2_LIBS) $(SSH2_LIBS) $(FFMPEG_LIBS) -lssl -lcrypto -lpng -lz -lm -pthread -lstdc++ \
+                   -fsanitize=address -fsanitize=undefined -rdynamic
+
+# ============================================================================
 # SOURCES
 # felixwebserver.cpp + sftp_webserver.cpp, plus everything they actually pull
 # in: terminal.cpp (term_feed / g_term_write_override, needed by
@@ -44,13 +60,17 @@ SRCS_CPP := felixwebserver.cpp   sftp_webserver.cpp    \
 SRCS_C   := felixchirp/miniz.c felixchirp/miniz_tdef.c \
             felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c
 
-BUILD_DIR := build/webserver
-OBJECTS   := $(addprefix $(BUILD_DIR)/, $(SRCS_CPP:.cpp=.o)) \
-             $(addprefix $(BUILD_DIR)/, $(SRCS_C:.c=.o))
+BUILD_DIR       := build/webserver
+BUILD_DIR_DEBUG := build/webserver_debug
+OBJECTS         := $(addprefix $(BUILD_DIR)/, $(SRCS_CPP:.cpp=.o)) \
+                   $(addprefix $(BUILD_DIR)/, $(SRCS_C:.c=.o))
+OBJECTS_DEBUG   := $(addprefix $(BUILD_DIR_DEBUG)/, $(SRCS_CPP:.cpp=.debug.o)) \
+                   $(addprefix $(BUILD_DIR_DEBUG)/, $(SRCS_C:.c=.debug.o))
 
-TARGET := flt_webserver
+TARGET       := flt_webserver
+TARGET_DEBUG := flt_webserver_debug
 
-$(shell mkdir -p $(BUILD_DIR)/felixchirp)
+$(shell mkdir -p $(BUILD_DIR)/felixchirp $(BUILD_DIR_DEBUG)/felixchirp)
 
 # ============================================================================
 # EMBEDDED WEB ASSETS
@@ -94,14 +114,21 @@ index.hpp: $(WEB_ASSETS)
 # ============================================================================
 # BUILD
 # ============================================================================
-.PHONY: all clean
+.PHONY: all debug clean
 
 all: $(TARGET)
+
+debug: $(TARGET_DEBUG)
 
 $(TARGET): index.hpp $(OBJECTS)
 	@echo "Linking: $@"
 	$(CXX) $(CXXFLAGS) $(OBJECTS) -o $@ $(LDFLAGS)
 	@echo "✓ $@"
+
+$(TARGET_DEBUG): index.hpp $(OBJECTS_DEBUG)
+	@echo "Linking (debug, ASan+UBSan): $@"
+	$(CXX) $(CXXFLAGS_DEBUG) $(OBJECTS_DEBUG) -o $@ $(LDFLAGS_DEBUG)
+	@echo "✓ $@  (run directly, or under gdb, for symbolized ASan traces)"
 
 $(BUILD_DIR)/%.o: %.cpp | index.hpp
 	@mkdir -p $(dir $@)
@@ -113,7 +140,18 @@ $(BUILD_DIR)/%.o: %.c | index.hpp
 	@echo "Compiling C: $<"
 	$(CC) $(CFLAGS_COMMON) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR_DEBUG)/%.debug.o: %.cpp | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Debug): $<"
+	$(CXX) $(CXXFLAGS_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_DEBUG)/%.debug.o: %.c | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Debug): $<"
+	$(CC) $(CFLAGS_DEBUG) -MMD -MP -c $< -o $@
+
 -include $(OBJECTS:.o=.d)
+-include $(OBJECTS_DEBUG:.o=.d)
 
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) $(ASSET_HEADERS)
+	rm -rf $(BUILD_DIR) $(BUILD_DIR_DEBUG) $(TARGET) $(TARGET_DEBUG) $(ASSET_HEADERS)
