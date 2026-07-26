@@ -1,7 +1,3 @@
-// Standalone entry point — only compiled when -Dwebserver is passed, so this
-// doesn't collide with the real app's main() when linked into the full build.
-#ifdef webserver
-
 #include "sftp_webserver.h"
 #include <SDL2/SDL.h>
 #include <cstdio>
@@ -290,4 +286,3 @@ int main(int argc, char **argv) {
     return run_server(root_dir, bind_addr, port, nullptr, -1);
 }
 
-#endif // webserver
