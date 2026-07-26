@@ -90,11 +90,11 @@ CFLAGS_WIN_DEBUG     = $(CFLAGS_BASE) -DWIN32 -D_WIN32 -DDEBUG -g -O0
 # Media Foundation on Windows (matching the felixterminal Makefile).
 # ============================================================================
 SRCS_CPP_COMMON := felixwebserver.cpp   sftp_webserver.cpp    \
-                   ssh_session.cpp      terminal.cpp          \
                    midi_render.cpp      dbopl.cpp             \
                    dbopl_wrapper.cpp    instruments.cpp       \
                    voc_render.cpp       au_render.cpp         \
-                   aiff_render.cpp
+                   aiff_render.cpp      ssh_session.cpp
+
 
 SRCS_CPP_LINUX := $(SRCS_CPP_COMMON) convertm4atowavlin.cpp
 SRCS_CPP_WIN   := $(SRCS_CPP_COMMON) convertm4atowavwin.cpp
