@@ -12,10 +12,14 @@
 #include <csignal>
 #include <cctype>
 #include <string>
+#ifndef _WIN32
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#else
+#include <windows.h>
+#endif
 
 static volatile bool g_running = true;
 static void handle_signal(int) { g_running = false; }
@@ -78,6 +82,7 @@ static bool parse_listen_spec(const char *spec, std::string &host_out, int &port
     return true;
 }
 
+#ifndef _WIN32
 static int stop_daemon(const char *pidfile) {
     FILE *f = fopen(pidfile, "r");
     if (!f) { fprintf(stderr, "No pidfile at %s\n", pidfile); return 1; }
@@ -90,6 +95,7 @@ static int stop_daemon(const char *pidfile) {
     remove(pidfile);
     return 0;
 }
+#endif
 
 // Runs the server loop in the calling process. Used directly in foreground
 // mode, and inside the grandchild once daemonized.
@@ -101,11 +107,15 @@ static int run_server(const char *root_dir, const char *bind_addr, int port,
 
     bool ok = sftp_webserver_start_local(root_dir, bind_addr, port);
 
+#ifndef _WIN32
     if (report_fd >= 0) {
         char status = ok ? 1 : 0;
         write(report_fd, &status, 1);
         close(report_fd);
     }
+#else
+    (void)report_fd;
+#endif
 
     if (!ok) {
         fprintf(stderr, "Failed to start web server on %s:%d\n", bind_addr, port);
@@ -126,6 +136,7 @@ static int run_server(const char *root_dir, const char *bind_addr, int port,
     return 0;
 }
 
+#ifndef _WIN32
 // Double-fork daemonize that blocks the ORIGINAL invocation until the
 // grandchild has actually attempted the bind, so failures (e.g. port already
 // in use) are reported on the terminal immediately instead of only showing
@@ -177,6 +188,7 @@ static int daemonize_and_run(const char *pidfile, const char *logfile,
     int rc = run_server(root_dir, bind_addr, port, pidfile, pipefd[1]);
     _exit(rc);
 }
+#endif // !_WIN32
 
 int main(int argc, char **argv) {
     const char *root_dir  = "/";
@@ -237,12 +249,18 @@ int main(int argc, char **argv) {
     }
 
     if (stop_mode) {
+#ifndef _WIN32
         return stop_daemon(pidfile);
+#else
+        fprintf(stderr, "--stop is not supported on Windows.\n");
+        return 1;
+#endif
     }
 
     // Resolve root_dir to an absolute path BEFORE daemonizing — daemonizing
     // chdir()s to "/", so a relative path like "." would otherwise end up
     // serving the wrong directory.
+#ifndef _WIN32
     char resolved_root[PATH_MAX];
     if (realpath(root_dir, resolved_root)) {
         root_dir = resolved_root;
@@ -250,9 +268,23 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Warning: could not resolve '%s' (%s); using as-is\n",
                 root_dir, strerror(errno));
     }
+#else
+    static char resolved_root[MAX_PATH];
+    if (_fullpath(resolved_root, root_dir, MAX_PATH)) {
+        root_dir = resolved_root;
+    } else {
+        fprintf(stderr, "Warning: could not resolve '%s'; using as-is\n", root_dir);
+    }
+#endif
 
     if (daemon_mode) {
+#ifndef _WIN32
         return daemonize_and_run(pidfile, logfile, root_dir, bind_addr, port);
+#else
+        fprintf(stderr, "-D/--daemon is not supported on Windows; run in the foreground "
+                        "(e.g. via NSSM or a Scheduled Task if you need it backgrounded).\n");
+        return 1;
+#endif
     }
 
     return run_server(root_dir, bind_addr, port, nullptr, -1);

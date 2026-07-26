@@ -1,29 +1,84 @@
 # Felix Webserver — standalone build
 # Builds ONLY flt_webserver (not the full felixterminal app). Reuses the same
 # flags/dependency-detection conventions as the felixterminal Makefile.
+#
+#   make               - Linux release       -> flt_webserver
+#   make debug         - Linux debug (ASan+UBSan, -g -O0) -> flt_webserver_debug
+#   make windows       - Windows cross-compile release    -> flt_webserver.exe
+#   make windows-debug - Windows cross-compile debug       -> flt_webserver_debug.exe
+#   make clean         - remove all build output
+#
+# Debug notes:
+#   flt_webserver_debug is built with AddressSanitizer + UndefinedBehaviorSanitizer
+#   (-fsanitize=address,undefined, -fno-sanitize-recover, -fno-omit-frame-pointer,
+#   -g -O0, -rdynamic) so it will abort with a symbolized stack trace on memory
+#   errors (leaks, use-after-free, heap/stack overflow, UB) instead of silently
+#   corrupting state. Run it exactly like the release binary:
+#     ./flt_webserver_debug --root /srv/files --listen :53716
+#   ASan reports leaks automatically at exit; set ASAN_OPTIONS=detect_leaks=1
+#   explicitly if your distro's default disables it.
+#   Windows debug (mingw) is -g -O0 only — mingw's sanitizer support is too
+#   unreliable to depend on, matching the felixterminal Makefile's own choice.
 
-CXX := g++
-CC  := gcc
-PKG_CONFIG := pkg-config
+CXX_LINUX := g++
+CC_LINUX  := gcc
+CXX_WIN   := x86_64-w64-mingw32-g++
+CC_WIN    := x86_64-w64-mingw32-gcc
 
-CXXFLAGS_COMMON := -Wall -Wextra -std=c++17 -O2 -ffunction-sections -fdata-sections -flto \
-                    -DDONTUSEGMP -DLINUX -DUSESSH -Dwebserver
-CFLAGS_COMMON   := -Wall -Wextra -O2
+PKG_CONFIG_LINUX := pkg-config
+PKG_CONFIG_WIN   := mingw64-pkg-config
 
-SDL2_CFLAGS   := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null || echo "")
-SDL2_LIBS     := $(shell $(PKG_CONFIG) --libs   sdl2 2>/dev/null || echo "-lSDL2")
+CXXFLAGS_BASE := -Wall -Wextra -std=c++17 -DDONTUSEGMP -DUSESSH -Dwebserver
+CFLAGS_BASE   := -Wall -Wextra
 
-SSH2_CFLAGS   := $(shell $(PKG_CONFIG) --cflags libssh2 2>/dev/null || echo "")
-SSH2_LIBS     := $(shell $(PKG_CONFIG) --libs   libssh2 2>/dev/null || echo "-lssh2")
+# ---- SDL2 ----
+SDL2_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags sdl2 2>/dev/null || echo "")
+SDL2_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   sdl2 2>/dev/null || echo "-lSDL2")
+SDL2_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags sdl2 2>/dev/null || echo "")
+SDL2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   sdl2 2>/dev/null || echo "-lSDL2")
 
-FFMPEG_CFLAGS := $(shell $(PKG_CONFIG) --cflags libavformat libavcodec libavutil libswresample 2>/dev/null || echo "")
-FFMPEG_LIBS   := $(shell $(PKG_CONFIG) --libs   libavformat libavcodec libavutil libswresample 2>/dev/null || echo "-lavformat -lavcodec -lavutil -lswresample")
+# ---- libssh2 ----
+SSH2_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags libssh2 2>/dev/null || echo "")
+SSH2_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libssh2 2>/dev/null || echo "-lssh2")
+SSH2_CFLAGS_WIN   := $(shell $(PKG_CONFIG_WIN) --cflags libssh2 2>/dev/null || echo "")
+SSH2_LIBS_WIN     := $(shell $(PKG_CONFIG_WIN) --libs   libssh2 2>/dev/null || echo "-lssh2")
+
+# ---- ffmpeg (Linux-only M4A conversion path — Windows uses Media Foundation instead) ----
+FFMPEG_CFLAGS_LINUX := $(shell $(PKG_CONFIG_LINUX) --cflags libavformat libavcodec libavutil libswresample 2>/dev/null || echo "")
+FFMPEG_LIBS_LINUX   := $(shell $(PKG_CONFIG_LINUX) --libs   libavformat libavcodec libavutil libswresample 2>/dev/null || echo "-lavformat -lavcodec -lavutil -lswresample")
 
 .DEFAULT_GOAL := all
 
-CXXFLAGS := $(CXXFLAGS_COMMON) $(SDL2_CFLAGS) $(SSH2_CFLAGS) $(FFMPEG_CFLAGS)
-LDFLAGS  := $(SDL2_LIBS) $(SSH2_LIBS) $(FFMPEG_LIBS) -lssl -lcrypto -lpng -lz -lm -pthread -lstdc++ \
-            -s -Wl,--gc-sections -flto
+# ============================================================================
+# FLAGS PER BUILD
+# ============================================================================
+CXXFLAGS_LINUX       = $(CXXFLAGS_BASE) $(SDL2_CFLAGS_LINUX) $(SSH2_CFLAGS_LINUX) $(FFMPEG_CFLAGS_LINUX) \
+                       -DLINUX -O2 -ffunction-sections -fdata-sections -flto
+LDFLAGS_LINUX        = $(SDL2_LIBS_LINUX) $(SSH2_LIBS_LINUX) $(FFMPEG_LIBS_LINUX) -lssl -lcrypto -lm -pthread -lstdc++ \
+                       -s -Wl,--gc-sections -flto
+
+CXXFLAGS_LINUX_DEBUG = $(CXXFLAGS_BASE) $(SDL2_CFLAGS_LINUX) $(SSH2_CFLAGS_LINUX) $(FFMPEG_CFLAGS_LINUX) \
+                       -DLINUX -DDEBUG -g -O0 -fno-omit-frame-pointer \
+                       -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=address,undefined
+LDFLAGS_LINUX_DEBUG  = $(SDL2_LIBS_LINUX) $(SSH2_LIBS_LINUX) $(FFMPEG_LIBS_LINUX) -lssl -lcrypto -lm -pthread -lstdc++ \
+                       -fsanitize=address -fsanitize=undefined -rdynamic
+
+CXXFLAGS_WIN         = $(CXXFLAGS_BASE) $(SDL2_CFLAGS_WIN) $(SSH2_CFLAGS_WIN) \
+                       -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 -O2 -ffunction-sections -fdata-sections -flto
+LDFLAGS_WIN          = $(SDL2_LIBS_WIN) $(SSH2_LIBS_WIN) -lssl -lcrypto -lws2_32 \
+                       -lmf -lmfplat -lmfreadwrite -lmfuuid -lole32 -loleaut32 \
+                       -s -Wl,--gc-sections -flto
+
+CXXFLAGS_WIN_DEBUG   = $(CXXFLAGS_BASE) $(SDL2_CFLAGS_WIN) $(SSH2_CFLAGS_WIN) \
+                       -DWIN32 -D_WIN32 -D_WIN32_WINNT=0x0A00 -DDEBUG -g -O0
+LDFLAGS_WIN_DEBUG    = $(SDL2_LIBS_WIN) $(SSH2_LIBS_WIN) -lssl -lcrypto -lws2_32 \
+                       -lmf -lmfplat -lmfreadwrite -lmfuuid -lole32 -loleaut32
+
+CFLAGS_LINUX         = $(CFLAGS_BASE) -DLINUX -O2
+CFLAGS_LINUX_DEBUG   = $(CFLAGS_BASE) -DLINUX -DDEBUG -g -O0 -fno-omit-frame-pointer \
+                       -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=address,undefined
+CFLAGS_WIN           = $(CFLAGS_BASE) -DWIN32 -D_WIN32 -O2
+CFLAGS_WIN_DEBUG     = $(CFLAGS_BASE) -DWIN32 -D_WIN32 -DDEBUG -g -O0
 
 # ============================================================================
 # SOURCES
@@ -31,26 +86,43 @@ LDFLAGS  := $(SDL2_LIBS) $(SSH2_LIBS) $(FFMPEG_LIBS) -lssl -lcrypto -lpng -lz -l
 # in: terminal.cpp (term_feed / g_term_write_override, needed by
 # ssh_session.cpp), the audio-render/convert helpers sftp_webserver.cpp calls
 # when streaming MIDI/VOC/AU/AIFF/M4A over HTTP, and miniz for on-the-fly
-# zip download.
+# zip download. M4A conversion is platform-specific: ffmpeg on Linux,
+# Media Foundation on Windows (matching the felixterminal Makefile).
 # ============================================================================
-SRCS_CPP := felixwebserver.cpp   sftp_webserver.cpp    \
-            midi_render.cpp      dbopl.cpp             \
-            dbopl_wrapper.cpp    instruments.cpp       \
-            voc_render.cpp       au_render.cpp         \
-            aiff_render.cpp      convertm4atowavlin.cpp \
-            ssh_session.cpp      
+SRCS_CPP_COMMON := felixwebserver.cpp   sftp_webserver.cpp    \
+                   ssh_session.cpp      terminal.cpp          \
+                   midi_render.cpp      dbopl.cpp             \
+                   dbopl_wrapper.cpp    instruments.cpp       \
+                   voc_render.cpp       au_render.cpp         \
+                   aiff_render.cpp
 
+SRCS_CPP_LINUX := $(SRCS_CPP_COMMON) convertm4atowavlin.cpp
+SRCS_CPP_WIN   := $(SRCS_CPP_COMMON) convertm4atowavwin.cpp
 
-SRCS_C   := felixchirp/miniz.c felixchirp/miniz_tdef.c \
-            felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c
+SRCS_C := felixchirp/miniz.c felixchirp/miniz_tdef.c \
+          felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c
 
-BUILD_DIR := build/webserver
-OBJECTS   := $(addprefix $(BUILD_DIR)/, $(SRCS_CPP:.cpp=.o)) \
-             $(addprefix $(BUILD_DIR)/, $(SRCS_C:.c=.o))
+TARGET_LINUX       := flt_webserver
+TARGET_LINUX_DEBUG := flt_webserver_debug
+TARGET_WIN         := flt_webserver.exe
+TARGET_WIN_DEBUG   := flt_webserver_debug.exe
 
-TARGET := flt_webserver
+BUILD_DIR_LINUX       := build/webserver
+BUILD_DIR_LINUX_DEBUG := build/webserver_debug
+BUILD_DIR_WIN         := build/webserver_windows
+BUILD_DIR_WIN_DEBUG   := build/webserver_windows_debug
 
-$(shell mkdir -p $(BUILD_DIR)/felixchirp)
+OBJECTS_LINUX       := $(addprefix $(BUILD_DIR_LINUX)/,       $(SRCS_CPP_LINUX:.cpp=.o)) \
+                       $(addprefix $(BUILD_DIR_LINUX)/,       $(SRCS_C:.c=.o))
+OBJECTS_LINUX_DEBUG := $(addprefix $(BUILD_DIR_LINUX_DEBUG)/, $(SRCS_CPP_LINUX:.cpp=.o)) \
+                       $(addprefix $(BUILD_DIR_LINUX_DEBUG)/, $(SRCS_C:.c=.o))
+OBJECTS_WIN         := $(addprefix $(BUILD_DIR_WIN)/,         $(SRCS_CPP_WIN:.cpp=.o)) \
+                       $(addprefix $(BUILD_DIR_WIN)/,         $(SRCS_C:.c=.o))
+OBJECTS_WIN_DEBUG   := $(addprefix $(BUILD_DIR_WIN_DEBUG)/,   $(SRCS_CPP_WIN:.cpp=.o)) \
+                       $(addprefix $(BUILD_DIR_WIN_DEBUG)/,   $(SRCS_C:.c=.o))
+
+$(shell mkdir -p $(BUILD_DIR_LINUX)/felixchirp $(BUILD_DIR_LINUX_DEBUG)/felixchirp \
+                  $(BUILD_DIR_WIN)/felixchirp   $(BUILD_DIR_WIN_DEBUG)/felixchirp)
 
 # ============================================================================
 # EMBEDDED WEB ASSETS
@@ -92,28 +164,80 @@ index.hpp: $(WEB_ASSETS)
 	@echo "✓ Converted web assets"
 
 # ============================================================================
-# BUILD
+# TARGETS
 # ============================================================================
-.PHONY: all clean
+.PHONY: all linux debug windows windows-debug clean
 
-all: $(TARGET)
+all: linux
+linux: $(TARGET_LINUX)
+debug: $(TARGET_LINUX_DEBUG)
+windows: $(TARGET_WIN)
+windows-debug: $(TARGET_WIN_DEBUG)
 
-$(TARGET): index.hpp $(OBJECTS)
-	@echo "Linking: $@"
-	$(CXX) $(CXXFLAGS) $(OBJECTS) -o $@ $(LDFLAGS)
+$(TARGET_LINUX): index.hpp $(OBJECTS_LINUX)
+	@echo "Linking (Linux release): $@"
+	$(CXX_LINUX) $(CXXFLAGS_LINUX) $(OBJECTS_LINUX) -o $@ $(LDFLAGS_LINUX)
 	@echo "✓ $@"
 
-$(BUILD_DIR)/%.o: %.cpp | index.hpp
-	@mkdir -p $(dir $@)
-	@echo "Compiling: $<"
-	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+$(TARGET_LINUX_DEBUG): index.hpp $(OBJECTS_LINUX_DEBUG)
+	@echo "Linking (Linux debug, ASan+UBSan): $@"
+	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) $(OBJECTS_LINUX_DEBUG) -o $@ $(LDFLAGS_LINUX_DEBUG)
+	@echo "✓ $@"
 
-$(BUILD_DIR)/%.o: %.c | index.hpp
-	@mkdir -p $(dir $@)
-	@echo "Compiling C: $<"
-	$(CC) $(CFLAGS_COMMON) -MMD -MP -c $< -o $@
+$(TARGET_WIN): index.hpp $(OBJECTS_WIN)
+	@echo "Linking (Windows release): $@"
+	$(CXX_WIN) $(CXXFLAGS_WIN) $(OBJECTS_WIN) -o $@ $(LDFLAGS_WIN)
+	@echo "✓ $@"
 
--include $(OBJECTS:.o=.d)
+$(TARGET_WIN_DEBUG): index.hpp $(OBJECTS_WIN_DEBUG)
+	@echo "Linking (Windows debug): $@"
+	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) $(OBJECTS_WIN_DEBUG) -o $@ $(LDFLAGS_WIN_DEBUG)
+	@echo "✓ $@"
+
+$(BUILD_DIR_LINUX)/%.o: %.cpp | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Linux): $<"
+	$(CXX_LINUX) $(CXXFLAGS_LINUX) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_LINUX)/%.o: %.c | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Linux): $<"
+	$(CC_LINUX) $(CFLAGS_LINUX) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_LINUX_DEBUG)/%.o: %.cpp | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Linux debug): $<"
+	$(CXX_LINUX) $(CXXFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_LINUX_DEBUG)/%.o: %.c | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Linux debug): $<"
+	$(CC_LINUX) $(CFLAGS_LINUX_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN)/%.o: %.cpp | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Windows): $<"
+	$(CXX_WIN) $(CXXFLAGS_WIN) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN)/%.o: %.c | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Windows): $<"
+	$(CC_WIN) $(CFLAGS_WIN) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN_DEBUG)/%.o: %.cpp | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling (Windows debug): $<"
+	$(CXX_WIN) $(CXXFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR_WIN_DEBUG)/%.o: %.c | index.hpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling C (Windows debug): $<"
+	$(CC_WIN) $(CFLAGS_WIN_DEBUG) -MMD -MP -c $< -o $@
+
+-include $(OBJECTS_LINUX:.o=.d)
+-include $(OBJECTS_LINUX_DEBUG:.o=.d)
+-include $(OBJECTS_WIN:.o=.d)
+-include $(OBJECTS_WIN_DEBUG:.o=.d)
 
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) $(ASSET_HEADERS)
+	rm -rf build $(TARGET_LINUX) $(TARGET_LINUX_DEBUG) $(TARGET_WIN) $(TARGET_WIN_DEBUG) $(ASSET_HEADERS)
