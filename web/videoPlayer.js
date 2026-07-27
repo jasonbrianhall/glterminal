@@ -846,14 +846,53 @@
             return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
         }
 
+        function formatLongListing(entries, useHumanReadable = false) {
+            if (!entries || entries.length === 0) return '';
+            
+            // Calculate column widths
+            let maxSizeWidth = 10;
+            let maxNameWidth = 20;
+            let maxTypeWidth = 4;
+            
+            entries.forEach(entry => {
+                const size = useHumanReadable ? formatBytes(entry.size || 0) : String(entry.size || 0);
+                if (size.length > maxSizeWidth) maxSizeWidth = size.length;
+                if (entry.name.length > maxNameWidth) maxNameWidth = entry.name.length;
+            });
+            
+            // Format each entry
+            return entries.map(entry => {
+                const type = entry.type === 'directory' ? 'dir' : 'file';
+                const size = useHumanReadable ? formatBytes(entry.size || 0) : String(entry.size || 0);
+                const sizeStr = size.padStart(maxSizeWidth, ' ');
+                const name = entry.name + (entry.type === 'directory' ? '/' : '');
+                
+                // Format modified date if available
+                let dateStr = '';
+                if (entry.modified) {
+                    const date = new Date(entry.modified * 1000);
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const day = String(date.getDate()).padStart(2, '0');
+                    const year = date.getFullYear();
+                    const hours = String(date.getHours()).padStart(2, '0');
+                    const mins = String(date.getMinutes()).padStart(2, '0');
+                    dateStr = `${month}-${day} ${year} ${hours}:${mins}`;
+                }
+                
+                return `${type.padEnd(maxTypeWidth, ' ')} ${sizeStr}  ${dateStr}  ${name}`;
+            }).join('\n');
+        }
+
         function addOutputLine(text, isCommand = false) {
             const line = document.createElement('div');
             line.className = 'console-output-line';
             if (isCommand) {
                 line.classList.add('command');
                 line.textContent = '$ ' + text;
+                console.log('$ ' + text);
             } else {
                 line.textContent = text;
+                console.log(text);
             }
             consoleOutput.appendChild(line);
             consoleOutput.scrollTop = consoleOutput.scrollHeight;
@@ -961,7 +1000,104 @@
             return resolved;
         }
 
+        function parseLsArgs(args) {
+            const flags = {
+                longFormat: false,
+                humanReadable: false,
+                singleColumn: false,
+                showAll: false,
+                sortBySize: false,
+                sortByTime: false,
+                reverseSort: false,
+                recursive: false,
+                listDirsOnly: false
+            };
+            const patterns = [];
+            
+            console.log('parseLsArgs input:', args);
+            
+            for (let i = 0; i < args.length; i++) {
+                const arg = args[i];
+                console.log('  processing arg:', arg, 'starts with -?', arg.startsWith('-'));
+                
+                if (arg.startsWith('-') && arg !== '-') {
+                    // Parse flag characters
+                    for (let j = 1; j < arg.length; j++) {
+                        const flag = arg[j];
+                        console.log('    flag:', flag);
+                        if (flag === 'l') flags.longFormat = true;
+                        else if (flag === 'h') flags.humanReadable = true;
+                        else if (flag === '1') flags.singleColumn = true;
+                        else if (flag === 'a') flags.showAll = true;
+                        else if (flag === 'S') flags.sortBySize = true;
+                        else if (flag === 't') flags.sortByTime = true;
+                        else if (flag === 'r') flags.reverseSort = true;
+                        else if (flag === 'R') flags.recursive = true;
+                        else if (flag === 'd') flags.listDirsOnly = true;
+                    }
+                } else {
+                    patterns.push(arg);
+                    console.log('    added to patterns:', arg);
+                }
+            }
+            
+            // Don't auto-enable human readable - only use if -h is specified
+            
+            console.log('parseLsArgs result:', flags, 'patterns:', patterns);
+            return { flags, patterns };
+        }
+
+        function getPattern(patterns) {
+            return patterns.length > 0 ? patterns.join(' ') : '*';
+        }
+
+        function filterHiddenFiles(entries, showAll) {
+            console.log('filterHiddenFiles: entries=', entries.length, 'showAll=', showAll);
+            if (showAll) return entries;
+            const filtered = entries.filter(e => !e.name.startsWith('.'));
+            console.log('filterHiddenFiles result:', filtered.length);
+            return filtered;
+        }
+
+        function filterDirsOnly(entries) {
+            console.log('filterDirsOnly: entries=', entries.length);
+            return entries.filter(e => e.type === 'directory');
+        }
+
+        function sortEntries(entries, flags) {
+            console.log('sortEntries: entries=', entries.length, 'flags=', flags);
+            const sorted = [...entries];
+            sorted.sort((a, b) => {
+                let cmp = 0;
+                if (flags.sortBySize) {
+                    cmp = (a.size || 0) - (b.size || 0);
+                } else if (flags.sortByTime) {
+                    cmp = (a.modified || 0) - (b.modified || 0);
+                } else {
+                    cmp = a.name.localeCompare(b.name);
+                }
+                return flags.reverseSort ? -cmp : cmp;
+            });
+            console.log('sortEntries result:', sorted.length);
+            return sorted;
+        }
+
+        function formatOutput(entries, flags) {
+            entries.forEach(entry => {
+                if (flags.longFormat) {
+                    addOutputLine(formatLongListing([entry], flags.humanReadable));
+                } else if (flags.singleColumn) {
+                    addOutputLine(entry.name + (entry.type === 'directory' ? '/' : ''));
+                } else {
+                    const type = entry.type === 'directory' ? '/' : '';
+                    addOutputLine(entry.name + type);
+                }
+            });
+        }
+
         async function executeCommand(cmd) {
+            console.log('=== executeCommand called with:', cmd);
+            
             cmd = cmd.trim();
             if (!cmd) return;
 
@@ -1003,45 +1139,73 @@
             
             const command = parts[0];
             const args = parts.slice(1);
+            
+            console.log('executeCommand: command=', command, 'args=', JSON.stringify(args), 'parts=', JSON.stringify(parts));
 
             try {
                 if (command === 'pwd') {
                     addOutputLine(currentPath);
                 } else if (command === 'ls') {
-                    const pattern = args.join(' ') || '*';
+                    const { flags, patterns } = parseLsArgs(args);
+                    const pattern = getPattern(patterns);
                     let dir = currentPath;
                     let filename = pattern;
+                    
+                    console.log('LS: pattern=', pattern, 'currentPath=', currentPath);
                     
                     // Check if pattern contains a directory separator
                     if (pattern.includes('/')) {
                         let targetDir = pattern.substring(0, pattern.lastIndexOf('/'));
                         dir = pattern.startsWith('/') ? targetDir || '/' : currentPath + (currentPath.endsWith('/') ? '' : '/') + targetDir;
                         filename = pattern.substring(pattern.lastIndexOf('/') + 1);
+                    } else {
+                        filename = pattern;
                     }
                     
-                    // Normalize dir - remove trailing slash for consistency, then add it back for API call
+                    // Normalize dir
                     if (dir.endsWith('/') && dir !== '/') {
                         dir = dir.slice(0, -1);
                     }
                     const apiDir = dir.endsWith('/') ? dir : dir + '/';
+                    
+                    console.log('LS: apiDir=', apiDir, 'filename=', filename);
                     
                     const response = await fetch('/api/listfiles', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ dir: apiDir })
                     });
+                    
                     if (response.ok) {
                         const data = await response.json();
+                        console.log('LS: got entries:', data.entries ? data.entries.length : 0, data.entries);
+                        
                         if (data.entries && data.entries.length > 0) {
                             const regex = new RegExp('^' + filename.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
-                            const matches = data.entries.filter(e => regex.test(e.name)).sort((a, b) => a.name.localeCompare(b.name));
+                            console.log('LS: regex=', regex);
+                            
+                            let matches = data.entries.filter(e => {
+                                const test = regex.test(e.name);
+                                console.log('  testing', e.name, '=', test);
+                                return test;
+                            });
+                            
+                            console.log('LS: matches after regex:', matches.length, matches);
+                            
+                            // Apply filters
+                            matches = filterHiddenFiles(matches, flags.showAll);
+                            if (flags.listDirsOnly) {
+                                matches = filterDirsOnly(matches);
+                            }
+                            
+                            // Sort
+                            matches = sortEntries(matches, flags);
                             
                             if (matches.length === 0) {
                                 addOutputLine('(no matches)');
-                            } else if (matches.length === 1 && matches[0].type === 'directory') {
-                                // If single match is a directory, list its contents
+                            } else if (matches.length === 1 && matches[0].type === 'directory' && !flags.listDirsOnly) {
+                                // Single directory match - list its contents
                                 let subDir = dir + (dir.endsWith('/') ? '' : '/') + matches[0].name;
-                                // Normalize subDir - remove trailing slash for consistency, then add it back for API call
                                 if (subDir.endsWith('/')) {
                                     subDir = subDir.slice(0, -1);
                                 }
@@ -1051,23 +1215,84 @@
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ dir: apiSubDir })
                                 });
+                                
                                 if (subResponse.ok) {
                                     const subData = await subResponse.json();
                                     if (subData.entries && subData.entries.length > 0) {
-                                        const sorted = [...subData.entries].sort((a, b) => a.name.localeCompare(b.name));
-                                        sorted.forEach(entry => {
-                                            const type = entry.type === 'directory' ? '/' : '';
-                                            addOutputLine(entry.name + type);
-                                        });
+                                        let sorted = filterHiddenFiles(subData.entries, flags.showAll);
+                                        sorted = sortEntries(sorted, flags);
+                                        
+                                        if (flags.longFormat) {
+                                            addOutputLine(formatLongListing(sorted, flags.humanReadable));
+                                        } else {
+                                            formatOutput(sorted, flags);
+                                        }
+                                        
+                                        // Handle recursive
+                                        if (flags.recursive) {
+                                            for (const entry of sorted) {
+                                                if (entry.type === 'directory') {
+                                                    const recDir = apiSubDir + entry.name + '/';
+                                                    const recResponse = await fetch('/api/listfiles', {
+                                                        method: 'POST',
+                                                        headers: { 'Content-Type': 'application/json' },
+                                                        body: JSON.stringify({ dir: recDir })
+                                                    });
+                                                    if (recResponse.ok) {
+                                                        const recData = await recResponse.json();
+                                                        if (recData.entries && recData.entries.length > 0) {
+                                                            addOutputLine('');
+                                                            addOutputLine(recDir + ':');
+                                                            let recEntries = filterHiddenFiles(recData.entries, flags.showAll);
+                                                            recEntries = sortEntries(recEntries, flags);
+                                                            if (flags.longFormat) {
+                                                                addOutputLine(formatLongListing(recEntries, flags.humanReadable));
+                                                            } else {
+                                                                formatOutput(recEntries, flags);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     } else {
                                         addOutputLine('(empty directory)');
                                     }
                                 }
                             } else {
-                                matches.forEach(entry => {
-                                    const type = entry.type === 'directory' ? '/' : '';
-                                    addOutputLine(entry.name + type);
-                                });
+                                if (flags.longFormat) {
+                                    addOutputLine(formatLongListing(matches, flags.humanReadable));
+                                } else {
+                                    formatOutput(matches, flags);
+                                }
+                                
+                                // Handle recursive
+                                if (flags.recursive) {
+                                    for (const entry of matches) {
+                                        if (entry.type === 'directory') {
+                                            const recDir = apiDir + entry.name + '/';
+                                            const recResponse = await fetch('/api/listfiles', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ dir: recDir })
+                                            });
+                                            if (recResponse.ok) {
+                                                const recData = await recResponse.json();
+                                                if (recData.entries && recData.entries.length > 0) {
+                                                    addOutputLine('');
+                                                    addOutputLine(recDir + ':');
+                                                    let recEntries = filterHiddenFiles(recData.entries, flags.showAll);
+                                                    recEntries = sortEntries(recEntries, flags);
+                                                    if (flags.longFormat) {
+                                                        addOutputLine(formatLongListing(recEntries, flags.humanReadable));
+                                                    } else {
+                                                        formatOutput(recEntries, flags);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             addOutputLine('(empty directory)');
@@ -1252,18 +1477,22 @@
                     }
                 } else if (command === 'help') {
                     addOutputLine('Commands:');
-                    addOutputLine('  ls [dir]       - List directory contents (sorted)');
-                    addOutputLine('  pwd            - Print working directory');
-                    addOutputLine('  cd [dir]       - Change directory (cd .. to go up, cd ~ for home)');
-                    addOutputLine('  get <file>     - Download single file');
-                    addOutputLine('  mget <pattern> - Download multiple files (e.g., mget *.mp3)');
-                    addOutputLine('  play <file>    - Play or preview file (converts aiff, ra, midi, voc, mp2, and a few other formats)');
+                    addOutputLine('  ls [FLAGS] [dir]  - List directory contents');
+                    addOutputLine('    Flags: -l (long format), -h (human-readable), -1 (single column)');
+                    addOutputLine('           -a (show hidden), -S (sort by size), -t (sort by time)');
+                    addOutputLine('           -r (reverse), -R (recursive), -d (list dirs only)');
+                    addOutputLine('    Examples: ls -l, ls -lh, ls -la, ls -lS, ls -lhR folder/');
+                    addOutputLine('  pwd                - Print working directory');
+                    addOutputLine('  cd [dir]           - Change directory (cd .. to go up, cd ~ for home)');
+                    addOutputLine('  get <file>         - Download single file');
+                    addOutputLine('  mget <pattern>     - Download multiple files (e.g., mget *.mp3)');
+                    addOutputLine('  play <file>        - Play or preview file (converts aiff, ra, midi, voc, mp2, and a few other formats)');
                     addOutputLine('                       Images, text, and movies files open in an overlay; music is in-line');
                     addOutputLine('                       CD+G packs (.zip) and .kfn karaoke files open in the music overlay');
-                    addOutputLine('  info <file>    - Show file/directory info (size, type, modified date, file count)');
-                    addOutputLine('  help           - Show this help');
-                    addOutputLine('  clear          - Clear screen');
-                    addOutputLine('  exit, bye      - Close console');
+                    addOutputLine('  info <file>        - Show file/directory info (size, type, modified date, file count)');
+                    addOutputLine('  help               - Show this help');
+                    addOutputLine('  clear              - Clear screen');
+                    addOutputLine('  exit, bye          - Close console');
                 } else if (command === 'clear') {
                     consoleOutput.innerHTML = '';
                 } else if (command === 'exit' || command === 'bye') {
@@ -1282,6 +1511,7 @@
 
         consoleInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
+                console.log('!!! KEYPRESS ENTER, value:', consoleInput.value);
                 executeCommand(consoleInput.value);
             }
         });
