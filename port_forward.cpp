@@ -242,6 +242,13 @@ static void tunnel_pump(Tunnel *t) {
     }
 
     // Teardown
+    // Every exit path from the loop above lands here (clean local close,
+    // recv error, channel EOF, channel error, or an explicit stop request).
+    // Mark the tunnel stopped unconditionally so reap_tunnels() will join
+    // and free it — previously only the write-error path set this, which
+    // leaked a Tunnel + unjoined thread handle on every connection that
+    // ended via ordinary EOF (the common case).
+    t->stop.store(true);
     sock_close(t->local_fd);
     t->local_fd = -1;
 
