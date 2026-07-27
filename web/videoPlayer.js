@@ -891,6 +891,30 @@
         let homePath = '/';
         let commandHistory = [];
         let historyIndex = -1;
+        
+        // Load command history from localStorage
+        function loadCommandHistory() {
+            try {
+                const saved = localStorage.getItem('commandHistory');
+                if (saved) {
+                    commandHistory = JSON.parse(saved);
+                }
+            } catch (err) {
+                console.error('Error loading command history:', err);
+                commandHistory = [];
+            }
+        }
+        
+        // Save command history to localStorage
+        function saveCommandHistory() {
+            try {
+                localStorage.setItem('commandHistory', JSON.stringify(commandHistory));
+            } catch (err) {
+                console.error('Error saving command history:', err);
+            }
+        }
+        
+        loadCommandHistory();
 
         const consoleInput = document.getElementById('consoleInput');
         const consoleOutput = document.getElementById('consoleOutput');
@@ -1157,6 +1181,45 @@
             
             cmd = cmd.trim();
             if (!cmd) return;
+            
+            // Handle history expansion: !N or !-N
+            if (cmd.startsWith('!')) {
+                const historyMatch = cmd.match(/^!(-?\d+)(?:\s+|$)/);
+                if (historyMatch) {
+                    const indexArg = parseInt(historyMatch[1], 10);
+                    let historyCmd = null;
+                    
+                    if (indexArg >= 0) {
+                        // !50 = command at index 50 (0-based)
+                        if (indexArg < commandHistory.length) {
+                            historyCmd = commandHistory[indexArg];
+                        }
+                    } else {
+                        // !-1 = last command, !-2 = second to last, etc.
+                        const idx = commandHistory.length + indexArg;
+                        if (idx >= 0) {
+                            historyCmd = commandHistory[idx];
+                        }
+                    }
+                    
+                    if (!historyCmd) {
+                        addOutputLine(`Error: history index ${indexArg} not found (have ${commandHistory.length} commands)`);
+                        return;
+                    }
+                    
+                    // Replace !N with the actual command
+                    const rest = cmd.slice(historyMatch[0].length);
+                    cmd = historyCmd + (rest ? ' ' + rest : '');
+                } else if (cmd === '!') {
+                    // Show last command
+                    if (commandHistory.length > 0) {
+                        cmd = commandHistory[commandHistory.length - 1];
+                    } else {
+                        addOutputLine('Error: no history');
+                        return;
+                    }
+                }
+            }
 
             addOutputLine(cmd, true);
             
@@ -1165,6 +1228,7 @@
             if (commandHistory.length > 100) {
                 commandHistory.shift();
             }
+            saveCommandHistory();
             historyIndex = -1;
 
             // Parse command with support for quoted arguments
@@ -1547,9 +1611,26 @@
                     addOutputLine('                       Images, text, and movies files open in an overlay; music is in-line');
                     addOutputLine('                       CD+G packs (.zip) and .kfn karaoke files open in the music overlay');
                     addOutputLine('  info <file>        - Show file/directory info (size, type, modified date, file count)');
+                    addOutputLine('  history [N]        - Show last N commands (or all if no N)');
                     addOutputLine('  help               - Show this help');
                     addOutputLine('  clear              - Clear screen');
                     addOutputLine('  exit, bye          - Close console');
+                    addOutputLine('');
+                    addOutputLine('History expansion:');
+                    addOutputLine('  !50                - Run command at history index 50');
+                    addOutputLine('  !-1                - Run last command (! alone also works)');
+                    addOutputLine('  !-2                - Run second to last command');
+                    addOutputLine('  !50 arg1 arg2      - Run command 50 and append additional arguments');
+                } else if (command === 'history') {
+                    if (commandHistory.length === 0) {
+                        addOutputLine('(no history)');
+                    } else {
+                        const limit = args.length > 0 ? parseInt(args[0], 10) : commandHistory.length;
+                        const start = Math.max(0, commandHistory.length - limit);
+                        for (let i = start; i < commandHistory.length; i++) {
+                            addOutputLine(`${i}  ${commandHistory[i]}`);
+                        }
+                    }
                 } else if (command === 'clear') {
                     consoleOutput.innerHTML = '';
                 } else if (command === 'exit' || command === 'bye') {
