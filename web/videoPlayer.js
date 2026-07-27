@@ -769,6 +769,63 @@
             if (e.key === 'Escape' && previewModal.classList.contains('active')) {
                 closePreview();
             }
+            
+            // Add keyboard scrolling in preview modal
+            if (previewModal.classList.contains('active')) {
+                const previewContent = document.getElementById('previewContent');
+                if (!previewContent) return;
+                
+                // Check if there's a PDF iframe
+                const pdfIframe = previewContent.querySelector('iframe.preview-pdf');
+                
+                let scrollAmount = 0;
+                if (e.key === 'ArrowUp') {
+                    scrollAmount = -50;
+                    e.preventDefault();
+                } else if (e.key === 'ArrowDown') {
+                    scrollAmount = 50;
+                    e.preventDefault();
+                } else if (e.key === 'PageUp') {
+                    scrollAmount = -previewContent.clientHeight + 50;
+                    e.preventDefault();
+                } else if (e.key === 'PageDown') {
+                    scrollAmount = previewContent.clientHeight - 50;
+                    e.preventDefault();
+                } else if (e.key === 'Home') {
+                    if (pdfIframe) {
+                        // For PDF, send key event to iframe
+                        try {
+                            pdfIframe.contentWindow.postMessage({ type: 'keydown', key: 'Home' }, '*');
+                        } catch (err) {}
+                    } else {
+                        previewContent.scrollTop = 0;
+                    }
+                    e.preventDefault();
+                } else if (e.key === 'End') {
+                    if (pdfIframe) {
+                        try {
+                            pdfIframe.contentWindow.postMessage({ type: 'keydown', key: 'End' }, '*');
+                        } catch (err) {}
+                    } else {
+                        previewContent.scrollTop = previewContent.scrollHeight;
+                    }
+                    e.preventDefault();
+                }
+                
+                if (scrollAmount !== 0) {
+                    if (pdfIframe) {
+                        // Scroll the iframe itself
+                        try {
+                            pdfIframe.contentWindow.scrollBy(0, scrollAmount);
+                        } catch (err) {
+                            // Cross-origin iframe, fall back to scrolling container
+                            previewContent.scrollTop += scrollAmount;
+                        }
+                    } else {
+                        previewContent.scrollTop += scrollAmount;
+                    }
+                }
+            }
         });
 
         // Initialize Home button before loading files
