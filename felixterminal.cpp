@@ -378,6 +378,10 @@ int main(int argc, char **argv) {
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
     );
     g_sdl_window = window;
+    
+    // Enforce minimum window size: 20 character width + 4px padding
+    // Assuming ~8px average char width at default font size
+    SDL_SetWindowMinimumSize(window, 160 + 4, 60);
 
     // Set embedded window icon
     SDL_Surface *icon_surf = SDL_CreateRGBSurfaceFrom(
