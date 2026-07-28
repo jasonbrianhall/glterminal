@@ -658,34 +658,31 @@ void term_resize(Terminal *t, int win_w, int win_h) {
     if (new_rows < 2) new_rows = 2;
     if (new_cols > TERM_MAX_COLS) new_cols = TERM_MAX_COLS;
     if (new_rows > TERM_MAX_ROWS) new_rows = TERM_MAX_ROWS;
+    if (new_cols == t->cols && new_rows == t->rows) return;
 
-    // Only reallocate if expanding beyond current buffer size
-    bool need_realloc = (new_cols > t->cols) || (new_rows > t->rows);
-    
-    if (!need_realloc) {
-        // Just update PTY, keep buffer as-is
-        goto update_pty;
-    }
+    Cell *new_cells = (Cell*)malloc(sizeof(Cell) * new_cols * new_rows);
+    for (int i = 0; i < new_cols * new_rows; i++)
+        new_cells[i] = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
 
-    // Expanding: reallocate with new dimensions, copy old data
-    {
-        Cell *new_cells = (Cell*)malloc(sizeof(Cell) * new_cols * new_rows);
-        
-        // Fill with blanks first
-        for (int i = 0; i < new_cols * new_rows; i++)
-            new_cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
-        
-        // Copy old data, row by row
-        for (int r = 0; r < t->rows; r++)
-            memcpy(&new_cells[r * new_cols], &CELL(t, r, 0), t->cols * sizeof(Cell));
-        
-        free(t->cells);
-        t->cells = new_cells;
-        t->cols = new_cols;
-        t->rows = new_rows;
-    }
+    int copy_rows = (t->rows < new_rows) ? t->rows : new_rows;
+    int copy_cols = (t->cols < new_cols) ? t->cols : new_cols;
+    for (int r = 0; r < copy_rows; r++)
+        for (int c = 0; c < copy_cols; c++)
+            new_cells[r * new_cols + c] = CELL(t, r, c);
 
-update_pty:
+    free(t->cells);
+    t->cells = new_cells;
+
+    if (t->alt_cells) { free(t->alt_cells); t->alt_cells = nullptr; t->in_alt_screen = false; }
+
+    if (t->sb_buf) free(t->sb_buf);
+    t->sb_buf   = (Cell*)calloc(t->sb_cap * new_cols, sizeof(Cell));
+    t->sb_head  = 0; t->sb_count = 0; t->sb_offset = 0;
+    t->cols = new_cols; t->rows = new_rows;
+
+    if (t->cur_row >= t->rows) t->cur_row = t->rows - 1;
+    if (t->cur_col >= t->cols) t->cur_col = t->cols - 1;
+
 #ifndef _WIN32
     if (t->pty_fd >= 0) {
         struct winsize ws = {
@@ -700,8 +697,9 @@ update_pty:
     term_pty_resize(new_cols, new_rows);
 #endif
 
+    t->scroll_top = 0; t->scroll_bot = new_rows - 1;
     term_dirty_all(t);
-    SDL_Log("[Term] resized to %dx%d (buffer %dx%d)\n", new_cols, new_rows, t->cols, t->rows);
+    SDL_Log("[Term] resized to %dx%d\n", new_cols, new_rows);
 }
 
 // Update cell dimensions based on current g_font_size.
