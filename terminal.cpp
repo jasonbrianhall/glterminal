@@ -675,9 +675,32 @@ void term_resize(Terminal *t, int win_w, int win_h) {
 
     if (t->alt_cells) { free(t->alt_cells); t->alt_cells = nullptr; t->in_alt_screen = false; }
 
-    if (t->sb_buf) free(t->sb_buf);
-    t->sb_buf   = (Cell*)calloc(t->sb_cap * new_cols, sizeof(Cell));
-    t->sb_head  = 0; t->sb_count = 0; t->sb_offset = 0;
+    // Migrate scrollback buffer if column width changed
+    if (t->cols != new_cols && t->sb_count > 0) {
+        Cell *new_sb = (Cell*)calloc(t->sb_cap * new_cols, sizeof(Cell));
+        int old_cols = t->cols;
+        
+        // Copy each row from old buffer to new buffer
+        for (int i = 0; i < t->sb_count; i++) {
+            int old_slot = (t->sb_head + i) % t->sb_cap;
+            int new_slot = (t->sb_head + i) % t->sb_cap;
+            Cell *old_row = t->sb_buf + old_slot * old_cols;
+            Cell *new_row = new_sb + new_slot * new_cols;
+            
+            int copy_cols = (old_cols < new_cols) ? old_cols : new_cols;
+            memcpy(new_row, old_row, copy_cols * sizeof(Cell));
+            
+            // Pad with blanks if expanding
+            if (new_cols > old_cols) {
+                for (int c = copy_cols; c < new_cols; c++)
+                    new_row[c] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+            }
+        }
+        free(t->sb_buf);
+        t->sb_buf = new_sb;
+    }
+    // If columns didn't change, just keep the buffer as-is
+    
     t->cols = new_cols; t->rows = new_rows;
 
     if (t->cur_row >= t->rows) t->cur_row = t->rows - 1;
