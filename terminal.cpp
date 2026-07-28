@@ -35,7 +35,18 @@ static void sb_push(Terminal *t, int row) {
     if (!t->sb_buf || t->sb_cap == 0) return;
     if (t->scroll_top != 0 || t->scroll_bot != t->rows - 1) return;
     int slot = (t->sb_head + t->sb_count) % t->sb_cap;
-    memcpy(t->sb_buf + slot * t->cols, &CELL(t, row, 0), sizeof(Cell) * t->cols);
+    Cell *sb_row_ptr = t->sb_buf + slot * t->sb_cols;
+    
+    // Copy current row data (up to min of display width and scrollback width)
+    int copy_cols = (t->cols < t->sb_cols) ? t->cols : t->sb_cols;
+    memcpy(sb_row_ptr, &CELL(t, row, 0), sizeof(Cell) * copy_cols);
+    
+    // If scrollback is wider than display, pad the rest with blanks
+    if (t->sb_cols > t->cols) {
+        for (int c = t->cols; c < t->sb_cols; c++)
+            sb_row_ptr[c] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+    }
+    
     if (t->sb_count < t->sb_cap) {
         t->sb_count++;
     } else {
@@ -47,14 +58,19 @@ static void sb_push(Terminal *t, int row) {
 
 Cell* sb_row(Terminal *t, int idx) {
     int slot = (t->sb_head + idx) % t->sb_cap;
-    return t->sb_buf + slot * t->cols;
+    return t->sb_buf + slot * t->sb_cols;
 }
 
 Cell* vcell(Terminal *t, int vrow, int col) {
     static Cell blank = {' ', 7, 0, 0, {0,0,0}};
     if (col < 0 || col >= t->cols) return &blank;
     if (vrow < 0) return &blank;
-    if (vrow < t->sb_count) return sb_row(t, vrow) + col;
+    if (vrow < t->sb_count) {
+        // Scrollback row: clamp col to sb_cols (old data might be wider)
+        int sb_col = (col < t->sb_cols) ? col : -1;
+        if (sb_col < 0) return &blank;
+        return sb_row(t, vrow) + sb_col;
+    }
     int live = vrow - t->sb_count;
     if (live < t->rows) return &CELL(t, live, col);
     return &blank;
@@ -564,8 +580,9 @@ void term_init(Terminal *t) {
     t->sb_cap = SCROLLBACK_LINES;
     t->cols   = TERM_COLS_DEFAULT;
     t->rows   = TERM_ROWS_DEFAULT;
+    t->sb_cols = t->cols;  // Initialize scrollback width to match display width
 
-    t->sb_buf = (Cell*)calloc(t->sb_cap * t->cols, sizeof(Cell));
+    t->sb_buf = (Cell*)calloc(t->sb_cap * t->sb_cols, sizeof(Cell));
     t->cells  = (Cell*)malloc(sizeof(Cell) * t->cols * t->rows);
     for (int i = 0; i < t->cols * t->rows; i++)
         t->cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
@@ -675,10 +692,31 @@ void term_resize(Terminal *t, int win_w, int win_h) {
 
     if (t->alt_cells) { free(t->alt_cells); t->alt_cells = nullptr; t->in_alt_screen = false; }
 
-    if (t->sb_buf) free(t->sb_buf);
-    t->sb_buf   = (Cell*)calloc(t->sb_cap * new_cols, sizeof(Cell));
-    t->sb_head  = 0; t->sb_count = 0; t->sb_offset = 0;
-    t->cols = new_cols; t->rows = new_rows;
+    // Scrollback buffer: width only increases, never decreases
+    // This preserves old data when shrinking the window; we just don't display
+    // the overflow. Only reallocate if the new width is larger than scrollback width.
+    if (new_cols > t->sb_cols && t->sb_buf) {
+        // Column count increased — expand scrollback to new width
+        Cell *new_sb_buf = (Cell*)calloc(t->sb_cap * new_cols, sizeof(Cell));
+        
+        // Copy existing scrollback data to new buffer, padding new columns with blanks
+        for (int i = 0; i < t->sb_count; i++) {
+            Cell *old_row = sb_row(t, i);
+            Cell *new_row = new_sb_buf + ((t->sb_head + i) % t->sb_cap) * new_cols;
+            memcpy(new_row, old_row, sizeof(Cell) * t->sb_cols);
+            // Pad the extra columns with blanks
+            for (int c = t->sb_cols; c < new_cols; c++)
+                new_row[c] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+        }
+        
+        free(t->sb_buf);
+        t->sb_buf = new_sb_buf;
+        t->sb_cols = new_cols;
+    }
+    // If new_cols <= t->sb_cols, scrollback width stays at sb_cols; overflow is simply not displayed
+
+    t->cols = new_cols;
+    t->rows = new_rows;
 
     if (t->cur_row >= t->rows) t->cur_row = t->rows - 1;
     if (t->cur_col >= t->cols) t->cur_col = t->cols - 1;

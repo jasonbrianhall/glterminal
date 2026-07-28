@@ -66,6 +66,7 @@ struct Terminal {
     // Scrollback ring buffer
     Cell         *sb_buf;
     int           sb_cap;
+    int           sb_cols;     // Width of scrollback buffer (never shrinks, only grows)
     int           sb_head;
     int           sb_count;
     int           sb_offset;   // 0=live, N=N rows back
