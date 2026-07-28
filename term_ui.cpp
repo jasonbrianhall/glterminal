@@ -674,10 +674,15 @@ void term_copy_selection_ansi(Terminal *t) {
             if (attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
             if (fg != last_fg || bg != last_bg || attrs != last_attrs)
                 emit_sgr(fg, bg, attrs);
-            if      (cp < 0x80)    out += (char)cp;
-            else if (cp < 0x800)   { out+=(char)(0xC0|(cp>>6)); out+=(char)(0x80|(cp&0x3F)); }
-            else if (cp < 0x10000) { out+=(char)(0xE0|(cp>>12)); out+=(char)(0x80|((cp>>6)&0x3F)); out+=(char)(0x80|(cp&0x3F)); }
-            else { out+=(char)(0xF0|(cp>>18)); out+=(char)(0x80|((cp>>12)&0x3F)); out+=(char)(0x80|((cp>>6)&0x3F)); out+=(char)(0x80|(cp&0x3F)); }
+            // ANSI output: only ASCII printable (32-126) and common control chars
+            if (cp >= 32 && cp < 127) {
+                out += (char)cp;
+            } else if (cp == '\t') {
+                out += '\t';
+            } else if (cp == ' ') {
+                out += ' ';
+            }
+            // Non-ASCII characters are silently skipped in ANSI mode
         }
         out += "\x1b[0m";
         last_fg = ~(TermColorVal)0;
