@@ -158,6 +158,9 @@ void display_color(int fg, int bg)
 #if defined(FELIX_BASIC)
     (void)bg;
     felix_basic_color(fg);
+#endif
+#if defined(WOPR)
+    printf("TODO; change color\n");
 #else
     if (fg < 0 || fg > 15) fg = 7;
     if (bg < 0 || bg > 15) bg = 0;
