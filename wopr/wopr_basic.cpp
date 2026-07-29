@@ -537,6 +537,19 @@ void wopr_basic_render(WoprState *w, int win_w, int win_h, int cw, int ch, int c
     }
 }
 
+// ── Mousewheel (scroll support) ───────────────────────────────────────────
+bool wopr_basic_mousewheel(WoprState *w, int delta)
+{
+    basicState *zs = static_cast<basicState *>(w->sub_state);
+    if (!zs || !zs->wopr) return false;
+
+    // Allow scrolling through BASIC output history
+    const int LINES_PER_TICK = 3;
+    zs->wopr->scroll_offset -= delta * LINES_PER_TICK;
+    if (zs->wopr->scroll_offset < 0) zs->wopr->scroll_offset = 0;
+    return true;
+}
+
 // ── Keydown ───────────────────────────────────────────────────────────────
 bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
 {

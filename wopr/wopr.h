@@ -197,6 +197,7 @@ void wopr_basic_enter(WoprState *w);
 void wopr_basic_update(WoprState *w, double dt);
 void wopr_basic_render(WoprState *w, int x, int y, int cw, int ch, int cols);
 bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym);
+bool wopr_basic_mousewheel(WoprState *w, int delta);
 bool wopr_basic_is_waiting_input(WoprState *w);
 const char *wopr_basic_get_prompt(uint8_t *r, uint8_t *g, uint8_t *b);
 int         wopr_basic_get_prompt_row(void);
