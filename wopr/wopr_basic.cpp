@@ -589,6 +589,7 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
             zs->history_temp.clear();
             
             typed += '\n'; basic_shim_set_input(const_cast<char*>(typed.c_str()));
+            // Don't advance cursor here; let BASIC handle it
             zs->input_buf.clear(); w->input_buf.clear(); return true;
         }
         case SDLK_BACKSPACE:

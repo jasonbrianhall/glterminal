@@ -1756,6 +1756,7 @@ static int cmd_print(Interp *ip, char *args) {
             if (*p == ';') { p = sk(p + 1); trailing = 1; }
             else           { trailing = 0; break; }
         }
+
         if (!trailing) display_newline();
         return 0;
     }
@@ -1809,9 +1810,6 @@ static int cmd_print(Interp *ip, char *args) {
     return 0;
 }
 
-/* ================================================================
- * DEBUG — like PRINT but outputs to SDL_Log instead of display
- * ================================================================ */
 static int cmd_debug(Interp *ip, char *args) {
     (void)ip;
     char *p = sk(args);

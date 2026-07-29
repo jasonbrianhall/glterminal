@@ -204,6 +204,7 @@ void display_print(char *s)
     // Suppress output while waiting for input to avoid double echo
     if (g_basic_waiting_input) return;
     g_basic_suppress_newline = 0;
+    SDL_Log("display_print\n");
     wopr_basic_push_line(s);
 #elif defined(FELIX_BASIC)
     felix_basic_push_line(s);
@@ -218,6 +219,7 @@ void display_putchar(int c)
 #ifdef WOPR
     g_basic_suppress_newline = 0;
     char tmp[2] = { (char)c, 0 };
+    SDL_Log("putchar\n");
     wopr_basic_push_line(tmp);
 #elif defined(FELIX_BASIC)
     char tmp[2] = { (char)c, 0 };
@@ -260,6 +262,8 @@ void display_cursor(int visible)
 void display_spc(int n)
 {
 #ifdef WOPR
+    SDL_Log("display_spc\n");
+
     for (int i = 0; i < n; i++) wopr_basic_push_line(" ");
 #elif defined(FELIX_BASIC)
     for (int i = 0; i < n; i++) felix_basic_push_line(" ");
@@ -326,7 +330,6 @@ int display_getline(char *buf, int bufsz)
     }
     // Don't echo here - wopr_basic_keydown already handled echo when Enter was pressed
     g_basic_suppress_newline = 1;
-    SDL_Log("Returning Buffer %s\n", buf);
     return (int)strlen(buf);
 #elif defined(FELIX_BASIC)
     felix_basic_shim_fgets(buf, bufsz);
