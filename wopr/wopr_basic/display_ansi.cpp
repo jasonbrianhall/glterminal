@@ -40,6 +40,11 @@
 #include "basic_print.h"
 #define printf(...) basic_printf(__VA_ARGS__)
 
+// Forward declaration of wopr_basic_color from wopr_basic.cpp
+#ifdef WOPR
+extern void wopr_basic_color(int fg, int bg);
+#endif
+
 BASIC_NS_BEGIN
 
 /* ----------------------------------------------------------------
@@ -160,7 +165,8 @@ void display_color(int fg, int bg)
     felix_basic_color(fg);
 #endif
 #if defined(WOPR)
-    printf("TODO; change color\n");
+    // Call wopr_basic_color which handles CGA→RGB conversion and updates globals
+    wopr_basic_color(fg, bg);
 #else
     if (fg < 0 || fg > 15) fg = 7;
     if (bg < 0 || bg > 15) bg = 0;
