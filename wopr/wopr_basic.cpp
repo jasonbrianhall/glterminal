@@ -66,6 +66,11 @@ struct basicState {
     bool        dead     = false;
 
     bool        requires_upper = false;
+    
+    // Command history
+    std::vector<std::string> history;
+    int                      history_index = -1;  // -1 = not in history, else index into history
+    std::string              history_temp;        // temp storage when editing during history navigation
 };
 
 static basicState *s_active = nullptr;
@@ -494,6 +499,9 @@ void wopr_basic_enter(WoprState *w)
     s_prompt_buf.clear();
     s_cur_row = 1; s_cur_col = 1; s_screen_top = 0; s_prompt_row = 0;
     s_fg_r = 0; s_fg_g = 170; s_fg_b = 0;
+    zs->history.clear();
+    zs->history_index = -1;
+    zs->history_temp.clear();
     basic_shim_init();
     sound_init();   /* audio init on main thread */
 
@@ -589,12 +597,55 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
             s_prompt_row = 0;
             s_cur_row++;
             s_cur_col = 1;
+            
+            // Save non-empty commands to history
+            if (!typed.empty()) {
+                zs->history.push_back(typed);
+            }
+            zs->history_index = -1;  // Reset history navigation
+            zs->history_temp.clear();
+            
             typed += '\n'; basic_shim_set_input(const_cast<char*>(typed.c_str()));
             zs->input_buf.clear(); w->input_buf.clear(); return true;
         }
         case SDLK_BACKSPACE:
             if (!zs->input_buf.empty()) { zs->input_buf.pop_back(); w->input_buf = zs->input_buf; }
             return true;
+        case SDLK_UP: {
+            // Navigate backwards through history
+            if (zs->history.empty()) return true;
+            
+            if (zs->history_index == -1) {
+                // Save current input as temporary
+                zs->history_temp = zs->input_buf;
+                zs->history_index = (int)zs->history.size() - 1;
+            } else if (zs->history_index > 0) {
+                zs->history_index--;
+            }
+            
+            if (zs->history_index >= 0 && zs->history_index < (int)zs->history.size()) {
+                zs->input_buf = zs->history[zs->history_index];
+                w->input_buf = zs->input_buf;
+            }
+            return true;
+        }
+        case SDLK_DOWN: {
+            // Navigate forwards through history
+            if (zs->history.empty() || zs->history_index == -1) return true;
+            
+            if (zs->history_index < (int)zs->history.size() - 1) {
+                zs->history_index++;
+                zs->input_buf = zs->history[zs->history_index];
+                w->input_buf = zs->input_buf;
+            } else {
+                // Return to the temporary input (the line being edited)
+                zs->history_index = -1;
+                zs->input_buf = zs->history_temp;
+                zs->history_temp.clear();
+                w->input_buf = zs->input_buf;
+            }
+            return true;
+        }
         case SDLK_ESCAPE: return false;
         default: return true;
         }
@@ -683,6 +734,9 @@ void wopr_wizard_enter(WoprState *w)
     s_prompt_buf.clear();
     s_cur_row = 1; s_cur_col = 1; s_screen_top = 0; s_prompt_row = 0;
     s_fg_r = 0; s_fg_g = 170; s_fg_b = 0;
+    zs->history.clear();
+    zs->history_index = -1;
+    zs->history_temp.clear();
     basic_shim_init();
     sound_init();
 
