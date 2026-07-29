@@ -109,28 +109,22 @@ void wopr_basic_post_key(char c)
 }
 static void commit_line(void)
 {
-    SDL_Log("[BASIC_DEBUG] commit_line: buf='%s' (len=%zu), row=%d, col=%d", 
-            s_out_buf.c_str(), s_out_buf.length(), s_cur_row, s_cur_col);
     
     if (!s_active || !s_active->wopr) { 
-        SDL_Log("[BASIC_DEBUG] commit_line early return"); 
         s_out_buf.clear(); 
         return; 
     }
     SDL_LockMutex(s_active->line_mtx);
     auto &lines = s_active->wopr->lines;
     int target = s_screen_top + s_cur_row - 1;  /* 0-based index for this row */
-    SDL_Log("[BASIC_DEBUG]   target line index: %d (screen_top=%d, cur_row=%d)", target, s_screen_top, s_cur_row);
     std::string colored = make_colored_line(s_out_buf, s_fg_r, s_fg_g, s_fg_b);
     if (target < (int)lines.size()) {
         lines[target] = colored;  /* overwrite existing row (LOCATE went backwards) */
-        SDL_Log("[BASIC_DEBUG]   overwrote line %d", target);
     } else {
         /* Fill any gap with blank lines, then append */
         while ((int)lines.size() < target)
             lines.push_back("");
         lines.push_back(colored);
-        SDL_Log("[BASIC_DEBUG]   appended as line %d (total lines now: %zu)", target, lines.size());
     }
     
     // FIX: Auto-scroll viewport to keep new output visible
@@ -144,14 +138,11 @@ static void commit_line(void)
     if ((int)lines.size() > display_rows) {
         s_screen_top = (int)lines.size() - display_rows;
         s_cur_row = display_rows + 1;  // Next output goes below visible area
-        SDL_Log("[BASIC_DEBUG]   SCROLL: s_screen_top=%d, s_cur_row=%d, total=%d", 
-                s_screen_top, s_cur_row, (int)lines.size());
     }
     SDL_UnlockMutex(s_active->line_mtx);
     s_out_buf.clear();
     s_cur_row++;
     s_cur_col = 1;
-    SDL_Log("[BASIC_DEBUG]   commit_line done, moving to row %d", s_cur_row);
 }
 // CP437 bytes 128-255 -> UTF-8 sequences
 static const char *cp437_utf8[128] = {
@@ -224,14 +215,8 @@ static const char *cp437_utf8[128] = {
 void wopr_basic_push_line(char *text)
 {
     if (!s_active || !s_active->wopr || !text) {
-        SDL_Log("[BASIC_DEBUG] wopr_basic_push_line early return: s_active=%p wopr=%p text=%p", 
-                s_active, s_active ? s_active->wopr : nullptr, text);
         return;
     }
-    
-    SDL_Log("[BASIC_DEBUG] wopr_basic_push_line called with: %s", text);
-    SDL_Log("[BASIC_DEBUG]   s_out_buf before: '%s' (len=%zu)", s_out_buf.c_str(), s_out_buf.length());
-    SDL_Log("[BASIC_DEBUG]   s_cur_row=%d, s_cur_col=%d", s_cur_row, s_cur_col);
     
     unsigned char *p = (unsigned char *)text;
     while (*p) {
@@ -341,10 +326,8 @@ void wopr_basic_push_line(char *text)
         }
     }
     
-    SDL_Log("[BASIC_DEBUG] wopr_basic_push_line done");
-    SDL_Log("[BASIC_DEBUG]   s_out_buf after: '%s' (len=%zu)", s_out_buf.c_str(), s_out_buf.length());
-    SDL_Log("[BASIC_DEBUG]   s_cur_row=%d, s_cur_col=%d", s_cur_row, s_cur_col);
 }
+
 void wopr_basic_flush_partial(void)
 {
     if (!s_active || !s_active->wopr || s_out_buf.empty()) return;
