@@ -39,6 +39,7 @@
 #  include <dirent.h>
 #  include <unistd.h>
 #  include <sys/select.h>
+#  include <signal.h>
 #else
 #  include <windows.h>
 #  include <shlobj.h>
@@ -132,12 +133,27 @@ static std::atomic<bool>          s_busy{false};
 static std::atomic<float>         s_progress{0.f};
 static std::string                s_progress_label;
 
+// Ctrl+C handling: signal handler sets this, worker thread checks it
+static std::atomic<bool>          s_sigint_pending{false};
+
+#ifndef _WIN32
+static void sigint_handler(int sig) {
+    (void)sig;
+    s_sigint_pending.store(true);
+}
+#endif
+
 // Thread-safe output queue: worker pushes here, main thread drains into s_lines each frame.
 static std::vector<ConsoleLine>   s_pending;
 static SDL_mutex                 *s_pending_mtx = nullptr;
 
 static void ensure_pending_mtx() {
     if (!s_pending_mtx) s_pending_mtx = SDL_CreateMutex();
+}
+
+// Returns true if Ctrl+C was pressed (worker should abort)
+static bool worker_interrupted() {
+    return s_sigint_pending.load();
 }
 
 static void pending_push(const char *text, float r, float g, float b) {
@@ -334,6 +350,12 @@ static std::string do_get(const char *remote_full, const char *local_full,
     ssize_t n; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
     for (;;) {
+        // Check for Ctrl+C interrupt
+        if (worker_interrupted()) {
+            ok = false;
+            break;
+        }
+        
         n = libssh2_sftp_read(fh, buf, TRANSFER_BUFFER_SIZE);
         if (n == LIBSSH2_ERROR_EAGAIN) { waitsocket_con(sock, sess); continue; }
         if (n < 0) { ok = false; break; }
@@ -346,7 +368,7 @@ static std::string do_get(const char *remote_full, const char *local_full,
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
     free(buf);
 
-    if (!ok) return std::string("transfer failed for '") + remote_full + "'";
+    if (!ok) return std::string("transfer failed or interrupted for '") + remote_full + "'";
     s_progress.store(1.f);
     return "";
 }
@@ -398,6 +420,12 @@ static std::string do_put(const char *local_full, const char *remote_full) {
     size_t nread; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
     while ((nread = fread(buf, 1, TRANSFER_BUFFER_SIZE, in)) > 0) {
+        // Check for Ctrl+C interrupt
+        if (worker_interrupted()) {
+            ok = false;
+            goto put_done;
+        }
+        
         size_t sent = 0;
         while (sent < nread) {
             ssize_t rc = libssh2_sftp_write(fh, buf + sent, nread - sent);
@@ -412,7 +440,7 @@ put_done:
     fclose(in);
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
     free(buf);
-    if (!ok) return std::string("transfer failed for '") + local_full + "'";
+    if (!ok) return std::string("transfer failed or interrupted for '") + local_full + "'";
     s_progress.store(1.f);
     return "";
 }
@@ -935,13 +963,17 @@ static void cmd_worker(std::vector<std::string> toks) {
         // Check if pattern contains path separator (e.g., "*/*.py" or "subdir/*")
         bool pattern_has_path = (pattern.find('/') != std::string::npos);
         
-        if (!recursive || !pattern_has_path) {
-            // Non-recursive OR pattern doesn't have path separators: only search current dir
+        if (!recursive) {
+            // Non-recursive: only search current directory
             auto entries = list_remote_dir(s_remote_cwd);
             lk.~SessionLock();
             new (&lk) SessionLock();
             
             for (auto &e : entries) {
+                if (worker_interrupted()) {
+                    push_info("mget interrupted");
+                    break;
+                }
                 if (e.is_dir) continue;
                 if (fnmatch(pattern.c_str(), e.name.c_str(), 0) != 0) continue;
                 
@@ -963,7 +995,7 @@ static void cmd_worker(std::vector<std::string> toks) {
                 }
             }
         } else {
-            // Recursive mode with path pattern (e.g., "*/*.py"): walk directory tree
+            // Recursive mode: walk directory tree to find all matching files
             std::function<void(const std::string &)> walk_and_get = 
                 [&](const std::string &dir) {
                 auto entries = list_remote_dir(dir.c_str());
@@ -973,6 +1005,12 @@ static void cmd_worker(std::vector<std::string> toks) {
                 new (&lk) SessionLock();
                 
                 for (auto &e : entries) {
+                    // Check for interrupt
+                    if (worker_interrupted()) {
+                        push_info("mget interrupted");
+                        return;  // Exit the lambda
+                    }
+                    
                     // Handle directories
                     if (e.is_dir) {
                         std::string subdir = dir + "/" + e.name;
@@ -995,8 +1033,18 @@ static void cmd_worker(std::vector<std::string> toks) {
                         rel_path += "/" + e.name;
                     }
                     
-                    // Match pattern against relative path (e.g., "subdir/file.py" against "*/*.py")
-                    if (fnmatch(pattern.c_str(), rel_path.c_str(), 0) != 0) continue;
+                    // Match pattern:
+                    // - If pattern has '/', match against full relative path (e.g., "subdir/file.py" against "*/*.py")
+                    // - If pattern is simple (e.g., "*" or "*.mp4"), match against just the filename
+                    bool matches = false;
+                    if (pattern_has_path) {
+                        // Pattern has path separators: match full relative path
+                        matches = (fnmatch(pattern.c_str(), rel_path.c_str(), 0) == 0);
+                    } else {
+                        // Simple pattern: match just the filename
+                        matches = (fnmatch(pattern.c_str(), e.name.c_str(), 0) == 0);
+                    }
+                    if (!matches) continue;
                     
                     // Construct full remote path
                     std::string rpath;
@@ -1156,6 +1204,12 @@ void sftp_console_open(int /*win_w*/, int /*win_h*/) {
     ensure_pending_mtx();
     g_sftp_console_visible = true;
     refresh_local_cwd();
+    
+    // Install signal handler for Ctrl+C to allow graceful abort
+#ifndef _WIN32
+    s_sigint_pending.store(false);
+    signal(SIGINT, sigint_handler);
+#endif
 
     if (s_lines.empty()) {
         push_info("SFTP Console — type 'help' for commands, 'exit' to close");
@@ -1600,6 +1654,15 @@ void sftp_console_render(int win_w, int win_h) {
     gl_flush_verts();
 }
 
+
+bool sftp_console_transfer_in_progress() {
+    return s_busy.load();
+}
+
+void sftp_console_cancel_transfer() {
+    // Placeholder: transfer cancellation would need signal handling in cmd_worker
+    // For now, this allows checking transfer status
+}
 
 void sftp_console_reset_after_fork() {
     // Clean up inherited console state from parent process.

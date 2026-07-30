@@ -51,10 +51,11 @@ void sftp_panel_refresh(SftpPanel &p);
 // Navigate into the selected directory of a panel.
 void sftp_panel_enter(SftpPanel &p);
 
-// Execute the transfer (blocking, renders progress mid-transfer).
+// Execute the transfer (now runs on background thread — returns immediately).
+// The overlay remains visible showing progress.
 void sftp_overlay_transfer();
 
-// Render the overlay (also called mid-transfer for progress updates).
+// Render the overlay (also updates progress from background thread).
 void sftp_overlay_render(int win_w, int win_h);
 
 // Handle SDL_KEYDOWN. Returns true if consumed.
@@ -73,7 +74,8 @@ std::string sftp_local_home_dir();
 bool sftp_init();
 void sftp_shutdown();
 
-// Call before sftp_shutdown if a transfer may be in progress (e.g. on quit).
+// Must be called before sftp_shutdown if a transfer may be in progress.
+// Waits for background transfer thread to complete.
 void sftp_transfer_join();
 
 // Returns current transfer progress 0..1 (thread-safe).
