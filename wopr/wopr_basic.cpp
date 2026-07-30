@@ -137,7 +137,10 @@ static void commit_line(void)
     int display_rows = 24;
     if ((int)lines.size() > display_rows) {
         s_screen_top = (int)lines.size() - display_rows;
-        s_cur_row = display_rows + 1;  // Next output goes below visible area
+        // Clamp s_cur_row to stay within visible display (1-24)
+        if (s_cur_row > display_rows) {
+            s_cur_row = display_rows;
+        }
     }
     SDL_UnlockMutex(s_active->line_mtx);
     s_out_buf.clear();
