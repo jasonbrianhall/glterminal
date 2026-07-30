@@ -81,7 +81,6 @@ void basic_shim_init(void)
 
 void basic_shim_set_input(char *line)
 {
-    SDL_Log("basic_shim_set_input called with '%s'", line);
     if (line && line[0] == '\0') {
         g_basic_game_over = 1;
         longjmp(basic_exit_jmp, 1);
@@ -92,22 +91,16 @@ void basic_shim_set_input(char *line)
     basic_input_buf[sizeof(basic_input_buf) - 1] = '\0';
     basic_input_ready = 1;
     if (basic_input_sem) {
-        SDL_Log("Posting semaphore %p", (void*)basic_input_sem);
         SDL_SemPost(basic_input_sem);
     } else {
-        SDL_Log("NO semaphore to post");
     }
 }
 
 
 char *basic_shim_fgets(char *buf, int n)
 {
-    SDL_Log("In Fgets: sem=%p ready=%d game_over=%d",
-            (void*)basic_input_sem, basic_input_ready, g_basic_game_over);
-
     // If BASIC is already shutting down, bail out via longjmp
     if (g_basic_game_over) {
-        SDL_Log("Game over (early, longjmp from fgets)");
         longjmp(basic_exit_jmp, 1);
     }
 
@@ -116,10 +109,8 @@ char *basic_shim_fgets(char *buf, int n)
     g_basic_waiting_input = 1;
 
     if (basic_input_sem) {
-        SDL_Log("Waiting on semaphore");
         SDL_SemWait(basic_input_sem);
     } else {
-        SDL_Log("No semaphore, polling");
         while (!basic_input_ready && !g_basic_game_over) {
             SDL_Delay(10);
         }
@@ -127,24 +118,19 @@ char *basic_shim_fgets(char *buf, int n)
 
     g_basic_waiting_input = 0;
 
-    SDL_Log("Woke from wait: ready=%d game_over=%d",
-            basic_input_ready, g_basic_game_over);
-
+ 
     // If BASIC was killed while waiting → bail out immediately
     if (g_basic_game_over) {
-        SDL_Log("Game over after wait, longjmp from fgets");
         longjmp(basic_exit_jmp, 1);
     }
 
     // No input was delivered (should be rare) — treat as EOF via longjmp
     if (!basic_input_ready) {
-        SDL_Log("No input ready after wait, treating as EOF via longjmp");
         longjmp(basic_exit_jmp, 1);
     }
 
     // CHR$(0) kill-switch (input path)
     if (basic_input_buf[0] == '\0') {
-        SDL_Log("Kill-switch: CHR$(0) received in fgets, longjmp");
         g_basic_game_over = 1;
         longjmp(basic_exit_jmp, 1);
     }
@@ -156,7 +142,6 @@ char *basic_shim_fgets(char *buf, int n)
     basic_input_ready = 0;
     g_basic_suppress_newline = 1;
 
-    SDL_Log("Returned Buffer is '%s'", buf);
     return buf;
 }
 
