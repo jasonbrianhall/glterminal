@@ -39,7 +39,6 @@
 #  include <dirent.h>
 #  include <unistd.h>
 #  include <sys/select.h>
-#  include <signal.h>
 #else
 #  include <windows.h>
 #  include <shlobj.h>
@@ -132,14 +131,14 @@ static std::thread                s_worker;
 static std::atomic<bool>          s_busy{false};
 static std::atomic<float>         s_progress{0.f};
 static std::string                s_progress_label;
-
-// Ctrl+C handling: signal handler sets this, worker thread checks it
-static std::atomic<bool>          s_sigint_pending{false};
+static std::atomic<bool>          s_transfer_cancel{false};
 
 #ifndef _WIN32
+// Signal handler for SIGINT — ignore it and let user use 'cancel' command instead
 static void sigint_handler(int sig) {
     (void)sig;
-    s_sigint_pending.store(true);
+    // Do nothing — just ignore Ctrl+C
+    // User should type 'cancel' to stop transfers
 }
 #endif
 
@@ -151,9 +150,9 @@ static void ensure_pending_mtx() {
     if (!s_pending_mtx) s_pending_mtx = SDL_CreateMutex();
 }
 
-// Returns true if Ctrl+C was pressed (worker should abort)
-static bool worker_interrupted() {
-    return s_sigint_pending.load();
+// Check if user requested transfer cancellation
+static bool should_cancel_transfer() {
+    return s_transfer_cancel.load();
 }
 
 static void pending_push(const char *text, float r, float g, float b) {
@@ -350,8 +349,8 @@ static std::string do_get(const char *remote_full, const char *local_full,
     ssize_t n; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
     for (;;) {
-        // Check for Ctrl+C interrupt
-        if (worker_interrupted()) {
+        // Check if user cancelled the transfer
+        if (should_cancel_transfer()) {
             ok = false;
             break;
         }
@@ -368,7 +367,12 @@ static std::string do_get(const char *remote_full, const char *local_full,
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
     free(buf);
 
-    if (!ok) return std::string("transfer failed or interrupted for '") + remote_full + "'";
+    if (!ok) {
+        if (should_cancel_transfer()) {
+            return std::string("transfer cancelled for '") + remote_full + "'";
+        }
+        return std::string("transfer failed for '") + remote_full + "'";
+    }
     s_progress.store(1.f);
     return "";
 }
@@ -420,8 +424,8 @@ static std::string do_put(const char *local_full, const char *remote_full) {
     size_t nread; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
     while ((nread = fread(buf, 1, TRANSFER_BUFFER_SIZE, in)) > 0) {
-        // Check for Ctrl+C interrupt
-        if (worker_interrupted()) {
+        // Check if user cancelled the transfer
+        if (should_cancel_transfer()) {
             ok = false;
             goto put_done;
         }
@@ -437,10 +441,19 @@ static std::string do_put(const char *local_full, const char *remote_full) {
     }
     if (ferror(in)) ok = false;
 put_done:
+    // Ensure files are closed BEFORE releasing session lock
     fclose(in);
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
     free(buf);
-    if (!ok) return std::string("transfer failed or interrupted for '") + local_full + "'";
+    
+    // Lock is released here when lk goes out of scope
+    
+    if (!ok) {
+        if (should_cancel_transfer()) {
+            return std::string("transfer cancelled for '") + local_full + "'";
+        }
+        return std::string("transfer failed for '") + local_full + "'";
+    }
     s_progress.store(1.f);
     return "";
 }
@@ -601,6 +614,7 @@ static void cmd_help() {
     push_info("  rename <old> <new>      Rename/move remote path");
     push_info("  chmod <mode> <file>     Change permissions (octal)");
     push_info("  progress                Show last transfer progress");
+    push_info("  cancel                  Cancel current transfer");
     push_info("  clear                   Clear screen");
     push_info("  exit / quit / bye       Close console");
     push_info("");
@@ -686,8 +700,15 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
         push_info(buf);
         return true;
     }
-
-    // ---- SFTP metadata commands — fast, run synchronously on main thread ----
+    if (cmd == "cancel") {
+        if (s_busy.load()) {
+            sftp_console_cancel_transfer();
+            push_info("Transfer cancellation requested (will stop at next checkpoint)");
+        } else {
+            push_info("No transfer in progress");
+        }
+        return true;
+    }
     if (!console_sftp_init()) { push_err("SFTP subsystem not available"); return true; }
 
     if (cmd == "ls") {
@@ -970,8 +991,8 @@ static void cmd_worker(std::vector<std::string> toks) {
             new (&lk) SessionLock();
             
             for (auto &e : entries) {
-                if (worker_interrupted()) {
-                    push_info("mget interrupted");
+                if (should_cancel_transfer()) {
+                    push_info("mget cancelled");
                     break;
                 }
                 if (e.is_dir) continue;
@@ -1005,9 +1026,9 @@ static void cmd_worker(std::vector<std::string> toks) {
                 new (&lk) SessionLock();
                 
                 for (auto &e : entries) {
-                    // Check for interrupt
-                    if (worker_interrupted()) {
-                        push_info("mget interrupted");
+                    // Check if user cancelled the transfer
+                    if (should_cancel_transfer()) {
+                        push_info("mget cancelled");
                         return;  // Exit the lambda
                     }
                     
@@ -1188,6 +1209,7 @@ static void execute(const char *line) {
     // Needs network — dispatch to worker
     if (s_busy.load()) { push_err("Busy — wait for current transfer to finish"); drain_pending(); return; }
     if (!console_sftp_init()) { push_err("SFTP subsystem not available"); drain_pending(); return; }
+    s_transfer_cancel.store(false);  // Reset cancel flag for new transfer
     s_busy.store(true);
     if (s_worker.joinable()) {
         s_worker.join();   // blocks until previous command's output is all pushed
@@ -1204,15 +1226,10 @@ void sftp_console_open(int /*win_w*/, int /*win_h*/) {
     ensure_pending_mtx();
     g_sftp_console_visible = true;
     refresh_local_cwd();
-    
-    // Install signal handler for Ctrl+C to allow graceful abort
-#ifndef _WIN32
-    s_sigint_pending.store(false);
-    signal(SIGINT, sigint_handler);
-#endif
 
     if (s_lines.empty()) {
         push_info("SFTP Console — type 'help' for commands, 'exit' to close");
+        push_info("Use 'cancel' command to stop transfers (Ctrl+C is disabled)");
     }
 
     // Populate remote CWD from active session if we can
@@ -1342,14 +1359,9 @@ bool sftp_console_keydown(SDL_Keysym ks, const char *text_input) {
         return true;
     }
 
-    // Ctrl+C — cancel / clear input
+    // Ctrl+C — do nothing in SFTP console (ignore it)
     if ((ks.mod & KMOD_CTRL) && sym == SDLK_c) {
-        if (s_input_len > 0) {
-            s_input[0] = '\0'; s_input_len = 0; s_cursor_pos = 0;
-        } else {
-            sftp_console_close();
-        }
-        return true;
+        return true;  // Consume the key but do nothing
     }
 
     // Ctrl+L — clear
@@ -1660,8 +1672,7 @@ bool sftp_console_transfer_in_progress() {
 }
 
 void sftp_console_cancel_transfer() {
-    // Placeholder: transfer cancellation would need signal handling in cmd_worker
-    // For now, this allows checking transfer status
+    s_transfer_cancel.store(true);
 }
 
 void sftp_console_reset_after_fork() {
