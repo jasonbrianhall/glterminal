@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <ctime>
+#include <chrono>
 
 #ifndef _WIN32
 #  include <fnmatch.h>
@@ -131,7 +132,9 @@ static std::thread                s_worker;
 static std::atomic<bool>          s_busy{false};
 static std::atomic<float>         s_progress{0.f};
 static std::string                s_progress_label;
-static std::atomic<bool>          s_transfer_cancel{false};
+
+// Transfer timeout constants
+static const int TRANSFER_TIMEOUT_SECONDS = 30;  // Max time to read/write one chunk
 
 #ifndef _WIN32
 // Signal handler for SIGINT — ignore it and let user use 'cancel' command instead
@@ -148,11 +151,6 @@ static SDL_mutex                 *s_pending_mtx = nullptr;
 
 static void ensure_pending_mtx() {
     if (!s_pending_mtx) s_pending_mtx = SDL_CreateMutex();
-}
-
-// Check if user requested transfer cancellation
-static bool should_cancel_transfer() {
-    return s_transfer_cancel.load();
 }
 
 static void pending_push(const char *text, float r, float g, float b) {
@@ -348,17 +346,29 @@ static std::string do_get(const char *remote_full, const char *local_full,
     
     ssize_t n; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
+    auto last_progress_time = std::chrono::steady_clock::now();
+    
     for (;;) {
-        // Check if user cancelled the transfer
-        if (should_cancel_transfer()) {
+        n = libssh2_sftp_read(fh, buf, TRANSFER_BUFFER_SIZE);
+        if (n == LIBSSH2_ERROR_EAGAIN) { 
+            waitsocket_con(sock, sess); 
+            continue; 
+        }
+        if (n < 0) { 
+            ok = false; 
+            break; 
+        }
+        if (n == 0) break;
+        
+        // Check timeout - if we haven't made progress in a while, abort
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_progress_time).count();
+        if (elapsed > TRANSFER_TIMEOUT_SECONDS) {
             ok = false;
             break;
         }
+        last_progress_time = now;
         
-        n = libssh2_sftp_read(fh, buf, TRANSFER_BUFFER_SIZE);
-        if (n == LIBSSH2_ERROR_EAGAIN) { waitsocket_con(sock, sess); continue; }
-        if (n < 0) { ok = false; break; }
-        if (n == 0) break;
         if (fwrite(buf, 1, (size_t)n, out) != (size_t)n) { ok = false; break; }
         total += (uint64_t)n;
         if (file_size) s_progress.store((float)total / (float)file_size);
@@ -367,12 +377,7 @@ static std::string do_get(const char *remote_full, const char *local_full,
     while (libssh2_sftp_close(fh) == LIBSSH2_ERROR_EAGAIN) waitsocket_con(sock, sess);
     free(buf);
 
-    if (!ok) {
-        if (should_cancel_transfer()) {
-            return std::string("transfer cancelled for '") + remote_full + "'";
-        }
-        return std::string("transfer failed for '") + remote_full + "'";
-    }
+    if (!ok) return std::string("transfer failed or timeout for '") + remote_full + "'";
     s_progress.store(1.f);
     return "";
 }
@@ -423,12 +428,17 @@ static std::string do_put(const char *local_full, const char *remote_full) {
     
     size_t nread; uint64_t total = 0; bool ok = true;
     s_progress.store(0.f);
+    auto last_progress_time = std::chrono::steady_clock::now();
+    
     while ((nread = fread(buf, 1, TRANSFER_BUFFER_SIZE, in)) > 0) {
-        // Check if user cancelled the transfer
-        if (should_cancel_transfer()) {
+        // Check timeout - if we haven't made progress in a while, abort
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_progress_time).count();
+        if (elapsed > TRANSFER_TIMEOUT_SECONDS) {
             ok = false;
             goto put_done;
         }
+        last_progress_time = now;
         
         size_t sent = 0;
         while (sent < nread) {
@@ -449,10 +459,7 @@ put_done:
     // Lock is released here when lk goes out of scope
     
     if (!ok) {
-        if (should_cancel_transfer()) {
-            return std::string("transfer cancelled for '") + local_full + "'";
-        }
-        return std::string("transfer failed for '") + local_full + "'";
+        return std::string("transfer failed or timeout for '") + local_full + "'";
     }
     s_progress.store(1.f);
     return "";
@@ -698,15 +705,6 @@ static bool cmd_instant(const std::vector<std::string> &toks) {
     if (cmd == "progress") {
         char buf[64]; snprintf(buf, sizeof(buf), "%.0f%%", s_progress.load() * 100.f);
         push_info(buf);
-        return true;
-    }
-    if (cmd == "cancel") {
-        if (s_busy.load()) {
-            sftp_console_cancel_transfer();
-            push_info("Transfer cancellation requested (will stop at next checkpoint)");
-        } else {
-            push_info("No transfer in progress");
-        }
         return true;
     }
     if (!console_sftp_init()) { push_err("SFTP subsystem not available"); return true; }
@@ -991,10 +989,6 @@ static void cmd_worker(std::vector<std::string> toks) {
             new (&lk) SessionLock();
             
             for (auto &e : entries) {
-                if (should_cancel_transfer()) {
-                    push_info("mget cancelled");
-                    break;
-                }
                 if (e.is_dir) continue;
                 if (fnmatch(pattern.c_str(), e.name.c_str(), 0) != 0) continue;
                 
@@ -1026,12 +1020,6 @@ static void cmd_worker(std::vector<std::string> toks) {
                 new (&lk) SessionLock();
                 
                 for (auto &e : entries) {
-                    // Check if user cancelled the transfer
-                    if (should_cancel_transfer()) {
-                        push_info("mget cancelled");
-                        return;  // Exit the lambda
-                    }
-                    
                     // Handle directories
                     if (e.is_dir) {
                         std::string subdir = dir + "/" + e.name;
@@ -1209,7 +1197,6 @@ static void execute(const char *line) {
     // Needs network — dispatch to worker
     if (s_busy.load()) { push_err("Busy — wait for current transfer to finish"); drain_pending(); return; }
     if (!console_sftp_init()) { push_err("SFTP subsystem not available"); drain_pending(); return; }
-    s_transfer_cancel.store(false);  // Reset cancel flag for new transfer
     s_busy.store(true);
     if (s_worker.joinable()) {
         s_worker.join();   // blocks until previous command's output is all pushed
@@ -1671,9 +1658,6 @@ bool sftp_console_transfer_in_progress() {
     return s_busy.load();
 }
 
-void sftp_console_cancel_transfer() {
-    s_transfer_cancel.store(true);
-}
 
 void sftp_console_reset_after_fork() {
     // Clean up inherited console state from parent process.
