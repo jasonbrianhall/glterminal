@@ -649,6 +649,57 @@ static void const_init_builtins(void) {
  * clear_program — reset all program and interpreter state
  * ================================================================ */
 void clear_program(void) {
+    /* Free all allocated variable data */
+    for (int i = 0; i < g_nvar; i++) {
+        Var *v = &g_vars[i];
+        if (v->kind == VAR_STR && v->str) {
+            free(v->str);
+            v->str = nullptr;
+        } else if (v->kind == VAR_ARRAY_NUM && v->arr_num) {
+            /* Calculate array size: use ndim to determine how many dimensions */
+            int size = 0;
+            if (v->ndim == 1) {
+                size = v->dim[0];
+            } else if (v->ndim == 2) {
+                size = v->dim[0] * v->dim[1];
+            } else if (v->ndim > 0 && v->dim[0] > 0) {
+                size = v->dim[0] * (v->dim[1] > 0 ? v->dim[1] : 1);
+            }
+            for (int j = 0; j < size; j++) {
+                mpf_clear(v->arr_num[j]);
+            }
+            free(v->arr_num);
+            v->arr_num = nullptr;
+        } else if (v->kind == VAR_ARRAY_STR && v->arr_str) {
+            /* Calculate array size */
+            int size = 0;
+            if (v->ndim == 1) {
+                size = v->dim[0];
+            } else if (v->ndim == 2) {
+                size = v->dim[0] * v->dim[1];
+            } else if (v->ndim > 0 && v->dim[0] > 0) {
+                size = v->dim[0] * (v->dim[1] > 0 ? v->dim[1] : 1);
+            }
+            /* Free each string in the array */
+            for (int j = 0; j < size; j++) {
+                if (v->arr_str[j]) {
+                    free(v->arr_str[j]);
+                }
+            }
+            free(v->arr_str);
+            v->arr_str = nullptr;
+        }
+        mpf_clear(v->num);
+    }
+    
+    /* Free all DATA items */
+    for (int i = 0; i < g_data_count; i++) {
+        if (g_data[i]) {
+            free(g_data[i]);
+            g_data[i] = nullptr;
+        }
+    }
+    
     g_nlines      = 0;
     g_nvar        = 0;
     g_ctrl_top    = 0;

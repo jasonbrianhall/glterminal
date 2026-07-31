@@ -462,6 +462,36 @@ static int basic_thread_fn(void *userdata)
     } else {
         SDL_Log("[basic] longjmp from exit_()");
     }
+    
+    /* Clean up BASIC interpreter state before thread exit */
+    {
+        using namespace WoprBasic;
+        for (int i = 0; i < g_nvar; i++) {
+            Var *v = &g_vars[i];
+            if (v->kind == VAR_STR && v->str) { free(v->str); v->str = nullptr; }
+            else if (v->kind == VAR_ARRAY_NUM && v->arr_num) {
+                int size = 0;
+                if (v->ndim == 1) size = v->dim[0];
+                else if (v->ndim == 2) size = v->dim[0] * v->dim[1];
+                else if (v->ndim > 0 && v->dim[0] > 0) size = v->dim[0] * (v->dim[1] > 0 ? v->dim[1] : 1);
+                for (int j = 0; j < size; j++) mpf_clear(v->arr_num[j]);
+                free(v->arr_num); v->arr_num = nullptr;
+            }
+            else if (v->kind == VAR_ARRAY_STR && v->arr_str) {
+                int size = 0;
+                if (v->ndim == 1) size = v->dim[0];
+                else if (v->ndim == 2) size = v->dim[0] * v->dim[1];
+                else if (v->ndim > 0 && v->dim[0] > 0) size = v->dim[0] * (v->dim[1] > 0 ? v->dim[1] : 1);
+                for (int j = 0; j < size; j++) if (v->arr_str[j]) free(v->arr_str[j]);
+                free(v->arr_str); v->arr_str = nullptr;
+            }
+            mpf_clear(v->num);
+        }
+        for (int i = 0; i < g_data_count; i++) {
+            if (g_data[i]) { free(g_data[i]); g_data[i] = nullptr; }
+        }
+    }
+    
     g_basic_game_over = 1;
     SDL_SemPost(zs->done_sem);
     return 0;

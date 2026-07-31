@@ -426,6 +426,37 @@ return 0;
 
         } else if (strncasecmp(p,"RUN",3)==0 && !isalnum((unsigned char)p[3])) {
             if (g_nlines == 0) { display_print("No program loaded.\n"); continue; }
+            /* Clean up old variables before running */
+            for (int i = 0; i < g_nvar; i++) {
+                Var *v = &g_vars[i];
+                if (v->kind == VAR_STR && v->str) { free(v->str); v->str = nullptr; }
+                else if (v->kind == VAR_ARRAY_NUM && v->arr_num) {
+                    /* Calculate array size: use ndim to determine how many dimensions */
+                    int size = 0;
+                    if (v->ndim == 1) {
+                        size = v->dim[0];
+                    } else if (v->ndim == 2) {
+                        size = v->dim[0] * v->dim[1];
+                    } else if (v->ndim > 0 && v->dim[0] > 0) {
+                        size = v->dim[0] * (v->dim[1] > 0 ? v->dim[1] : 1);
+                    }
+                    for (int j = 0; j < size; j++) mpf_clear(v->arr_num[j]);
+                    free(v->arr_num); v->arr_num = nullptr;
+                }
+                else if (v->kind == VAR_ARRAY_STR && v->arr_str) {
+                    int size = 0;
+                    if (v->ndim == 1) {
+                        size = v->dim[0];
+                    } else if (v->ndim == 2) {
+                        size = v->dim[0] * v->dim[1];
+                    } else if (v->ndim > 0 && v->dim[0] > 0) {
+                        size = v->dim[0] * (v->dim[1] > 0 ? v->dim[1] : 1);
+                    }
+                    for (int j = 0; j < size; j++) if (v->arr_str[j]) free(v->arr_str[j]);
+                    free(v->arr_str); v->arr_str = nullptr;
+                }
+                mpf_clear(v->num);
+            }
             g_nvar = 0; g_ctrl_top = 0; g_data_pos = 0;
             run();
 
@@ -616,6 +647,7 @@ return 0;
     }
 
     display_shutdown();
+    clear_program();  /* Clean up all variables, arrays, and data before exit */
     return 0;
 }
 
