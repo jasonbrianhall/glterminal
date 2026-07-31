@@ -211,7 +211,8 @@ void load(char *filename) {
 
     /* ---- detect format by scanning for the first code line ---- */
     int numbered = 0;
-    char buf[MAX_LINE_LEN];
+    char *buf = (char *)malloc(MAX_LINE_LEN);
+    if (!buf) { perror("malloc"); fclose(f); return; }
     while (fgets(buf, sizeof buf, f)) {
         buf[strcspn(buf, "\r\n")] = '\0';
         char *p = buf;
@@ -380,22 +381,33 @@ void load(char *filename) {
     memset(pending_buf, 0, sizeof pending_buf);
     int pending_count = 0;
 
-    while (fgets(buf, sizeof buf, f)) {
+    while (fgets(buf, MAX_LINE_LEN, f)) {
         buf[strcspn(buf, "\r\n")] = '\0';
         /* Line continuation: join lines ending with _ */
         {
-            char *tail = buf + strlen(buf) - 1;
-            while (tail > buf && isspace((unsigned char)*tail)) tail--;
-            while (*tail == '_' && tail > buf) {
+            int len = (int)strlen(buf);
+            char *tail = len > 0 ? buf + len - 1 : buf;
+            /* trim trailing whitespace */
+            while (tail >= buf && isspace((unsigned char)*tail)) tail--;
+            /* join continued lines (ending with _) */
+            while (tail >= buf && *tail == '_') {
                 *tail = '\0';
-                char cont[MAX_LINE_LEN];
-                if (!fgets(cont, sizeof cont, f)) break;
+                char *cont = (char *)malloc(MAX_LINE_LEN);
+                if (!cont) { basic_stderr("malloc failed\n"); break; }
+                if (!fgets(cont, MAX_LINE_LEN, f)) { free(cont); break; }
                 cont[strcspn(cont, "\r\n")] = '\0';
                 char *cp = cont; while (isspace((unsigned char)*cp)) cp++;
                 int cur = (int)strlen(buf);
+                if (cur + 1 + strlen(cp) >= MAX_LINE_LEN) {
+                    basic_stderr("Line too long after continuation\n");
+                    free(cont);
+                    break;
+                }
                 snprintf(buf + cur, MAX_LINE_LEN - cur, " %s", cp);
-                tail = buf + strlen(buf) - 1;
-                while (tail > buf && isspace((unsigned char)*tail)) tail--;
+                free(cont);
+                len = (int)strlen(buf);
+                tail = len > 0 ? buf + len - 1 : buf;
+                while (tail >= buf && isspace((unsigned char)*tail)) tail--;
             }
         }
         char *p = buf;
@@ -484,7 +496,7 @@ void load(char *filename) {
                  * (or only a comment follows), so we don't misfire on
                  * things like "FOR i = 1 TO n:" */
                 if (*after_colon == '\0' || *after_colon == '\'') {
-                    if (pending_count < 8) {
+                    if (pending_count < 8 && (pending_count + 1) * MAX_VARNAME <= (int)sizeof(pending_buf)) {
                         strncpy(pending_buf + pending_count * MAX_VARNAME,
                                 lname, MAX_VARNAME - 1);
                         pending_buf[(pending_count + 1) * MAX_VARNAME - 1] = '\0';
@@ -590,6 +602,7 @@ void load(char *filename) {
         #undef STORE_FREE
     }
     fclose(f);
+    free(buf);
     /* Free-form: do NOT sort — insertion order is execution order. */
 }
 
