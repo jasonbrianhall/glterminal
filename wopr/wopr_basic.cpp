@@ -481,6 +481,7 @@ void wopr_basic_enter(WoprState *w)
     s_key_head = s_key_tail = 0;
     g_basic_game_over = 0; basic_input_ready = 0; basic_input_buf[0] = '\0';
     g_basic_suppress_newline = 0;
+    g_break = 0;  /* Reset break flag to ensure clean BASIC interpreter state */
     s_out_buf.clear();
     s_prompt_buf.clear();
     s_cur_row = 1; s_cur_col = 1; s_screen_top = 0; s_prompt_row = 0;
@@ -549,6 +550,13 @@ bool wopr_basic_keydown(WoprState *w, SDL_Keycode sym)
 {
     basicState *zs = static_cast<basicState *>(w->sub_state);
     if (!zs || zs->dead) return false;
+
+    if (sym == SDLK_ESCAPE) {
+        /* ESC sends CTRL+C to break the BASIC interpreter */
+        g_break = 1;
+        basic_shim_set_input(const_cast<char*>("\n"));
+        return true;
+    }
 
     if (sym == SDLK_c) {
         const Uint8 *ks = SDL_GetKeyboardState(NULL);
@@ -741,12 +749,10 @@ void wopr_basic_free(WoprState *w)
     if (!zs) return;
 
     if (!zs->dead) {
-        // Signal the thread to exit: set game-over flag, then post the
-        // semaphore enough times to unblock it regardless of where it is
-        // (waiting for input, or having already consumed one post).
-        g_basic_game_over = 1;
+        // Signal the thread to exit by sending a CTRL+C break signal
+        g_break = 1;
+        basic_shim_set_input(const_cast<char*>("\n"));
         if (basic_input_sem) {
-            SDL_SemPost(basic_input_sem);
             SDL_SemPost(basic_input_sem);
         }
     }

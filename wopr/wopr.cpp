@@ -1105,7 +1105,7 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
                 wopr_zork_text(w, text);
             return wopr_zork_keydown(w, sym);
         case WoprPhase::PLAYING_BASIC:
-            if (sym == SDLK_ESCAPE) { sub_back(w); return true; }
+            /* Don't intercept ESC here; let BASIC keydown handle it to send CTRL+C */
             if (text && *text)
                 wopr_basic_text(w, text);
             return wopr_basic_keydown(w, sym);
