@@ -523,7 +523,10 @@ return 0;
 
         } else if (strncasecmp(p,"HELP",4)==0) {
             display_print(
-                "Felix BASIC Command Reference\n"
+                "Felix BASIC\n"
+                "In loving memory of Felix the lovebird.\n"
+                "\n"
+                "Command Reference\n"
                 "--------------------------------\n"
                 "PROGRAM CONTROL\n"
                 "  NEW              Clear the current program\n"
