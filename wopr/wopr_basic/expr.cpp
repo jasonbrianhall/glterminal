@@ -670,14 +670,21 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
          * 3. NUMERIC comparison
          * ----------------------------------------- */
         skip_ws_p(ps);
-        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        char op[3] = { '\0', '\0', '\0' };
         int oplen = 0;
+        
+        /* Safely read comparison operator (max 2 chars) */
+        if (ps->p[0]) {
+            op[0] = ps->p[0];
+            if (ps->p[1]) op[1] = ps->p[1];
+        }
 
-        if (!strcmp(op,"<>") || !strcmp(op,"><") ||
-            !strcmp(op,"<=") || !strcmp(op,"=<") ||
-            !strcmp(op,">=") || !strcmp(op,"=>")) {
+        if (op[0] && op[1] && 
+            (!strcmp(op,"<>") || !strcmp(op,"><") ||
+             !strcmp(op,"<=") || !strcmp(op,"=<") ||
+             !strcmp(op,">=") || !strcmp(op,"=>"))) {
             oplen = 2;
-        } else if (ps->p[0]=='<' || ps->p[0]=='>' || ps->p[0]=='=') {
+        } else if (op[0] && (op[0]=='<' || op[0]=='>' || op[0]=='=')) {
             op[1] = '\0';
             oplen = 1;
         }
