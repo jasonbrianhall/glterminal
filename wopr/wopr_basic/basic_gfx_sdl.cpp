@@ -1385,9 +1385,11 @@ void display_width(int cols) {
 }
 
 void display_print(char *s) {
+#ifndef WOPR
     for (; *s; s++) text_putchar(*s);
     // Note: Do NOT pump/render here. This gets called on every PSET.
     // Batching is handled at the BASIC interpreter level (main loop).
+#endif
 }
 
 void display_putchar(int c) {
