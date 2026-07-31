@@ -222,83 +222,55 @@ SRCS_COMMON = felixterminal.cpp     gl_renderer.cpp       \
               fight_mode.cpp        crt_audio.cpp         \
               felix_settings.cpp    kitty_graphics.cpp    \
               font_manager.cpp      sftp_overlay.cpp      \
-              sftp_console.cpp      felixchirp/felixchirp.cpp      \
-              felixchirp/cdg.cpp               $(SSH_SRCS)           \
-              telnet_session.cpp                          \
-              basic_graphics.cpp    mml_player.cpp        \
-              glyph_atlas.cpp       sticky_prompt.cpp     \
-              ssh_key_manager.cpp   serial_session.cpp    \
-              felixchirp/fc_file.cpp felixchirp/fc_text.cpp  \
-              felixchirp/fc_input.cpp felixchirp/fc_zip.cpp \
-              felixchirp/fc_kfn.cpp   felixchirp/kfn.cpp    \
-              sftp_webserver.cpp      midi_render.cpp       \
-              dbopl.cpp               dbopl_wrapper.cpp     \
-              instruments.cpp         voc_render.cpp        \
-              au_render.cpp           aiff_render.cpp       \
-              convertm4atowavlin.cpp  convertm4atowavwin.cpp \
+              sftp_console.cpp      felixchirp/felixchirp.cpp  \
+              felixchirp/cdg.cpp    $(SSH_SRCS)                \
+              telnet_session.cpp                               \
+              basic_graphics.cpp    mml_player.cpp             \
+              glyph_atlas.cpp       sticky_prompt.cpp          \
+              ssh_key_manager.cpp   serial_session.cpp         \
+              felixchirp/fc_file.cpp felixchirp/fc_text.cpp    \
+              felixchirp/fc_input.cpp felixchirp/fc_zip.cpp    \
+              felixchirp/fc_kfn.cpp   felixchirp/kfn.cpp       \
+              sftp_webserver.cpp      midi_render.cpp          \
+              dbopl.cpp               dbopl_wrapper.cpp        \
+              instruments.cpp         voc_render.cpp           \
+              au_render.cpp           aiff_render.cpp          \
+              convertm4atowavlin.cpp  convertm4atowavwin.cpp   \
               vfs.cpp
 
 SRCS_MINIZ = libtelnet.c felixchirp/miniz.c felixchirp/miniz_tdef.c felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c \
-            wopr/zork/actors.c \
-            wopr/zork/ballop.c \
-            wopr/zork/clockr.c \
-            wopr/zork/demons.c \
-            wopr/zork/dgame.c \
-            wopr/zork/dinit.c  \
-	    wopr/zork_modified/dmain.c \
-	    wopr/zork/dso1.c \
-	    wopr/zork/dso2.c \
-	    wopr/zork_modified/dso3.c \
-	    wopr/zork/dso4.c \
-	    wopr/zork/dso5.c \
-	    wopr/zork/dso6.c \
-	    wopr/zork/dso7.c \
-	    wopr/zork_modified/dsub.c \
-	    wopr/zork/dverb1.c\
-	    wopr/zork/dverb2.c \
-	    wopr/zork_modified/gdt.c \
-	    wopr/zork/lightp.c \
-	    wopr/zork/local.c \
-	    wopr/zork/nobjs.c \
-	    wopr/zork_modified/np.c \
-	    wopr/zork/np1.c \
-	    wopr/zork/np2.c \
-	    wopr/zork/np3.c \
-	    wopr/zork/nrooms.c \
-	    wopr/zork/objcts.c \
-	    wopr/zork/rooms.c \
-	    wopr/zork/sobjs.c \
-	    wopr/zork_modified/supp.c \
-	    wopr/zork/sverbs.c \
-	    wopr/zork/verbs.c \
-	    wopr/zork/villns.c \
+            wopr/zork/actors.c            wopr/zork/ballop.c        \
+            wopr/zork/clockr.c            wopr/zork/demons.c        \
+            wopr/zork/dgame.c             wopr/zork/dinit.c         \
+	    wopr/zork_modified/dmain.c    wopr/zork/dso1.c          \
+	    wopr/zork/dso2.c              wopr/zork_modified/dso3.c \
+	    wopr/zork/dso4.c              wopr/zork/dso5.c          \
+	    wopr/zork/dso6.c              wopr/zork/dso7.c          \
+	    wopr/zork_modified/dsub.c     wopr/zork/dverb1.c        \
+	    wopr/zork/dverb2.c            wopr/zork_modified/gdt.c  \
+	    wopr/zork/lightp.c            wopr/zork/local.c         \
+	    wopr/zork/nobjs.c             wopr/zork_modified/np.c   \
+	    wopr/zork/np1.c               wopr/zork/np2.c           \
+	    wopr/zork/np3.c               wopr/zork/nrooms.c        \
+	    wopr/zork/objcts.c            wopr/zork/rooms.c         \
+	    wopr/zork/sobjs.c             wopr/zork_modified/supp.c \
+	    wopr/zork/sverbs.c            wopr/zork/verbs.c         \
+	    wopr/zork/villns.c
 
 
 
-SRCS_WOPR = wopr/wopr.cpp                \
-            wopr/wopr_audio.cpp          \
-            wopr/wopr_tictactoe.cpp      \
-            wopr/wopr_checkers.cpp       \
-            wopr/wopr_chess.cpp          \
-            wopr/beatchess.cpp           \
-            wopr/wopr_mines.cpp          \
-            wopr/wopr_maze.cpp           \
-            wopr/wopr_war.cpp            \
-            wopr/wopr_zork.cpp           \
-            wopr/wopr_basic.cpp          \
-            wopr/chess_ai_move.cpp       \
-            wopr/minesweeper_game.cpp    \
-            wopr/highscores.cpp          \
-            wopr/wopr_basic/basic_print.cpp  \
-            wopr/wopr_basic/commands.cpp     \
-            wopr/wopr_basic/display_ansi.cpp \
-            wopr/wopr_basic/expr.cpp         \
-            wopr/wopr_basic/main.cpp         \
-            wopr/wopr_basic/program.cpp      \
-            wopr/wopr_basic/sound_sdl.cpp    \
-            wopr/wopr_basic/vars.cpp         \
-            wopr/wopr_willy.cpp              \
-            wopr/chess_sound.cpp             \
+SRCS_WOPR = wopr/wopr.cpp                     wopr/wopr_audio.cpp          \
+            wopr/wopr_tictactoe.cpp           wopr/wopr_checkers.cpp       \
+            wopr/wopr_chess.cpp               wopr/beatchess.cpp           \
+            wopr/wopr_mines.cpp               wopr/wopr_maze.cpp           \
+            wopr/wopr_war.cpp                 wopr/wopr_zork.cpp           \
+            wopr/wopr_basic.cpp               wopr/chess_ai_move.cpp       \
+            wopr/minesweeper_game.cpp         wopr/highscores.cpp          \
+            wopr/wopr_basic/basic_print.cpp   wopr/wopr_basic/commands.cpp \
+            wopr/wopr_basic/display_ansi.cpp  wopr/wopr_basic/expr.cpp     \
+            wopr/wopr_basic/main.cpp          wopr/wopr_basic/program.cpp  \
+            wopr/wopr_basic/sound_sdl.cpp     wopr/wopr_basic/vars.cpp     \
+            wopr/wopr_willy.cpp               wopr/chess_sound.cpp         \
             wopr/wopr_sdi.cpp
                    
 
