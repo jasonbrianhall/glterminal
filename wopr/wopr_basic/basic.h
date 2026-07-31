@@ -123,11 +123,11 @@ typedef struct {
     /* scalar */
     mpf_t   num;
     char   *str;
-    /* array (up to 2D) */
+    /* array (up to 2D) - statically allocated to avoid heap fragmentation */
     int     dim[MAX_ARRAY_DIMS];
     int     ndim;
-    mpf_t  *arr_num;
-    char  **arr_str;
+    mpf_t   arr_num[MAX_ARRAY_SIZE];  /* Static allocation instead of dynamic */
+    char   *arr_str[MAX_ARRAY_SIZE];  /* Array of string pointers (strings are still malloc'd) */
 } Var;
 
 extern Var* g_vars;

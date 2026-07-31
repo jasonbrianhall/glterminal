@@ -549,14 +549,16 @@ static int cmd_erase(Interp *ip, char *args) {
         p = sk(read_varname(p, name));
         Var *v = var_find(name);
         if (v) {
-            if (v->kind == VAR_ARRAY_NUM && v->arr_num) {
+            if (v->kind == VAR_ARRAY_NUM) {
+                /* Arrays are now static in Var struct, just clear the mpf_t values */
                 int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
                 for (int i = 0; i < total; i++) mpf_clear(v->arr_num[i]);
-                free(v->arr_num); v->arr_num = NULL;
-            } else if (v->kind == VAR_ARRAY_STR && v->arr_str) {
+            } else if (v->kind == VAR_ARRAY_STR) {
+                /* Arrays are now static, just free the individual string elements */
                 int total = v->dim[0] * (v->ndim == 2 ? v->dim[1] : 1);
-                for (int i = 0; i < total; i++) free(v->arr_str[i]);
-                free(v->arr_str); v->arr_str = NULL;
+                for (int i = 0; i < total; i++) {
+                    if (v->arr_str[i]) { free(v->arr_str[i]); v->arr_str[i] = NULL; }
+                }
             }
             v->kind = var_is_str_name(name) ? VAR_STR : VAR_NUM;
             v->ndim = 0;
@@ -1590,12 +1592,20 @@ static int cmd_dim(Interp *ip, char *args) {
             if (total > MAX_ARRAY_SIZE) { basic_stderr("Array too large: %d\n", total); total = MAX_ARRAY_SIZE; }
             if (var_is_str_name(name)) {
                 v->kind = VAR_ARRAY_STR; v->dim[0] = dim1; v->dim[1] = dim2; v->ndim = ndim;
-                v->arr_str = (char **)calloc(total, sizeof(char *));
-                for (int i = 0; i < total; i++) v->arr_str[i] = str_dup("");
+                /* Use static array from Var struct instead of calloc */
+                /* Initialize all string pointers to empty strings */
+                for (int i = 0; i < total; i++) {
+                    if (v->arr_str[i]) free(v->arr_str[i]);
+                    v->arr_str[i] = str_dup("");
+                }
             } else {
                 v->kind = VAR_ARRAY_NUM; v->dim[0] = dim1; v->dim[1] = dim2; v->ndim = ndim;
-                v->arr_num = (mpf_t *)calloc(total, sizeof(mpf_t));
-                for (int i = 0; i < total; i++) { mpf_init2(v->arr_num[i], g_prec); mpf_set_ui(v->arr_num[i], 0); }
+                /* Use static array from Var struct instead of calloc */
+                for (int i = 0; i < total; i++) { 
+                    mpf_clear(v->arr_num[i]);
+                    mpf_init2(v->arr_num[i], g_prec); 
+                    mpf_set_ui(v->arr_num[i], 0); 
+                }
             }
         }
         p = sk(p);
