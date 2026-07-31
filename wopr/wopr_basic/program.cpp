@@ -207,13 +207,24 @@ void load(char *filename) {
     FILE *f = fopen(filename, "r");
     if (!f) { perror(filename); return; }
 
+    /* Check file size before loading */
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    if (file_size > MAX_LINE_LEN) {
+        basic_stderr("File too large: %ld bytes (max %d)\n", file_size, MAX_LINE_LEN);
+        fclose(f);
+        return;
+    }
+
     label_clear();
 
     /* ---- detect format by scanning for the first code line ---- */
     int numbered = 0;
     char *buf = (char *)malloc(MAX_LINE_LEN);
     if (!buf) { perror("malloc"); fclose(f); return; }
-    while (fgets(buf, sizeof buf, f)) {
+    while (fgets(buf, MAX_LINE_LEN, f)) {
         buf[strcspn(buf, "\r\n")] = '\0';
         char *p = buf;
         while (isspace((unsigned char)*p)) p++;
@@ -226,7 +237,7 @@ void load(char *filename) {
     /* ---- NUMBERED path ---- */
     if (numbered) {
         int inside_type_n = 0;
-        while (fgets(buf, sizeof buf, f)) {
+        while (fgets(buf, MAX_LINE_LEN, f)) {
             buf[strcspn(buf, "\r\n")] = '\0';
             char *p = buf;
             while (isspace((unsigned char)*p)) p++;
