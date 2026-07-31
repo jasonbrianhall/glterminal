@@ -379,6 +379,7 @@ void load(char *filename) {
             #undef STORE_SEG
         }
         fclose(f);
+        free(buf);  /* Free buffer before returning */
         qsort(g_lines, g_nlines, sizeof(Line), line_cmp);
         return;
     }
