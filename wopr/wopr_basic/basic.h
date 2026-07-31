@@ -63,20 +63,20 @@ BASIC_NS_BEGIN
 /* ================================================================
  * Configuration constants
  * ================================================================ */
+#define CTRL_STACK_MAX    16384
 #define DEFAULT_PREC     128
 #define DEFAULT_BUFFER  4096
-#define PRINT_DIGITS      60
-#define MAX_VARS        16384
-#define MAX_VARNAME       64
-#define MAX_LINES       8192
-#define MAX_LINE_LEN    16384
-#define CTRL_STACK_MAX    16384
 #define MAX_ARRAY_DIMS     2
 #define MAX_ARRAY_SIZE  4096
-#define MAX_FILE_HANDLES  16
-#define MAX_DEF_FN        32
 #define MAX_DATA_ITEMS  4096
-#define MAX_STMTS         32
+#define MAX_DEF_FN        32
+#define MAX_FILE_HANDLES  16
+#define MAX_LINES       8192
+#define MAX_LINE_LEN    1048576
+#define MAX_STMTS       16384
+#define MAX_VARNAME     16384
+#define MAX_VARS        16384
+#define PRINT_DIGITS      60
 
 /* ================================================================
  * Global interpreter settings
