@@ -1234,9 +1234,6 @@ void sftp_console_open(int /*win_w*/, int /*win_h*/) {
 }
 
 void sftp_console_close() {
-    if (sftp_webserver_running()) {
-        sftp_webserver_stop();
-    }
     g_sftp_console_visible = false;
 }
 
