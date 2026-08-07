@@ -409,7 +409,7 @@ int main(int argc, char **argv) {
             "Your graphics card or driver does not support OpenGL 3.3.\n"
             "Please ensure you have:\n"
             "- A compatible GPU (most modern GPUs support OpenGL 3.3+)\n"
-            "- Updated graphics drivers\n\n"
+            "- Updated graphics drivers\n\nSometimes this works in Linux --> MESA_GL_VERSION_OVERRIDE=3.3 MESA_GLSL_VERSION_OVERRIDE=330 flt\n\n"
             "Error: %s", SDL_GetError());
         SDL_ShowSimpleMessageBox(
             SDL_MESSAGEBOX_ERROR,
