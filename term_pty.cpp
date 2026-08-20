@@ -29,15 +29,14 @@ bool term_spawn(Terminal *t, const char *cmd) {
     }
 
     if (pid == 0) {
-        // --- terminal-related env you already set ---
-        char cols_str[16], rows_str[16];
-        snprintf(cols_str, sizeof(cols_str), "%d", t->cols);
-        snprintf(rows_str, sizeof(rows_str), "%d", t->rows);
-
+        // NOTE: deliberately NOT setting $COLUMNS/$LINES here. ncurses
+        // prioritizes those env vars over the real ioctl(TIOCGWINSZ) size,
+        // and since they'd only ever be set once (at spawn), they go stale
+        // after any resize — causing apps like top to wrap/pad at the old
+        // width forever. The pty winsize (set below, and kept in sync by
+        // term_resize's TIOCSWINSZ call) is the single source of truth.
         setenv("TERM",      "xterm-kitty", 1);
         setenv("COLORTERM", "truecolor",   1);
-        setenv("COLUMNS",   cols_str,      1);
-        setenv("LINES",     rows_str,      1);
 
         // --- X11-related env: preserve if present ---
         const char *disp = getenv("DISPLAY");

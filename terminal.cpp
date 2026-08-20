@@ -198,6 +198,8 @@ static void dispatch_csi(Terminal *t) {
     case 'C': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_min(t->cols-1,t->cur_col+n); break; }
     case 'D': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_max(0,t->cur_col-n); break; }
     case 'G': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_clamp(n-1,0,t->cols-1); break; }
+    case 'd': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_clamp(n-1,0,t->rows-1); break; }
+    case 'e': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_min(t->rows-1,t->cur_row+n); break; }
     case 'J': {
         int n=atoi(p);
         if (n==2||n==3) {
@@ -257,12 +259,14 @@ static void dispatch_csi(Terminal *t) {
                         t->cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
                     t->in_alt_screen = true;
                     t->cur_row = t->cur_col = 0;
+                    t->scroll_top = 0; t->scroll_bot = t->rows - 1;
                     term_dirty_all(t);
                 } else if (!set && t->in_alt_screen) {
                     Cell *tmp = t->cells;
                     t->cells = t->alt_cells;
                     t->alt_cells = tmp;
                     t->in_alt_screen = false;
+                    t->scroll_top = 0; t->scroll_bot = t->rows - 1;
                     if (mode == 1049) {
                         t->cur_row   = SDL_clamp(t->saved_cur_row, 0, t->rows - 1);
                         t->cur_col   = SDL_clamp(t->saved_cur_col, 0, t->cols - 1);
