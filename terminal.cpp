@@ -93,7 +93,7 @@ Cell* vcell(Terminal *t, int vrow, int col) {
 static void scroll_up(Terminal *t) {
     int top = t->scroll_top;
     int bot = SDL_min(t->scroll_bot, t->rows - 1);
-    if (top == 0) sb_push(t, top);
+    if (top == 0 && !t->in_alt_screen) sb_push(t, top);
     if (bot > top)
         memmove(&CELL(t,top,0), &CELL(t,top+1,0), sizeof(Cell)*t->cols*(bot-top));
     for (int c = 0; c < t->cols; c++)
