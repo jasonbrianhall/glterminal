@@ -14,11 +14,16 @@
 void (*g_term_write_override)(Terminal *t, const char *s, int n) = nullptr;
 
 bool term_spawn(Terminal *t, const char *cmd) {
+    // See term_resize() for why: report one fewer column/row than we
+    // actually render, so a full-width line from the child never reaches
+    // our real autowrap boundary.
+    int report_cols = t->cols > 1 ? t->cols - 1 : t->cols;
+    int report_rows = t->rows > 1 ? t->rows - 1 : t->rows;
     struct winsize ws = {
-        .ws_row    = (unsigned short)t->rows,
-        .ws_col    = (unsigned short)t->cols,
-        .ws_xpixel = (unsigned short)(t->cols*(int)t->cell_w),
-        .ws_ypixel = (unsigned short)(t->rows*(int)t->cell_h)
+        .ws_row    = (unsigned short)report_rows,
+        .ws_col    = (unsigned short)report_cols,
+        .ws_xpixel = (unsigned short)(report_cols*(int)t->cell_w),
+        .ws_ypixel = (unsigned short)(report_rows*(int)t->cell_h)
     };
 
     int master;

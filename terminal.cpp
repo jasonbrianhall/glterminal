@@ -805,11 +805,18 @@ void term_resize(Terminal *t, int win_w, int win_h) {
 
 #ifndef _WIN32
     if (t->pty_fd >= 0) {
+        // Report one fewer column/row than we actually render. We still
+        // render the full grid — this margin only affects what child
+        // processes (top, bash, etc.) believe COLUMNS/LINES to be, so a
+        // line padded to the full reported width never reaches our real
+        // autowrap boundary and can't trigger a spurious extra newline.
+        int report_cols = new_cols > 1 ? new_cols - 1 : new_cols;
+        int report_rows = new_rows > 1 ? new_rows - 1 : new_rows;
         struct winsize ws = {
-            .ws_row    = (unsigned short)new_rows,
-            .ws_col    = (unsigned short)new_cols,
-            .ws_xpixel = (unsigned short)(new_cols * (int)t->cell_w),
-            .ws_ypixel = (unsigned short)(new_rows * (int)t->cell_h),
+            .ws_row    = (unsigned short)report_rows,
+            .ws_col    = (unsigned short)report_cols,
+            .ws_xpixel = (unsigned short)(report_cols * (int)t->cell_w),
+            .ws_ypixel = (unsigned short)(report_rows * (int)t->cell_h),
         };
         ioctl(t->pty_fd, TIOCSWINSZ, &ws);
     }
