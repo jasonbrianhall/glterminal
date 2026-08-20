@@ -29,6 +29,8 @@ struct Terminal {
     TermColorVal  cur_fg, cur_bg;
     uint8_t       cur_attrs;
     ParseState    state;
+    char          charset_slot;   // which Gn ('(' ')' '*' '+') a PS_CHARSET byte designates
+    bool          g0_line_drawing; // true if G0 currently designated as DEC special graphics
     char          csi[256];
     int           csi_len;
     char          osc[512];

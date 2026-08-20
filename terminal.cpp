@@ -26,6 +26,16 @@ extern int g_basic_win_h;
 // and other multiplexers send APC sequences that aren't kitty graphics.
 bool g_kitty_enabled = true;
 
+// DEC Special Graphics charset — maps ASCII 0x5f..0x7e to the Unicode
+// box-drawing / symbol glyphs used when G0 is designated as line-drawing
+// (ESC(0), e.g. by ncurses' smacs/rmacs. Index 0 == 0x5f.
+static const uint32_t DEC_LINE_DRAWING[] = {
+    0x00A0, 0x25C6, 0x2592, 0x2409, 0x240C, 0x240D, 0x240A, 0x00B0, // _`abcdef
+    0x00B1, 0x2424, 0x240B, 0x2518, 0x2510, 0x250C, 0x2514, 0x253C, // ghijklmn
+    0x23BA, 0x23BB, 0x2500, 0x23BC, 0x23BD, 0x251C, 0x2524, 0x2534, // opqrstuv
+    0x252C, 0x2502, 0x2264, 0x2265, 0x03C0, 0x2260, 0x00A3, 0x00B7, // wxyz{|}~
+};
+
 // ============================================================================
 // SCROLLBACK
 // ============================================================================
@@ -212,10 +222,60 @@ static void dispatch_csi(Terminal *t) {
         break;
     }
     case 'h': case 'l': {
-        // DECSET / DECRST (only parse ?25 for cursor visibility)
-        int mode = atoi(p);
-        if (final == 'h' && mode == 25) t->cursor_on = true;
-        if (final == 'l' && mode == 25) t->cursor_on = false;
+        // DECSET / DECRST. Private modes are prefixed with '?' in the CSI
+        // buffer (e.g. "?1049") — atoi() on that returns 0, so it must be
+        // skipped before parsing, or every private mode silently no-ops.
+        bool priv = (p[0] == '?');
+        int mode = atoi(priv ? p + 1 : p);
+        bool set = (final == 'h');
+        if (priv) {
+            switch (mode) {
+            case 25: t->cursor_on = set; break;
+            case 1:  t->app_cursor_keys = set; break;
+            case 1000: case 1002: case 1003: t->mouse_report = set; break;
+            case 1006: t->mouse_sgr = set; break;
+            case 2004: t->bracketed_paste = set; break;
+            case 47: case 1047: case 1049: {
+                // Alternate screen buffer (smcup/rmcup) — used by ncurses
+                // apps like top/sl/vim/less. Without this their full-screen
+                // redraws land directly on the live/main buffer instead of
+                // a separate one, mixing with whatever was already there.
+                if (set && !t->in_alt_screen) {
+                    if (mode == 1049) {
+                        t->saved_cur_row   = t->cur_row;
+                        t->saved_cur_col   = t->cur_col;
+                        t->saved_cur_fg    = t->cur_fg;
+                        t->saved_cur_bg    = t->cur_bg;
+                        t->saved_cur_attrs = t->cur_attrs;
+                    }
+                    if (!t->alt_cells)
+                        t->alt_cells = (Cell*)malloc(sizeof(Cell) * t->cols * t->rows);
+                    Cell *tmp = t->cells;
+                    t->cells = t->alt_cells;
+                    t->alt_cells = tmp;
+                    for (int i = 0; i < t->cols * t->rows; i++)
+                        t->cells[i] = {' ', TCOLOR_PALETTE(7), TCOLOR_PALETTE(0), 0, {0,0,0}};
+                    t->in_alt_screen = true;
+                    t->cur_row = t->cur_col = 0;
+                    term_dirty_all(t);
+                } else if (!set && t->in_alt_screen) {
+                    Cell *tmp = t->cells;
+                    t->cells = t->alt_cells;
+                    t->alt_cells = tmp;
+                    t->in_alt_screen = false;
+                    if (mode == 1049) {
+                        t->cur_row   = SDL_clamp(t->saved_cur_row, 0, t->rows - 1);
+                        t->cur_col   = SDL_clamp(t->saved_cur_col, 0, t->cols - 1);
+                        t->cur_fg    = t->saved_cur_fg;
+                        t->cur_bg    = t->saved_cur_bg;
+                        t->cur_attrs = t->saved_cur_attrs;
+                    }
+                    term_dirty_all(t);
+                }
+                break;
+            }
+            }
+        }
         break;
     }
     case 'M': {
@@ -369,8 +429,11 @@ void term_feed(Terminal *t, const char *data, int size) {
             } else if (ch == 0x0d) {
                 t->cur_col = 0;
             } else if (ch >= 32 && ch < 127) {
+                uint32_t cp = ch;
+                if (t->g0_line_drawing && ch >= 0x5f && ch <= 0x7e)
+                    cp = DEC_LINE_DRAWING[ch - 0x5f];
                 if (t->cur_col < t->cols) {
-                    CELL(t, t->cur_row, t->cur_col) = {(char)ch, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
+                    CELL(t, t->cur_row, t->cur_col) = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
                     term_dirty_row(t, t->cur_row);
                 }
                 t->cur_col++;
@@ -440,9 +503,23 @@ void term_feed(Terminal *t, const char *data, int size) {
                 t->cur_bg = t->saved7_bg;
                 t->cur_attrs = t->saved7_attrs;
                 t->state = PS_NORMAL;
+            } else if (ch == '(' || ch == ')' || ch == '*' || ch == '+') {
+                // Gn charset designation (SCS) — e.g. ESC(B (ASCII),
+                // ESC(0 (DEC line drawing). The next byte is the charset
+                // designator and must be swallowed here, not left to fall
+                // through to the else-branch below, where it would print
+                // as literal text (this is the 'B' bug from `top`).
+                t->charset_slot = ch;
+                t->state = PS_CHARSET;
             } else {
                 t->state = PS_NORMAL;
             }
+            break;
+
+        case PS_CHARSET:
+            if (t->charset_slot == '(')
+                t->g0_line_drawing = (ch == '0');
+            t->state = PS_NORMAL;
             break;
 
         case PS_CSI:
@@ -624,6 +701,7 @@ void term_soft_reset(Terminal *t) {
     t->scroll_bot = t->rows - 1;
 
     t->state    = PS_NORMAL;
+    t->g0_line_drawing = false;
     t->csi_len  = 0;
     t->osc_len  = 0;
     t->apc_len  = 0;
