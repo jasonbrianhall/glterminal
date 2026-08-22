@@ -60,7 +60,12 @@ static DWORD WINAPI pty_reader_thread(LPVOID arg) {
 bool term_spawn(Terminal *t, const char *cmd) {
     s_pipe_mutex = CreateMutex(nullptr, FALSE, nullptr);
 
-    COORD size = { (SHORT)t->cols, (SHORT)t->rows };
+    // See term_resize()/term_pty_resize() for why: report one fewer
+    // column/row than we actually render, so a full-width line from the
+    // child never reaches our real autowrap boundary (mirrors term_pty.cpp).
+    int report_cols = t->cols > 1 ? t->cols - 1 : t->cols;
+    int report_rows = t->rows > 1 ? t->rows - 1 : t->rows;
+    COORD size = { (SHORT)report_cols, (SHORT)report_rows };
 
     HANDLE hPipeIn_r, hPipeIn_w, hPipeOut_r, hPipeOut_w;
     if (!CreatePipe(&hPipeIn_r,  &hPipeIn_w,  nullptr, 0)) return false;
@@ -190,7 +195,12 @@ bool term_child_exited(void) {
 
 void term_pty_resize(int cols, int rows) {
     if (!s_hPC) return;
-    COORD size = { (SHORT)cols, (SHORT)rows };
+    // Caller (term_resize) passes the real grid size — apply the same
+    // report-one-fewer margin used at spawn time, so ConPTY's idea of
+    // COLUMNS/LINES stays one behind our actual render size.
+    int report_cols = cols > 1 ? cols - 1 : cols;
+    int report_rows = rows > 1 ? rows - 1 : rows;
+    COORD size = { (SHORT)report_cols, (SHORT)report_rows };
     ResizePseudoConsole(s_hPC, size);
 }
 #endif
