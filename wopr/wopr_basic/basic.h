@@ -72,11 +72,22 @@ BASIC_NS_BEGIN
 #define MAX_DEF_FN        32
 #define MAX_FILE_HANDLES  16
 #define MAX_LINES       8192
-#define MAX_LINE_LEN    1048576
+#define MAX_LINE_LEN    16384   /* upper bound for a single line/body — buffers below are
+                                    allocated dynamically to the actual string length, this
+                                    is just a sanity cap used when reading/validating input */
 #define MAX_STMTS       16384
-#define MAX_VARNAME     16384
+#define MAX_VARNAME     1024    /* upper bound for identifiers — same story, see above */
 #define MAX_VARS        16384
 #define PRINT_DIGITS      60
+
+/* Small strdup helper — avoids relying on POSIX strdup() (not guaranteed
+ * under -std=c++17 strict mode) for the dynamic-allocation fields below. */
+static inline char *bstrdup(const char *s) {
+    size_t n = strlen(s) + 1;
+    char *p = (char*)malloc(n);
+    if (p) memcpy(p, s, n);
+    return p;
+}
 
 /* ================================================================
  * Global interpreter settings
@@ -118,7 +129,7 @@ FileHandle *fh_get(int n);
 typedef enum { VAR_NUM, VAR_STR, VAR_ARRAY_NUM, VAR_ARRAY_STR } VarKind;
 
 typedef struct {
-    char    name[MAX_VARNAME];
+    char   *name;        /* dynamically allocated (bstrdup), not fixed-size */
     VarKind kind;
     /* scalar */
     mpf_t   num;
@@ -145,7 +156,7 @@ char  **arr_str_elem(Var *v, int i, int j);
  * ================================================================ */
 typedef struct {
     int  linenum;
-    char text[MAX_LINE_LEN];
+    char *text;   /* dynamically allocated (bstrdup), not fixed-size */
 } Line;
 
 extern Line* g_lines;
@@ -222,9 +233,9 @@ TypeDef *typedef_find(char *name);
  * DEF FN store
  * ================================================================ */
 typedef struct {
-    char name[MAX_VARNAME];
-    char param[MAX_VARNAME];
-    char body[MAX_LINE_LEN];
+    char *name;    /* dynamically allocated (bstrdup), not fixed-size */
+    char *param;
+    char *body;
 } DefFn;
 
 extern DefFn g_defn[MAX_DEF_FN];
