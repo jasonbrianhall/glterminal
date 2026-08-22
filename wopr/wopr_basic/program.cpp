@@ -16,7 +16,7 @@ BASIC_NS_BEGIN
 Line* g_lines;
 
 struct LinesInit {
-    LinesInit() { g_lines = new Line[MAX_LINES]; }
+    LinesInit() { g_lines = new Line[MAX_LINES](); }
     ~LinesInit() { delete[] g_lines; }
 };
 
@@ -206,17 +206,6 @@ static int is_label_def(char *p, char *name_out) {
 void load(char *filename) {
     FILE *f = fopen(filename, "r");
     if (!f) { perror(filename); return; }
-
-    /* Check file size before loading */
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
-    if (file_size > MAX_LINE_LEN) {
-        basic_stderr("File too large: %ld bytes (max %d)\n", file_size, MAX_LINE_LEN);
-        fclose(f);
-        return;
-    }
 
     label_clear();
 

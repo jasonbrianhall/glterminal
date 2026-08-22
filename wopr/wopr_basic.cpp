@@ -471,7 +471,7 @@ static int basic_thread_fn(void *userdata)
         if (g_vars) {
             for (int i = 0; i < MAX_VARS; i++) {
                 Var *v = &g_vars[i];
-                if (!v->name[0]) continue;
+                if (!v->name) continue;
                 
                 if (v->kind == VAR_STR && v->str) { 
                     free(v->str); 

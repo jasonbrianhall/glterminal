@@ -17,7 +17,7 @@ Var* g_vars = nullptr;
 
 struct VarsInit {
     VarsInit() {
-        g_vars = new Var[MAX_VARS];
+        g_vars = new Var[MAX_VARS]();
     }
     ~VarsInit() {
         for (int i = 0; i < g_nvar; i++) {
