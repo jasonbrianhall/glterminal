@@ -199,7 +199,7 @@ LDFLAGS_WIN  = $(SDL2_LIBS_WIN) $(GLEW_LIBS_WIN) $(FREETYPE_LIBS_WIN) \
                $(SSH_LIBS_WIN) \
                -lopengl32 -lpng -lz -lwinmm -lSDL2_mixer $(CODEC_LIBS_WIN) -lshlwapi -lws2_32 \
                -lmf -lmfplat -lmfreadwrite -lmfuuid -lole32 -loleaut32 \
-               -s -Wl,--gc-sections -flto -lwebp
+               -Wl,--gc-sections -flto -lwebp -Wl,-Map=$(BUILD_DIR_WIN)/flt.map
 
 CXXFLAGS_WIN_DEBUG = $(CXXFLAGS_COMMON) \
                      $(SDL2_CFLAGS_WIN) $(GLEW_CFLAGS_WIN) $(FREETYPE_CFLAGS_WIN) \
