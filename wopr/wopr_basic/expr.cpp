@@ -641,7 +641,7 @@ static void parse_expr_p(Parser *ps, mpf_t result) {
         skip_ws_p(ps);
 
         /* detect operator */
-        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        char op[3] = { ps->p[0], ps->p[0] ? ps->p[1] : '\0', '\0' };
         int oplen = 0;
 
         if (!strcmp(op,"<>") || !strcmp(op,"><") ||
@@ -782,7 +782,7 @@ static void parse_and_operand_p(Parser *ps, mpf_t result) {
         char lhs_s[DEFAULT_BUFFER], rhs_s[DEFAULT_BUFFER];
         ps->p = sk(eval_str_expr(ps->p, lhs_s, sizeof lhs_s));
         skip_ws_p(ps);
-        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        char op[3] = { ps->p[0], ps->p[0] ? ps->p[1] : '\0', '\0' };
         int oplen = 0;
         if (!strcmp(op,"<>")||!strcmp(op,"><")||!strcmp(op,"<=")||
             !strcmp(op,"=<")||!strcmp(op,">=")||!strcmp(op,"=>")) oplen=2;
@@ -802,7 +802,7 @@ static void parse_and_operand_p(Parser *ps, mpf_t result) {
     } else {
         /* numeric comparison */
         skip_ws_p(ps);
-        char op[3] = { ps->p[0], ps->p[1], '\0' };
+        char op[3] = { ps->p[0], ps->p[0] ? ps->p[1] : '\0', '\0' };
         int oplen = 0;
         if (!strcmp(op,"<>")||!strcmp(op,"><")||!strcmp(op,"<=")||
             !strcmp(op,"=<")||!strcmp(op,">=")||!strcmp(op,"=>")) oplen=2;
@@ -962,7 +962,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
             if (is_str_token(ps->p)) { \
                 char _lhs[1024], _rhs[1024]; \
                 ps->p = sk(eval_str_expr(ps->p, _lhs, sizeof _lhs)); \
-                char _op[3]={ps->p[0],ps->p[1],'\0'}; int _ol=2; \
+                char _op[3]={ps->p[0],ps->p[0]?ps->p[1]:'\0','\0'}; int _ol=2; \
                 if(!strcmp(_op,"<>")||!strcmp(_op,"><")||!strcmp(_op,"<=")||!strcmp(_op,"=<")||!strcmp(_op,">=")||!strcmp(_op,"=>"));else{_op[1]='\0';_ol=1;} \
                 ps->p=sk(ps->p+_ol); ps->p=sk(eval_str_expr(ps->p,_rhs,sizeof _rhs)); \
                 int _c=strcmp(_lhs,_rhs),_cmp; \
@@ -973,7 +973,7 @@ static void parse_primary_p(Parser *ps, mpf_t result) {
                 mpf_set_si(res,_cmp?-1:0); \
             } else { \
                 parse_expr_p(ps,res); skip_ws_p(ps); \
-                char _op[3]={ps->p[0],ps->p[1],'\0'}; int _ol=2; \
+                char _op[3]={ps->p[0],ps->p[0]?ps->p[1]:'\0','\0'}; int _ol=2; \
                 if(!strcmp(_op,"<>")||!strcmp(_op,"><")||!strcmp(_op,"<=")||!strcmp(_op,"=<")||!strcmp(_op,">=")||!strcmp(_op,"=>"));else if(ps->p[0]=='<'||ps->p[0]=='>'||ps->p[0]=='='){_op[1]='\0';_ol=1;}else _ol=0; \
                 if(_ol>0){ ps->p=sk(ps->p+_ol); mpf_t _r; mpf_init2(_r,g_prec); parse_expr_p(ps,_r); \
                 int _c=mpf_cmp(res,_r),_cmp; \

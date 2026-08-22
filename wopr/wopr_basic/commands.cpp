@@ -1005,7 +1005,7 @@ static int cmd_select(Interp *ip, char *args) {
             } else if (kw_match(t, "IS")) {
                 /* CASE IS op val */
                 t = sk(t + 2);
-                char op[3] = {t[0], t[1], '\0'}; int ol = 2;
+                char op[3] = {t[0], t[0] ? t[1] : '\0', '\0'}; int ol = 2;
                 if (!strcmp(op,"<>")||!strcmp(op,"><")||!strcmp(op,"<=")||
                     !strcmp(op,"=<")||!strcmp(op,">=")||!strcmp(op,"=>")) ;
                 else { op[1] = '\0'; ol = 1; }
@@ -2521,7 +2521,7 @@ static int eval_one_cmp(char **pp) {
         if (is_str_token(p)) {
             char lhs[1024], rhs[1024];
             p = sk(eval_str_or_inkey(p, lhs, sizeof lhs));
-            char op2[3] = {p[0],p[1],'\0'}; int oplen = 2;
+            char op2[3] = {p[0], p[0] ? p[1] : '\0', '\0'}; int oplen = 2;
             if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
                 !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
             else { op2[1] = '\0'; oplen = 1; }
@@ -2535,7 +2535,7 @@ static int eval_one_cmp(char **pp) {
         } else {
             mpf_t lhs; mpf_init2(lhs, g_prec);
             p = sk(eval_expr(p, lhs));
-            char op2[3] = {p[0],p[1],'\0'}; int oplen = 2;
+            char op2[3] = {p[0], p[0] ? p[1] : '\0', '\0'}; int oplen = 2;
             if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
                 !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
             else if (p[0]=='<'||p[0]=='>'||p[0]=='=') { op2[1]='\0'; oplen=1; }
@@ -2554,7 +2554,7 @@ static int eval_one_cmp(char **pp) {
                 p = sk(p + (is_and ? 3 : 2));
                 mpf_t lhs2; mpf_init2(lhs2, g_prec);
                 p = sk(eval_expr(p, lhs2));
-                char op3[3]={p[0],p[1],'\0'}; int ol3=2;
+                char op3[3] = {p[0], p[0] ? p[1] : '\0', '\0'}; int ol3 = 2;
                 if (!strcmp(op3,"<>")||!strcmp(op3,"><")||!strcmp(op3,"<=")||
                     !strcmp(op3,"=<")||!strcmp(op3,">=")||!strcmp(op3,"=>")) ;
                 else if (p[0]=='<'||p[0]=='>'||p[0]=='=') { op3[1]='\0'; ol3=1; }
@@ -2581,7 +2581,7 @@ static int eval_one_cmp(char **pp) {
     if (is_str_token(p)) {
         char lhs[1024], rhs[1024];
         p = sk(eval_str_or_inkey(p, lhs, sizeof lhs));
-        char op2[3] = {p[0],p[1],'\0'}; int oplen = 2;
+        char op2[3] = {p[0], p[0] ? p[1] : '\0', '\0'}; int oplen = 2;
         if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
             !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
         else { op2[1]='\0'; oplen=1; }
@@ -2595,7 +2595,7 @@ static int eval_one_cmp(char **pp) {
     } else {
         mpf_t lhs; mpf_init2(lhs, g_prec);
         p = sk(eval_expr(p, lhs));
-        char op2[3] = {p[0],p[1],'\0'}; int oplen = 2;
+        char op2[3] = {p[0], p[0] ? p[1] : '\0', '\0'}; int oplen = 2;
         if (!strcmp(op2,"<>")||!strcmp(op2,"><")||!strcmp(op2,"<=")||
             !strcmp(op2,"=<")||!strcmp(op2,">=")||!strcmp(op2,"=>")) ;
         else if (p[0]=='<'||p[0]=='>'||p[0]=='=') { op2[1]='\0'; oplen=1; }
