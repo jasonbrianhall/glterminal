@@ -145,6 +145,13 @@ bool term_spawn(Terminal *t, const char *cmd) {
 
     if (!ok) return false;
 
+    // ConPTY quirk: a resize issued before the child process is actually
+    // attached to the pseudo console can be silently dropped — the COORD
+    // given to CreatePseudoConsole() alone isn't reliably honored on some
+    // Windows builds. Re-issue it now that CreateProcessW has succeeded
+    // and the child is attached, so it reliably takes effect.
+    ResizePseudoConsole(s_hPC, size);
+
     s_hThread = CreateThread(nullptr, 0, pty_reader_thread, t, 0, nullptr);
     return true;
 }
