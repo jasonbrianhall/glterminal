@@ -2837,20 +2837,27 @@ static int cmd_def(Interp *ip, char *args) {
     p += 2;
     if (g_defn_count >= MAX_DEF_FN) return 0;
     DefFn *fn = &g_defn[g_defn_count++];
+
+    char namebuf[MAX_VARNAME];
     int i = 0;
-    fn->name[i++] = 'F'; fn->name[i++] = 'N';
-    while (isalnum((unsigned char)*p) && i < MAX_VARNAME - 1) fn->name[i++] = (char)toupper(*p++);
-    fn->name[i] = '\0';
+    namebuf[i++] = 'F'; namebuf[i++] = 'N';
+    while (isalnum((unsigned char)*p) && i < MAX_VARNAME - 1) namebuf[i++] = (char)toupper(*p++);
+    namebuf[i] = '\0';
+    fn->name = bstrdup(namebuf);
+
     p = sk(p);
-    fn->param[0] = '\0';
+    char parambuf[MAX_VARNAME];
+    parambuf[0] = '\0';
     if (*p == '(') {
         p = sk(p + 1); int j = 0;
-        while (*p && *p != ')' && j < MAX_VARNAME - 1) fn->param[j++] = (char)toupper(*p++);
-        fn->param[j] = '\0';
+        while (*p && *p != ')' && j < MAX_VARNAME - 1) parambuf[j++] = (char)toupper(*p++);
+        parambuf[j] = '\0';
         if (*p == ')') p++;
     }
+    fn->param = bstrdup(parambuf);
+
     p = sk(p); if (*p == '=') p = sk(p + 1);
-    strncpy(fn->body, p, MAX_LINE_LEN - 1);
+    fn->body = bstrdup(p);
     return 0;
 }
 

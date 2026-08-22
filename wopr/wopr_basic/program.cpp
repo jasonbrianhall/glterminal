@@ -324,12 +324,14 @@ void load(char *filename) {
                 g_lines[g_nlines].linenum = (lnum); \
                 char *_sp = (sp); \
                 while (isspace((unsigned char)*_sp)) _sp++; \
+                char _linebuf[MAX_LINE_LEN]; \
                 if (*_sp == '?') { \
-                    snprintf(g_lines[g_nlines].text, MAX_LINE_LEN, "PRINT %s", _sp + 1); \
+                    snprintf(_linebuf, MAX_LINE_LEN, "PRINT %s", _sp + 1); \
                 } else { \
-                    strncpy(g_lines[g_nlines].text, _sp, MAX_LINE_LEN - 1); \
-                    g_lines[g_nlines].text[MAX_LINE_LEN - 1] = '\0'; \
+                    strncpy(_linebuf, _sp, MAX_LINE_LEN - 1); \
+                    _linebuf[MAX_LINE_LEN - 1] = '\0'; \
                 } \
+                g_lines[g_nlines].text = bstrdup(_linebuf); \
                 g_nlines++; \
             } while(0)
 
@@ -561,12 +563,14 @@ void load(char *filename) {
             g_lines[g_nlines].linenum = pseudo; \
             char *_sp = (sp); \
             while (isspace((unsigned char)*_sp)) _sp++; \
+            char _linebuf[MAX_LINE_LEN]; \
             if (*_sp == '?') { \
-                snprintf(g_lines[g_nlines].text, MAX_LINE_LEN, "PRINT %s", _sp + 1); \
+                snprintf(_linebuf, MAX_LINE_LEN, "PRINT %s", _sp + 1); \
             } else { \
-                strncpy(g_lines[g_nlines].text, _sp, MAX_LINE_LEN - 1); \
-                g_lines[g_nlines].text[MAX_LINE_LEN - 1] = '\0'; \
+                strncpy(_linebuf, _sp, MAX_LINE_LEN - 1); \
+                _linebuf[MAX_LINE_LEN - 1] = '\0'; \
             } \
+            g_lines[g_nlines].text = bstrdup(_linebuf); \
             g_nlines++; \
         } while(0)
 
@@ -664,6 +668,8 @@ void clear_program(void) {
     /* Free all allocated variable data */
     for (int i = 0; i < g_nvar; i++) {
         Var *v = &g_vars[i];
+        free(v->name);
+        v->name = nullptr;
         if (v->kind == VAR_STR && v->str) {
             free(v->str);
             v->str = nullptr;
@@ -692,7 +698,21 @@ void clear_program(void) {
         }
         mpf_clear(v->num);
     }
-    
+
+    /* Free all program line text */
+    for (int i = 0; i < g_nlines; i++) {
+        free(g_lines[i].text);
+        g_lines[i].text = nullptr;
+    }
+
+    /* Free all DEF FN entries */
+    for (int i = 0; i < g_defn_count; i++) {
+        free(g_defn[i].name);
+        free(g_defn[i].param);
+        free(g_defn[i].body);
+        g_defn[i].name = g_defn[i].param = g_defn[i].body = nullptr;
+    }
+
     /* Free all DATA items */
     for (int i = 0; i < g_data_count; i++) {
         if (g_data[i]) {

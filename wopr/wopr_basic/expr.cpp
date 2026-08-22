@@ -46,24 +46,33 @@ int   g_defn_count = 0;
  * the expression evaluator substitutes them before eval.
  * ================================================================ */
 #define MAX_CONSTS 256
-typedef struct { char name[MAX_VARNAME]; char value[MAX_LINE_LEN]; int is_str; } ConstEntry;
+typedef struct { char *name; char *value; int is_str; } ConstEntry;
 static ConstEntry g_consts[MAX_CONSTS];
 static int        g_nconsts = 0;
 
-void const_clear(void) { g_nconsts = 0; }
+void const_clear(void) {
+    for (int i = 0; i < g_nconsts; i++) {
+        free(g_consts[i].name);
+        free(g_consts[i].value);
+        g_consts[i].name  = NULL;
+        g_consts[i].value = NULL;
+    }
+    g_nconsts = 0;
+}
 
 void const_set(char *name, char *value, int is_str) {
     /* update existing */
     for (int i = 0; i < g_nconsts; i++) {
         if (strcasecmp(g_consts[i].name, name) == 0) {
-            strncpy(g_consts[i].value, value, MAX_LINE_LEN - 1);
+            free(g_consts[i].value);
+            g_consts[i].value  = bstrdup(value);
             g_consts[i].is_str = is_str;
             return;
         }
     }
     if (g_nconsts >= MAX_CONSTS) { basic_stderr("Too many CONSTs\n"); return; }
-    strncpy(g_consts[g_nconsts].name,  name,  MAX_VARNAME  - 1);
-    strncpy(g_consts[g_nconsts].value, value, MAX_LINE_LEN - 1);
+    g_consts[g_nconsts].name  = bstrdup(name);
+    g_consts[g_nconsts].value = bstrdup(value);
     g_consts[g_nconsts].is_str = is_str;
     g_nconsts++;
 }

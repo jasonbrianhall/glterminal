@@ -20,6 +20,15 @@ struct VarsInit {
         g_vars = new Var[MAX_VARS];
     }
     ~VarsInit() {
+        for (int i = 0; i < g_nvar; i++) {
+            free(g_vars[i].name);
+            if (g_vars[i].kind == VAR_STR) free(g_vars[i].str);
+            if (g_vars[i].kind == VAR_ARRAY_STR) {
+                int total = g_vars[i].dim[0] * (g_vars[i].ndim == 2 ? g_vars[i].dim[1] : 1);
+                for (int j = 0; j < total && j < MAX_ARRAY_SIZE; j++)
+                    free(g_vars[i].arr_str[j]);
+            }
+        }
         delete[] g_vars;
     }
 };
@@ -100,7 +109,7 @@ Var *var_create(char *name) {
     }
     Var *v = &g_vars[g_nvar++];
     memset(v, 0, sizeof(*v));
-    strncpy(v->name, name, MAX_VARNAME - 1);
+    v->name = bstrdup(name);
     if (var_is_str_name(name)) {
         v->kind = VAR_STR;
         v->str  = str_dup("");

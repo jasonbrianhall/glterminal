@@ -72,9 +72,10 @@ BASIC_NS_BEGIN
 #define MAX_DEF_FN        32
 #define MAX_FILE_HANDLES  16
 #define MAX_LINES       8192
-#define MAX_LINE_LEN    16384   /* upper bound for a single line/body — buffers below are
-                                    allocated dynamically to the actual string length, this
-                                    is just a sanity cap used when reading/validating input */
+#define MAX_LINE_LEN    16384   /* upper bound for a single line/body — the fields that use
+                                    this (Line::text, DefFn::body, ConstEntry::value) are now
+                                    allocated dynamically to the actual string length; this is
+                                    just a sanity cap used when reading/validating input */
 #define MAX_STMTS       16384
 #define MAX_VARNAME     1024    /* upper bound for identifiers — same story, see above */
 #define MAX_VARS        16384

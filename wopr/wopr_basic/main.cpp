@@ -493,8 +493,10 @@ return 0;
             int to = from; p = sk(p);
             if (*p == '-') { p=sk(p+1); to=isdigit((unsigned char)*p)?atoi(p):999999; }
             int w = 0;
-            for (int i = 0; i < g_nlines; i++)
+            for (int i = 0; i < g_nlines; i++) {
                 if (g_lines[i].linenum < from || g_lines[i].linenum > to) g_lines[w++] = g_lines[i];
+                else free(g_lines[i].text);
+            }
             printf("Deleted %d entries.\n", g_nlines - w);
             g_nlines = w;
 
@@ -530,11 +532,18 @@ return 0;
                     for (int j = 0; j < nmap; j++) {
                         if (old_nums[j] == old_target) {
                             char newnum[16]; snprintf(newnum,sizeof newnum,"%d",new_nums[j]);
-                            char after_num[MAX_LINE_LEN];
                             char *end_num = np2;
                             while (isdigit((unsigned char)*end_num)) end_num++;
-                            strncpy(after_num, end_num, MAX_LINE_LEN-1);
-                            snprintf(np2, MAX_LINE_LEN-(np2-g_lines[i].text), "%s%s", newnum, after_num);
+                            /* Build the full replacement line into a temp buffer —
+                               text is no longer a fixed MAX_LINE_LEN buffer with
+                               headroom, so we can't grow it in place. */
+                            size_t prefix_len = (size_t)(np2 - g_lines[i].text);
+                            size_t total = prefix_len + strlen(newnum) + strlen(end_num) + 1;
+                            char *rebuilt = (char*)malloc(total);
+                            memcpy(rebuilt, g_lines[i].text, prefix_len);
+                            snprintf(rebuilt + prefix_len, total - prefix_len, "%s%s", newnum, end_num);
+                            free(g_lines[i].text);
+                            g_lines[i].text = rebuilt;
                             break;
                         }
                     }
@@ -607,8 +616,10 @@ return 0;
             int num = (int)strtol(p, (char **)&p, 10);
             while (isspace((unsigned char)*p)) p++;
             int w = 0;
-            for (int i = 0; i < g_nlines; i++)
+            for (int i = 0; i < g_nlines; i++) {
                 if (g_lines[i].linenum != num) g_lines[w++] = g_lines[i];
+                else free(g_lines[i].text);
+            }
             g_nlines = w;
             if (*p) {
                 if (g_nlines >= MAX_LINES) { display_print("Too many lines\n"); continue; }
@@ -617,8 +628,7 @@ return 0;
                     if (g_lines[i].linenum > num) { ins = i; break; }
                 memmove(&g_lines[ins+1], &g_lines[ins], (g_nlines-ins)*sizeof(Line));
                 g_lines[ins].linenum = num;
-                strncpy(g_lines[ins].text, p, MAX_LINE_LEN-1);
-                g_lines[ins].text[MAX_LINE_LEN-1] = '\0';
+                g_lines[ins].text = bstrdup(p);
                 g_nlines++;
             }
             suppress_ok = 1; continue;  /* no Ok prompt */
