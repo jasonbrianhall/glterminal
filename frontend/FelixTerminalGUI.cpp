@@ -9,6 +9,8 @@
 #include <wx/filefn.h>
 #include <wx/fileconf.h>
 #include <wx/mstream.h>
+#include <wx/hyperlink.h>
+#include <wx/filename.h>
 #ifdef _WIN32
 #include <wx/msw/registry.h>
 #endif
@@ -26,6 +28,7 @@ struct SessionConfig {
     wxString name;
     int connType = 0;
     wxString localShell;
+    wxString termType = "xterm-256color";  // --term value, used for Local and SSH
     
     // Telnet
     wxString telnetHost;
@@ -58,6 +61,11 @@ struct SessionConfig {
     wxString webRootDir = "/";
 };
 
+enum {
+    ID_MENU_EXPORT = wxID_HIGHEST + 1,
+    ID_MENU_IMPORT
+};
+
 class FelixTerminalFrame : public wxFrame {
 public:
     FelixTerminalFrame() : wxFrame(nullptr, wxID_ANY, "Felix Terminal", 
@@ -72,6 +80,34 @@ public:
             icon.CopyFromBitmap(bmp);
             SetIcon(icon);
         }
+        
+        // ========== MENU BAR ==========
+        wxMenuBar *menuBar = new wxMenuBar();
+
+        wxMenu *fileMenu = new wxMenu();
+        fileMenu->Append(wxID_OPEN, "&Load Session\tCtrl+L");
+        fileMenu->Append(wxID_SAVE, "&Save Session\tCtrl+S");
+        fileMenu->Append(wxID_DELETE, "&Delete Session");
+        fileMenu->AppendSeparator();
+        fileMenu->Append(ID_MENU_EXPORT, "&Export Settings...\tCtrl+E");
+        fileMenu->Append(ID_MENU_IMPORT, "&Import Settings...\tCtrl+I");
+        fileMenu->AppendSeparator();
+        fileMenu->Append(wxID_CLOSE, "&Close\tCtrl+Q");
+        menuBar->Append(fileMenu, "&File");
+
+        wxMenu *helpMenu = new wxMenu();
+        helpMenu->Append(wxID_ABOUT, "&About Felix Terminal");
+        menuBar->Append(helpMenu, "&Help");
+
+        SetMenuBar(menuBar);
+
+        fileMenu->Bind(wxEVT_MENU, &FelixTerminalFrame::OnLoadSession, this, wxID_OPEN);
+        fileMenu->Bind(wxEVT_MENU, &FelixTerminalFrame::OnSaveSession, this, wxID_SAVE);
+        fileMenu->Bind(wxEVT_MENU, &FelixTerminalFrame::OnDeleteSession, this, wxID_DELETE);
+        fileMenu->Bind(wxEVT_MENU, &FelixTerminalFrame::OnExportSettings, this, ID_MENU_EXPORT);
+        fileMenu->Bind(wxEVT_MENU, &FelixTerminalFrame::OnImportSettings, this, ID_MENU_IMPORT);
+        fileMenu->Bind(wxEVT_MENU, &FelixTerminalFrame::OnClose, this, wxID_CLOSE);
+        helpMenu->Bind(wxEVT_MENU, &FelixTerminalFrame::OnAbout, this, wxID_ABOUT);
         
         wxPanel *mainPanel = new wxPanel(this);
         wxBoxSizer *mainSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -110,6 +146,20 @@ public:
         m_sessionNameCtrl = new wxTextCtrl(mainPanel, wxID_ANY, "New Session");
         sessionNameBox->Add(m_sessionNameCtrl, 1, wxEXPAND | wxALL, 4);
         rightSizer->Add(sessionNameBox, 0, wxEXPAND | wxALL, 8);
+
+        wxStaticBoxSizer *termTypeBox = new wxStaticBoxSizer(wxHORIZONTAL, mainPanel, "Terminal Type (--term)");
+        wxArrayString termTypeChoices;
+        termTypeChoices.Add("xterm-256color");
+        termTypeChoices.Add("xterm-kitty");
+        termTypeChoices.Add("xterm");
+        termTypeChoices.Add("screen-256color");
+        termTypeChoices.Add("vt100");
+        m_termTypeCtrl = new wxComboBox(mainPanel, wxID_ANY, "xterm-256color", wxDefaultPosition, wxDefaultSize, termTypeChoices);
+        m_termTypeCtrl->SetToolTip("xterm-kitty requires the 'kitty' terminfo entry to be installed on the remote/local system (e.g. 'kitty-terminfo' package)");
+        m_termTypeCtrl->Bind(wxEVT_TEXT, &FelixTerminalFrame::OnUpdatePreview, this);
+        m_termTypeCtrl->Bind(wxEVT_COMBOBOX, &FelixTerminalFrame::OnUpdatePreview, this);
+        termTypeBox->Add(m_termTypeCtrl, 1, wxEXPAND | wxALL, 4);
+        rightSizer->Add(termTypeBox, 0, wxEXPAND | wxALL, 8);
 
         // Notebook for settings
         wxNotebook *notebook = new wxNotebook(mainPanel, wxID_ANY);
@@ -169,6 +219,7 @@ private:
     wxButton *m_openBtn;
     wxButton *m_closeBtn;
     wxTextCtrl *m_sessionNameCtrl;
+    wxComboBox *m_termTypeCtrl;
     wxTextCtrl *m_cmdPreview;
 
     // Connection
@@ -642,6 +693,9 @@ private:
                 if (!shell.empty()) {
                     cmd += "--local " + shell;
                 }
+                if (!m_termTypeCtrl->GetValue().empty()) {
+                    cmd += " --term " + m_termTypeCtrl->GetValue();
+                }
                 break;
             }
             case 1: // Telnet
@@ -661,6 +715,9 @@ private:
                 if (!m_sshX11Check->GetValue()) cmd += " --no-x11";
                 if (!m_sshCommandCtrl->GetValue().empty()) {
                     cmd += " -c " + m_sshCommandCtrl->GetValue();
+                }
+                if (!m_termTypeCtrl->GetValue().empty()) {
+                    cmd += " --term " + m_termTypeCtrl->GetValue();
                 }
                 
                 // Port forwarding
@@ -706,6 +763,8 @@ private:
                 cfg.localShell = choice;
             }
         }
+        
+        cfg.termType = m_termTypeCtrl->GetValue();
         
         cfg.telnetHost = m_telnetHostCtrl->GetValue();
         cfg.telnetPort = m_telnetPortSpin->GetValue();
@@ -874,6 +933,8 @@ private:
         m_sshX11Check->SetValue(true);
         m_sshCommandCtrl->SetValue("");
         
+        m_termTypeCtrl->SetValue("xterm-256color");
+        
         m_localPFList->Clear();
         m_localPFEntries.clear();
         m_remotePFList->Clear();
@@ -893,6 +954,118 @@ private:
 
     void OnClose(wxCommandEvent &event) {
         Close(true);
+    }
+
+    void OnExportSettings(wxCommandEvent &event) {
+        SessionConfig cfg = GetCurrentConfig(m_sessionNameCtrl->GetValue());
+
+        wxString defaultName = cfg.name.empty() ? wxString("FelixTerminal") : cfg.name;
+        wxFileDialog dlg(this, "Export Settings", "", defaultName + ".cfg",
+                          "Felix Terminal Config (*.cfg)|*.cfg|All files (*.*)|*.*",
+                          wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+        if (dlg.ShowModal() == wxID_OK) {
+            ExportConfigToFile(cfg, dlg.GetPath());
+            wxMessageBox("Settings exported!", "Success", wxOK | wxICON_INFORMATION);
+        }
+    }
+
+    void OnImportSettings(wxCommandEvent &event) {
+        wxFileDialog dlg(this, "Import Settings", "", "",
+                          "Felix Terminal Config (*.cfg)|*.cfg|All files (*.*)|*.*",
+                          wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dlg.ShowModal() == wxID_OK) {
+            SessionConfig cfg = ImportConfigFromFile(dlg.GetPath());
+            if (cfg.name.empty()) {
+                cfg.name = wxFileName(dlg.GetPath()).GetName();
+            }
+            LoadSessionToUI(cfg);
+            m_sessionNameCtrl->SetValue(cfg.name);
+            UpdatePreview();
+            wxMessageBox("Settings imported!", "Success", wxOK | wxICON_INFORMATION);
+        }
+    }
+
+    void OnAbout(wxCommandEvent &event) {
+        wxDialog dlg(this, wxID_ANY, "About Felix Terminal", wxDefaultPosition, wxSize(520, 620));
+        wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+
+        // Felix's portrait (reuse the app icon) next to the title
+        wxBoxSizer *headerSizer = new wxBoxSizer(wxHORIZONTAL);
+
+        wxMemoryInputStream istream(favicon_ico, favicon_ico_len);
+        wxImage felixImg(istream, wxBITMAP_TYPE_ICO);
+        if (felixImg.IsOk()) {
+            felixImg.Rescale(64, 64, wxIMAGE_QUALITY_HIGH);
+            wxStaticBitmap *felixPic = new wxStaticBitmap(&dlg, wxID_ANY, wxBitmap(felixImg));
+            headerSizer->Add(felixPic, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
+        }
+
+        wxStaticText *title = new wxStaticText(&dlg, wxID_ANY, "Felix Terminal");
+        wxFont titleFont = title->GetFont();
+        titleFont.SetPointSize(titleFont.GetPointSize() + 6);
+        titleFont.SetWeight(wxFONTWEIGHT_BOLD);
+        title->SetFont(titleFont);
+        headerSizer->Add(title, 0, wxALIGN_CENTER_VERTICAL);
+
+        sizer->Add(headerSizer, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, 12);
+
+        wxString storyText =
+            "Felix Terminal is named after Felix, a lovebird whose life was tragically\n"
+            "cut short. Felix had a particular fondness for perching on top of\n"
+            "computer monitors and supervising whatever was happening on\n"
+            "screen -- and occasionally causing as much mischief as a small bird\n"
+            "possibly could. In his honor, this terminal carries his name.\n"
+            "Every time it opens, a little chaos birdie lives on.\n\n"
+            "Rest easy, Felix.";
+
+        wxStaticText *storyCtrl = new wxStaticText(&dlg, wxID_ANY, storyText, wxDefaultPosition,
+                                                     wxDefaultSize, wxALIGN_CENTER);
+        storyCtrl->Wrap(460);
+        sizer->Add(storyCtrl, 0, wxEXPAND | wxLEFT | wxRIGHT, 16);
+
+        wxHyperlinkCtrl *coffeeLink = new wxHyperlinkCtrl(&dlg, wxID_ANY,
+                                                           "\u2615 Buy me a coffee if you like Felix Terminal",
+                                                           "https://buymeacoffee.com/jasonbrianhall");
+        sizer->Add(coffeeLink, 0, wxALIGN_CENTER | wxALL, 12);
+
+
+        wxStaticLine *line = new wxStaticLine(&dlg, wxID_ANY);
+        sizer->Add(line, 0, wxEXPAND | wxLEFT | wxRIGHT, 16);
+
+        wxStaticText *licenseTitle = new wxStaticText(&dlg, wxID_ANY, "MIT License");
+        wxFont licenseTitleFont = licenseTitle->GetFont();
+        licenseTitleFont.SetWeight(wxFONTWEIGHT_BOLD);
+        licenseTitle->SetFont(licenseTitleFont);
+        sizer->Add(licenseTitle, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, 8);
+
+        wxString licenseText =
+            "Copyright (c) 2026 Jason Brian Hall\n\n"
+            "Permission is hereby granted, free of charge, to any person obtaining a copy "
+            "of this software and associated documentation files (the \"Software\"), to deal "
+            "in the Software without restriction, including without limitation the rights "
+            "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell "
+            "copies of the Software, and to permit persons to whom the Software is "
+            "furnished to do so, subject to the following conditions:\n\n"
+            "The above copyright notice and this permission notice shall be included in all "
+            "copies or substantial portions of the Software.\n\n"
+            "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR "
+            "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, "
+            "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE "
+            "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER "
+            "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, "
+            "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE "
+            "SOFTWARE.";
+
+        wxTextCtrl *licenseCtrl = new wxTextCtrl(&dlg, wxID_ANY, licenseText, wxDefaultPosition,
+                                                  wxSize(-1, 160),
+                                                  wxTE_MULTILINE | wxTE_READONLY | wxTE_WORDWRAP);
+        sizer->Add(licenseCtrl, 1, wxEXPAND | wxALL, 16);
+
+        wxButton *okBtn = new wxButton(&dlg, wxID_OK, "OK");
+        sizer->Add(okBtn, 0, wxALIGN_CENTER | wxBOTTOM, 12);
+
+        dlg.SetSizer(sizer);
+        dlg.ShowModal();
     }
 
     wxString GetConfigValue(wxFileConfig &config, const wxString &key, const wxString &defaultVal = "") {
@@ -916,6 +1089,7 @@ private:
         
         if (regKey.QueryValue("connType", &lVal)) cfg.connType = lVal;
         if (regKey.QueryValue("localShell", sVal)) cfg.localShell = sVal;
+        if (regKey.QueryValue("termType", sVal)) cfg.termType = sVal;
         if (regKey.QueryValue("telnetHost", sVal)) cfg.telnetHost = sVal;
         if (regKey.QueryValue("telnetPort", &lVal)) cfg.telnetPort = lVal;
         if (regKey.QueryValue("telnetTType", sVal)) cfg.telnetTType = sVal;
@@ -964,6 +1138,7 @@ private:
         
         cfg.connType = config.ReadLong("connType", 0);
         cfg.localShell = config.Read("localShell", "");
+        cfg.termType = config.Read("termType", "xterm-256color");
         cfg.telnetHost = config.Read("telnetHost", "");
         cfg.telnetPort = config.ReadLong("telnetPort", 23);
         cfg.telnetTType = config.Read("telnetTType", "xterm-256color");
@@ -1035,6 +1210,7 @@ private:
         
         regKey.SetValue("connType", (long)cfg.connType);
         regKey.SetValue("localShell", cfg.localShell);
+        regKey.SetValue("termType", cfg.termType);
         regKey.SetValue("telnetHost", cfg.telnetHost);
         regKey.SetValue("telnetPort", (long)cfg.telnetPort);
         regKey.SetValue("telnetTType", cfg.telnetTType);
@@ -1069,6 +1245,7 @@ private:
         
         config.Write("connType", (long)cfg.connType);
         config.Write("localShell", cfg.localShell);
+        config.Write("termType", cfg.termType);
         config.Write("telnetHost", cfg.telnetHost);
         config.Write("telnetPort", (long)cfg.telnetPort);
         config.Write("telnetTType", cfg.telnetTType);
@@ -1093,6 +1270,115 @@ private:
         config.Write("webRootDir", cfg.webRootDir);
         config.Flush();
         #endif
+    }
+
+    // Export/Import are always file-based (portable), regardless of platform,
+    // so settings can be shared between machines / backed up.
+    void ExportConfigToFile(const SessionConfig &cfg, const wxString &path) {
+        wxString localPFStr, remotePFStr, socksStr;
+        for (size_t i = 0; i < cfg.localPF.size(); i++) {
+            if (i > 0) localPFStr += "|";
+            localPFStr += cfg.localPF[i];
+        }
+        for (size_t i = 0; i < cfg.remotePF.size(); i++) {
+            if (i > 0) remotePFStr += "|";
+            remotePFStr += cfg.remotePF[i];
+        }
+        for (size_t i = 0; i < cfg.socks.size(); i++) {
+            if (i > 0) socksStr += "|";
+            socksStr += cfg.socks[i];
+        }
+
+        if (wxFileExists(path)) {
+            wxRemoveFile(path);
+        }
+        wxFileConfig config(wxEmptyString, wxEmptyString, path);
+
+        config.Write("name", cfg.name);
+        config.Write("connType", (long)cfg.connType);
+        config.Write("localShell", cfg.localShell);
+        config.Write("termType", cfg.termType);
+        config.Write("telnetHost", cfg.telnetHost);
+        config.Write("telnetPort", (long)cfg.telnetPort);
+        config.Write("telnetTType", cfg.telnetTType);
+        config.Write("telnetRaw", cfg.telnetRaw ? 1L : 0L);
+        config.Write("telnetSSL", cfg.telnetSSL ? 1L : 0L);
+        config.Write("serialPort", cfg.serialPort);
+        config.Write("serialBaud", (long)cfg.serialBaud);
+        config.Write("sshUser", cfg.sshUser);
+        config.Write("sshHost", cfg.sshHost);
+        config.Write("sshPort", (long)cfg.sshPort);
+        config.Write("sshAuthMethod", (long)cfg.sshAuthMethod);
+        config.Write("sshKeyPath", cfg.sshKeyPath);
+        config.Write("sshKnownHosts", cfg.sshKnownHosts);
+        config.Write("sshX11", cfg.sshX11 ? 1L : 0L);
+        config.Write("sshCommand", cfg.sshCommand);
+        config.Write("localPF", localPFStr);
+        config.Write("remotePF", remotePFStr);
+        config.Write("socks", socksStr);
+        config.Write("webServerEnabled", cfg.webServerEnabled ? 1L : 0L);
+        config.Write("webServerAddr", cfg.webServerAddr);
+        config.Write("webServerPort", (long)cfg.webServerPort);
+        config.Write("webRootDir", cfg.webRootDir);
+        config.Flush();
+    }
+
+    SessionConfig ImportConfigFromFile(const wxString &path) {
+        SessionConfig cfg;
+        if (!wxFileExists(path)) return cfg;
+
+        wxFileConfig config(wxEmptyString, wxEmptyString, path);
+
+        cfg.name = config.Read("name", "");
+        cfg.connType = config.ReadLong("connType", 0);
+        cfg.localShell = config.Read("localShell", "");
+        cfg.termType = config.Read("termType", "xterm-256color");
+        cfg.telnetHost = config.Read("telnetHost", "");
+        cfg.telnetPort = config.ReadLong("telnetPort", 23);
+        cfg.telnetTType = config.Read("telnetTType", "xterm-256color");
+        cfg.telnetRaw = config.ReadLong("telnetRaw", 0) != 0;
+        cfg.telnetSSL = config.ReadLong("telnetSSL", 0) != 0;
+        cfg.serialPort = config.Read("serialPort", "");
+        cfg.serialBaud = config.ReadLong("serialBaud", 9600);
+        cfg.sshUser = config.Read("sshUser", "");
+        cfg.sshHost = config.Read("sshHost", "localhost");
+        cfg.sshPort = config.ReadLong("sshPort", 22);
+        cfg.sshAuthMethod = config.ReadLong("sshAuthMethod", 0);
+        cfg.sshKeyPath = config.Read("sshKeyPath", "");
+        cfg.sshKnownHosts = config.Read("sshKnownHosts", "");
+        cfg.sshX11 = config.ReadLong("sshX11", 1) != 0;
+        cfg.sshCommand = config.Read("sshCommand", "");
+
+        wxString localPFStr = config.Read("localPF", "");
+        if (!localPFStr.empty()) {
+            wxArrayString parts = wxSplit(localPFStr, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.localPF.push_back(part);
+            }
+        }
+
+        wxString remotePFStr = config.Read("remotePF", "");
+        if (!remotePFStr.empty()) {
+            wxArrayString parts = wxSplit(remotePFStr, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.remotePF.push_back(part);
+            }
+        }
+
+        wxString socksStr = config.Read("socks", "");
+        if (!socksStr.empty()) {
+            wxArrayString parts = wxSplit(socksStr, '|');
+            for (const auto &part : parts) {
+                if (!part.empty()) cfg.socks.push_back(part);
+            }
+        }
+
+        cfg.webServerEnabled = config.ReadLong("webServerEnabled", 0) != 0;
+        cfg.webServerAddr = config.Read("webServerAddr", "127.0.0.1");
+        cfg.webServerPort = config.ReadLong("webServerPort", 53716);
+        cfg.webRootDir = config.Read("webRootDir", "/");
+
+        return cfg;
     }
 
     void LoadSessionToUI(const SessionConfig &cfg) {
@@ -1138,6 +1424,8 @@ private:
         m_sshKeyCtrl->SetValue(cfg.sshKeyPath);
         m_sshX11Check->SetValue(cfg.sshX11);
         m_sshCommandCtrl->SetValue(cfg.sshCommand);
+        
+        m_termTypeCtrl->SetValue(cfg.termType);
         
         m_localPFList->Clear();
         m_localPFEntries.clear();
