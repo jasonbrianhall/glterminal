@@ -9,7 +9,6 @@
 #include <wx/filefn.h>
 #include <wx/fileconf.h>
 #include <wx/mstream.h>
-#include <wx/hyperlink.h>
 #include <wx/filename.h>
 #ifdef _WIN32
 #include <wx/msw/registry.h>
@@ -1018,14 +1017,24 @@ private:
             "Every time it opens, a little chaos birdie lives on.\n\n"
             "Rest easy, Felix.";
 
+
         wxStaticText *storyCtrl = new wxStaticText(&dlg, wxID_ANY, storyText, wxDefaultPosition,
                                                      wxDefaultSize, wxALIGN_CENTER);
         storyCtrl->Wrap(460);
         sizer->Add(storyCtrl, 0, wxEXPAND | wxLEFT | wxRIGHT, 16);
 
-        wxHyperlinkCtrl *coffeeLink = new wxHyperlinkCtrl(&dlg, wxID_ANY,
-                                                           "\u2615 Buy me a coffee if you like Felix Terminal",
-                                                           "https://buymeacoffee.com/jasonbrianhall");
+        // Plain clickable label instead of wxHyperlinkCtrl -- avoids requiring
+        // the wxWidgets "adv" library, which some minimal/mingw builds don't link.
+        wxStaticText *coffeeLink = new wxStaticText(&dlg, wxID_ANY,
+                                                      "Buy me a coffee if you like Felix Terminal");
+        wxFont linkFont = coffeeLink->GetFont();
+        linkFont.SetUnderlined(true);
+        coffeeLink->SetFont(linkFont);
+        coffeeLink->SetForegroundColour(wxColour(0, 102, 204));
+        coffeeLink->SetCursor(wxCursor(wxCURSOR_HAND));
+        coffeeLink->Bind(wxEVT_LEFT_UP, [](wxMouseEvent &) {
+            wxLaunchDefaultBrowser("https://buymeacoffee.com/jasonbrianhall");
+        });
         sizer->Add(coffeeLink, 0, wxALIGN_CENTER | wxALL, 12);
 
 
