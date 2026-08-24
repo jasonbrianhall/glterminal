@@ -1085,7 +1085,6 @@ bool ssh_read(Terminal *t) {
     for (;;) {
         ssize_t n = libssh2_channel_read(s_channel, buf, sizeof(buf));
         if (n > 0) {
-            SDL_Log("[SSH][read] n=%zd bytes\n", n);
             term_feed(t, buf, (int)n);
             got_data = true;
             continue;
@@ -1131,8 +1130,6 @@ void ssh_write(Terminal *t, const char *buf, int n) {
     (void)t;
     if (!s_active || !s_channel || n <= 0) return;
 
-    SDL_Log("[SSH][write] n=%d bytes: %.*s\n", n, n, buf);
-
     std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
     int sent = 0;
     while (sent < n) {
@@ -1146,7 +1143,6 @@ void ssh_write(Terminal *t, const char *buf, int n) {
             break;
         }
     }
-    SDL_Log("[SSH][write] sent %d/%d bytes\n", sent, n);
 }
 
 void ssh_pty_resize(int cols, int rows) {

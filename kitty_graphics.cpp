@@ -291,7 +291,6 @@ static void free_tex(GLuint gl, SDL_Texture *sdl) {
 static bool build_image(const std::vector<uint8_t> &raw, int fmt, int pw, int ph,
                         GLuint *gl_tex_out, SDL_Texture **sdl_tex_out,
                         int *w_out, int *h_out) {
-    SDL_Log("[Kitty][build_image] fmt=%d pw=%d ph=%d raw_bytes=%zu\n", fmt, pw, ph, raw.size());
     if (fmt == 100) {
         int w = 0, h = 0;
         uint8_t *dec = decode_png(raw.data(), (int)raw.size(), &w, &h);
@@ -323,23 +322,14 @@ static bool build_image(const std::vector<uint8_t> &raw, int fmt, int pw, int ph
 }
 
 static void send_response(Terminal *t, uint32_t id, int quiet, bool ok, const char *msg) {
-    if (quiet >= 2) {
-        SDL_Log("[Kitty][response] i=%u ok=%d msg=%s SUPPRESSED (quiet=%d)\n",
-                id, ok, msg ? msg : "", quiet);
-        return;
-    }
-    if (quiet == 1 && ok) {
-        SDL_Log("[Kitty][response] i=%u ok=1 SUPPRESSED (quiet=1, ok)\n", id);
-        return;
-    }
+    if (quiet >= 2) return;
+    if (quiet == 1 && ok) return;
     char buf[128];
     if (ok) {
         int n = snprintf(buf, sizeof(buf), "\x1b_Gi=%u;OK\x1b\\", id);
-        SDL_Log("[Kitty][response] i=%u OK -> term_write(%d bytes)\n", id, n);
         term_write(t, buf, n);
     } else {
         int n = snprintf(buf, sizeof(buf), "\x1b_Gi=%u;ERROR:%s\x1b\\", id, msg ? msg : "unknown");
-        SDL_Log("[Kitty][response] i=%u ERROR:%s -> term_write(%d bytes)\n", id, msg ? msg : "unknown", n);
         term_write(t, buf, n);
     }
 }
@@ -443,9 +433,6 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
 
     ApcParams p = parse_apc(payload, len);
     KittyTermState &ts = s_terms[t];
-
-    SDL_Log("[Kitty][APC] a=%c i=%u p=%u f=%d t=%c m=%d q=%d payload_len=%d\n",
-            p.a ? p.a : '0', p.i, p.p, p.f, p.t_, p.m, p.q, p.payload_len);
 
     // ---- QUERY action (a=q) ----
     // Per spec: if a payload is attached, the terminal must attempt to
