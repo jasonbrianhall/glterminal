@@ -15,6 +15,7 @@
 #include "crt_audio.h"
 #include "felix_settings.h"
 #include "kitty_graphics.h"
+#include "sixel_graphics.h"
 #include "basic_graphics.h"
 #include "font_manager.h"
 #include "felixchirp/felixchirp.h"
@@ -469,6 +470,7 @@ int main(int argc, char **argv) {
 
     gl_init_renderer(win_w, win_h);
     kitty_init();
+    sixel_init();
     g_basic_win_w = win_w;
     g_basic_win_h = win_h;
     basic_graphics_init(win_w, win_h);
@@ -2363,6 +2365,7 @@ int main(int argc, char **argv) {
     wopr_audio_shutdown();
     crt_audio_shutdown();
     kitty_shutdown();
+    sixel_shutdown();
     basic_graphics_shutdown();
     menu_font_shutdown();
     term_free(&term);      // Clean up terminal buffers (fixes memory leaks)

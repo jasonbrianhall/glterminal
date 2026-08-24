@@ -223,12 +223,12 @@ SRCS_COMMON = felixterminal.cpp     gl_renderer.cpp       \
               felix_settings.cpp    kitty_graphics.cpp    \
               font_manager.cpp      sftp_overlay.cpp      \
               sftp_console.cpp      felixchirp/felixchirp.cpp  \
-              felixchirp/cdg.cpp    $(SSH_SRCS)                \
+              felixchirp/cdg.cpp      $(SSH_SRCS)                \
               telnet_session.cpp                               \
-              basic_graphics.cpp    mml_player.cpp             \
-              glyph_atlas.cpp       sticky_prompt.cpp          \
-              ssh_key_manager.cpp   serial_session.cpp         \
-              felixchirp/fc_file.cpp felixchirp/fc_text.cpp    \
+              basic_graphics.cpp      mml_player.cpp             \
+              glyph_atlas.cpp         sticky_prompt.cpp          \
+              ssh_key_manager.cpp     serial_session.cpp         \
+              felixchirp/fc_file.cpp  felixchirp/fc_text.cpp    \
               felixchirp/fc_input.cpp felixchirp/fc_zip.cpp    \
               felixchirp/fc_kfn.cpp   felixchirp/kfn.cpp       \
               sftp_webserver.cpp      midi_render.cpp          \
@@ -236,7 +236,7 @@ SRCS_COMMON = felixterminal.cpp     gl_renderer.cpp       \
               instruments.cpp         voc_render.cpp           \
               au_render.cpp           aiff_render.cpp          \
               convertm4atowavlin.cpp  convertm4atowavwin.cpp   \
-              vfs.cpp
+              vfs.cpp                 sixel_graphics.cpp
 
 SRCS_MINIZ = libtelnet.c felixchirp/miniz.c felixchirp/miniz_tdef.c felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c \
             wopr/zork/actors.c            wopr/zork/ballop.c        \

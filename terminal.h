@@ -40,6 +40,15 @@ struct Terminal {
     int           apc_len;
     int           apc_cap;
     bool          apc_esc_pending;  // saw ESC inside APC, waiting for '\' to complete ST
+    // DCS buffer — for Sixel graphics (ESC P ... ESC \) and passthrough sinks
+    // (tmux, etc). Params (before the sixel 'q' introducer) and body are
+    // split at dispatch time in term_feed().
+    char         *dcs_buf;
+    int           dcs_len;
+    int           dcs_cap;
+    int           dcs_params_len; // bytes in dcs_buf before the sixel body starts
+    bool          dcs_is_sixel;    // set once we see the 'q' introducer
+    bool          dcs_determined;  // true once we've decided sixel vs. plain sink
     int           pty_fd;
     pid_t         child;
     float         cell_w, cell_h;

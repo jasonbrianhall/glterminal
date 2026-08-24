@@ -3,6 +3,7 @@
 #include "ft_font.h"    // s_ft_face, g_font_size
 #include "gl_terminal.h" // TERM_COLS_DEFAULT etc.
 #include "kitty_graphics.h"
+#include "sixel_graphics.h"
 #include "basic_graphics.h"
 
 #include <SDL2/SDL.h>
@@ -100,8 +101,10 @@ static void scroll_up(Terminal *t) {
         CELL(t,bot,c) = {' ', t->cur_fg, t->cur_bg, 0, {0,0,0}};
     term_dirty_rows(t, top, bot);
     // Shift image placements up with the scroll region
-    if (top == 0 && bot == t->rows - 1)
+    if (top == 0 && bot == t->rows - 1) {
         kitty_scroll(t, 1);
+        sixel_scroll(t, 1);
+    }
 }
 
 static void scroll_down(Terminal *t) {
@@ -467,6 +470,11 @@ void term_feed(Terminal *t, const char *data, int size) {
                 t->apc_esc_pending = false;
                 t->state = PS_APC;
             } else if (ch == 'P') {
+                t->dcs_len = 0;
+                t->dcs_params_len = 0;
+                t->dcs_is_sixel = false;
+                t->dcs_determined = false;
+                t->apc_esc_pending = false;
                 t->state = PS_DCS;
             } else if (ch == '^') {
                 t->state = PS_PM;
@@ -585,17 +593,73 @@ void term_feed(Terminal *t, const char *data, int size) {
         // passthrough and clipboard protocols.  Without this sink the payload
         // bytes reach PS_NORMAL and get misinterpreted as CSI/text, corrupting
         // the terminal state and eventually crashing.
+        //
+        // DCS specifically also buffers its content: while the leading
+        // parameter string (digits/';') is still being read, bytes are held
+        // in dcs_buf. If the first non-parameter byte is 'q', this is a
+        // DECSIXEL (Sixel graphics) sequence — buffering continues for the
+        // body and gets dispatched to sixel_handle_dcs() at ST/BEL. Any
+        // other terminator byte means it's not sixel (e.g. tmux passthrough)
+        // and the buffer is dropped immediately, falling back to the
+        // original pure-sink behavior so we don't hold megabytes of tmux
+        // passthrough data in memory.
         case PS_DCS:
         case PS_PM:
         case PS_SOS:
             if (ch == 0x07) {
+                if (t->state == PS_DCS && t->dcs_is_sixel && t->dcs_buf)
+                    sixel_handle_dcs(t, t->dcs_buf, t->dcs_params_len,
+                                     t->dcs_buf + t->dcs_params_len,
+                                     t->dcs_len - t->dcs_params_len);
+                t->dcs_len = 0;
                 t->state = PS_NORMAL;  // BEL = ST shorthand
             } else if (ch == 0x1b) {
                 t->apc_esc_pending = true;  // reuse flag — next char must be '\'
             } else if (t->apc_esc_pending) {
                 t->apc_esc_pending = false;
-                if (ch == '\\') t->state = PS_NORMAL;
+                if (ch == '\\') {
+                    if (t->state == PS_DCS && t->dcs_is_sixel && t->dcs_buf)
+                        sixel_handle_dcs(t, t->dcs_buf, t->dcs_params_len,
+                                         t->dcs_buf + t->dcs_params_len,
+                                         t->dcs_len - t->dcs_params_len);
+                    t->dcs_len = 0;
+                    t->state = PS_NORMAL;
+                }
                 // else: not ST, keep sinking
+            } else if (t->state == PS_DCS) {
+                if (!t->dcs_determined) {
+                    if ((ch >= '0' && ch <= '9') || ch == ';') {
+                        if (!t->dcs_buf || t->dcs_len >= t->dcs_cap - 1) {
+                            int new_cap = t->dcs_cap ? t->dcs_cap * 2 : 4096;
+                            t->dcs_buf = (char*)realloc(t->dcs_buf, new_cap);
+                            t->dcs_cap = new_cap;
+                        }
+                        if (t->dcs_buf) t->dcs_buf[t->dcs_len++] = (char)ch;
+                    } else {
+                        t->dcs_determined = true;
+                        t->dcs_is_sixel   = (ch == 'q');
+                        if (t->dcs_is_sixel) {
+                            t->dcs_params_len = t->dcs_len;  // 'q' itself isn't stored
+                        } else {
+                            if (t->dcs_buf) { free(t->dcs_buf); t->dcs_buf = nullptr; }
+                            t->dcs_cap = 0;
+                            t->dcs_len = 0;
+                        }
+                    }
+                } else if (t->dcs_is_sixel) {
+                    if (!t->dcs_buf || t->dcs_len >= t->dcs_cap - 1) {
+                        int new_cap = t->dcs_cap ? t->dcs_cap * 2 : 65536;
+                        if (new_cap > 32*1024*1024) {
+                            SDL_Log("[Sixel] buffer exceeded 32MB (dcs_len=%d) — aborting sequence\n", t->dcs_len);
+                            t->dcs_len = 0; t->dcs_is_sixel = false; t->state = PS_NORMAL;
+                            break;
+                        }
+                        t->dcs_buf = (char*)realloc(t->dcs_buf, new_cap);
+                        t->dcs_cap = new_cap;
+                    }
+                    if (t->dcs_buf) t->dcs_buf[t->dcs_len++] = (char)ch;
+                }
+                // else: determined not-sixel — pure sink, nothing to do
             }
             break;
         case PS_OSC:
@@ -675,6 +739,12 @@ void term_init(Terminal *t) {
     t->apc_len         = 0;
     t->apc_cap         = 0;
     t->apc_esc_pending = false;
+    t->dcs_buf         = nullptr;
+    t->dcs_len         = 0;
+    t->dcs_cap         = 0;
+    t->dcs_params_len  = 0;
+    t->dcs_is_sixel    = false;
+    t->dcs_determined  = false;
 
     term_dirty_all(t);
     //SDL_Log("[Term] init: %dx%d cells %.0fx%.0f px\n", t->cols, t->rows, t->cell_w, t->cell_h);
@@ -710,6 +780,9 @@ void term_soft_reset(Terminal *t) {
     t->osc_len  = 0;
     t->apc_len  = 0;
     t->apc_esc_pending = false;
+    t->dcs_len  = 0;
+    t->dcs_is_sixel = false;
+    t->dcs_determined = false;
 
     t->cursor_on            = true;
     t->cursor_blink_enabled = true;
@@ -747,6 +820,10 @@ void term_free(Terminal *t) {
     if (t->apc_buf) {
         free(t->apc_buf);
         t->apc_buf = nullptr;
+    }
+    if (t->dcs_buf) {
+        free(t->dcs_buf);
+        t->dcs_buf = nullptr;
     }
 }
 

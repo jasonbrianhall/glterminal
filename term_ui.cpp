@@ -6,6 +6,7 @@
 #include "gl_terminal.h"
 #include "gl_bouncingcircle.h"
 #include "kitty_graphics.h"
+#include "sixel_graphics.h"
 #include "basic_graphics.h"
 #include "sticky_prompt.h"
 #include "ssh_key_manager.h"
@@ -834,6 +835,7 @@ void term_render(Terminal *t, int ox, int oy) {
 
     // Kitty graphics — render placed images over the glyph layer
     kitty_render(t, ox, oy);
+    sixel_render(t, ox, oy);
 
     // Cursor
     if (!scrolled && t->cursor_on) {
