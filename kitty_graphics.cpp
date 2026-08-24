@@ -1219,7 +1219,7 @@ std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, in
         char fname[32];
         snprintf(fname, sizeof(fname), "image%d.png", (int)result.size() + 1);
 
-        std::string tag = "<a href=\"" + data_uri + "\" download=\"" + fname + "\">";
+        std::string tag = "<a class=\"img-dl\" href=\"" + data_uri + "\" download=\"" + fname + "\">";
         tag += "<img src=\"" + data_uri + "\"";
         if (display_cols > 0) {
             // Express width as number of 'ch' units (monospace character widths)

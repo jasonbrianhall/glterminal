@@ -619,7 +619,18 @@ void term_copy_selection_html(Terminal *t) {
         last_fg = ~(TermColorVal)0;
         if (r < r1) html += '\n';
     }
-    html += "</div>\n</body>\n</html>\n";
+    html += "</div>\n";
+    html += "<script>\n";
+    html += "document.querySelectorAll('a.img-dl').forEach(function(a){\n";
+    html += "  var m = a.getAttribute('href').match(/^data:([^;]+);base64,(.*)$/);\n";
+    html += "  if (!m) return;\n";
+    html += "  var bin = atob(m[2]);\n";
+    html += "  var bytes = new Uint8Array(bin.length);\n";
+    html += "  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);\n";
+    html += "  a.href = URL.createObjectURL(new Blob([bytes], {type: m[1]}));\n";
+    html += "});\n";
+    html += "</script>\n";
+    html += "</body>\n</html>\n";
     SDL_SetClipboardText(html.c_str());
 }
 
