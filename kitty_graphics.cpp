@@ -254,7 +254,16 @@ static GLuint upload_texture(const uint8_t *pixels, int w, int h, bool has_alpha
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     GLenum fmt = has_alpha ? GL_RGBA : GL_RGB;
+    // Source buffers are tightly packed (no row padding), but GL's default
+    // GL_UNPACK_ALIGNMENT of 4 assumes rows start on 4-byte boundaries. For
+    // RGB data (3 bytes/pixel) with a width not divisible by 4, that mismatch
+    // causes each row to be read from the wrong offset, producing diagonal/
+    // banding corruption. Set alignment to 1 to disable the assumption.
+    GLint prev_alignment = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_alignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, pixels);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;
 }
@@ -1201,12 +1210,17 @@ std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, in
         png_data.reserve(sw * sh);
         if (!encode_png(src_ptr, sw, sh, stride, png_data)) continue;
 
-        // Build <img> tag with data URI
-        // Width attribute: use cell columns if specified, else natural pixel width
+        // Build <img> tag with data URI, wrapped in a download-anchor so
+        // "Save Image As" offers a sequential filename (image1.png, image2.png,
+        // ...) instead of falling back to a generic default like "untitled.png".
         int display_cols = pl.cols ? pl.cols : 0;
-        std::string tag = "<img src=\"data:image/png;base64,";
-        tag += b64_encode(png_data.data(), (int)png_data.size());
-        tag += "\"";
+        std::string data_uri = "data:image/png;base64," + b64_encode(png_data.data(), (int)png_data.size());
+
+        char fname[32];
+        snprintf(fname, sizeof(fname), "image%d.png", (int)result.size() + 1);
+
+        std::string tag = "<a href=\"" + data_uri + "\" download=\"" + fname + "\">";
+        tag += "<img src=\"" + data_uri + "\"";
         if (display_cols > 0) {
             // Express width as number of 'ch' units (monospace character widths)
             char wbuf[64];
@@ -1217,6 +1231,7 @@ std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, in
             tag += " style=\"max-width:100%\"";
         }
         tag += " alt=\"[terminal image]\">";
+        tag += "</a>";
 
         KittyHtmlImage entry;
         entry.y_cell  = vrow;
