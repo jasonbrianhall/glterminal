@@ -163,7 +163,13 @@ int main(int argc, char **argv) {
         // prompted inside the GL window.
         if ((strcmp(arg, "--ssh") == 0 || strcmp(arg, "-ssh") == 0)) {
             use_ssh = true;
-            g_kitty_enabled = false;  // tmux/multiplexers send APC; disable kitty to avoid crashes
+            // NOTE: previously disabled kitty graphics unconditionally for
+            // all SSH sessions here, to guard against tmux/multiplexers on
+            // the remote end sending malformed APC. That threw out kitty
+            // graphics for every SSH session, tmux or not. Left enabled by
+            // default now; if remote tmux APC passthrough turns out to
+            // actually crash, disable it specifically when the remote shell
+            // is inside a multiplexer, not for SSH as a whole.
             if (i + 1 < argc && argv[i+1][0] != '-') {
                 const char *target = argv[++i];
                 const char *at = strchr(target, '@');

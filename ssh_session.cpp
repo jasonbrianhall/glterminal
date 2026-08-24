@@ -1015,17 +1015,12 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
 
     // Request PTY. Servers like git@github.com refuse PTY allocation but
     // still open the channel and send a message before closing — non-fatal.
-    // Report one fewer column/row than we actually render — see
-    // term_pty.cpp / term_pty_win.cpp for why: it keeps a full-width line
-    // from the remote shell from ever reaching our real autowrap boundary.
-    int report_cols = t->cols > 1 ? t->cols - 1 : t->cols;
-    int report_rows = t->rows > 1 ? t->rows - 1 : t->rows;
     while ((rc = libssh2_channel_request_pty_ex(
                 s_channel,
-                "xterm-256color", (unsigned int)strlen("xterm-256color"),
+                "xterm-kitty", (unsigned int)strlen("xterm-kitty"),
                 nullptr, 0,
-                report_cols, report_rows,
-                0, 0)) == LIBSSH2_ERROR_EAGAIN)
+                (int)t->cols, (int)t->rows,
+                (int)(t->cols * t->cell_w), (int)(t->rows * t->cell_h))) == LIBSSH2_ERROR_EAGAIN)
         SDL_Delay(5);
     s_have_pty = (rc == 0);
     if (!s_have_pty)
@@ -1068,6 +1063,7 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
 
     // Environment hints (best-effort; server may reject setenv)
     libssh2_channel_setenv(s_channel, "COLORTERM", "truecolor");
+    libssh2_channel_setenv(s_channel, "KITTY_WINDOW_ID", "1");
 
     // Route all term_write() calls (handle_key, term_paste, etc.) through SSH
     g_term_write_override = ssh_write_bridge;
@@ -1089,6 +1085,7 @@ bool ssh_read(Terminal *t) {
     for (;;) {
         ssize_t n = libssh2_channel_read(s_channel, buf, sizeof(buf));
         if (n > 0) {
+            SDL_Log("[SSH][read] n=%zd bytes\n", n);
             term_feed(t, buf, (int)n);
             got_data = true;
             continue;
@@ -1134,6 +1131,8 @@ void ssh_write(Terminal *t, const char *buf, int n) {
     (void)t;
     if (!s_active || !s_channel || n <= 0) return;
 
+    SDL_Log("[SSH][write] n=%d bytes: %.*s\n", n, n, buf);
+
     std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
     int sent = 0;
     while (sent < n) {
@@ -1147,13 +1146,12 @@ void ssh_write(Terminal *t, const char *buf, int n) {
             break;
         }
     }
+    SDL_Log("[SSH][write] sent %d/%d bytes\n", sent, n);
 }
 
 void ssh_pty_resize(int cols, int rows) {
     if (!s_active || !s_channel || !s_have_pty) return;
-    int report_cols = cols > 1 ? cols - 1 : cols;
-    int report_rows = rows > 1 ? rows - 1 : rows;
-    libssh2_channel_request_pty_size(s_channel, report_cols, report_rows);
+    libssh2_channel_request_pty_size(s_channel, cols, rows);
 }
 
 bool ssh_channel_closed() {
