@@ -2,6 +2,11 @@
 #include "terminal.h"
 #include <stdbool.h>
 
+// TERM/ttype value used when spawning the local child shell (term_pty.cpp /
+// term_pty_win.cpp) and when requesting a PTY over SSH (ssh_session.cpp).
+// Defaults to "xterm-256color"; overridable via --term on the command line.
+extern const char *g_term_type;
+
 bool term_spawn(Terminal *t, const char *cmd);
 bool term_read(Terminal *t);
 void term_write(Terminal *t, const char *s, int n);

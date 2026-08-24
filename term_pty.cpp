@@ -40,7 +40,7 @@ bool term_spawn(Terminal *t, const char *cmd) {
         // after any resize — causing apps like top to wrap/pad at the old
         // width forever. The pty winsize (set below, and kept in sync by
         // term_resize's TIOCSWINSZ call) is the single source of truth.
-        setenv("TERM",      "xterm-kitty", 1);
+        setenv("TERM",      g_term_type,   1);
         setenv("COLORTERM", "truecolor",   1);
 
         // --- X11-related env: preserve if present ---

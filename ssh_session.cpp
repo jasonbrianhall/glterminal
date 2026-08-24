@@ -1022,7 +1022,7 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     int report_rows = t->rows > 1 ? t->rows - 1 : t->rows;
     while ((rc = libssh2_channel_request_pty_ex(
                 s_channel,
-                "xterm-256color", (unsigned int)strlen("xterm-256color"),
+                g_term_type, (unsigned int)strlen(g_term_type),
                 nullptr, 0,
                 report_cols, report_rows,
                 (int)(report_cols * t->cell_w), (int)(report_rows * t->cell_h))) == LIBSSH2_ERROR_EAGAIN)

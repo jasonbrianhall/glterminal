@@ -99,7 +99,9 @@ bool term_spawn(Terminal *t, const char *cmd) {
     //
 
     // Always set terminal-related vars
-    SetEnvironmentVariableW(L"TERM",      L"xterm-256color");
+    wchar_t wterm[128];
+    MultiByteToWideChar(CP_UTF8, 0, g_term_type, -1, wterm, 128);
+    SetEnvironmentVariableW(L"TERM",      wterm);
     SetEnvironmentVariableW(L"COLORTERM", L"truecolor");
 
     // Pass through DISPLAY if present

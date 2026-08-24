@@ -55,6 +55,7 @@ std::vector<FontEntry> g_font_list;
 // Current window size exposed to terminal.cpp for basic_handle_osc coordinate mapping.
 int         g_basic_win_w = 800;
 int         g_basic_win_h = 480;
+const char *g_term_type   = "xterm-256color";  // overridable via --term
 
 // ============================================================================
 // SSH / PTY / Telnet dispatch helpers — used throughout the main loop.
@@ -144,6 +145,12 @@ int main(int argc, char **argv) {
         }
         if (strcmp(arg, "--ssl") == 0 || strcmp(arg, "-ssl") == 0) {
             telnet_cfg.use_ssl = true;
+            continue;
+        }
+
+        // --term <type>  — TERM env var for the spawned shell (default: xterm-256color)
+        if ((strcmp(arg, "--term") == 0 || strcmp(arg, "-term") == 0) && i + 1 < argc) {
+            g_term_type = argv[++i];
             continue;
         }
 
@@ -314,6 +321,8 @@ int main(int argc, char **argv) {
             SDL_Log("\nSerial options:\n");
             SDL_Log("  --serial [port]             Connect via serial port (prompts if omitted)\n");
             SDL_Log("  --serial-baud <baud>        Serial baud rate\n");
+            SDL_Log("\nGeneral options:\n");
+            SDL_Log("  --term <type>               TERM env var for local shell (default: xterm-256color)\n");
 #ifdef USESSH
             SDL_Log("\nSSH options:\n");
             SDL_Log("  --ssh [user@host[:port]]    Connect via SSH (prompts for missing fields)\n");
