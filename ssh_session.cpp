@@ -1015,12 +1015,17 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
 
     // Request PTY. Servers like git@github.com refuse PTY allocation but
     // still open the channel and send a message before closing — non-fatal.
+    // Report one fewer column/row than we actually render, matching
+    // term_spawn()'s convention (term_pty.cpp) — so a full-width line from
+    // the remote shell never reaches our real autowrap boundary.
+    int report_cols = t->cols > 1 ? t->cols - 1 : t->cols;
+    int report_rows = t->rows > 1 ? t->rows - 1 : t->rows;
     while ((rc = libssh2_channel_request_pty_ex(
                 s_channel,
-                "xterm-kitty", (unsigned int)strlen("xterm-kitty"),
+                "xterm-256color", (unsigned int)strlen("xterm-256color"),
                 nullptr, 0,
-                (int)t->cols, (int)t->rows,
-                (int)(t->cols * t->cell_w), (int)(t->rows * t->cell_h))) == LIBSSH2_ERROR_EAGAIN)
+                report_cols, report_rows,
+                (int)(report_cols * t->cell_w), (int)(report_rows * t->cell_h))) == LIBSSH2_ERROR_EAGAIN)
         SDL_Delay(5);
     s_have_pty = (rc == 0);
     if (!s_have_pty)
@@ -1147,7 +1152,9 @@ void ssh_write(Terminal *t, const char *buf, int n) {
 
 void ssh_pty_resize(int cols, int rows) {
     if (!s_active || !s_channel || !s_have_pty) return;
-    libssh2_channel_request_pty_size(s_channel, cols, rows);
+    int report_cols = cols > 1 ? cols - 1 : cols;
+    int report_rows = rows > 1 ? rows - 1 : rows;
+    libssh2_channel_request_pty_size(s_channel, report_cols, report_rows);
 }
 
 bool ssh_channel_closed() {
