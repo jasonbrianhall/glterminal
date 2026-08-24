@@ -127,6 +127,21 @@ static void newline(Terminal *t) {
 // Public wrapper used by kitty_graphics to advance the cursor with proper scrolling
 void term_newline(Terminal *t) { newline(t); }
 
+// Places one decoded codepoint at the cursor and advances it, handling
+// autowrap. Shared by the ASCII path and the UTF-8 decode path below so
+// both go through identical cell-write/advance/wrap behavior.
+static void term_put_char(Terminal *t, uint32_t cp) {
+    if (t->cur_col < t->cols) {
+        CELL(t, t->cur_row, t->cur_col) = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
+        term_dirty_row(t, t->cur_row);
+    }
+    t->cur_col++;
+    if (t->autowrap && t->cur_col >= t->cols) {
+        t->cur_col = 0;
+        newline(t);
+    }
+}
+
 // ============================================================================
 // SGR
 // ============================================================================
@@ -425,6 +440,7 @@ void term_feed(Terminal *t, const char *data, int size) {
         switch (t->state) {
         case PS_NORMAL:
             if (ch == 0x1b) {
+                t->utf8_remaining = 0;  // abort any partial UTF-8 sequence
                 t->state = PS_ESC;
             } else if (ch == 0x08) {
                 if (t->cur_col > 0) t->cur_col--;
@@ -439,15 +455,22 @@ void term_feed(Terminal *t, const char *data, int size) {
                 uint32_t cp = ch;
                 if (t->g0_line_drawing && ch >= 0x5f && ch <= 0x7e)
                     cp = DEC_LINE_DRAWING[ch - 0x5f];
-                if (t->cur_col < t->cols) {
-                    CELL(t, t->cur_row, t->cur_col) = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
-                    term_dirty_row(t, t->cur_row);
+                term_put_char(t, cp);
+            } else if (ch >= 0xC2 && ch <= 0xF4) {
+                // UTF-8 lead byte — start (or restart) accumulating a
+                // multi-byte codepoint. Ranges: 110xxxxx (2-byte),
+                // 1110xxxx (3-byte), 11110xxx (4-byte).
+                if      (ch < 0xE0) { t->utf8_cp = ch & 0x1F; t->utf8_remaining = 1; }
+                else if (ch < 0xF0) { t->utf8_cp = ch & 0x0F; t->utf8_remaining = 2; }
+                else                 { t->utf8_cp = ch & 0x07; t->utf8_remaining = 3; }
+            } else if (ch >= 0x80 && ch <= 0xBF) {
+                if (t->utf8_remaining > 0) {
+                    t->utf8_cp = (t->utf8_cp << 6) | (ch & 0x3F);
+                    t->utf8_remaining--;
+                    if (t->utf8_remaining == 0)
+                        term_put_char(t, t->utf8_cp);
                 }
-                t->cur_col++;
-                if (t->autowrap && t->cur_col >= t->cols) {
-                    t->cur_col = 0;
-                    newline(t);
-                }
+                // else: stray continuation byte with no lead byte — drop it
             } else if (ch == 0x7f) {
                 // DEL is treated as backspace
                 if (t->cur_col > 0) {
@@ -607,10 +630,13 @@ void term_feed(Terminal *t, const char *data, int size) {
         case PS_PM:
         case PS_SOS:
             if (ch == 0x07) {
-                if (t->state == PS_DCS && t->dcs_is_sixel && t->dcs_buf)
+                if (t->state == PS_DCS && t->dcs_is_sixel && t->dcs_buf) {
+                    SDL_Log("[DCS] dispatching sixel on BEL, body_bytes=%d\n",
+                            t->dcs_len - t->dcs_params_len);
                     sixel_handle_dcs(t, t->dcs_buf, t->dcs_params_len,
                                      t->dcs_buf + t->dcs_params_len,
                                      t->dcs_len - t->dcs_params_len);
+                }
                 t->dcs_len = 0;
                 t->state = PS_NORMAL;  // BEL = ST shorthand
             } else if (ch == 0x1b) {
@@ -618,10 +644,13 @@ void term_feed(Terminal *t, const char *data, int size) {
             } else if (t->apc_esc_pending) {
                 t->apc_esc_pending = false;
                 if (ch == '\\') {
-                    if (t->state == PS_DCS && t->dcs_is_sixel && t->dcs_buf)
+                    if (t->state == PS_DCS && t->dcs_is_sixel && t->dcs_buf) {
+                        SDL_Log("[DCS] dispatching sixel on ST, body_bytes=%d\n",
+                                t->dcs_len - t->dcs_params_len);
                         sixel_handle_dcs(t, t->dcs_buf, t->dcs_params_len,
                                          t->dcs_buf + t->dcs_params_len,
                                          t->dcs_len - t->dcs_params_len);
+                    }
                     t->dcs_len = 0;
                     t->state = PS_NORMAL;
                 }
@@ -638,6 +667,8 @@ void term_feed(Terminal *t, const char *data, int size) {
                     } else {
                         t->dcs_determined = true;
                         t->dcs_is_sixel   = (ch == 'q');
+                        SDL_Log("[DCS] terminator='%c' is_sixel=%d params_bytes=%d\n",
+                                ch, t->dcs_is_sixel, t->dcs_len);
                         if (t->dcs_is_sixel) {
                             t->dcs_params_len = t->dcs_len;  // 'q' itself isn't stored
                         } else {
@@ -739,6 +770,8 @@ void term_init(Terminal *t) {
     t->apc_len         = 0;
     t->apc_cap         = 0;
     t->apc_esc_pending = false;
+    t->utf8_cp         = 0;
+    t->utf8_remaining  = 0;
     t->dcs_buf         = nullptr;
     t->dcs_len         = 0;
     t->dcs_cap         = 0;
@@ -780,6 +813,7 @@ void term_soft_reset(Terminal *t) {
     t->osc_len  = 0;
     t->apc_len  = 0;
     t->apc_esc_pending = false;
+    t->utf8_remaining = 0;
     t->dcs_len  = 0;
     t->dcs_is_sixel = false;
     t->dcs_determined = false;

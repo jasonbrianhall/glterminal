@@ -282,11 +282,20 @@ void sixel_handle_dcs(Terminal *t, const char *params, int params_len,
                       const char *body, int body_len) {
     (void)params; (void)params_len; // Pb (background-select) not implemented
 
-    if (!body || body_len <= 0) return;
+    SDL_Log("[Sixel] handle_dcs: params_len=%d body_len=%d\n", params_len, body_len);
+
+    if (!body || body_len <= 0) {
+        SDL_Log("[Sixel] empty body — nothing to decode\n");
+        return;
+    }
 
     int w = 0, h = 0;
     run_sixel_parser(body, body_len, nullptr, 0, 0, &w, &h);
-    if (w <= 0 || h <= 0) return;
+    SDL_Log("[Sixel] measured w=%d h=%d\n", w, h);
+    if (w <= 0 || h <= 0) {
+        SDL_Log("[Sixel] zero-size image — aborting\n");
+        return;
+    }
     if (w > 4096) w = 4096;
     if (h > 4096) h = 4096;
 
@@ -297,6 +306,9 @@ void sixel_handle_dcs(Terminal *t, const char *params, int params_len,
     img.pw = w; img.ph = h;
     if (g_use_sdl_renderer) img.sdl_tex = upload_sdl_texture_rgba(canvas.data(), w, h);
     else                    img.tex     = upload_texture_rgba(canvas.data(), w, h);
+
+    SDL_Log("[Sixel] uploaded texture: gl_tex=%u sdl_tex=%p\n",
+            img.tex, (void*)img.sdl_tex);
 
     SixelPlacement pl;
     pl.img    = img;
@@ -310,6 +322,9 @@ void sixel_handle_dcs(Terminal *t, const char *params, int params_len,
 
     s_terms[t].placements.push_back(pl);
 
+    SDL_Log("[Sixel] placed at cell(%d,%d) footprint %dx%d cells, total placements=%zu\n",
+            pl.x_cell, pl.y_cell, pl.cols, pl.rows, s_terms[t].placements.size());
+
     // Cursor moves below the image and back to column 0 — matches common
     // xterm/mlterm behavior for the default (non-DECSDM) cursor mode.
     t->cur_row = std::min(t->rows - 1, pl.y_cell + pl.rows);
@@ -319,6 +334,13 @@ void sixel_handle_dcs(Terminal *t, const char *params, int params_len,
 void sixel_render(Terminal *t, int ox, int oy) {
     auto tit = s_terms.find(t);
     if (tit == s_terms.end() || tit->second.placements.empty()) return;
+
+    static int s_log_count = 0;
+    if (s_log_count < 3) {
+        SDL_Log("[Sixel] render: %zu placement(s), sdl_renderer=%d\n",
+                tit->second.placements.size(), (int)g_use_sdl_renderer);
+        s_log_count++;
+    }
 
     float cw = t->cell_w, ch = t->cell_h;
 

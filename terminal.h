@@ -35,6 +35,10 @@ struct Terminal {
     int           csi_len;
     char          osc[512];
     int           osc_len;
+    // UTF-8 decode state — persists across term_feed() calls since a
+    // multi-byte sequence can be split across separate reads.
+    uint32_t      utf8_cp;
+    int           utf8_remaining;   // continuation bytes still expected
     // APC buffer — for Kitty graphics protocol (ESC _ ... ESC \)
     char         *apc_buf;
     int           apc_len;
