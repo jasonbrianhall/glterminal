@@ -801,10 +801,59 @@ void term_render(Terminal *t, int ox, int oy) {
             uint32_t cp = c->cp;
             bool blink_hidden = (c->attrs & ATTR_BLINK) && !g_blink_text_on;
             if (cp && cp != ' ' && !blink_hidden) {
-                char tmp[5] = {};
-                cp_to_utf8(cp, tmp);
-                float baseline = py + ch * 0.82f;
-                draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
+                // Block Elements (U+2580-259F): draw as exact procedural
+                // rectangles instead of going through the font atlas. Font
+                // anti-aliasing/hinting on solid block glyphs leaves
+                // partial-coverage pixels at the edges, which produces a
+                // visible seam/grid pattern once thousands of them tile
+                // together (as in ANSI-art image rendering) — and several
+                // of these codepoints (eighth-blocks, shades, quadrants)
+                // aren't even present in the embedded font at all, which
+                // drew_text's "unknown glyph" fallback renders as a small
+                // bordered box, another visible artifact. draw_rect fills
+                // exact pixel rects with neither problem — same reason the
+                // background-fill pass above already tiles cleanly.
+                bool drew_block = true;
+                if (cp == 0x2580) {
+                    draw_rect(px, py, cw, ch * 0.5f, fc.r, fc.g, fc.b, 1.f); // upper half
+                } else if (cp >= 0x2581 && cp <= 0x2588) {
+                    // Lower N-eighths block, bottom-aligned (2581=1/8 .. 2588=8/8)
+                    float frac = (float)(cp - 0x2580) / 8.f;
+                    draw_rect(px, py + ch * (1.f - frac), cw, ch * frac, fc.r, fc.g, fc.b, 1.f);
+                } else if (cp >= 0x2589 && cp <= 0x258F) {
+                    // Left N-eighths block, left-aligned (2589=7/8 .. 258F=1/8)
+                    float frac = (float)(0x2590 - cp) / 8.f;
+                    draw_rect(px, py, cw * frac, ch, fc.r, fc.g, fc.b, 1.f);
+                } else if (cp == 0x2590) {
+                    draw_rect(px + cw * 0.5f, py, cw * 0.5f, ch, fc.r, fc.g, fc.b, 1.f); // right half
+                } else if (cp == 0x2591) {
+                    draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.25f); // light shade
+                } else if (cp == 0x2592) {
+                    draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.50f); // medium shade
+                } else if (cp == 0x2593) {
+                    draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.75f); // dark shade
+                } else if (cp == 0x2594) {
+                    draw_rect(px, py, cw, ch * 0.125f, fc.r, fc.g, fc.b, 1.f); // upper 1/8
+                } else if (cp == 0x2595) {
+                    draw_rect(px + cw * 0.875f, py, cw * 0.125f, ch, fc.r, fc.g, fc.b, 1.f); // right 1/8
+                } else if (cp >= 0x2596 && cp <= 0x259F) {
+                    // Quadrant blocks: bit0=TL bit1=TR bit2=BL bit3=BR
+                    static const uint8_t quad_mask[10] = { 4, 8, 1, 13, 9, 7, 11, 2, 6, 14 };
+                    uint8_t m = quad_mask[cp - 0x2596];
+                    float hw = cw * 0.5f, hh = ch * 0.5f;
+                    if (m & 1) draw_rect(px,      py,      hw, hh, fc.r, fc.g, fc.b, 1.f); // TL
+                    if (m & 2) draw_rect(px + hw, py,      hw, hh, fc.r, fc.g, fc.b, 1.f); // TR
+                    if (m & 4) draw_rect(px,      py + hh, hw, hh, fc.r, fc.g, fc.b, 1.f); // BL
+                    if (m & 8) draw_rect(px + hw, py + hh, hw, hh, fc.r, fc.g, fc.b, 1.f); // BR
+                } else {
+                    drew_block = false;
+                }
+                if (!drew_block) {
+                    char tmp[5] = {};
+                    cp_to_utf8(cp, tmp);
+                    float baseline = py + ch * 0.82f;
+                    draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
+                }
                 dirty_cells++;
             }
             if ((c->attrs & ATTR_UNDERLINE) && !blink_hidden)
