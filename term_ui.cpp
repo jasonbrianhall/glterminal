@@ -467,7 +467,7 @@ void term_copy_selection_html(Terminal *t) {
     html += "    color: "; html += fg_hex; html += ";\n";
     html += "    font-family: 'DejaVu Sans Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;\n";
     html += "    font-size: 14px;\n";
-    html += "    line-height: 1.4;\n";
+    html += "    line-height: 1;\n";
     html += "    white-space: pre;\n";
     html += "    overflow-x: auto;\n";
     html += "  }\n";
