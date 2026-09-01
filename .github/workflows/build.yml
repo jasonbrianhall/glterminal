@@ -136,8 +136,91 @@ jobs:
         path: FelixTerminal-Portable.zip
         retention-days: 7
 
-  build-msi-windows:
+  build-windows-msvc:
+    runs-on: windows-latest
     needs: build-linux
+    outputs:
+      version: ${{ needs.build-linux.outputs.version }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up vcpkg
+      run: |
+        git clone https://github.com/microsoft/vcpkg.git
+        .\vcpkg\bootstrap-vcpkg.bat
+        echo "VCPKG_ROOT=$PWD\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Install dependencies (static)
+      run: |
+        ${{ env.VCPKG_ROOT }}\vcpkg install `
+          sdl2:x64-windows-static `
+          "sdl2-mixer[libxmp,mpg123,opusfile,libvorbis,libflac]:x64-windows-static" `
+          glew:x64-windows-static `
+          freetype:x64-windows-static `
+          libpng:x64-windows-static `
+          zlib:x64-windows-static `
+          libwebp:x64-windows-static `
+          libssh2:x64-windows-static `
+          openssl:x64-windows-static `
+          wxwidgets:x64-windows-static
+
+    - name: Convert PNG Icon to ICO Format
+      run: |
+        if (Test-Path "icon.png") {
+          magick icon.png -resize 256x256 -colors 256 icon.ico
+        } else {
+          Write-Host "icon.png not found — exe will use the default icon"
+        }
+
+    - name: Configure (CMake)
+      run: |
+        cmake -B build -S . -A x64 `
+          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake" `
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static
+
+    - name: Build (Visual Studio / MSBuild via CMake)
+      run: |
+        cmake --build build --config Release
+
+    - name: Prepare Build Artifacts
+      run: |
+        New-Item -ItemType Directory -Force -Path "package"
+        Copy-Item "build\Release\flt.exe" "package\"
+        Copy-Item "build\Release\FelixTerminalGUI.exe" "package\"
+        Copy-Item "README.md" "package\" -ErrorAction SilentlyContinue
+        Copy-Item "LICENSE.md" "package\" -ErrorAction SilentlyContinue
+        Copy-Item "icon.png" "package\" -ErrorAction SilentlyContinue
+        Copy-Item "icon.ico" "package\" -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path "package\flt.exe")) {
+          Write-Error "flt.exe not found!"
+          exit 1
+        }
+        if (-not (Test-Path "package\FelixTerminalGUI.exe")) {
+          Write-Error "FelixTerminalGUI.exe not found!"
+          exit 1
+        }
+
+        Write-Host "Static MSVC build — DLL dependencies:"
+        if (Get-Command dumpbin -ErrorAction SilentlyContinue) {
+          dumpbin /dependents "package\flt.exe" | Select-String "\.dll"
+          dumpbin /dependents "package\FelixTerminalGUI.exe" | Select-String "\.dll"
+        } else {
+          Write-Host "(dumpbin not on PATH outside a VS dev shell — skipping DLL listing)"
+        }
+
+        Compress-Archive -Path "package\*" -DestinationPath "FelixTerminal-MSVC-Portable.zip"
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: felix-terminal-build-msvc
+        path: FelixTerminal-MSVC-Portable.zip
+        retention-days: 7
+
+  build-msi-windows:
+    needs: build-windows-msvc
     runs-on: windows-latest
     permissions:
       contents: write
@@ -148,12 +231,12 @@ jobs:
     - name: Download Build Artifacts
       uses: actions/download-artifact@v4
       with:
-        name: felix-terminal-build
+        name: felix-terminal-build-msvc
         path: .
 
     - name: Extract Build Files
       run: |
-        Expand-Archive -Path "FelixTerminal-Portable.zip" -DestinationPath "artifacts/build/windows/" -Force
+        Expand-Archive -Path "FelixTerminal-MSVC-Portable.zip" -DestinationPath "artifacts/build/windows/" -Force
 
     - name: Setup WiX Toolset
       run: |
@@ -323,7 +406,7 @@ jobs:
         retention-days: 7
 
   build-msix-windows:
-    needs: build-linux
+    needs: build-windows-msvc
     runs-on: windows-latest
     permissions:
       contents: write
@@ -334,12 +417,12 @@ jobs:
     - name: Download Build Artifacts
       uses: actions/download-artifact@v4
       with:
-        name: felix-terminal-build
+        name: felix-terminal-build-msvc
         path: .
 
     - name: Extract Build Files
       run: |
-        Expand-Archive -Path "FelixTerminal-Portable.zip" -DestinationPath "msix-source\" -Force
+        Expand-Archive -Path "FelixTerminal-MSVC-Portable.zip" -DestinationPath "msix-source\" -Force
 
     - name: Prepare MSIX Package Structure
       run: |
@@ -414,7 +497,7 @@ jobs:
           <Identity
             Name="JasonBrianHall.FelixTerminal"
             Publisher="CN=7A3CF65F-504C-42F2-BABD-6A0512A0A017"
-            Version="${{ needs.build-linux.outputs.version }}"
+            Version="${{ needs.build-windows-msvc.outputs.version }}"
             ProcessorArchitecture="x64" />
 
           <Properties>
@@ -496,7 +579,7 @@ jobs:
         retention-days: 7
 
   create-release:
-    needs: [build-linux, build-msi-windows, build-msix-windows]
+    needs: [build-linux, build-windows-msvc, build-msi-windows, build-msix-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -521,6 +604,12 @@ jobs:
         name: felix-terminal-build
         path: release
 
+    - name: Download MSVC Portable Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: felix-terminal-build-msvc
+        path: release
+
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
@@ -528,6 +617,7 @@ jobs:
           release/FelixTerminal.msi
           release/FelixTerminal.msix
           release/FelixTerminal-Portable.zip
+          release/FelixTerminal-MSVC-Portable.zip
         tag_name: ${{ github.ref == 'refs/heads/main' && format('v{0}', github.run_number) || format('dev-v{0}', github.run_number) }}
         name: ${{ github.ref == 'refs/heads/main' && format('Release v{0}', github.run_number) || format('Dev Build v{0}', github.run_number) }}
         draft: false
@@ -546,7 +636,8 @@ jobs:
           ### 📦 Downloads
           - **FelixTerminal.msi** — Windows installer with Start Menu and optional desktop shortcuts
           - **FelixTerminal.msix** — Unsigned package ready for Microsoft Store submission
-          - **FelixTerminal-Portable.zip** — Portable version, no installation required
+          - **FelixTerminal-Portable.zip** — Portable version (mingw build), no installation required
+          - **FelixTerminal-MSVC-Portable.zip** — Portable version (MSVC static build), no installation required, no bundled DLLs, no GStreamer/video playback
 
           ### ✨ Installer Features (MSI)
           - ✅ Start Menu shortcuts for cmd.exe and PowerShell
