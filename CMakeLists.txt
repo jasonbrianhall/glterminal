@@ -23,9 +23,9 @@ if(WIN32)
     find_package(SDL2 CONFIG REQUIRED)
     find_package(SDL2_mixer CONFIG REQUIRED)
     find_package(GLEW REQUIRED)
+    find_package(ZLIB REQUIRED)
     find_package(Freetype REQUIRED)
     find_package(PNG REQUIRED)
-    find_package(ZLIB REQUIRED)
     find_package(WebP CONFIG REQUIRED)
 
     # Codec libs optional, same as the pkg-config fallbacks in the Makefile --
