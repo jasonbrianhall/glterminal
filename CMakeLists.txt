@@ -1,5 +1,15 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 project(felixterminal C CXX)
+
+# Forces every target created by find_package() to be globally visible
+# rather than directory-scoped. Needed here because some vcpkg port configs
+# (e.g. SDL2_mixer's, which transitively depends on zlib/libpng) resolve
+# their own dependencies via nested find_package() calls in a scope that,
+# without this, doesn't propagate the resulting imported target (e.g.
+# ZLIB::ZLIB) back up to this top-level CMakeLists.txt -- even though the
+# "found" cache variables leak through fine, leaving downstream
+# target_link_libraries() calls unable to see the target at all.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,12 +30,40 @@ set(FLT_CODEC_LIBS)   # accumulated optional codec link targets/flags
 set(FLT_CODEC_FOUND)  # accumulated compile defs for codecs actually found
 
 if(WIN32)
+    # ZLIB::ZLIB is created manually here rather than via find_package(ZLIB),
+    # which has proven unreliable against this vcpkg static triplet: it
+    # reports success (no error, REQUIRED doesn't trip) but the resulting
+    # target is invisible to freetype/png/libssh2's own vcpkg configs when
+    # THEY look for ZLIB::ZLIB, causing a "target not found" failure at
+    # CMake's generate step. Pointing IMPORTED_LOCATION straight at vcpkg's
+    # known static-triplet lib/include layout sidesteps whatever's wrong
+    # with the find_package() path entirely.
+    if(NOT TARGET ZLIB::ZLIB)
+        find_library(FLT_ZLIB_LIBRARY
+            NAMES zlib zlibstatic z
+            PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib"
+            NO_DEFAULT_PATH
+        )
+        find_path(FLT_ZLIB_INCLUDE_DIR
+            NAMES zlib.h
+            PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+            NO_DEFAULT_PATH
+        )
+        if(NOT FLT_ZLIB_LIBRARY OR NOT FLT_ZLIB_INCLUDE_DIR)
+            message(FATAL_ERROR "Could not locate vcpkg's zlib under ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET} -- is 'zlib:${VCPKG_TARGET_TRIPLET}' installed?")
+        endif()
+        add_library(ZLIB::ZLIB STATIC IMPORTED GLOBAL)
+        set_target_properties(ZLIB::ZLIB PROPERTIES
+            IMPORTED_LOCATION "${FLT_ZLIB_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${FLT_ZLIB_INCLUDE_DIR}"
+        )
+    endif()
+
     find_package(SDL2 CONFIG REQUIRED)
-    find_package(sdl2-mixer CONFIG REQUIRED)
+    find_package(SDL2_mixer CONFIG REQUIRED)
     find_package(GLEW REQUIRED)
     find_package(Freetype REQUIRED)
     find_package(PNG REQUIRED)
-    find_package(ZLIB REQUIRED)
     find_package(WebP CONFIG REQUIRED)
 
     # Codec libs optional, same as the pkg-config fallbacks in the Makefile --
