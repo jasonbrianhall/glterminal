@@ -1,5 +1,15 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 project(felixterminal C CXX)
+
+# Forces every target created by find_package() to be globally visible
+# rather than directory-scoped. Needed here because some vcpkg port configs
+# (e.g. SDL2_mixer's, which transitively depends on zlib/libpng) resolve
+# their own dependencies via nested find_package() calls in a scope that,
+# without this, doesn't propagate the resulting imported target (e.g.
+# ZLIB::ZLIB) back up to this top-level CMakeLists.txt -- even though the
+# "found" cache variables leak through fine, leaving downstream
+# target_link_libraries() calls unable to see the target at all.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
