@@ -160,15 +160,17 @@ jobs:
 
     # Caches vcpkg's compiled package archives so subsequent runs restore
     # prebuilt binaries instead of rebuilding SDL2/wxWidgets/etc. from source
-    # (a full rebuild here takes ~45+ min). Bump the "v1" suffix if you ever
-    # need to force a clean rebuild (e.g. after a vcpkg baseline bump).
+    # (a full rebuild here takes ~45+ min). Bump the version suffix if you
+    # ever need to force a clean rebuild (e.g. after a vcpkg baseline bump,
+    # or -- as happened once -- a suspected corrupted/incomplete cache from
+    # a run that failed partway through a package build).
     - name: Cache vcpkg binaries
       uses: actions/cache@v4
       with:
         path: ${{ github.workspace }}\vcpkg_cache
-        key: vcpkg-bincache-windows-static-v1
+        key: vcpkg-bincache-windows-static-v2
         restore-keys: |
-          vcpkg-bincache-windows-static-
+          vcpkg-bincache-windows-static-v2
 
     - name: Install dependencies (static)
       run: |
@@ -183,6 +185,15 @@ jobs:
           libssh2:x64-windows-static `
           openssl:x64-windows-static `
           wxwidgets:x64-windows-static
+
+    - name: Verify zlib install (diagnostic)
+      run: |
+        $zlibShare = "${{ env.FLT_VCPKG_ROOT }}\installed\x64-windows-static\share\zlib"
+        $zlibLib = "${{ env.FLT_VCPKG_ROOT }}\installed\x64-windows-static\lib\zlib.lib"
+        Write-Host "zlib share dir:"
+        if (Test-Path $zlibShare) { Get-ChildItem $zlibShare } else { Write-Host "  MISSING: $zlibShare" }
+        Write-Host "zlib.lib:"
+        if (Test-Path $zlibLib) { Write-Host "  OK: $zlibLib" } else { Write-Host "  MISSING: $zlibLib" }
 
     - name: Convert PNG Icon to ICO Format
       run: |
