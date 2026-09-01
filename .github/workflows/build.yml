@@ -155,7 +155,7 @@ jobs:
       run: |
         ${{ env.VCPKG_ROOT }}\vcpkg install `
           sdl2:x64-windows-static `
-          "sdl2-mixer[mpg123,opusfile,libvorbis,libflac]:x64-windows-static" `
+          "sdl2-mixer[mpg123,opusfile,libflac]:x64-windows-static" `
           glew:x64-windows-static `
           freetype:x64-windows-static `
           libpng:x64-windows-static `
