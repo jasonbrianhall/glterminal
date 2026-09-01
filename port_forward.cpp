@@ -1,7 +1,4 @@
 // port_forward.cpp — SSH local, remote, and SOCKS5 dynamic port forwarding
-// Compiled only when USESSH is defined.
-
-#ifdef USESSH
 
 #include "port_forward.h"
 #include "ssh_session.h"
@@ -852,4 +849,3 @@ std::vector<PfStatus> pf_status() {
     return out;
 }
 
-#endif // USESSH
