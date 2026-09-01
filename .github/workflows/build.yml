@@ -153,7 +153,7 @@ jobs:
       run: |
         git clone https://github.com/microsoft/vcpkg.git
         .\vcpkg\bootstrap-vcpkg.bat
-        echo "VCPKG_ROOT=$PWD\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "FLT_VCPKG_ROOT=$PWD\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         $cacheDir = "$PWD\vcpkg_cache"
         New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
         echo "VCPKG_DEFAULT_BINARY_CACHE=$cacheDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -172,7 +172,7 @@ jobs:
 
     - name: Install dependencies (static)
       run: |
-        ${{ env.VCPKG_ROOT }}\vcpkg install `
+        ${{ env.FLT_VCPKG_ROOT }}\vcpkg install `
           sdl2:x64-windows-static `
           "sdl2-mixer[mpg123,opusfile,libflac]:x64-windows-static" `
           glew:x64-windows-static `
@@ -202,8 +202,9 @@ jobs:
 
     - name: Configure (CMake, Ninja)
       run: |
+        Write-Host "Using vcpkg toolchain: ${{ env.FLT_VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake"
         cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake" `
+          -DCMAKE_TOOLCHAIN_FILE="${{ env.FLT_VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake" `
           -DVCPKG_TARGET_TRIPLET=x64-windows-static
 
     - name: Build (Ninja)
