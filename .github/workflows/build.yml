@@ -192,21 +192,29 @@ jobs:
           Write-Host "icon.png not found — exe will use the default icon"
         }
 
-    - name: Configure (CMake)
+    - name: Set up MSVC dev environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Set up Ninja
+      uses: seanmiddleditch/gha-setup-ninja@v4
+
+    - name: Configure (CMake, Ninja)
       run: |
-        cmake -B build -S . -A x64 `
+        cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake" `
           -DVCPKG_TARGET_TRIPLET=x64-windows-static
 
-    - name: Build (Visual Studio / MSBuild via CMake)
+    - name: Build (Ninja)
       run: |
-        cmake --build build --config Release
+        cmake --build build
 
     - name: Prepare Build Artifacts
       run: |
         New-Item -ItemType Directory -Force -Path "package"
-        Copy-Item "build\Release\flt.exe" "package\"
-        Copy-Item "build\Release\FelixTerminalGUI.exe" "package\"
+        Copy-Item "build\flt.exe" "package\"
+        Copy-Item "build\FelixTerminalGUI.exe" "package\"
         Copy-Item "README.md" "package\" -ErrorAction SilentlyContinue
         Copy-Item "LICENSE.md" "package\" -ErrorAction SilentlyContinue
         Copy-Item "icon.png" "package\" -ErrorAction SilentlyContinue
