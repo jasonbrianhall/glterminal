@@ -21,7 +21,7 @@ set(FLT_CODEC_FOUND)  # accumulated compile defs for codecs actually found
 
 if(WIN32)
     find_package(SDL2 CONFIG REQUIRED)
-    find_package(sdl2-mixer CONFIG REQUIRED)
+    find_package(SDL2_mixer CONFIG REQUIRED)
     find_package(GLEW REQUIRED)
     find_package(Freetype REQUIRED)
     find_package(PNG REQUIRED)
