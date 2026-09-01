@@ -8,6 +8,8 @@ on:
       - '**.h'
       - 'Makefile'
       - '**/Makefile'
+      - 'CMakeLists.txt'
+      - '**/CMakeLists.txt'
       - '**.yml'
       - '**.yaml'
   pull_request:
@@ -17,6 +19,8 @@ on:
       - '**.h'
       - 'Makefile'
       - '**/Makefile'
+      - 'CMakeLists.txt'
+      - '**/CMakeLists.txt'
       - '**.yml'
       - '**.yaml'
   workflow_dispatch:
