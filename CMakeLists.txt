@@ -1,67 +1,36 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.20)
 project(felixterminal C CXX)
-
-# Forces every target created by find_package() to be globally visible
-# rather than directory-scoped. Needed here because some vcpkg port configs
-# (e.g. SDL2_mixer's, which transitively depends on zlib/libpng) resolve
-# their own dependencies via nested find_package() calls in a scope that,
-# without this, doesn't propagate the resulting imported target (e.g.
-# ZLIB::ZLIB) back up to this top-level CMakeLists.txt -- even though the
-# "found" cache variables leak through fine, leaving downstream
-# target_link_libraries() calls unable to see the target at all.
-set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-if(WIN32)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
 
 option(FLT_SSH "Build with libssh2 SSH/SFTP support" ON)
 option(FLT_FELIXBASIC "Build with -DFELIXBASIC_BUILD" OFF)
 
 # ============================================================================
 # DEPENDENCIES
-#   Windows: vcpkg static triplet (e.g. x64-windows-static), CONFIG mode.
+#   Windows: vcpkg DYNAMIC triplet (x64-windows) for everything except
+#            wxWidgets, which is resolved from the STATIC triplet
+#            (x64-windows-static) instead -- FelixTerminalGUI.exe ends up
+#            with zero DLL deps while flt.exe keeps its normal ones. Mixing
+#            triplets this way needs FLT_VCPKG_STATIC_DIR passed explicitly
+#            at configure time (see build.yml); wx's own CONFIG package is
+#            looked up directly under that path rather than through the
+#            toolchain's default (dynamic-triplet) search.
+#            flt.exe itself stays off the static triplet entirely: its
+#            dependency graph (SDL2/freetype/png/libssh2, all sharing zlib)
+#            hits a vcpkg/CMake target-visibility bug there.
 #   Linux:   native dev packages via pkg-config, same modules the Makefile
-#            already probes for (wx-config for wxWidgets, as in ClearText).
+#            already probes for.
 # ============================================================================
 set(FLT_CODEC_LIBS)   # accumulated optional codec link targets/flags
 set(FLT_CODEC_FOUND)  # accumulated compile defs for codecs actually found
 
 if(WIN32)
-    # ZLIB::ZLIB is created manually here rather than via find_package(ZLIB),
-    # which has proven unreliable against this vcpkg static triplet: it
-    # reports success (no error, REQUIRED doesn't trip) but the resulting
-    # target is invisible to freetype/png/libssh2's own vcpkg configs when
-    # THEY look for ZLIB::ZLIB, causing a "target not found" failure at
-    # CMake's generate step. Pointing IMPORTED_LOCATION straight at vcpkg's
-    # known static-triplet lib/include layout sidesteps whatever's wrong
-    # with the find_package() path entirely.
-    if(NOT TARGET ZLIB::ZLIB)
-        find_library(FLT_ZLIB_LIBRARY
-            NAMES zlib zlibstatic z
-            PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib"
-            NO_DEFAULT_PATH
-        )
-        find_path(FLT_ZLIB_INCLUDE_DIR
-            NAMES zlib.h
-            PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
-            NO_DEFAULT_PATH
-        )
-        if(NOT FLT_ZLIB_LIBRARY OR NOT FLT_ZLIB_INCLUDE_DIR)
-            message(FATAL_ERROR "Could not locate vcpkg's zlib under ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET} -- is 'zlib:${VCPKG_TARGET_TRIPLET}' installed?")
-        endif()
-        add_library(ZLIB::ZLIB STATIC IMPORTED GLOBAL)
-        set_target_properties(ZLIB::ZLIB PROPERTIES
-            IMPORTED_LOCATION "${FLT_ZLIB_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${FLT_ZLIB_INCLUDE_DIR}"
-        )
-    endif()
-
     find_package(SDL2 CONFIG REQUIRED)
     find_package(SDL2_mixer CONFIG REQUIRED)
     find_package(GLEW REQUIRED)
+    find_package(ZLIB REQUIRED)
     find_package(Freetype REQUIRED)
     find_package(PNG REQUIRED)
     find_package(WebP CONFIG REQUIRED)
@@ -100,8 +69,15 @@ if(WIN32)
         find_package(OpenSSL REQUIRED)
     endif()
 
-    # wxWidgets for the frontend, vcpkg CONFIG mode.
-    find_package(wxWidgets CONFIG REQUIRED COMPONENTS core base)
+    # wxWidgets, resolved from the STATIC triplet directly (see note above)
+    # rather than through the toolchain's default dynamic-triplet search.
+    if(NOT DEFINED FLT_VCPKG_STATIC_DIR)
+        message(FATAL_ERROR "FLT_VCPKG_STATIC_DIR not set -- pass -DFLT_VCPKG_STATIC_DIR=<vcpkg>/installed/x64-windows-static at configure time")
+    endif()
+    find_package(wxWidgets CONFIG REQUIRED COMPONENTS core base
+        PATHS "${FLT_VCPKG_STATIC_DIR}/share/wxwidgets"
+        NO_DEFAULT_PATH
+    )
 
     # GStreamer is deliberately NOT searched for on Windows. Source guards on
     # #ifdef HAVE_GSTREAMER (left undefined here), so gstreamer code compiles
@@ -224,8 +200,8 @@ target_include_directories(flt PRIVATE ${CMAKE_SOURCE_DIR} wopr)
 
 if(WIN32)
     target_link_libraries(flt PRIVATE
-        SDL2::SDL2main SDL2::SDL2-static
-        SDL2_mixer::SDL2_mixer-static
+        SDL2::SDL2main SDL2::SDL2
+        SDL2_mixer::SDL2_mixer
         GLEW::GLEW
         Freetype::Freetype
         PNG::PNG
@@ -263,12 +239,20 @@ endif()
 
 # ============================================================================
 # FRONTEND (FelixTerminalGUI) -- single-file wx launcher/config GUI
+#   Windows: statically linked (wx from the static triplet, see above) so
+#     it ships with zero DLL dependencies, independent of flt.exe's own
+#     (dynamically-linked) dependency set.
+#   Linux: wx-config, matches flt's own toolchain.
 # ============================================================================
-add_executable(FelixTerminalGUI WIN32 frontend/FelixTerminalGUI.cpp)
 if(WIN32)
+    add_executable(FelixTerminalGUI WIN32 frontend/FelixTerminalGUI.cpp)
     target_compile_definitions(FelixTerminalGUI PRIVATE WIN32 _WIN32 _WIN32_WINNT=0x0A00)
     target_link_libraries(FelixTerminalGUI PRIVATE ${wxWidgets_LIBRARIES})
     target_include_directories(FelixTerminalGUI PRIVATE ${wxWidgets_INCLUDE_DIRS})
+    set_target_properties(FelixTerminalGUI PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
 else()
+    add_executable(FelixTerminalGUI frontend/FelixTerminalGUI.cpp)
     target_link_libraries(FelixTerminalGUI PRIVATE ${wxWidgets_LIBRARIES})
 endif()
