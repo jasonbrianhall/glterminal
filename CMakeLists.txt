@@ -1,3 +1,5 @@
+# Builds only the Linux Version; can theoretically be used for Windows but couldn't get it working in Visual Studio
+
 cmake_minimum_required(VERSION 3.24)
 project(felixterminal C CXX)
 
@@ -14,7 +16,7 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(WIN32)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
 
 option(FLT_SSH "Build with libssh2 SSH/SFTP support" ON)
@@ -22,7 +24,7 @@ option(FLT_FELIXBASIC "Build with -DFELIXBASIC_BUILD" OFF)
 
 # ============================================================================
 # DEPENDENCIES
-#   Windows: vcpkg static triplet (e.g. x64-windows-static), CONFIG mode.
+#   Windows: vcpkg dynamic triplet (e.g. x64-windows), CONFIG mode.
 #   Linux:   native dev packages via pkg-config, same modules the Makefile
 #            already probes for (wx-config for wxWidgets, as in ClearText).
 # ============================================================================
@@ -30,34 +32,7 @@ set(FLT_CODEC_LIBS)   # accumulated optional codec link targets/flags
 set(FLT_CODEC_FOUND)  # accumulated compile defs for codecs actually found
 
 if(WIN32)
-    # ZLIB::ZLIB is created manually here rather than via find_package(ZLIB),
-    # which has proven unreliable against this vcpkg static triplet: it
-    # reports success (no error, REQUIRED doesn't trip) but the resulting
-    # target is invisible to freetype/png/libssh2's own vcpkg configs when
-    # THEY look for ZLIB::ZLIB, causing a "target not found" failure at
-    # CMake's generate step. Pointing IMPORTED_LOCATION straight at vcpkg's
-    # known static-triplet lib/include layout sidesteps whatever's wrong
-    # with the find_package() path entirely.
-    if(NOT TARGET ZLIB::ZLIB)
-        find_library(FLT_ZLIB_LIBRARY
-            NAMES zlib zlibstatic z
-            PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib"
-            NO_DEFAULT_PATH
-        )
-        find_path(FLT_ZLIB_INCLUDE_DIR
-            NAMES zlib.h
-            PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
-            NO_DEFAULT_PATH
-        )
-        if(NOT FLT_ZLIB_LIBRARY OR NOT FLT_ZLIB_INCLUDE_DIR)
-            message(FATAL_ERROR "Could not locate vcpkg's zlib under ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET} -- is 'zlib:${VCPKG_TARGET_TRIPLET}' installed?")
-        endif()
-        add_library(ZLIB::ZLIB STATIC IMPORTED GLOBAL)
-        set_target_properties(ZLIB::ZLIB PROPERTIES
-            IMPORTED_LOCATION "${FLT_ZLIB_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${FLT_ZLIB_INCLUDE_DIR}"
-        )
-    endif()
+    find_package(ZLIB REQUIRED)
 
     find_package(SDL2 CONFIG REQUIRED)
     find_package(SDL2_mixer CONFIG REQUIRED)
@@ -224,8 +199,8 @@ target_include_directories(flt PRIVATE ${CMAKE_SOURCE_DIR} wopr)
 
 if(WIN32)
     target_link_libraries(flt PRIVATE
-        SDL2::SDL2main SDL2::SDL2-static
-        SDL2_mixer::SDL2_mixer-static
+        SDL2::SDL2main SDL2::SDL2
+        SDL2_mixer::SDL2_mixer
         GLEW::GLEW
         Freetype::Freetype
         PNG::PNG
