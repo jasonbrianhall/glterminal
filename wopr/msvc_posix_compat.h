@@ -16,7 +16,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX  // otherwise windows.h's min/max macros mangle std::min/std::max
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <shellapi.h>
 
@@ -82,6 +84,12 @@ static __inline unsigned int sleep(unsigned int seconds) {
 }
 static __inline int usleep(unsigned int usec) {
     Sleep(usec < 1000 ? 1 : usec / 1000);
+    return 0;
+}
+static __inline int nanosleep(const struct timespec *req, struct timespec *rem) {
+    (void)rem;
+    DWORD ms = (DWORD)(req->tv_sec * 1000 + req->tv_nsec / 1000000);
+    Sleep(ms);
     return 0;
 }
 
