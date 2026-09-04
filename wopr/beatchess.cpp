@@ -7,7 +7,11 @@
 #include <limits.h>
 #include <math.h>
 #include <time.h>
+#if defined(_MSC_VER) && !defined(__MINGW32__)
+#include "msvc_posix_compat.h"  // unistd.h doesn't exist under MSVC
+#else
 #include <unistd.h>
+#endif
 #ifdef MSDOS
 #include "math_compat.h"
 #endif
