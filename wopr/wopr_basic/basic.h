@@ -17,9 +17,13 @@
 #include <ctype.h>
 #include <math.h>
 #include <time.h>
+#if defined(_MSC_VER) && !defined(__MINGW32__)
+#include "msvc_posix_compat.h"  // dirent.h/unistd.h don't exist under MSVC
+#else
 #include <dirent.h>
-#include <sys/stat.h>
 #include <unistd.h>
+#endif
+#include <sys/stat.h>
 #include <signal.h>
 #ifndef DONTUSEGMP
 #include <gmp.h>

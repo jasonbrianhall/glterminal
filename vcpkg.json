@@ -17,6 +17,7 @@
     "libflac",
     "libssh2",
     "openssl",
-    "wxwidgets"
+    "wxwidgets",
+    "pthreads"
   ]
 }

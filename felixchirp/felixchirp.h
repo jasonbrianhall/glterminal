@@ -1,8 +1,10 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
+#ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
+#endif
 #include "cdg.h"
 #include <string>
 #include <vector>
@@ -149,8 +151,10 @@ struct ImageViewer {
     // Video playback (GStreamer)
     bool       video_playing      = false;
     bool       video_paused       = false;
+#ifdef HAVE_GSTREAMER
     GstElement *video_pipeline    = nullptr;  // GStreamer pipeline for video
     GstElement *video_appsink     = nullptr;  // Sink to get decoded frames
+#endif
     SDL_Texture *video_tex        = nullptr;  // Current video frame texture
     int        video_w            = 0;
     int        video_h            = 0;

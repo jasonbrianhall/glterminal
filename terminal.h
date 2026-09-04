@@ -3,6 +3,9 @@
 #include "term_color.h"
 #include <stdint.h>
 #include <sys/types.h>
+#if defined(_MSC_VER) && !defined(__MINGW32__)
+#include "msvc_posix_compat.h"  // pid_t isn't in MSVC's sys/types.h
+#endif
 
 // ============================================================================
 // CELL

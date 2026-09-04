@@ -274,12 +274,14 @@ void iv_cdg_free() {
 }
 
 void iv_video_stop() {
+#ifdef HAVE_GSTREAMER
     if (g_iv.video_pipeline) {
         gst_element_set_state(g_iv.video_pipeline, GST_STATE_NULL);
         gst_object_unref(g_iv.video_pipeline);
         g_iv.video_pipeline = nullptr;
         g_iv.video_appsink  = nullptr;
     }
+#endif
     
     // Clean up textures (created in iv_tick)
     if (g_use_sdl_renderer) {
@@ -301,7 +303,12 @@ void iv_video_stop() {
 
 bool iv_video_play(const char *file_path) {
     iv_video_stop();
-    
+
+#ifndef HAVE_GSTREAMER
+    (void)file_path;
+    snprintf(g_iv.error, sizeof(g_iv.error), "Video playback requires GStreamer, not available in this build");
+    return false;
+#else
     // Build pipeline with video and audio output
     char pipeline_str[4096];
     snprintf(pipeline_str, sizeof(pipeline_str),
@@ -364,6 +371,7 @@ bool iv_video_play(const char *file_path) {
     
     g_iv.error[0] = '\0';
     return true;
+#endif
 }
 
 bool iv_cdg_load(const char *cdg_path) {
@@ -548,6 +556,7 @@ void iv_tick(double /*dt*/) {
     iv_kfn_tick();
 
     // Update video playback and pull frames
+#ifdef HAVE_GSTREAMER
     if (g_iv.video_playing && !g_iv.video_paused && g_iv.video_pipeline) {
         g_iv.video_position = ((double)SDL_GetTicks() - g_iv.video_start_ticks) / 1000.0;
         
@@ -665,6 +674,7 @@ void iv_tick(double /*dt*/) {
         }
         gst_object_unref(bus);
     }
+#endif
 
     // Advance CDG to current position using your cdg_update()
     if (g_iv.cdg_display) {

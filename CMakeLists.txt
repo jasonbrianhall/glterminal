@@ -78,6 +78,9 @@ if(WIN32)
     # wxWidgets for the frontend, vcpkg CONFIG mode.
     find_package(wxWidgets CONFIG REQUIRED COMPONENTS core base)
 
+    # MSVC has no native pthread.h; beatchess.h reaches for one.
+    find_package(PThreads4W REQUIRED)
+
     # GStreamer is deliberately NOT searched for on Windows. Source guards on
     # #ifdef HAVE_GSTREAMER (left undefined here), so gstreamer code compiles
     # out and the Windows exe stays gstreamer/plugin-DLL free.
@@ -206,6 +209,7 @@ if(WIN32)
         PNG::PNG
         ZLIB::ZLIB
         WebP::webp
+        PThreads4W::PThreads4W
         opengl32 winmm shlwapi ws2_32
         mf mfplat mfreadwrite mfuuid ole32 oleaut32
         ${FLT_CODEC_LIBS}
