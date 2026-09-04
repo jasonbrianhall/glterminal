@@ -32,15 +32,41 @@ struct ZorkState {
 
 static ZorkState *s_active = nullptr;
 
+// Diagnostic only, for now: log any byte that isn't printable ASCII so we
+// can identify what these legacy bytes actually are (leftover TOPS-20/
+// PDP-10 pagination control codes? high-bit typographic chars from a
+// The WOPR overlay draws each line as literal glyphs -- it has no tab-stop
+// logic like the main VT100 terminal parser does. Dungeon's original text
+// uses raw tab bytes for both title spacing ("Welcome to Dungeon.\t\t\tThis
+// version...") and paragraph indentation, so expand them to spaces at
+// standard 8-column tab stops before they ever reach the renderer.
+static std::string expand_tabs(const char *line, int tab_width = 8)
+{
+    std::string out;
+    int col = 0;
+    for (const char *p = line; *p; ++p) {
+        if (*p == '\t') {
+            int spaces = tab_width - (col % tab_width);
+            out.append((size_t)spaces, ' ');
+            col += spaces;
+        } else {
+            out += *p;
+            col++;
+        }
+    }
+    return out;
+}
+
 // ── Output callback called by supp.c ─────────────────────────────────────
 extern "C" void wopr_zork_push_line(const char *line)
 {
     if (!s_active || !s_active->wopr) {
         return;
     }
+    std::string expanded = expand_tabs(line);
     SDL_LockMutex(s_active->line_mtx);
     auto &lines = s_active->wopr->lines;
-    lines.push_back(std::string(line));
+    lines.push_back(expanded);
     const int MAX_LINES = 5000;
     if ((int)lines.size() > MAX_LINES)
         lines.erase(lines.begin(), lines.begin() + ((int)lines.size() - MAX_LINES));

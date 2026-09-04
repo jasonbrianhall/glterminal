@@ -780,7 +780,7 @@ void wopr_update(double dt) {
                         set_phase(w, WoprPhase::LOGIN_PROMPT);
                     } else {
                         w->password_entered = to_upper(w->input_buf);
-                        push_line(w, "PASSWORD: " + std::string(w->input_buf.size(), '*'));
+                        push_line(w, "PASSWORD: " + w->password_entered);
                         w->input_buf.clear();
                         push_line(w, "");
                         set_phase(w, WoprPhase::CONNECTING);
@@ -1000,7 +1000,7 @@ void wopr_render(int win_w, int win_h) {
         if (!w->username_done)
             prompt = "USERNAME: " + w->input_buf;
         else
-            prompt = "PASSWORD: " + std::string(w->input_buf.size(), '*');
+            prompt = "PASSWORD: " + w->input_buf;
         Uint32 ticks = SDL_GetTicks();
         if ((ticks / 500) % 2 == 0) prompt += '_';
         gl_draw_text(prompt.c_str(), x0, y, g_term_r/255.f, g_term_g/255.f, g_term_b/255.f, 1.f, SCALE);
@@ -1142,7 +1142,7 @@ bool wopr_keydown(SDL_Keycode sym, const char *text) {
                 set_phase(w, WoprPhase::LOGIN_PROMPT);
             } else {
                 w->password_entered = to_upper(w->input_buf);
-                push_line(w, "PASSWORD: " + std::string(w->input_buf.size(), '*'));
+                push_line(w, "PASSWORD: " + w->password_entered);
                 w->input_buf.clear();
                 if (w->username_entered == VALID_USER &&
                     w->password_entered == VALID_PASS) {
