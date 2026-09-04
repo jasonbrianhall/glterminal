@@ -8,6 +8,10 @@
 
 #include <io.h>
 #include <sys/types.h>
+#if !defined(_OFF_T_DEFINED)
+typedef long off_t;
+#define _OFF_T_DEFINED
+#endif
 #include <direct.h>
 #include <stdio.h>
 #include <stdlib.h>

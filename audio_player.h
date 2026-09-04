@@ -8,6 +8,10 @@
 #include <cstdint>
 #include <ctime>
 #include <sys/types.h>
+#if defined(_MSC_VER) && !defined(__MINGW32__) && !defined(_OFF_T_DEFINED)
+typedef long off_t;
+#define _OFF_T_DEFINED
+#endif
 
 // Conversion Cache Entry
 typedef struct {
