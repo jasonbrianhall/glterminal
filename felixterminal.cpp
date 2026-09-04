@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
     bool use_ssh    = false;
     bool use_telnet = false;
     bool use_serial = false;
-    bool force_sdl  = false;
+//    bool force_sdl  = false;
     TelnetConfig telnet_cfg;
     SerialConfig serial_cfg;
 

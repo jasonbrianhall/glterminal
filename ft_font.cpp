@@ -201,8 +201,8 @@ int cp_to_utf8(uint32_t cp, char *buf) {
 // Push one quad (6 GlyphVertex) for an atlas-cached glyph.
 // Returns the pixel advance so the caller can advance cx.
 static float push_glyph_quad(const GlyphEntry *e,
-                              float cx, float baseline_y,
-                              int font_px,
+                              float cx, 
+                              float baseline_y,
                               float r, float g, float b, float a,
                               bool is_bitmap_face,
                               std::vector<GlyphVertex> &verts) {
@@ -325,7 +325,7 @@ float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
                 // back to emoji face from a non-emoji primary face)
             }
 
-            adv = push_glyph_quad(e, cx, y, font_px, er, eg, eb, a,
+            adv = push_glyph_quad(e, cx, y, er, eg, eb, a,
                                   is_bitmap, verts);
         }
 
