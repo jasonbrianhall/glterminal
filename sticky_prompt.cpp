@@ -2,16 +2,14 @@
 #include "terminal.h"
 #include "term_color.h"
 #include "gl_renderer.h"
+#include "ft_font.h"
 #include <cstdio>
 #include <SDL2/SDL.h>
 #include <string.h>
 
 // Forward declarations for functions from other modules
-extern void draw_text(const char *text, float x, float y, int font_size, int cell_h, 
-                      float r, float g, float b, float a, uint8_t attrs);
-extern void cp_to_utf8(uint32_t cp, char *buf);
 extern int g_font_size;
-extern int g_blink_text_on;
+extern bool g_blink_text_on;
 extern bool s_basic_palette_active;
 extern bool cell_in_sel(Terminal *t, int r, int c);
 extern bool g_line_numbers_enabled;
