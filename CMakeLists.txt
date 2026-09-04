@@ -182,7 +182,7 @@ endif()
 
 target_compile_definitions(flt PRIVATE WOPR DONTUSEGMP)
 if(WIN32)
-    target_compile_definitions(flt PRIVATE WIN32 _WIN32 _WIN32_WINNT=0x0A00 NOMINMAX WIN32_LEAN_AND_MEAN __STDC__=1)
+    target_compile_definitions(flt PRIVATE WIN32 _WIN32 _WIN32_WINNT=0x0A00 NOMINMAX WIN32_LEAN_AND_MEAN __STDC__=1 _CRT_DECLARE_NONSTDC_NAMES=1)
 else()
     target_compile_definitions(flt PRIVATE LINUX)
 endif()
