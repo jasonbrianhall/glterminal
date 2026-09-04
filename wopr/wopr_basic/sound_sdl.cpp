@@ -75,7 +75,7 @@ typedef struct {
     int       have_note;     /* 1 if cur is valid                    */
 } SynthState;
 
-static SynthState g_synth = {0};
+static SynthState g_synth = {};
 
 static void audio_callback(void *userdata, Uint8 *stream, int len) {
     (void)userdata;
@@ -166,7 +166,7 @@ void sound_init(void) {
     g_mutex = SDL_CreateMutex();
     g_cond  = SDL_CreateCond();
 
-    SDL_AudioSpec want = {0}, have;
+    SDL_AudioSpec want = {}, have;
     want.freq     = SAMPLE_RATE;
     want.format   = AUDIO_S16SYS;
     want.channels = CHANNELS;
