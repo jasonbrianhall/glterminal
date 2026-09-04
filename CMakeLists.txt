@@ -176,6 +176,10 @@ set(SRCS_MINIZ
 
 add_executable(flt WIN32 ${SRCS_COMMON} ${SRCS_WOPR} ${SRCS_MINIZ})
 
+if(MSVC)
+    target_compile_options(flt PRIVATE /MP)
+endif()
+
 target_compile_definitions(flt PRIVATE WOPR DONTUSEGMP)
 if(WIN32)
     target_compile_definitions(flt PRIVATE WIN32 _WIN32 _WIN32_WINNT=0x0A00)
