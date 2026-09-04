@@ -1,0 +1,375 @@
+#ifndef _WIN32
+#  include <dirent.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
+#  include <fcntl.h>
+#else
+#  include <windows.h>
+#  include <shlobj.h>
+#  include <io.h>
+#  include <fcntl.h>
+#endif
+
+#include <string>
+#include <cstring>
+#include <algorithm>
+
+#include "felixchirp.h"
+
+#  include "../ssh_session.h"
+#  include "../sftp_overlay.h"
+#  include <libssh2_sftp.h>
+
+#include "stb_image.h"
+
+// ---- libwebp (for WebP support) -------------------------------------------
+// WebP is decoded via libwebp if available
+// Link with: -lwebp
+#  include <webp/decode.h>
+
+
+extern ImageViewer g_iv;
+extern TextDocument s_text_doc;
+extern bool s_viewing_text;
+bool g_video_capable = false;  // Will be set during iv_open()
+
+// ============================================================================
+// CROSS-PLATFORM TEMP FILE
+// ============================================================================
+
+// Write data to a new temp file with the given extension. Returns the path on
+// success or "" on failure. Caller must delete the file when done.
+std::string iv_write_tempfile(const unsigned char *data, size_t len, const char *ext) {
+    char path[512];
+#ifndef _WIN32
+    snprintf(path, sizeof(path), "/tmp/iv_tmp_XXXXXX%s", ext ? ext : "");
+    int fd = mkstemps(path, ext ? (int)strlen(ext) : 0);
+    if (fd < 0) return "";
+    ssize_t written = write(fd, data, len);
+    close(fd);
+    if (written != (ssize_t)len) { unlink(path); return ""; }
+#else
+    char tmp_dir[MAX_PATH];
+    if (!GetTempPathA(sizeof(tmp_dir), tmp_dir)) return "";
+    char base[MAX_PATH];
+    if (!GetTempFileNameA(tmp_dir, "iv_", 0, base)) return "";
+    // GetTempFileName creates a .tmp file — rename to include the right extension
+    snprintf(path, sizeof(path), "%s%s", base, ext ? ext : "");
+    // Write to the path directly (overwrite the placeholder)
+    FILE *f = fopen(path, "wb");
+    if (!f) { DeleteFileA(base); return ""; }
+    bool ok = (fwrite(data, 1, len, f) == len);
+    fclose(f);
+    DeleteFileA(base);  // remove the placeholder .tmp
+    if (!ok) { DeleteFileA(path); return ""; }
+#endif
+    return std::string(path);
+}
+
+void iv_delete_tempfile(const char *path) {
+    if (!path || !path[0]) return;
+#ifndef _WIN32
+    unlink(path);
+#else
+    DeleteFileA(path);
+#endif
+}
+
+// Truncate a filename so it fits within max_chars, preserving the extension.
+// Result is written into out (must be at least max_chars+1 bytes).
+// Uses a UTF-8-safe approach by working in bytes (filenames are usually ASCII).
+void iv_truncate_name(const char *name, int max_chars, char *out, int out_sz) {
+    int len = (int)strlen(name);
+    if (len <= max_chars) {
+        strncpy(out, name, out_sz - 1);
+        out[out_sz - 1] = '\0';
+        return;
+    }
+    // Find extension (last dot)
+    const char *dot = strrchr(name, '.');
+    int ext_len = dot ? (int)strlen(dot) : 0;  // includes the dot
+    // We need: stem... + ellipsis(1 char '…' = 3 bytes) + ext
+    // Keep at least "A…ext" = 1 stem char + ellipsis + ext
+    int keep_stem = max_chars - 1 - ext_len;  // chars for stem before ellipsis
+    if (keep_stem < 1) keep_stem = 1;
+    // Build truncated string
+    int pos = 0;
+    for (int i = 0; i < keep_stem && i < len && pos < out_sz - 1; i++)
+        out[pos++] = name[i];
+    // UTF-8 ellipsis: 0xE2 0x80 0xA6
+    if (pos + 3 < out_sz) { out[pos++]='\xe2'; out[pos++]='\x80'; out[pos++]='\xa6'; }
+    if (dot && ext_len > 0 && pos + ext_len < out_sz) {
+        strncpy(out + pos, dot, out_sz - pos - 1);
+        pos += ext_len;
+    }
+    out[pos] = '\0';
+}
+
+std::string iv_home() {
+#ifdef _WIN32
+    char buf[MAX_PATH] = {};
+    SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, buf);
+    return buf[0] ? buf : "C:\\Users";
+#else
+    const char *h = getenv("HOME");
+    return h ? h : "/home";
+#endif
+}
+
+void iv_load_local(const char *filepath, const char *label) {
+    FILE *f = fopen(filepath, "rb");
+    if (!f) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "Cannot open: %s", filepath);
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    if (sz <= 0 || sz > 64 * 1024 * 1024) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "File too large or empty");
+        fclose(f);
+        return;
+    }
+    unsigned char *buf = (unsigned char *)malloc(sz);
+    fread(buf, 1, sz, f);
+    fclose(f);
+    iv_load_image_from_mem(buf, (size_t)sz, label);
+    free(buf);
+}
+
+// ============================================================================
+// OPEN / CLOSE
+// ============================================================================
+
+void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
+#ifdef HAVE_GSTREAMER
+    // Initialize GStreamer and detect video capability
+    static bool gst_initialized = false;
+    if (!gst_initialized) {
+        gst_init(nullptr, nullptr);
+        gst_initialized = true;
+        
+        // Test if basic GStreamer elements are available
+        GstElement *test = gst_element_factory_make("filesrc", nullptr);
+        g_video_capable = (test != nullptr);
+        if (test) gst_object_unref(test);
+    }
+#else
+    g_video_capable = false;
+#endif
+
+    g_iv = ImageViewer{};
+    g_iv.visible = true;
+    g_iv.remote  = remote;
+
+    if (!remote) {
+        strncpy(g_iv.path, iv_home().c_str(), sizeof(g_iv.path)-1);
+        iv_list_local(g_iv.path, g_iv.entries);
+    } else {
+        // Start at remote filesystem root — getenv("HOME") is the *local*
+        // home directory and is wrong when connecting from Windows.
+        // The user can navigate to their home via the listing.
+        strncpy(g_iv.path, "/", sizeof(g_iv.path)-1);
+        iv_list_remote(g_iv.path, g_iv.entries);
+    }
+}
+
+void iv_close() {
+    iv_stop_audio();
+    iv_kfn_stop();
+    iv_video_stop();
+    iv_cdg_free();
+    iv_free_tex();
+    
+    // Clean up text document - use swap to safely clear without double-free
+    TextDocument empty_doc;
+    s_text_doc = empty_doc;
+    s_viewing_text = false;
+    
+    g_iv.visible = false;
+}
+
+void iv_load_image_from_mem(const unsigned char *data, size_t len, const char *label) {
+    int w, h, ch;
+    unsigned char *px = stbi_load_from_memory(data, (int)len, &w, &h, &ch, 4);
+    
+    // If stbi fails, try WebP decoder
+    if (!px) {
+        px = WebPDecodeRGBA(data, len, &w, &h);
+        if (px) {
+            // WebP decoder returns RGBA, which matches what we need
+            ch = 4;
+        }
+    }
+    
+    if (!px) {
+        snprintf(g_iv.error, sizeof(g_iv.error), "Decode failed: %s", stbi_failure_reason());
+        iv_free_tex();
+        return;
+    }
+    g_iv.error[0] = '\0';
+    iv_upload_texture(px, w, h);
+    
+    // Free with appropriate function based on source
+    // Check if this was decoded by WebP (simple heuristic: if stbi_load_from_memory failed above)
+    if (stbi_load_from_memory(data, (int)len, &w, &h, &ch, 4) == nullptr) {
+        WebPFree(px);
+    } else {
+        stbi_image_free(px);
+    }
+    
+    strncpy(g_iv.img_label, label, sizeof(g_iv.img_label)-1);
+    // Reset view for every new image
+    g_iv.zoom    = 1.0f;
+    g_iv.pan_x   = 0.0f;
+    g_iv.pan_y   = 0.0f;
+    g_iv.img_rot = 0;
+}
+
+// ============================================================================
+// DIRECTORY LISTING
+// ============================================================================
+
+void iv_list_local(const char *path, std::vector<IVEntry> &out) {
+    out.clear();
+#ifndef _WIN32
+    if (strcmp(path, "/") != 0) {
+        IVEntry up{}; strncpy(up.name, "..", sizeof(up.name)-1); up.is_dir = true;
+        out.push_back(up);
+    }
+    DIR *d = opendir(path);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        IVEntry e{};
+        strncpy(e.name, de->d_name, sizeof(e.name)-1);
+        char full[4096]; snprintf(full, sizeof(full), "%s/%s", path, de->d_name);
+        struct stat st{};
+        if (stat(full, &st) == 0) {
+            e.is_dir = S_ISDIR(st.st_mode);
+            e.size   = (uint64_t)st.st_size;
+        }
+        bool img   = is_image_ext(e.name);
+        bool txt   = is_text_ext(e.name);
+        bool md    = is_markdown_ext(e.name);
+        bool zip   = is_zip_ext(e.name);
+        bool audio = is_audio_ext(e.name);
+        bool video = is_video_ext(e.name) && g_video_capable;
+        bool cdg   = is_cdg_ext(e.name);
+        bool kfn   = is_kfn_ext(e.name);
+        if (e.is_dir || img || txt || md || zip || audio || video || cdg || kfn) {
+            if (zip)   { e.is_zip = true; e.has_cdg_pair = zip_contains_cdg_pair(full); }
+            if (audio) { e.is_audio = true; e.has_cdg_pair = has_paired_cdg(path, e.name); }
+            if (video) { e.is_video = true; }
+            if (cdg)   e.is_cdg = true;
+            if (kfn)   e.is_kfn = true;
+            out.push_back(e);
+        }
+    }
+    closedir(d);
+#else
+    if (strcmp(path, "/") != 0 && strcmp(path, "\\") != 0) {
+        IVEntry up{}; strncpy(up.name, "..", sizeof(up.name)-1); up.is_dir = true;
+        out.push_back(up);
+    }
+    char pattern[4096]; snprintf(pattern, sizeof(pattern), "%s\\*", path);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+        IVEntry e{};
+        strncpy(e.name, fd.cFileName, sizeof(e.name)-1);
+        e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        e.size   = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        if (e.is_dir || is_image_ext(e.name) || is_zip_ext(e.name) ||
+            is_audio_ext(e.name) || (is_video_ext(e.name) && g_video_capable) ||
+            is_cdg_ext(e.name) || is_kfn_ext(e.name)) {
+            if (is_zip_ext(e.name)) {
+                e.is_zip = true;
+                char full[4096]; snprintf(full, sizeof(full), "%s\\%s", path, e.name);
+                e.has_cdg_pair = zip_contains_cdg_pair(full);
+            }
+            if (is_audio_ext(e.name)) { e.is_audio = true;
+                e.has_cdg_pair = has_paired_cdg(path, e.name); }
+            if (is_video_ext(e.name) && g_video_capable) { e.is_video = true; }
+            if (is_cdg_ext(e.name))   e.is_cdg = true;
+            if (is_kfn_ext(e.name))   e.is_kfn = true;
+            out.push_back(e);
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#endif
+    std::stable_sort(out.begin(), out.end(), [](const IVEntry &a, const IVEntry &b){
+        if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
+        return strcmp(a.name, b.name) < 0;
+    });
+}
+
+// Reuse the SFTP subsystem from sftp_overlay (s_sftp is extern there).
+// We call the public sftp_panel helpers indirectly by duplicating the
+// list logic here so we don't need to expose s_sftp directly.
+void iv_list_remote(const char *path, std::vector<IVEntry> &out) {
+    out.clear();
+    // Access the SFTP handle via the public SSH session API
+    LIBSSH2_SESSION *sess = ssh_get_session();
+    if (!sess) return;
+
+    // We need the sftp handle. sftp_overlay.cpp owns it but doesn't expose it.
+    // Use SftpPanel as a vehicle: create a temporary panel, call sftp_panel_refresh.
+    // Instead, we open our own SFTP channel for listing (read-only, quick).
+    // Note: sftp_init() in sftp_overlay already initialised the subsystem;
+    // we open a second handle here for the directory listing to avoid
+    // touching sftp_overlay's internal state.
+    ssh_session_lock();
+    libssh2_session_set_blocking(sess, 1);
+    LIBSSH2_SFTP *sftp = libssh2_sftp_init(sess);
+    if (!sftp) { libssh2_session_set_blocking(sess, 0); ssh_session_unlock(); return; }
+
+    if (strcmp(path, "/") != 0) {
+        IVEntry up{}; strncpy(up.name, "..", sizeof(up.name)-1); up.is_dir = true;
+        out.push_back(up);
+    }
+
+    LIBSSH2_SFTP_HANDLE *dh = libssh2_sftp_opendir(sftp, path);
+    if (dh) {
+        char name[512], longentry[1024];
+        LIBSSH2_SFTP_ATTRIBUTES attrs{};
+        while (libssh2_sftp_readdir_ex(dh, name, sizeof(name), longentry, sizeof(longentry), &attrs) > 0) {
+            if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
+            bool is_dir = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) &&
+                          LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
+            bool img   = is_image_ext(name);
+            bool txt   = is_text_ext(name);
+            bool md    = is_markdown_ext(name);
+            bool audio = is_audio_ext(name);
+            bool zip   = is_zip_ext(name);
+            bool video = is_video_ext(name) && g_video_capable;
+            bool cdg   = is_cdg_ext(name);
+            bool kfn   = is_kfn_ext(name);
+            if (!is_dir && !img && !txt && !md && !audio && !zip && !video && !cdg && !kfn) continue;
+            IVEntry e{};
+            strncpy(e.name, name, sizeof(e.name)-1);
+            e.is_dir = is_dir;
+            e.size   = (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) ? attrs.filesize : 0;
+            if (audio) e.is_audio = true;
+            if (zip)   e.is_zip   = true;
+            if (video) e.is_video = true;
+            if (cdg)   e.is_cdg   = true;
+            if (kfn)   e.is_kfn   = true;
+            // Note: has_cdg_pair and zip CDG peek not done for remote listings
+            // (would require extra SFTP round-trips per file)
+            out.push_back(e);
+        }
+        libssh2_sftp_closedir(dh);
+    }
+    libssh2_sftp_shutdown(sftp);
+    libssh2_session_set_blocking(sess, 0);
+    ssh_session_unlock();
+
+    std::stable_sort(out.begin(), out.end(), [](const IVEntry &a, const IVEntry &b){
+        if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
+        return strcmp(a.name, b.name) < 0;
+    });
+}

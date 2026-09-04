@@ -24,7 +24,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#if defined(_MSC_VER) && !defined(__MINGW32__)
+#include "msvc_posix_compat.h"  // strings.h doesn't exist under MSVC; strcasecmp
+#else
 #include <strings.h>   // strcasecmp
+#endif
 #include <ctype.h>
 #include <algorithm>
 #include <map>

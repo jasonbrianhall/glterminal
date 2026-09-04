@@ -11,6 +11,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <sys/stat.h>
+#ifndef NOMINMAX
+#define NOMINMAX  // otherwise windows.h's min/max macros mangle std::min/std::max
+#endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
@@ -18,6 +23,31 @@
 /* ---- POSIX case-insensitive string compare ---------------------------- */
 #define strcasecmp  _stricmp
 #define strncasecmp _strnicmp
+
+/* ---- <sys/stat.h> S_ISDIR ----------------------------------------------
+ * MSVC's sys/stat.h defines S_IFDIR/st_mode but not the S_ISDIR() macro.
+ */
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
+#endif
+
+/* ---- clock_gettime(CLOCK_REALTIME, ...) --------------------------------
+ * MSVC's <time.h> already defines struct timespec (since VS2015 UCRT), just
+ * not clock_gettime() or CLOCK_REALTIME itself.
+ */
+#ifndef CLOCK_REALTIME
+#define CLOCK_REALTIME 0
+static __inline int clock_gettime(int clk_id, struct timespec *spec) {
+    (void)clk_id;
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    t -= 116444736000000000ULL;  // Windows epoch (1601) -> Unix epoch (1970)
+    spec->tv_sec  = (long)(t / 10000000ULL);
+    spec->tv_nsec = (long)((t % 10000000ULL) * 100);
+    return 0;
+}
+#endif
 
 /* ---- <pid_t> --------------------------------------------------------- */
 #ifndef _PID_T_DEFINED
@@ -32,6 +62,10 @@ typedef int pid_t;
 #define unlink _unlink
 #define getcwd _getcwd
 #define chdir  _chdir
+#define write  _write
+#ifndef STDOUT_FILENO
+#define STDOUT_FILENO 1
+#endif
 #ifndef F_OK
 #define F_OK 0
 #endif

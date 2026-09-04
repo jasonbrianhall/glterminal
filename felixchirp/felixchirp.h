@@ -1,6 +1,9 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
+#if defined(_MSC_VER) && !defined(__MINGW32__)
+#include "msvc_posix_compat.h"
+#endif
 // Prior to guarding gst usage behind this macro, felixchirp.h included
 // <gst/gst.h> unconditionally -- i.e. every non-Windows build assumed
 // GStreamer was present. Default that assumption back on here so existing

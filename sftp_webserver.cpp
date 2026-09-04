@@ -42,7 +42,11 @@
 #include <cerrno>
 #include <vector>
 #include <signal.h>
+#if defined(_MSC_VER) && !defined(__MINGW32__)
+#include "msvc_posix_compat.h"  // dirent.h doesn't exist under MSVC
+#else
 #include <dirent.h>
+#endif
 #include <sys/stat.h>
 
 #ifdef _WIN32

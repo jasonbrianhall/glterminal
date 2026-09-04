@@ -13,7 +13,7 @@ project(felixterminal C CXX)
 # target_link_libraries() calls unable to see the target at all.
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(WIN32)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
@@ -182,7 +182,7 @@ endif()
 
 target_compile_definitions(flt PRIVATE WOPR DONTUSEGMP)
 if(WIN32)
-    target_compile_definitions(flt PRIVATE WIN32 _WIN32 _WIN32_WINNT=0x0A00)
+    target_compile_definitions(flt PRIVATE WIN32 _WIN32 _WIN32_WINNT=0x0A00 NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
     target_compile_definitions(flt PRIVATE LINUX)
 endif()

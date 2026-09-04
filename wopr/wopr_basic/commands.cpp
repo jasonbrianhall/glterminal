@@ -138,7 +138,11 @@ static void felix_drawf(char *, ...) {}
 
 #else
 /*  OSC 666 escape-code path (original Felix terminal protocol)  */
+#if defined(_MSC_VER) && !defined(__MINGW32__)
+#include "msvc_posix_compat.h"  // unistd.h doesn't exist under MSVC; write/STDOUT_FILENO
+#else
 #include <unistd.h>
+#endif
 
 static void felix_send(char *cmd) {
     write(STDOUT_FILENO, "\033]666;", 6);
