@@ -26,6 +26,15 @@
 #define strcasecmp  _stricmp
 #define strncasecmp _strnicmp
 
+/* ---- struct stat / stat() ------------------------------------------------
+ * MSVC's <sys/stat.h> only provides the underscore-prefixed struct _stat
+ * and _stat() -- no non-prefixed alias exists by default. One macro covers
+ * both the type name (`struct stat`) and the function call (`stat(...)`).
+ */
+#ifndef stat
+#define stat _stat
+#endif
+
 /* ---- <sys/stat.h> S_ISDIR ----------------------------------------------
  * MSVC's sys/stat.h always defines the underscore-prefixed _S_IFMT/_S_IFDIR;
  * the non-prefixed POSIX aliases (S_IFMT/S_IFDIR) are only exposed under
