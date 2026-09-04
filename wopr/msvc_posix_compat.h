@@ -27,10 +27,32 @@
 #define strncasecmp _strnicmp
 
 /* ---- <sys/stat.h> S_ISDIR ----------------------------------------------
- * MSVC's sys/stat.h defines S_IFDIR/st_mode but not the S_ISDIR() macro.
+ * MSVC's sys/stat.h always defines the underscore-prefixed _S_IFMT/_S_IFDIR;
+ * the non-prefixed POSIX aliases (S_IFMT/S_IFDIR) are only exposed under
+ * some CRT configs, so define them explicitly rather than assume they're
+ * already there.
  */
+#ifndef S_IFMT
+#define S_IFMT _S_IFMT
+#endif
+#ifndef S_IFDIR
+#define S_IFDIR _S_IFDIR
+#endif
 #ifndef S_ISDIR
 #define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
+#endif
+
+/* ---- mkdir/rmdir --------------------------------------------------------
+ * MSVC's <direct.h> only has the single-argument _mkdir (no POSIX mode
+ * bits on Windows). Wrap it under the POSIX name so callers can use either
+ * mkdir(name) (as guarded by #ifdef _WIN32 at call sites) or, if some call
+ * site isn't guarded, mkdir(name, mode) with the mode silently ignored.
+ */
+#ifndef mkdir
+static __inline int mkdir(const char *path) { return _mkdir(path); }
+#endif
+#ifndef rmdir
+#define rmdir _rmdir
 #endif
 
 /* ---- clock_gettime(CLOCK_REALTIME, ...) --------------------------------
