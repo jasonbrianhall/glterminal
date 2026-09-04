@@ -142,6 +142,7 @@ void iv_load_local(const char *filepath, const char *label) {
 // ============================================================================
 
 void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
+#ifdef HAVE_GSTREAMER
     // Initialize GStreamer and detect video capability
     static bool gst_initialized = false;
     if (!gst_initialized) {
@@ -153,6 +154,9 @@ void iv_open(bool remote, int /*win_w*/, int /*win_h*/) {
         g_video_capable = (test != nullptr);
         if (test) gst_object_unref(test);
     }
+#else
+    g_video_capable = false;
+#endif
 
     g_iv = ImageViewer{};
     g_iv.visible = true;
