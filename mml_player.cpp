@@ -95,8 +95,8 @@ static void ring_write_samples(const float *buf, int n) {
     for (int i = 0; i < n; i++) {
         if (s_ring_fill >= MML_RING_SAMPLES) break;
         s_ring[s_ring_write % MML_RING_SAMPLES] = buf[i];
-        s_ring_write++;
-        s_ring_fill++;
+        s_ring_write = s_ring_write + 1;
+        s_ring_fill  = s_ring_fill + 1;
     }
 }
 
@@ -352,7 +352,9 @@ static std::vector<MmlNote> parse_mml(const char *mml, MmlState &st) {
 void mml_init(void) {
     s_dev = term_audio_get_device();
     for (int i = 0; i < MML_VOICES; i++) s_voices[i].reset();
-    s_ring_write = s_ring_read = s_ring_fill = 0;
+    s_ring_write = 0;
+    s_ring_read  = 0;
+    s_ring_fill  = 0;
     memset(s_ring, 0, sizeof(s_ring));
 }
 
@@ -379,7 +381,9 @@ void mml_play(const char *mml) {
     }
 
     // Pre-render into ring buffer so the callback always has data
-    s_ring_write = s_ring_read = s_ring_fill = 0;
+    s_ring_write = 0;
+    s_ring_read  = 0;
+    s_ring_fill  = 0;
     const int PREFILL = MML_SAMPLE_RATE / 4;  // 250ms prefill
     float tmp[PREFILL];
     mml_render_block(tmp, PREFILL);
