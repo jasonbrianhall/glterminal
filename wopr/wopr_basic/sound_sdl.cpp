@@ -56,7 +56,8 @@ static int q_full(void) { return q_count() >= MAX_QUEUE - 1; }
 static void q_push(double freq, int tone_ms, int gap_ms) {
     SDL_LockMutex(g_mutex);
     while (q_full()) SDL_CondWait(g_cond, g_mutex); /* back-pressure */
-    g_queue[g_q_tail] = (NoteEvent){ freq, tone_ms, gap_ms };
+    NoteEvent ev = { freq, tone_ms, gap_ms };
+    g_queue[g_q_tail] = ev;
     g_q_tail = (g_q_tail + 1) % MAX_QUEUE;
     SDL_UnlockMutex(g_mutex);
 }
