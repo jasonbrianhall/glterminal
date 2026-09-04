@@ -1,6 +1,14 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
+// Prior to guarding gst usage behind this macro, felixchirp.h included
+// <gst/gst.h> unconditionally -- i.e. every non-Windows build assumed
+// GStreamer was present. Default that assumption back on here so existing
+// Makefile-driven Linux builds keep working without needing to learn about
+// this flag. Windows/vcpkg builds never define it, so they stay excluded.
+#if !defined(_WIN32) && !defined(HAVE_GSTREAMER)
+#define HAVE_GSTREAMER 1
+#endif
 #ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>

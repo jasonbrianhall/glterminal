@@ -101,7 +101,9 @@ bool iv_keydown(SDL_Keycode sym) {
             g_iv.audio_paused  = false;
             // Adjust start_ticks to account for paused time
             g_iv.audio_start_ticks = (double)SDL_GetTicks() - g_iv.audio_position * 1000.0;
-        } else if (g_iv.video_playing && g_iv.video_pipeline) {
+        }
+#ifdef HAVE_GSTREAMER
+        else if (g_iv.video_playing && g_iv.video_pipeline) {
             // Toggle video pause
             if (!g_iv.video_paused) {
                 gst_element_set_state(g_iv.video_pipeline, GST_STATE_PAUSED);
@@ -113,7 +115,9 @@ bool iv_keydown(SDL_Keycode sym) {
                 g_iv.video_playing = true;
                 g_iv.video_start_ticks = (double)SDL_GetTicks() - g_iv.video_position * 1000.0;
             }
-        } else {
+        }
+#endif
+        else {
             iv_enter_selected();
         }
         return true;
@@ -247,12 +251,14 @@ bool iv_keydown(SDL_Keycode sym) {
             double delta = (sym == SDLK_RIGHT) ? 5.0 : -5.0;
             double newpos = g_iv.video_position + delta;
             if (newpos < 0.0) newpos = 0.0;
+#ifdef HAVE_GSTREAMER
             if (g_iv.video_pipeline) {
                 gst_element_seek_simple(g_iv.video_pipeline, GST_FORMAT_TIME,
                     GST_SEEK_FLAG_FLUSH, (gint64)(newpos * GST_SECOND));
                 g_iv.video_position = newpos;
                 g_iv.video_start_ticks = (double)SDL_GetTicks() - newpos * 1000.0;
             }
+#endif
             return true;
         }
         // No shift — navigate to prev/next playable file
@@ -302,12 +308,14 @@ bool iv_keydown(SDL_Keycode sym) {
             double delta = (sym == SDLK_UP) ? 30.0 : -30.0;
             double newpos = g_iv.video_position + delta;
             if (newpos < 0.0) newpos = 0.0;
+#ifdef HAVE_GSTREAMER
             if (g_iv.video_pipeline) {
                 gst_element_seek_simple(g_iv.video_pipeline, GST_FORMAT_TIME,
                     GST_SEEK_FLAG_FLUSH, (gint64)(newpos * GST_SECOND));
                 g_iv.video_position = newpos;
                 g_iv.video_start_ticks = (double)SDL_GetTicks() - newpos * 1000.0;
             }
+#endif
             return true;
         }
         // No shift — normal list navigation with wrap-around
