@@ -573,17 +573,17 @@ static void do_command(WoprState *w, const std::string &raw) {
 
         push_line(w, "Activity:");
         push_line(w, current_salute.activity);
-        if (!current_salute.activity2==NULL) push_line(w, current_salute.activity2);
+        if (current_salute.activity2 != NULL) push_line(w, current_salute.activity2);
         push_line(w, "");
 
         push_line(w, "Location:");
         push_line(w, current_salute.location);
-        if (!current_salute.activity2==NULL) push_line(w, current_salute.location2);
+        if (current_salute.activity2 != NULL) push_line(w, current_salute.location2);
         push_line(w, "");
 
         push_line(w, "Uniform:");
         push_line(w, current_salute.uniform);
-        if (!current_salute.activity2==NULL) push_line(w, current_salute.uniform2);
+        if (current_salute.activity2 != NULL) push_line(w, current_salute.uniform2);
         push_line(w, "");
 
         push_line(w, "Time:");
@@ -592,7 +592,7 @@ static void do_command(WoprState *w, const std::string &raw) {
 
         push_line(w, "Equipment:");
         push_line(w, current_salute.equipment);
-        if (!current_salute.activity2==NULL) push_line(w, current_salute.equipment2);
+        if (current_salute.activity2 != NULL) push_line(w, current_salute.equipment2);
         push_line(w, "");
         return;
     }
