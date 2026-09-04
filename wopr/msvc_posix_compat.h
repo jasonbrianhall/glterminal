@@ -8,8 +8,12 @@
 
 #include <io.h>
 #include <sys/types.h>
-#if !defined(_OFF_T_DEFINED)
+/* MSVC's sys/types.h sets the _OFF_T_DEFINED guard even when its own
+ * typedef is compiled out (oldnames suppressed in this project's build),
+ * so checking that guard here would skip our real fix. Force it instead;
+ * #pragma once above already prevents this running twice per TU. */
 typedef long off_t;
+#ifndef _OFF_T_DEFINED
 #define _OFF_T_DEFINED
 #endif
 #include <direct.h>

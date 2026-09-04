@@ -8,9 +8,13 @@
 #include <cstdint>
 #include <ctime>
 #include <sys/types.h>
-#if defined(_MSC_VER) && !defined(__MINGW32__) && !defined(_OFF_T_DEFINED)
+#if defined(_MSC_VER) && !defined(__MINGW32__)
+/* sys/types.h sets _OFF_T_DEFINED even when its own typedef is compiled
+ * out (oldnames suppressed in this project's build) -- don't gate on it. */
 typedef long off_t;
+#ifndef _OFF_T_DEFINED
 #define _OFF_T_DEFINED
+#endif
 #endif
 
 // Conversion Cache Entry
