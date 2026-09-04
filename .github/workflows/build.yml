@@ -62,7 +62,7 @@ jobs:
 
     - name: Configure (CMake, MSVC)
       run: |
-        cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.cmake_arch }} -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} -DVCPKG_INSTALLED_DIR=C:\vcpkg\installed -DCMAKE_BUILD_TYPE=Release
+        cmake -S . -B build -A ${{ matrix.cmake_arch }} -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} -DVCPKG_INSTALLED_DIR=C:\vcpkg\installed -DCMAKE_BUILD_TYPE=Release
 
     - name: Build
       run: |
