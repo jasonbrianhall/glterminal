@@ -16,6 +16,11 @@
     #define BEATCHESS_DOS 0
     #define BEATCHESS_HAS_PTHREAD 1
     #include <pthread.h>
+#elif defined(_MSC_VER) && !defined(__MINGW32__)
+    /* MSVC has no native pthread.h -- pulled in via vcpkg's "pthreads" port */
+    #define BEATCHESS_DOS 0
+    #define BEATCHESS_HAS_PTHREAD 1
+    #include <pthread.h>
 #else
     /* Unix/Linux/Windows with modern compiler - pthread support */
     #define BEATCHESS_DOS 0
