@@ -1817,7 +1817,8 @@ int main(int argc, char **argv) {
                                 fbo_needs_clear = true;
                                 term_dirty_all(&term);
                             } else if (g_menu.sub_open == MENU_ID_OPACITY) {
-                                g_opacity = ((float[]){1.0f,0.85f,0.7f,0.5f,0.3f,0.1f})[sub_hit];
+                                static const float opacities[] = {1.0f,0.85f,0.7f,0.5f,0.3f,0.1f};
+                                g_opacity = opacities[sub_hit];
                                 SDL_SetWindowOpacity(window, g_opacity);
                                 term_dirty_all(&term);
                             } else if (g_menu.sub_open == MENU_ID_RENDER_MODE) {

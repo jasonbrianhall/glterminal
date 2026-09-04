@@ -8,10 +8,16 @@
 
 #include <io.h>
 #include <direct.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
+
+/* ---- POSIX case-insensitive string compare ---------------------------- */
+#define strcasecmp  _stricmp
+#define strncasecmp _strnicmp
 
 /* ---- <pid_t> --------------------------------------------------------- */
 #ifndef _PID_T_DEFINED

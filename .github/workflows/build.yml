@@ -52,9 +52,18 @@ jobs:
 
     - name: Bootstrap vcpkg
       run: |
-        git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+        git clone --branch 2026.07.29 --depth 1 https://github.com/microsoft/vcpkg.git C:\vcpkg
         C:\vcpkg\bootstrap-vcpkg.bat
         echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "VCPKG_BINARY_SOURCES=clear;files,C:\vcpkg_bincache,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Cache vcpkg binaries
+      uses: actions/cache@v4
+      with:
+        path: C:\vcpkg_bincache
+        key: vcpkg-bincache-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          vcpkg-bincache-${{ matrix.triplet }}-
 
     - name: Install Dependencies (vcpkg)
       run: |
