@@ -7,6 +7,7 @@
 #if defined(_MSC_VER) && !defined(__MINGW32__)
 
 #include <io.h>
+#include <sys/types.h>
 #include <direct.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,6 +93,7 @@ typedef int pid_t;
  * Only the bits this project actually reaches for; extend as needed.
  */
 #define access _access
+#define chmod  _chmod
 #define unlink _unlink
 #define getcwd _getcwd
 #define chdir  _chdir
