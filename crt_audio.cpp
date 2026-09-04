@@ -342,7 +342,9 @@ static void audio_callback(void * /*userdata*/, Uint8 *stream, int len) {
 
         // ── WOPR modem screech mix-in ──────────────────────────────────────
         if (s_wopr_buf && s_wopr_pos < s_wopr_len) {
-            sample += s_wopr_buf[s_wopr_pos++] * 0.7f;
+            int pos = s_wopr_pos;
+            sample += s_wopr_buf[pos] * 0.7f;
+            s_wopr_pos = pos + 1;
             if (sample >  1.0f) sample =  1.0f;
             if (sample < -1.0f) sample = -1.0f;
         }
