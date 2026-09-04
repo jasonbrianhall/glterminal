@@ -262,7 +262,7 @@ int basic_printf(char *fmt, ...)
 }
 
 
-int basic_stderr(char *fmt, ...)
+int basic_stderr(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);

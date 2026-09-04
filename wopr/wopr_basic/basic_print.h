@@ -73,7 +73,7 @@ int basic_rnd_(int maxval);
 /* BASIC printf override (line-buffered) */
 int basic_printf(char *fmt, ...);
 
-int basic_stderr(char *fmt, ...);
+int basic_stderr(const char *fmt, ...);
 
 
 /* BASIC fgets override (calls basic_shim_fgets) */
