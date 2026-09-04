@@ -178,6 +178,13 @@ add_executable(flt WIN32 ${SRCS_COMMON} ${SRCS_WOPR} ${SRCS_MINIZ})
 
 if(MSVC)
     target_compile_options(flt PRIVATE /MP /Zc:strictStrings-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # This codebase's C-style BASIC/Zork interpreter APIs take char* (not
+    # const char*) for read-only string params throughout basic.h, so
+    # passing string literals trips -Wwrite-strings everywhere. Same
+    # tradeoff as /Zc:strictStrings- above -- suppress the warning class
+    # rather than widen dozens of signatures blind.
+    target_compile_options(flt PRIVATE -Wno-write-strings)
 endif()
 
 target_compile_definitions(flt PRIVATE WOPR DONTUSEGMP)
