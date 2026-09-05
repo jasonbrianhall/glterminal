@@ -124,6 +124,90 @@ jobs:
         path: FelixTerminal-Portable-${{ matrix.name }}.zip
         retention-days: 7
 
+  build-debug-standalone:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Bootstrap vcpkg
+      run: |
+        git clone --branch 2026.07.29 --depth 1 https://github.com/microsoft/vcpkg.git C:\vcpkg
+        C:\vcpkg\bootstrap-vcpkg.bat
+        echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "VCPKG_BINARY_SOURCES=clear;files,C:\vcpkg_bincache,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Restore vcpkg binary cache
+      uses: actions/cache/restore@v4
+      with:
+        path: C:\vcpkg_bincache
+        key: vcpkg-bincache-x64-windows-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          vcpkg-bincache-x64-windows-
+
+    - name: Install Dependencies (vcpkg)
+      run: |
+        C:\vcpkg\vcpkg.exe install --triplet x64-windows --x-install-root=C:\vcpkg\installed
+
+    - name: Save vcpkg binary cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: C:\vcpkg_bincache
+        key: vcpkg-bincache-x64-windows-${{ hashFiles('vcpkg.json') }}
+
+    - name: Configure (CMake, MSVC, Debug)
+      run: |
+        cmake -S . -B build-debug -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR=C:\vcpkg\installed -DCMAKE_BUILD_TYPE=Debug
+
+    - name: Build (Debug)
+      run: |
+        cmake --build build-debug --config Debug --parallel
+
+    - name: Stage Debug Artifacts
+      working-directory: build-debug\Debug
+      run: |
+        Copy-Item "C:\vcpkg\installed\x64-windows\debug\bin\*.dll" . -ErrorAction SilentlyContinue
+        Copy-Item "C:\vcpkg\installed\x64-windows\bin\*.dll" . -ErrorAction SilentlyContinue
+        Get-ChildItem *.exe, *.pdb, *.dll | Format-Table Name, Length
+
+    - name: Install Windows Debugging Tools (cdb)
+      run: |
+        $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
+        if (-not (Test-Path $cdb)) {
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2237403" -OutFile sdksetup.exe
+          Start-Process -FilePath .\sdksetup.exe -ArgumentList "/features OptionId.WindowsDesktopDebuggers /quiet /norestart" -Wait
+        }
+        echo "CDB=$cdb" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Capture crash stack trace (flt.exe)
+      working-directory: build-debug\Debug
+      continue-on-error: true
+      run: |
+        # Adjust args/stdin below to whatever actually triggers the crash.
+        # -g / -G: ignore initial/final breakpoints so it just runs.
+        # kb = call stack of crashing thread; ~*kb = all threads (SDL thread included).
+        & "$env:CDB" -g -G -c "g; .lastevent; kb; ~*kb; q" .\flt.exe > flt_crash_trace.txt 2>&1
+        Get-Content flt_crash_trace.txt
+
+    - name: Capture crash stack trace (FelixTerminalGUI.exe)
+      working-directory: build-debug\Debug
+      continue-on-error: true
+      run: |
+        & "$env:CDB" -g -G -c "g; .lastevent; kb; ~*kb; q" .\FelixTerminalGUI.exe > gui_crash_trace.txt 2>&1
+        Get-Content gui_crash_trace.txt
+
+    - name: Upload Debug Build + Traces
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: felix-terminal-debug-x64
+        path: |
+          build-debug\Debug\*.exe
+          build-debug\Debug\*.pdb
+          build-debug\Debug\*.dll
+          build-debug\Debug\*_crash_trace.txt
+        retention-days: 7
+
   build-msi-windows:
     # WiX v3 (used below) has no ARM64 target support, so the MSI stays x64-only.
     needs: build-windows
