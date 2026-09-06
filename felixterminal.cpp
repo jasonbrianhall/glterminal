@@ -31,6 +31,7 @@
 
 #include <SDL2/SDL.h>
 #include "icon.h"
+#include "crash_handler.h"
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -86,6 +87,8 @@ static inline bool _term_read_dispatch(bool ssh, bool tnet, bool ser, Terminal *
 // ============================================================================
 
 int main(int argc, char **argv) {
+    install_crash_handler();  // writes crash_log.txt next to the exe on an unhandled SEH exception
+
     // ---- Command-line parsing ----
 #ifdef WIN32
     const char *shell = "cmd.exe";
