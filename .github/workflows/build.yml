@@ -169,16 +169,14 @@ jobs:
         Copy-Item "C:\vcpkg\installed\x64-windows\debug\bin\*.dll" . -ErrorAction SilentlyContinue
         Copy-Item "C:\vcpkg\installed\x64-windows\bin\*.dll" . -ErrorAction SilentlyContinue
         Get-ChildItem *.exe, *.pdb, *.dll | Format-Table Name, Length
+        Compress-Archive -Path *.exe, *.pdb, *.dll -DestinationPath ..\..\FelixTerminal-Debug-x64.zip -Force
 
     - name: Upload Debug Build
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: felix-terminal-debug-x64
-        path: |
-          build-debug\Debug\*.exe
-          build-debug\Debug\*.pdb
-          build-debug\Debug\*.dll
+        path: FelixTerminal-Debug-x64.zip
         retention-days: 7
 
   build-msi-windows:
@@ -550,7 +548,7 @@ jobs:
         retention-days: 7
 
   create-release:
-    needs: [build-windows, build-msi-windows, build-msix-windows]
+    needs: [build-windows, build-msi-windows, build-msix-windows, build-debug-standalone]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -577,6 +575,12 @@ jobs:
         path: release
         merge-multiple: true
 
+    - name: Download Debug Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: felix-terminal-debug-x64
+        path: release
+
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
@@ -586,6 +590,7 @@ jobs:
           release/FelixTerminal-arm64.msix
           release/FelixTerminal-Portable-x64.zip
           release/FelixTerminal-Portable-arm64.zip
+          release/FelixTerminal-Debug-x64.zip
         tag_name: ${{ github.ref == 'refs/heads/main' && format('v{0}', github.run_number) || format('dev-v{0}', github.run_number) }}
         name: ${{ github.ref == 'refs/heads/main' && format('Release v{0}', github.run_number) || format('Dev Build v{0}', github.run_number) }}
         draft: false
