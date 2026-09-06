@@ -18,16 +18,35 @@
 #include <cstdio>
 #pragma comment(lib, "dbghelp.lib")
 
+#if defined(_M_X64) || defined(_M_AMD64)
+    #define CH_MACHINE_TYPE  IMAGE_FILE_MACHINE_AMD64
+    #define CH_PC(ctx)       ((ctx).Rip)
+    #define CH_FRAME(ctx)    ((ctx).Rbp)
+    #define CH_STACK(ctx)    ((ctx).Rsp)
+#elif defined(_M_ARM64)
+    #define CH_MACHINE_TYPE  IMAGE_FILE_MACHINE_ARM64
+    #define CH_PC(ctx)       ((ctx).Pc)
+    #define CH_FRAME(ctx)    ((ctx).Fp)
+    #define CH_STACK(ctx)    ((ctx).Sp)
+#elif defined(_M_IX86)
+    #define CH_MACHINE_TYPE  IMAGE_FILE_MACHINE_I386
+    #define CH_PC(ctx)       ((ctx).Eip)
+    #define CH_FRAME(ctx)    ((ctx).Ebp)
+    #define CH_STACK(ctx)    ((ctx).Esp)
+#else
+    #error "crash_handler.h: unsupported architecture"
+#endif
+
 namespace crash_handler_detail {
 
 inline void write_thread_stack(FILE *f, HANDLE process, HANDLE thread, CONTEXT ctx) {
     STACKFRAME64 frame = {};
-    DWORD machine = IMAGE_FILE_MACHINE_AMD64;
-    frame.AddrPC.Offset    = ctx.Rip;
+    DWORD machine = CH_MACHINE_TYPE;
+    frame.AddrPC.Offset    = CH_PC(ctx);
     frame.AddrPC.Mode      = AddrModeFlat;
-    frame.AddrFrame.Offset = ctx.Rbp;
+    frame.AddrFrame.Offset = CH_FRAME(ctx);
     frame.AddrFrame.Mode   = AddrModeFlat;
-    frame.AddrStack.Offset = ctx.Rsp;
+    frame.AddrStack.Offset = CH_STACK(ctx);
     frame.AddrStack.Mode   = AddrModeFlat;
 
     for (int i = 0; i < 64; i++) {
