@@ -170,33 +170,7 @@ jobs:
         Copy-Item "C:\vcpkg\installed\x64-windows\bin\*.dll" . -ErrorAction SilentlyContinue
         Get-ChildItem *.exe, *.pdb, *.dll | Format-Table Name, Length
 
-    - name: Install Windows Debugging Tools (cdb)
-      run: |
-        $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
-        if (-not (Test-Path $cdb)) {
-          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2237403" -OutFile sdksetup.exe
-          Start-Process -FilePath .\sdksetup.exe -ArgumentList "/features OptionId.WindowsDesktopDebuggers /quiet /norestart" -Wait
-        }
-        echo "CDB=$cdb" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-    - name: Capture crash stack trace (flt.exe)
-      working-directory: build-debug\Debug
-      continue-on-error: true
-      run: |
-        # Adjust args/stdin below to whatever actually triggers the crash.
-        # -g / -G: ignore initial/final breakpoints so it just runs.
-        # kb = call stack of crashing thread; ~*kb = all threads (SDL thread included).
-        & "$env:CDB" -g -G -c "g; .lastevent; kb; ~*kb; q" .\flt.exe > flt_crash_trace.txt 2>&1
-        Get-Content flt_crash_trace.txt
-
-    - name: Capture crash stack trace (FelixTerminalGUI.exe)
-      working-directory: build-debug\Debug
-      continue-on-error: true
-      run: |
-        & "$env:CDB" -g -G -c "g; .lastevent; kb; ~*kb; q" .\FelixTerminalGUI.exe > gui_crash_trace.txt 2>&1
-        Get-Content gui_crash_trace.txt
-
-    - name: Upload Debug Build + Traces
+    - name: Upload Debug Build
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -205,7 +179,6 @@ jobs:
           build-debug\Debug\*.exe
           build-debug\Debug\*.pdb
           build-debug\Debug\*.dll
-          build-debug\Debug\*_crash_trace.txt
         retention-days: 7
 
   build-msi-windows:
