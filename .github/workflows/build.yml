@@ -155,9 +155,9 @@ jobs:
         path: C:\vcpkg_bincache
         key: vcpkg-bincache-x64-windows-${{ hashFiles('vcpkg.json') }}
 
-    - name: Configure (CMake, MSVC, Debug)
+    - name: Configure (CMake, MSVC, Debug + ASan)
       run: |
-        cmake -S . -B build-debug -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR=C:\vcpkg\installed -DCMAKE_BUILD_TYPE=Debug
+        cmake -S . -B build-debug -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR=C:\vcpkg\installed -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="/fsanitize=address" -DCMAKE_C_FLAGS="/fsanitize=address"
 
     - name: Build (Debug)
       run: |
@@ -180,6 +180,17 @@ jobs:
           Copy-Item "$($debugCrtDir.FullName)\*.dll" . -Force
         } else {
           Write-Warning "Debug CRT redist folder not found on this runner image -- VCRUNTIME140D.dll etc. will be missing from the zip."
+        }
+
+        # ASan (/fsanitize=address) needs its runtime DLL next to the exe.
+        $asanDll = Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Recurse -Filter "clang_rt.asan_dynamic-x86_64.dll" -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -match '\\Hostx64\\x64\\' } |
+                   Select-Object -First 1
+        if ($asanDll) {
+          Write-Host "Found ASan runtime at $($asanDll.FullName)"
+          Copy-Item $asanDll.FullName . -Force
+        } else {
+          Write-Warning "ASan runtime DLL not found -- instrumented exe likely won't launch."
         }
 
         Get-ChildItem *.exe, *.pdb, *.dll | Format-Table Name, Length
