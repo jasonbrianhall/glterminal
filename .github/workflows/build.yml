@@ -168,6 +168,20 @@ jobs:
       run: |
         Copy-Item "C:\vcpkg\installed\x64-windows\debug\bin\*.dll" . -ErrorAction SilentlyContinue
         Copy-Item "C:\vcpkg\installed\x64-windows\bin\*.dll" . -ErrorAction SilentlyContinue
+
+        # Debug CRT (VCRUNTIME140D.dll, msvcp140d.dll, ucrtbased.dll, vcruntime140_1d.dll)
+        # is NOT redistributable, so it isn't installed on end-user machines and can't be
+        # grabbed via vcredist. Copy it straight from the VS Build Tools on this runner.
+        $debugCrtDir = Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Recurse -Directory -Filter "Microsoft.VC*.DebugCRT" -ErrorAction SilentlyContinue |
+                       Where-Object { $_.FullName -match '\\x64\\' } |
+                       Select-Object -First 1
+        if ($debugCrtDir) {
+          Write-Host "Found Debug CRT at $($debugCrtDir.FullName)"
+          Copy-Item "$($debugCrtDir.FullName)\*.dll" . -Force
+        } else {
+          Write-Warning "Debug CRT redist folder not found on this runner image -- VCRUNTIME140D.dll etc. will be missing from the zip."
+        }
+
         Get-ChildItem *.exe, *.pdb, *.dll | Format-Table Name, Length
         Compress-Archive -Path *.exe, *.pdb, *.dll -DestinationPath ..\..\FelixTerminal-Debug-x64.zip -Force
 
