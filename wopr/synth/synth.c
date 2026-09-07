@@ -889,6 +889,15 @@ int main(int argc, char *argv[]) {
     load_cmudict("cmudict-0.7b");
     printf("End Loading Dictionary\n");
 
+    /* Load the hand-curated overrides (proper nouns like "falken"/"joshua"
+     * that CMUdict doesn't have, and abbreviation expansions like "dr"/"mrs"
+     * that CMUdict either lacks or spells out letter-by-letter). Inserted
+     * AFTER cmudict so these win the lookup for any word appearing in both,
+     * since dict_lookup() walks each hash bucket starting from the most
+     * recently inserted node. */
+    for (int i = 0; DICT[i].word; i++)
+        dict_insert(DICT[i].word, DICT[i].phones);
+
 
     if (SDL_OpenAudio(&want, &got) < 0) {
         fprintf(stderr, "SDL_OpenAudio: %s\n", SDL_GetError());
