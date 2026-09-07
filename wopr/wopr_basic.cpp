@@ -107,6 +107,16 @@ void wopr_basic_post_key(char c)
     }
     SDL_UnlockMutex(s_key_mtx);
 }
+// See wopr.h for why wopr_render() (main thread) needs these to safely read
+// WoprState::lines while this file's commit_line() etc. (BASIC interpreter
+// thread) push_back()/erase()/assign into it concurrently.
+void wopr_basic_lines_lock(void) {
+    if (s_active && s_active->line_mtx) SDL_LockMutex(s_active->line_mtx);
+}
+void wopr_basic_lines_unlock(void) {
+    if (s_active && s_active->line_mtx) SDL_UnlockMutex(s_active->line_mtx);
+}
+
 static void commit_line(void)
 {
     
@@ -534,7 +544,7 @@ void wopr_basic_enter(WoprState *w)
     basic_shim_init();
     sound_init();   /* audio init on main thread */
 
-    zs->thread = SDL_CreateThreadWithStackSize(basic_thread_fn, "basicThread", 16 * 1024 * 1024, zs);
+    zs->thread = SDL_CreateThread(basic_thread_fn, "basicThread", zs);
     if (!zs->thread) {
         w->lines.push_back("  [basic] THREAD CREATION FAILED: " + std::string(SDL_GetError()));
         zs->dead = true;
@@ -777,7 +787,7 @@ void wopr_wizard_enter(WoprState *w)
     basic_shim_init();
     sound_init();
 
-    zs->thread = SDL_CreateThreadWithStackSize(wizard_thread_fn, "wizardThread", 16 * 1024 * 1024, zs);
+    zs->thread = SDL_CreateThread(wizard_thread_fn, "wizardThread", zs);
     if (!zs->thread) {
         w->lines.push_back("  [wizard] THREAD CREATION FAILED: " + std::string(SDL_GetError()));
         zs->dead = true;
