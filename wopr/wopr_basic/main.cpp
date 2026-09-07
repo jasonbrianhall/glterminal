@@ -343,8 +343,14 @@ return 0;
 
             /* Collect entries into two sorted lists: dirs and files */
             #define MAX_DIR_ENTRIES 2048
-            char dirs[MAX_DIR_ENTRIES][256];
-            char files[MAX_DIR_ENTRIES][256];
+            // static, not stack: these are 512KB each. As plain locals they get
+            // reserved as part of basic_main()'s single stack frame the moment the
+            // function is entered (even if FILES/DIR/LS is never typed), and under
+            // ASan's no-stack-slot-reuse instrumentation they can't share space with
+            // any other branch's locals either. basic_main() runs once per thread,
+            // never recursively/concurrently, so static here is safe.
+            static char dirs[MAX_DIR_ENTRIES][256];
+            static char files[MAX_DIR_ENTRIES][256];
             int ndirs = 0, nfiles = 0;
 
             struct dirent *de;
