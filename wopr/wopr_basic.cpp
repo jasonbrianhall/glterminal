@@ -303,10 +303,26 @@ void wopr_basic_push_line(char *text)
                 // Unhandled escape sequences are just skipped
                 continue;
             }
-            // Not a CSI — just output the ESC as a regular character
+            // Not a CSI. Some old BASIC programs (this codebase's own
+            // wizard.bas included) target real hardware terminals like the
+            // Heath/Zenith H19, which used single-character escapes outside
+            // the ESC[ CSI form. Recognize the common ones here rather than
+            // falling through to printing the raw ESC byte as a visible
+            // character (which typically renders as a "missing glyph" box
+            // or bell-like symbol -- ESC is never meant to be visible).
+            if (*(p+1) == 'E') {
+                // H19: clear screen + home cursor (like ESC[2J here).
+                wopr_basic_cls();
+                p += 2;
+                continue;
+            }
+            // Any other unrecognized single-character escape: drop only the
+            // ESC byte itself (never render it as visible text) and let the
+            // following character continue through the loop normally, in
+            // case it's ordinary text rather than part of some other H19
+            // code this doesn't specifically recognize.
             p++;
-            s_out_buf += '\033';
-            s_cur_col++;
+            continue;
         } else if (*p == '\n') {
             commit_line();
             p++;
@@ -428,6 +444,19 @@ BASIC_NS_END
 
 using WoprBasic::wopr_basic_post_key;
 
+// See wopr.h for why wopr_render() (main thread) needs these to safely read
+// WoprState::lines while this file's commit_line() etc. (BASIC interpreter
+// thread) push_back()/erase()/assign into it concurrently. Global scope to
+// match the rest of this file's public wopr_basic_* API -- s_active is a
+// plain file-scope static (declared above, before BASIC_NS_BEGIN), so it's
+// visible here without qualification.
+void wopr_basic_lines_lock(void) {
+    if (s_active && s_active->line_mtx) SDL_LockMutex(s_active->line_mtx);
+}
+void wopr_basic_lines_unlock(void) {
+    if (s_active && s_active->line_mtx) SDL_UnlockMutex(s_active->line_mtx);
+}
+
 int wopr_basic_get_screen_top(void)
 {
     return s_screen_top;
@@ -534,7 +563,7 @@ void wopr_basic_enter(WoprState *w)
     basic_shim_init();
     sound_init();   /* audio init on main thread */
 
-    zs->thread = SDL_CreateThread(basic_thread_fn, "basicThread", zs);
+    zs->thread = SDL_CreateThreadWithStackSize(basic_thread_fn, "basicThread", 16 * 1024 * 1024, zs);
     if (!zs->thread) {
         w->lines.push_back("  [basic] THREAD CREATION FAILED: " + std::string(SDL_GetError()));
         zs->dead = true;
@@ -777,7 +806,7 @@ void wopr_wizard_enter(WoprState *w)
     basic_shim_init();
     sound_init();
 
-    zs->thread = SDL_CreateThread(wizard_thread_fn, "wizardThread", zs);
+    zs->thread = SDL_CreateThreadWithStackSize(wizard_thread_fn, "wizardThread", 16 * 1024 * 1024, zs);
     if (!zs->thread) {
         w->lines.push_back("  [wizard] THREAD CREATION FAILED: " + std::string(SDL_GetError()));
         zs->dead = true;

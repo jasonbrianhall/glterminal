@@ -910,6 +910,11 @@ void wopr_render(int win_w, int win_h) {
     if (in_subgame) { gl_flush_verts(); return; }
 
     // ── Terminal log scroll ──────────────────────────────────────────────────
+    // wopr_basic's commit_line() (interpreter thread) can concurrently
+    // push_back/erase/assign into w->lines, so every read of it below --
+    // .size() and the indexed loop -- must happen while holding its lock.
+    // No-ops if no BASIC session is active (the common case).
+    wopr_basic_lines_lock();
     int total       = (int)w->lines.size();
     int crawl_extra = w->crawl_target.empty() ? 0 : 1;
     bool in_shell   = (w->phase == WoprPhase::GAME_MENU);
@@ -986,6 +991,7 @@ void wopr_render(int win_w, int win_h) {
         gl_draw_text(line, x0, y, lr, lg, lb, 1.f, SCALE);
         y += ch;
     }
+    wopr_basic_lines_unlock();
 
     // Active crawl line — uses current terminal color
     if (!w->crawl_target.empty()) {

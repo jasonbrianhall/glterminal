@@ -205,6 +205,16 @@ int         wopr_basic_get_screen_top(void);
 void wopr_basic_text(WoprState *w, const char *text);
 void wopr_basic_free(WoprState *w);
 
+// wopr_basic's line_mtx guards WoprState::lines against concurrent writes
+// from the BASIC interpreter thread (commit_line() etc). wopr_render() reads
+// w->lines from the main thread and must hold this lock while doing so, or
+// a push_back()/erase() on the interpreter thread mid-read can invalidate
+// the vector out from under the render loop (observed as a bounds-checked
+// STL "vector subscript out of range" under a tight PRINT/GOTO loop).
+// No-ops safely if no BASIC session is active.
+void wopr_basic_lines_lock(void);
+void wopr_basic_lines_unlock(void);
+
 // Wizard's Castle (BASIC program, shares the BASIC sub-game machinery)
 void wopr_wizard_enter(WoprState *w);
 
