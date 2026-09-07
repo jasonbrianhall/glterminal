@@ -303,10 +303,26 @@ void wopr_basic_push_line(char *text)
                 // Unhandled escape sequences are just skipped
                 continue;
             }
-            // Not a CSI — just output the ESC as a regular character
+            // Not a CSI. Some old BASIC programs (this codebase's own
+            // wizard.bas included) target real hardware terminals like the
+            // Heath/Zenith H19, which used single-character escapes outside
+            // the ESC[ CSI form. Recognize the common ones here rather than
+            // falling through to printing the raw ESC byte as a visible
+            // character (which typically renders as a "missing glyph" box
+            // or bell-like symbol -- ESC is never meant to be visible).
+            if (*(p+1) == 'E') {
+                // H19: clear screen + home cursor (like ESC[2J here).
+                wopr_basic_cls();
+                p += 2;
+                continue;
+            }
+            // Any other unrecognized single-character escape: drop only the
+            // ESC byte itself (never render it as visible text) and let the
+            // following character continue through the loop normally, in
+            // case it's ordinary text rather than part of some other H19
+            // code this doesn't specifically recognize.
             p++;
-            s_out_buf += '\033';
-            s_cur_col++;
+            continue;
         } else if (*p == '\n') {
             commit_line();
             p++;
