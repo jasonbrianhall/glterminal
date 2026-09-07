@@ -534,7 +534,7 @@ void wopr_basic_enter(WoprState *w)
     basic_shim_init();
     sound_init();   /* audio init on main thread */
 
-    zs->thread = SDL_CreateThread(basic_thread_fn, "basicThread", zs);
+    zs->thread = SDL_CreateThreadWithStackSize(basic_thread_fn, "basicThread", 16 * 1024 * 1024, zs);
     if (!zs->thread) {
         w->lines.push_back("  [basic] THREAD CREATION FAILED: " + std::string(SDL_GetError()));
         zs->dead = true;
@@ -777,7 +777,7 @@ void wopr_wizard_enter(WoprState *w)
     basic_shim_init();
     sound_init();
 
-    zs->thread = SDL_CreateThread(wizard_thread_fn, "wizardThread", zs);
+    zs->thread = SDL_CreateThreadWithStackSize(wizard_thread_fn, "wizardThread", 16 * 1024 * 1024, zs);
     if (!zs->thread) {
         w->lines.push_back("  [wizard] THREAD CREATION FAILED: " + std::string(SDL_GetError()));
         zs->dead = true;
