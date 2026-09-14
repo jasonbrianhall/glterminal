@@ -146,9 +146,12 @@ static void ww_audio_shutdown() {
     if (s_aud) { SDL_CloseAudioDevice(s_aud); s_aud=0; }
 }
 
+// Muted from the "Do you want sound effects?" startup prompt.
+static bool s_sound_on = true;
+
 // Queue a square-wave tone: freq Hz for dur_ms milliseconds.
 static void ww_beep(float freq, float dur_ms) {
-    if (!s_aud) return;
+    if (!s_aud || !s_sound_on) return;
     int n = (int)(s_aud_rate * dur_ms / 1000.f);
     SDL_LockAudioDevice(s_aud);
     float ph=0.f, inc=(freq>0.f)?(2.f*(float)M_PI*freq/s_aud_rate):0.f;
@@ -369,7 +372,23 @@ struct WBall { int row,col; std::string dir; };
 // =============================================================================
 // STATE
 // =============================================================================
-enum class WSub { INTRO, PLAYING, DEAD_WHITE, WIN_PAUSE, GAME_OVER, NAME_ENTRY, HIGHSCORES };
+enum class WSub { PROMPT_COLOR, PROMPT_SOUND, INTRO, PLAYING, DEAD_WHITE, WIN_PAUSE, GAME_OVER, NAME_ENTRY, HIGHSCORES };
+
+// ─── Background color palette ───────────────────────────────────────────────
+// Cycled at runtime with '[' / ']'. Index 0 is the original blue; a couple of
+// single-hue "monochrome monitor" presets are included for the color-monitor
+// startup prompt.
+struct WWBgColor { float r,g,b; const char *name; };
+static const WWBgColor WW_BG_COLORS[] = {
+    {0.00f, 0.00f, 0.55f, "BLUE"},
+    {0.00f, 0.00f, 0.00f, "BLACK"},
+    {0.00f, 0.22f, 0.00f, "GREEN"},
+    {0.35f, 0.18f, 0.00f, "AMBER"},
+    {0.25f, 0.00f, 0.25f, "MAGENTA"},
+    {0.00f, 0.25f, 0.30f, "CYAN"},
+};
+static const int WW_BG_COLOR_COUNT = (int)(sizeof(WW_BG_COLORS)/sizeof(WW_BG_COLORS[0]));
+static const int WW_BG_MONO_IDX    = 1; // "BLACK" — used when color monitor = No
 
 // Persistent highscore table, shared for the life of the process. Willy is a
 // point-scoring game (higher score wins), unlike a timed game, so it's opened
@@ -450,10 +469,15 @@ struct WillyWoprState {
     double ball_spawn_acc   = 0.0;
     double ball_spawn_delay = 1.0;
 
-    WSub   sub = WSub::INTRO;
+    WSub   sub = WSub::PROMPT_COLOR;
     double sub_timer = 0.0;
     int    flash_count = 0;
     int    death_wy = 0, death_wx = 0; // cell where Willy died (for localized flash)
+
+    // Startup prompts ("Are you using a color monitor?" / "Do you want sound effects?")
+    bool color_monitor = true;
+    bool sound_enabled  = true;
+    int  bg_color_idx   = 0;   // index into WW_BG_COLORS, changeable with '[' / ']'
 
     // Highscore name entry
     std::string name_entry;
@@ -923,9 +947,42 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
     SDL_Window *win=SDL_GL_GetCurrentWindow();
     if(win) SDL_GetWindowSize(win,&ww,&wh);
 
+    // Current background color (cycled with '[' / ']', seeded by the color-monitor prompt)
+    const WWBgColor &bg = WW_BG_COLORS[s->bg_color_idx % WW_BG_COLOR_COUNT];
+
+    // ── COLOR / SOUND STARTUP PROMPTS ───────────────────────────────────────
+    // Always plain black-and-white here — we don't know yet whether the
+    // person even has a color monitor, so showing color on this screen
+    // would defeat the point of asking.
+    if(s->sub == WSub::PROMPT_COLOR || s->sub == WSub::PROMPT_SOUND) {
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.f,1.f);
+        float cs = (float)cw;
+        float y  = (float)wh * 0.42f;
+
+        const char *q1 = "ARE YOU USING A COLOR MONITOR?";
+        const char *q2 = "DO YOU WANT SOUND EFFECTS?";
+        bool onQ1 = (s->sub == WSub::PROMPT_COLOR);
+
+        gl_draw_text(q1, ww_center_x(ww,cs,q1), y, 1.f,1.f,1.f,1.f,1.f);
+        if(!onQ1) {
+            std::string ans = std::string("  ") + (s->color_monitor ? "YES" : "NO");
+            gl_draw_text(ans.c_str(), ww_center_x(ww,cs,q1) + (float)strlen(q1)*cs, y, 1.f,1.f,1.f,1.f,1.f);
+        }
+        y += cs * 2.f;
+
+        if(!onQ1) gl_draw_text(q2, ww_center_x(ww,cs,q2), y, 1.f,1.f,1.f,1.f,1.f);
+        y += cs * 2.5f;
+
+        const char *hint = "PRESS Y OR N";
+        gl_draw_text(hint, ww_center_x(ww,cs,hint), y, 0.6f,0.6f,0.6f,1.f,1.f);
+
+        gl_flush_verts();
+        return;
+    }
+
     // ── INTRO SCREEN ─────────────────────────────────────────────────────────
     if(s->sub == WSub::INTRO) {
-        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, bg.r,bg.g,bg.b,1.f);
 
         // Every glyph is g_font_size × g_font_size pixels (see wopr_render.h).
         float cs = (float)cw;
@@ -1054,7 +1111,7 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
 
     // ── GAME OVER ─────────────────────────────────────────────────────────
     if(s->sub == WSub::GAME_OVER) {
-        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, bg.r,bg.g,bg.b,1.f);
         float cs = (float)cw;
         float y = (float)wh * 0.30f;
         char buf[128];
@@ -1087,7 +1144,7 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
 
     // ── NAME ENTRY (new high score) ────────────────────────────────────────
     if(s->sub == WSub::NAME_ENTRY) {
-        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, bg.r,bg.g,bg.b,1.f);
         float cs = (float)cw;
         char buf[96];
         std::string tier = s->hiscore_tier_msg.empty() ? "NEW HIGH SCORE!" : s->hiscore_tier_msg;
@@ -1106,7 +1163,7 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
 
     // ── HIGH SCORE TABLE ─────────────────────────────────────────────────
     if(s->sub == WSub::HIGHSCORES) {
-        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, bg.r,bg.g,bg.b,1.f);
         float cs = (float)cw;
         auto top = willy_highscores().getScoresByDifficulty(WILLY_SCORE_CATEGORY);
 
@@ -1141,7 +1198,7 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
     float gh=cell*W_ROWS; (void)(cell*W_COLS);
 
     // Fill the entire window with blue — game area + margins + status strip
-    gl_draw_rect(0.f, 0.f, (float)ww, (float)wh, 0.f, 0.f, 0.55f, 1.f);
+    gl_draw_rect(0.f, 0.f, (float)ww, (float)wh, bg.r, bg.g, bg.b, 1.f);
 
     // Death: expanding white burst around the death cell, fading out
     if(s->sub==WSub::DEAD_WHITE) {
@@ -1191,7 +1248,7 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
     float gap    = (float)(wh) - ((float)py + gh);
     float sy     = (float)py + gh + gap * 0.35f;
     // Blue strip filling the gap area
-    gl_draw_rect(0.f, (float)py+gh, (float)ww, gap, 0.f,0.f,0.55f,1.f);
+    gl_draw_rect(0.f, (float)py+gh, (float)ww, gap, bg.r,bg.g,bg.b,1.f);
 
     {
         char buf[160];
@@ -1271,6 +1328,26 @@ void wopr_willy_update(WoprState *w, double dt) {
 bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
     if(!w->sub_state) return false;
     WillyWoprState *s=static_cast<WillyWoprState*>(w->sub_state);
+
+    // Global: cycle the background color from anywhere in the sub-game.
+    if(sym==SDLK_LEFTBRACKET)  { s->bg_color_idx = (s->bg_color_idx + WW_BG_COLOR_COUNT - 1) % WW_BG_COLOR_COUNT; return true; }
+    if(sym==SDLK_RIGHTBRACKET) { s->bg_color_idx = (s->bg_color_idx + 1) % WW_BG_COLOR_COUNT; return true; }
+
+    if(s->sub==WSub::PROMPT_COLOR) {
+        if(sym==SDLK_y) { s->color_monitor=true;  s->sub=WSub::PROMPT_SOUND; }
+        else if(sym==SDLK_n) {
+            s->color_monitor=false;
+            s->bg_color_idx = WW_BG_MONO_IDX;   // drop to a single-hue "monochrome monitor" look
+            s->sub=WSub::PROMPT_SOUND;
+        }
+        return true;
+    }
+
+    if(s->sub==WSub::PROMPT_SOUND) {
+        if(sym==SDLK_y) { s->sound_enabled=true;  s_sound_on=true;  s->sub=WSub::INTRO; }
+        else if(sym==SDLK_n) { s->sound_enabled=false; s_sound_on=false; s->sub=WSub::INTRO; }
+        return true;
+    }
 
     if(s->sub==WSub::INTRO) {
         if(sym==SDLK_RETURN||sym==SDLK_KP_ENTER||sym==SDLK_SPACE)
@@ -1498,7 +1575,7 @@ void wopr_willy_enter(WoprState *w) {
     ww_audio_init();
     s->max_balls=6; s->score=0; s->lives=5; s->life_adder=0;
     ww_load_level(s,1);
-    s->sub = WSub::INTRO;  // show intro first
+    s->sub = WSub::PROMPT_COLOR;  // "Are you using a color monitor?" first, like the DOS original
     w->sub_state=s;
 }
 
