@@ -14,7 +14,7 @@
     #define PATH_SEP "/"
 #endif
 
-Highscores::Highscores() {
+Highscores::Highscores(bool higherIsBetter_) : higherIsBetter(higherIsBetter_) {
     #ifdef MSDOS
         const char* home = ".";
     #elif defined(_WIN32)
@@ -31,15 +31,19 @@ Highscores::Highscores() {
     loadScores();
 }
 
+bool Highscores::better(int a, int b) const {
+    return higherIsBetter ? (a > b) : (a < b);
+}
+
 void Highscores::addScore(const Score& score) {
     scores.push_back(score);
     scoresByDifficulty[score.difficulty].push_back(score);
     
-    // Sort scores for this difficulty by time
+    // Sort scores for this difficulty
     auto& difficultyScores = scoresByDifficulty[score.difficulty];
     std::sort(difficultyScores.begin(), difficultyScores.end(),
-        [](const Score& a, const Score& b) {
-            return a.time < b.time;
+        [this](const Score& a, const Score& b) {
+            return better(a.time, b.time);
         });
     
     // Keep only top MAX_SCORES_PER_DIFFICULTY scores for this difficulty
@@ -79,7 +83,7 @@ bool Highscores::isHighScore(int time, const std::string& difficulty) const {
         return true;  // Less than max scores for this difficulty
     }
     
-    return time < difficultyScores.back().time;  // Compare with worst time in top 10
+    return better(time, difficultyScores.back().time);  // Compare with worst score in top 10
 }
 
 void Highscores::loadScores() {
@@ -107,8 +111,8 @@ void Highscores::loadScores() {
     for (auto& pair : scoresByDifficulty) {
         auto& difficultyScores = pair.second;
         std::sort(difficultyScores.begin(), difficultyScores.end(),
-            [](const Score& a, const Score& b) {
-                return a.time < b.time;
+            [this](const Score& a, const Score& b) {
+                return better(a.time, b.time);
             });
         if (difficultyScores.size() > MAX_SCORES_PER_DIFFICULTY) {
             difficultyScores.resize(MAX_SCORES_PER_DIFFICULTY);

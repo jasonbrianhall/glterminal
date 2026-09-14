@@ -10,6 +10,7 @@
 // =============================================================================
 
 #include "wopr.h"
+#include "highscores.h"
 #include "wopr_render.h"
 #include <SDL2/SDL.h>
 #include "../felixchirp/miniz.h"
@@ -368,7 +369,46 @@ struct WBall { int row,col; std::string dir; };
 // =============================================================================
 // STATE
 // =============================================================================
-enum class WSub { INTRO, PLAYING, DEAD_WHITE, WIN_PAUSE, GAME_OVER };
+enum class WSub { INTRO, PLAYING, DEAD_WHITE, WIN_PAUSE, GAME_OVER, NAME_ENTRY, HIGHSCORES };
+
+// Persistent highscore table, shared for the life of the process. Willy is a
+// point-scoring game (higher score wins), unlike a timed game, so it's opened
+// with higherIsBetter=true. Constructed lazily on first use so we don't touch
+// disk unless the Willy sub-game is actually entered.
+static Highscores &willy_highscores() {
+    static Highscores h(/*higherIsBetter=*/true);
+    return h;
+}
+static const char *const WILLY_SCORE_CATEGORY = "willy";
+
+// Center a plain-ASCII line by character count against the monospace cell
+// grid (cs = cell width in px) — mirrors how the INTRO screen positions text,
+// rather than trusting gl_text_width() for whole-line centering.
+static float ww_center_x(int win_w, float cs, const char *text) {
+    return ((float)win_w - (float)strlen(text) * cs) * 0.5f;
+}
+
+// Mirrors willy.py's score_desc thresholds
+static const char *ww_score_desc(int score) {
+    if(score < 1000) return "Didn't you even read the instructions?";
+    if(score < 2000) return "If you can't say anything nice...";
+    if(score < 3000) return "Okay. Maybe you're not so bad after all.";
+    if(score < 4000) return "Wow! Absolutely mediocre!";
+    if(score < 5000) return "Pretty darn good, for a vertebrate!";
+    if(score < 6000) return "Well done! Do you often eat garbage?";
+    return "Absolutely fantastic! You should consider a career as an earthworm!";
+}
+
+// mirrors willy.py's hiscore_msg: a top-3 finish gets the "official" line,
+// otherwise merely making the top 10 gets the lesser one. We only keep one
+// persistent table (no daily/all-time split like willy.py's hiscoreT/hiscoreP),
+// so rank within that table stands in for the distinction.
+static std::string ww_hiscore_tier_msg(int score) {
+    auto top = willy_highscores().getScoresByDifficulty(WILLY_SCORE_CATEGORY);
+    int rank = 1;
+    for(const auto &sc : top) if(sc.time > score) rank++;
+    return (rank <= 3) ? "You're an Official Nightcrawler!" : "You're a Daily Pinworm!";
+}
 
 struct WillyWoprState {
     WLevels     levels;
@@ -414,6 +454,11 @@ struct WillyWoprState {
     double sub_timer = 0.0;
     int    flash_count = 0;
     int    death_wy = 0, death_wx = 0; // cell where Willy died (for localized flash)
+
+    // Highscore name entry
+    std::string name_entry;
+    bool        just_scored = false;  // true once addScore() has been called for this game
+    std::string hiscore_tier_msg;     // "You're an Official Nightcrawler!" etc, set on death
 
     // Render geometry
     float rx0=0,ry0=0,rcw=0,rch=0;
@@ -1007,6 +1052,83 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
         return;
     }
 
+    // ── GAME OVER ─────────────────────────────────────────────────────────
+    if(s->sub == WSub::GAME_OVER) {
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
+        float cs = (float)cw;
+        float y = (float)wh * 0.30f;
+        char buf[128];
+
+        gl_draw_text("GAME OVER", ww_center_x(ww,cs,"GAME OVER"), y, 1.f,1.f,1.f,1.f,1.f);
+        y += cs * 2.f;
+
+        snprintf(buf, sizeof(buf), "FINAL SCORE: %d", s->score);
+        gl_draw_text(buf, ww_center_x(ww,cs,buf), y, 1.f,1.f,1.f,1.f,1.f);
+        y += cs * 1.6f;
+
+        const char *desc = ww_score_desc(s->score);
+        gl_draw_text(desc, ww_center_x(ww,cs,desc), y, 0.8f,0.8f,0.8f,1.f,1.f);
+        y += cs * 1.8f;
+
+        if(!s->hiscore_tier_msg.empty()) {
+            gl_draw_text(s->hiscore_tier_msg.c_str(), ww_center_x(ww,cs,s->hiscore_tier_msg.c_str()), y, 1.f,1.f,0.f,1.f,1.f);
+            y += cs * 2.f;
+            const char *prompt = "PRESS ENTER TO ENTER YOUR NAME";
+            gl_draw_text(prompt, ww_center_x(ww,cs,prompt), y, 1.f,1.f,1.f,1.f,1.f);
+        } else {
+            y += cs * 0.6f;
+            const char *prompt = "PRESS ENTER TO PLAY AGAIN";
+            gl_draw_text(prompt, ww_center_x(ww,cs,prompt), y, 1.f,1.f,1.f,1.f,1.f);
+        }
+
+        gl_flush_verts();
+        return;
+    }
+
+    // ── NAME ENTRY (new high score) ────────────────────────────────────────
+    if(s->sub == WSub::NAME_ENTRY) {
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
+        float cs = (float)cw;
+        char buf[96];
+        std::string tier = s->hiscore_tier_msg.empty() ? "NEW HIGH SCORE!" : s->hiscore_tier_msg;
+        snprintf(buf, sizeof(buf), "%s  (%d POINTS)", tier.c_str(), s->score);
+        float y = (float)wh * 0.4f;
+        gl_draw_text(buf, ww_center_x(ww,cs,buf), y, 1.f,1.f,0.f,1.f,1.f);
+        y += cs * 2.f;
+        std::string prompt = "ENTER YOUR NAME: " + s->name_entry + "_";
+        gl_draw_text(prompt.c_str(), ww_center_x(ww,cs,prompt.c_str()), y, 1.f,1.f,1.f,1.f,1.f);
+        y += cs * 2.f;
+        const char *hint = "ENTER TO SUBMIT  -  ESC TO SKIP";
+        gl_draw_text(hint, ww_center_x(ww,cs,hint), y, 0.6f,0.6f,0.6f,1.f,1.f);
+        gl_flush_verts();
+        return;
+    }
+
+    // ── HIGH SCORE TABLE ─────────────────────────────────────────────────
+    if(s->sub == WSub::HIGHSCORES) {
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.55f,1.f);
+        float cs = (float)cw;
+        auto top = willy_highscores().getScoresByDifficulty(WILLY_SCORE_CATEGORY);
+
+        const char *title = "WOPR NIGHTCRAWLERS - TOP SCORES";
+        float y = (float)wh * 0.12f;
+        gl_draw_text(title, ww_center_x(ww,cs,title), y, 1.f,1.f,0.f,1.f,1.f);
+        y += cs * 2.f;
+
+        for(size_t i=0; i<top.size(); i++) {
+            char line[96];
+            snprintf(line, sizeof(line), "%2d. %-16s %6d", (int)(i+1), top[i].name.c_str(), top[i].time);
+            gl_draw_text(line, ww_center_x(ww,cs,line), y, 1.f,1.f,1.f,1.f,1.f);
+            y += cs * 2.0f;
+        }
+
+        y += cs;
+        const char *foot = "PRESS ENTER TO CONTINUE";
+        gl_draw_text(foot, ww_center_x(ww,cs,foot), y, 1.f,1.f,1.f,1.f,1.f);
+        gl_flush_verts();
+        return;
+    }
+
     // Shrink grid so the bottom row is fully clear of the status bar.
     // Reserve ch*2 below the grid: ch for the gap + ch for the text line.
     float avail_w = (float)(ww - px*2);
@@ -1071,16 +1193,22 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
     // Blue strip filling the gap area
     gl_draw_rect(0.f, (float)py+gh, (float)ww, gap, 0.f,0.f,0.55f,1.f);
 
-    if(s->sub==WSub::GAME_OVER) {
-        char buf[160];
-        snprintf(buf, sizeof(buf), "GAME OVER  -  FINAL SCORE: %6d  -  PRESS ENTER TO PLAY AGAIN", s->score);
-        gl_draw_text(buf, (float)px, sy, 1.f,1.f,1.f,1.f,1.f);
-    } else {
+    {
         char buf[160];
         snprintf(buf,sizeof(buf),
-                 "SCORE: %6d    BONUS: %4d    LEVEL: %2d    WILLY THE WORMS LEFT: %2d",
-                 s->score, s->bonus, s->level_num, s->lives);
+                 "SCORE: %6d    BONUS: %4d    LEVEL: %2d    WILLY THE WORMS LEFT: ",
+                 s->score, s->bonus, s->level_num);
         gl_draw_text(buf,(float)px,sy, 1.f,1.f,1.f,1.f,1.f);
+
+        // One small Willy sprite per remaining life, equally spaced, in place
+        // of the old "%2d" life count.
+        float icon_cs  = (float)cw;
+        float icon_x   = (float)px + (float)strlen(buf) * icon_cs;
+        float icon_gap = icon_cs * 1.4f;
+        int   lives_shown = s->lives > 0 ? s->lives : 0;
+        for(int i = 0; i < lives_shown; i++) {
+            ww_draw_sprite(0 /* Willy, facing right */, icon_x + i*icon_gap, sy - icon_cs, icon_cs, icon_cs);
+        }
     }
 
     gl_flush_verts();
@@ -1099,7 +1227,11 @@ void wopr_willy_update(WoprState *w, double dt) {
     if(s->sub==WSub::DEAD_WHITE) {
         s->sub_timer += dt;
         if(s->sub_timer >= 1.0) {  // hold white for 1 second
-            if(s->lives<0) { s->sub=WSub::GAME_OVER; }
+            if(s->lives<0) {
+                s->hiscore_tier_msg = (s->score>0 && willy_highscores().isHighScore(s->score, WILLY_SCORE_CATEGORY))
+                                        ? ww_hiscore_tier_msg(s->score) : "";
+                s->sub=WSub::GAME_OVER;
+            }
             else            { ww_load_level(s,s->level_num); }
         }
         return;
@@ -1148,6 +1280,46 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
 
     if(s->sub==WSub::GAME_OVER) {
         if(sym==SDLK_RETURN||sym==SDLK_KP_ENTER) {
+            if(!s->hiscore_tier_msg.empty()) {
+                s->name_entry.clear();
+                s->just_scored = false;
+                s->sub = WSub::NAME_ENTRY;
+            } else {
+                int saved_maxb=s->max_balls;
+                ww_load_level(s,1);
+                s->score=0; s->lives=5; s->life_adder=0;
+                s->max_balls=saved_maxb;
+                s->sub=WSub::INTRO;  // back to intro
+            }
+        }
+        return true;
+    }
+
+    if(s->sub==WSub::NAME_ENTRY) {
+        if(sym==SDLK_RETURN||sym==SDLK_KP_ENTER) {
+            if(!s->just_scored) {
+                std::string nm = s->name_entry.empty() ? "ANONYMOUS" : s->name_entry;
+                willy_highscores().addScore({nm, s->score, WILLY_SCORE_CATEGORY});
+                s->just_scored = true;
+            }
+            s->sub = WSub::HIGHSCORES;
+        } else if(sym==SDLK_ESCAPE) {
+            s->sub = WSub::GAME_OVER;   // bail out without recording a name
+        } else if(sym==SDLK_BACKSPACE) {
+            if(!s->name_entry.empty()) s->name_entry.pop_back();
+        } else if(s->name_entry.size() < 16) {
+            char c = 0;
+            if(sym>=SDLK_a && sym<=SDLK_z)      c = 'A' + (char)(sym - SDLK_a);
+            else if(sym>=SDLK_0 && sym<=SDLK_9) c = '0' + (char)(sym - SDLK_0);
+            else if(sym==SDLK_SPACE)            c = ' ';
+            else if(sym==SDLK_MINUS)            c = '-';
+            if(c) s->name_entry += c;
+        }
+        return true;
+    }
+
+    if(s->sub==WSub::HIGHSCORES) {
+        if(sym==SDLK_RETURN||sym==SDLK_KP_ENTER||sym==SDLK_SPACE) {
             int saved_maxb=s->max_balls;
             ww_load_level(s,1);
             s->score=0; s->lives=5; s->life_adder=0;
