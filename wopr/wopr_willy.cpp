@@ -13,7 +13,7 @@
 #include "highscores.h"
 #include "wopr_render.h"
 #include <SDL2/SDL.h>
-#include "../felixchirp/miniz.h"
+#include "miniz.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "wopr_willy_assets.h"
+#include "wopr_willy_assets_original.h"
 #define WILLY_ASSETS_EMBEDDED 1
 
 // =============================================================================
@@ -352,7 +353,18 @@ struct WLevels {
     }
 };
 
-static bool ww_load_levels(WLevels &lv) {
+static bool ww_load_levels(WLevels &lv, bool use_original) {
+    if(use_original) {
+        if(WILLY_ASSETS_EMBEDDED && willy_levels_original_z_len>1) {
+            std::vector<uint8_t> raw(willy_levels_original_raw_len);
+            mz_ulong out=(mz_ulong)willy_levels_original_raw_len;
+            if(mz_uncompress(raw.data(),&out,
+                             willy_levels_original_z,(mz_ulong)willy_levels_original_z_len)==MZ_OK) {
+                if(lv.load_str(std::string(raw.begin(),raw.begin()+out))) return true;
+            }
+        }
+        return lv.load_disk("original_levels.json");
+    }
     if(WILLY_ASSETS_EMBEDDED && willy_levels_z_len>1) {
         std::vector<uint8_t> raw(willy_levels_raw_len);
         mz_ulong out=(mz_ulong)willy_levels_raw_len;
@@ -372,7 +384,7 @@ struct WBall { int row,col; std::string dir; };
 // =============================================================================
 // STATE
 // =============================================================================
-enum class WSub { PROMPT_COLOR, PROMPT_SOUND, INTRO, PLAYING, DEAD_WHITE, WIN_PAUSE, GAME_OVER, NAME_ENTRY, HIGHSCORES };
+enum class WSub { PROMPT_LEVELS, PROMPT_COLOR, PROMPT_SOUND, INTRO, PLAYING, DEAD_WHITE, WIN_PAUSE, GAME_OVER, NAME_ENTRY, HIGHSCORES };
 
 // ─── Background color palette ───────────────────────────────────────────────
 // Cycled at runtime with '[' / ']'. Index 0 is the original blue; a couple of
@@ -469,12 +481,13 @@ struct WillyWoprState {
     double ball_spawn_acc   = 0.0;
     double ball_spawn_delay = 1.0;
 
-    WSub   sub = WSub::PROMPT_COLOR;
+    WSub   sub = WSub::PROMPT_LEVELS;
     double sub_timer = 0.0;
     int    flash_count = 0;
     int    death_wy = 0, death_wx = 0; // cell where Willy died (for localized flash)
 
-    // Startup prompts ("Are you using a color monitor?" / "Do you want sound effects?")
+    // Startup prompts ("Original 1980's levels or new levels?" / color monitor / sound)
+    bool use_original_levels = false;
     bool color_monitor = true;
     bool sound_enabled  = true;
     int  bg_color_idx   = 0;   // index into WW_BG_COLORS, changeable with '[' / ']'
@@ -950,6 +963,26 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
     // Current background color (cycled with '[' / ']', seeded by the color-monitor prompt)
     const WWBgColor &bg = WW_BG_COLORS[s->bg_color_idx % WW_BG_COLOR_COUNT];
 
+    // ── LEVEL PACK STARTUP PROMPT ───────────────────────────────────────────
+    if(s->sub == WSub::PROMPT_LEVELS) {
+        gl_draw_rect(0.f,0.f,(float)ww,(float)wh, 0.f,0.f,0.f,1.f);
+        float cs = (float)cw;
+        float y  = (float)wh * 0.38f;
+
+        const char *q1 = "PLAY THE ORIGINAL 1980's LEVELS";
+        const char *q2 = "OR THE NEW LEVELS?";
+        gl_draw_text(q1, ww_center_x(ww,cs,q1), y, 1.f,1.f,1.f,1.f,1.f);
+        y += cs * 1.6f;
+        gl_draw_text(q2, ww_center_x(ww,cs,q2), y, 1.f,1.f,1.f,1.f,1.f);
+        y += cs * 2.5f;
+
+        const char *hint = "PRESS O FOR ORIGINAL  -  N FOR NEW";
+        gl_draw_text(hint, ww_center_x(ww,cs,hint), y, 0.6f,0.6f,0.6f,1.f,1.f);
+
+        gl_flush_verts();
+        return;
+    }
+
     // ── COLOR / SOUND STARTUP PROMPTS ───────────────────────────────────────
     // Always plain black-and-white here — we don't know yet whether the
     // person even has a color monitor, so showing color on this screen
@@ -1259,12 +1292,24 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
 
         // One small Willy sprite per remaining life, equally spaced, in place
         // of the old "%2d" life count.
+        //
+        // The vertical nudge below lines the icon row up with the text
+        // baseline. This differs by renderer: the real WOPR gl_draw_text()
+        // anchors text one cell lower than ww_draw_sprite()'s top-left
+        // sprites (needs the nudge), while the standalone wopr_render.cpp
+        // anchors both the same way (needs none). -DWOPR selects which.
+        #ifdef WOPR
+        static const float WW_LIFE_ICON_Y_NUDGE = 1.0f;
+        #else
+        static const float WW_LIFE_ICON_Y_NUDGE = 0.0f;
+        #endif
         float icon_cs  = (float)cw;
         float icon_x   = (float)px + (float)strlen(buf) * icon_cs;
         float icon_gap = icon_cs * 1.4f;
         int   lives_shown = s->lives > 0 ? s->lives : 0;
         for(int i = 0; i < lives_shown; i++) {
-            ww_draw_sprite(0 /* Willy, facing right */, icon_x + i*icon_gap, sy - icon_cs, icon_cs, icon_cs);
+            ww_draw_sprite(0 /* Willy, facing right */, icon_x + i*icon_gap,
+                            sy - WW_LIFE_ICON_Y_NUDGE*icon_cs, icon_cs, icon_cs);
         }
     }
 
@@ -1332,6 +1377,25 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
     // Global: cycle the background color from anywhere in the sub-game.
     if(sym==SDLK_LEFTBRACKET)  { s->bg_color_idx = (s->bg_color_idx + WW_BG_COLOR_COUNT - 1) % WW_BG_COLOR_COUNT; return true; }
     if(sym==SDLK_RIGHTBRACKET) { s->bg_color_idx = (s->bg_color_idx + 1) % WW_BG_COLOR_COUNT; return true; }
+
+    if(s->sub==WSub::PROMPT_LEVELS) {
+        if(sym==SDLK_o || sym==SDLK_n) {
+            bool want_original = (sym==SDLK_o);
+            if(want_original != s->use_original_levels) {
+                WLevels tmp;
+                if(ww_load_levels(tmp, want_original) && tmp.exists("level1")) {
+                    s->levels = tmp;
+                    s->use_original_levels = want_original;
+                    ww_load_level(s,1);
+                }
+                // else: pack failed to load (e.g. original_levels.json missing on
+                // disk with no embedded copy) — silently keep whichever pack is
+                // already active rather than breaking the game.
+            }
+            s->sub = WSub::PROMPT_COLOR;
+        }
+        return true;
+    }
 
     if(s->sub==WSub::PROMPT_COLOR) {
         if(sym==SDLK_y) { s->color_monitor=true;  s->sub=WSub::PROMPT_SOUND; }
@@ -1562,7 +1626,7 @@ void wopr_willy_enter(WoprState *w) {
     }
 
     auto *s = new WillyWoprState();
-    if(!ww_load_levels(s->levels)) {
+    if(!ww_load_levels(s->levels, false)) {
         w->lines.push_back("  ERROR: levels.json NOT FOUND.");
         w->lines.push_back("  COPY levels.json NEXT TO THE BINARY OR RUN gen_willy_assets.py.");
         delete s; return;
@@ -1575,7 +1639,7 @@ void wopr_willy_enter(WoprState *w) {
     ww_audio_init();
     s->max_balls=6; s->score=0; s->lives=5; s->life_adder=0;
     ww_load_level(s,1);
-    s->sub = WSub::PROMPT_COLOR;  // "Are you using a color monitor?" first, like the DOS original
+    s->sub = WSub::PROMPT_LEVELS;  // "Original 1980's levels, or the new levels?" first
     w->sub_state=s;
 }
 
@@ -1588,3 +1652,9 @@ void wopr_willy_free(WoprState *w) {
 }
 
 void wopr_willy_textinput(WoprState *w, const char *t) { (void)w;(void)t; }
+
+bool wopr_willy_escape_is_ingame(WoprState *w) {
+    if(!w->sub_state) return false;
+    WillyWoprState *s = static_cast<WillyWoprState*>(w->sub_state);
+    return s->sub == WSub::NAME_ENTRY;  // Escape there skips submitting a name
+}
