@@ -1470,18 +1470,31 @@ bool g_debuglog_visible = false;
 #define DEBUGLOG_MAX_LINES 2000
 
 static std::deque<std::string> s_debuglog_lines;
-// NOTE: was std::mutex, but the Debug STL's lazy Mtx_lock init path is
-// crashing with a null internal handle on the very first lock in the
-// process (confirmed via ASan: access-violation, not heap corruption --
+// NOTE: was std::mutex, but on Windows the Debug STL's lazy Mtx_lock init
+// path was crashing with a null internal handle on the very first lock in
+// the process (confirmed via ASan: access-violation, not heap corruption --
 // the mutex object itself is at a valid address, its internal handle is
 // just zero when Mtx_lock dereferences it as if already initialized).
 // A raw CRITICAL_SECTION is eagerly initialized at construction with no
-// lazy-init step, sidestepping whatever this toolset's bug is.
+// lazy-init step, sidestepping whatever that toolset's bug is. CRITICAL_SECTION
+// is Windows-only, so non-Windows builds fall back to a pthread mutex, which
+// is likewise eagerly initialized (via PTHREAD_MUTEX_INITIALIZER).
+#ifdef _WIN32
 struct DebuglogLock {
     CRITICAL_SECTION cs;
     DebuglogLock()  { InitializeCriticalSection(&cs); }
     ~DebuglogLock() { DeleteCriticalSection(&cs); }
+    void lock()   { EnterCriticalSection(&cs); }
+    void unlock() { LeaveCriticalSection(&cs); }
 };
+#else
+#include <pthread.h>
+struct DebuglogLock {
+    pthread_mutex_t cs = PTHREAD_MUTEX_INITIALIZER;
+    void lock()   { pthread_mutex_lock(&cs); }
+    void unlock() { pthread_mutex_unlock(&cs); }
+};
+#endif
 static DebuglogLock            s_debuglog_mutex;
 static SDL_LogOutputFunction   s_debuglog_prev_fn = nullptr;
 static void                   *s_debuglog_prev_ud  = nullptr;
@@ -1492,11 +1505,11 @@ static void debuglog_capture(void *userdata, int category, SDL_LogPriority prior
     if (s_debuglog_prev_fn)
         s_debuglog_prev_fn(s_debuglog_prev_ud, category, priority, message);
 
-    EnterCriticalSection(&s_debuglog_mutex.cs);
+    s_debuglog_mutex.lock();
     s_debuglog_lines.emplace_back(message);
     while (s_debuglog_lines.size() > DEBUGLOG_MAX_LINES)
         s_debuglog_lines.pop_front();
-    LeaveCriticalSection(&s_debuglog_mutex.cs);
+    s_debuglog_mutex.unlock();
 }
 
 void debuglog_init() {
@@ -1538,7 +1551,7 @@ void debuglog_render(int win_w, int win_h) {
     int max_rows    = content_h / DEBUGLOG_ROW_H;
     if (max_rows < 1) max_rows = 1;
 
-    EnterCriticalSection(&s_debuglog_mutex.cs);
+    s_debuglog_mutex.lock();
     int count = (int)s_debuglog_lines.size();
     int max_scroll = count > max_rows ? count - max_rows : 0;
     if (s_debuglog_scroll > max_scroll) s_debuglog_scroll = max_scroll;
@@ -1560,7 +1573,7 @@ void debuglog_render(int win_w, int win_h) {
                        r, g, b, 1.f);
         ty += DEBUGLOG_ROW_H;
     }
-    LeaveCriticalSection(&s_debuglog_mutex.cs);
+    s_debuglog_mutex.unlock();
 
     gl_flush_verts();
 }
