@@ -200,6 +200,13 @@ static const int W_MAXROWS = 26;   // GAME_MAX_HEIGHT
 static const int W_MAXCOLS = 40;
 static const int W_NEWLIFE = 2000; // GAME_NEWLIFEPOINTS
 
+// Authentic-mode only: fixed length, in ticks, of an active jump's arc —
+// matches WILLY.PAS's jcount cycling 1..7 (3 up, 1 flat, 3 down). Once a
+// jump has run this many ticks, it's over even if Willy hasn't landed;
+// from there he drops into an ordinary zero-horizontal-drift fall exactly
+// like walking off a ledge. Ignored entirely when authentic_mode is off.
+static const int W_JUMP_ARC_TICKS = 7;
+
 struct WLevel {
     std::string grid[W_MAXROWS][W_MAXCOLS];
     std::string orig[W_MAXROWS][W_MAXCOLS];
@@ -454,6 +461,15 @@ struct WillyWoprState {
     int  willy_velocity_y = 0;
     bool jumping          = false;
     int  fall_speed       = 0;   // consecutive falling ticks, resets on landing
+    int  jump_arc_tick    = 0;   // authentic-mode: ticks elapsed since an active jump began; resets on landing/launch
+    bool jump_apex_flat_pending = false;  // authentic-mode: one-shot flag consumed by the flat apex tick (WILLY.PAS jcount=4)
+
+    // Ctrl+A toggles between the original Pascal game's stricter rules
+    // (jump only from a ladder's bottom rung; falling drift capped at
+    // FALL_DRIFT_LIMIT tiles) and this port's more permissive defaults.
+    // Off (false) = modern/permissive, matching behavior before this toggle
+    // existed.
+    bool authentic_mode = false;
 
     // Movement — mirrors moving_continuously / continuous_direction / up_pressed / down_pressed
     bool        moving_continuously = false;
@@ -546,15 +562,22 @@ static void do_jump(WillyWoprState *s) {
     if(s->willy_velocity_y != 0) return; // already airborne, ignore
     const std::string &cur  = wg(s,s->wy,s->wx);
     const std::string &below= wg(s,s->wy+1,s->wx);
-    // Deviation from the original Pascal game: there, space only worked on a
-    // ladder's bottom rung (standing on a pipe). Here any rung counts, since
-    // being unable to jump off a ladder anywhere but the very bottom was
-    // just an annoying restriction, not something worth preserving.
-    bool can_jump = (cur=="UPSPRING") || is_pipe(below) || (cur=="LADDER") || (s->wy==W_MAXROWS-1);
+    // authentic_mode: WILLY.PAS's jump key requires screen[wx,wy]<>131
+    // unconditionally (line 268-269) — you cannot jump from a ladder tile
+    // at all, not even the bottom rung (which is still tile 131, just with
+    // a pipe underneath). Off: any rung works — see the toggle comment on
+    // WillyWoprState::authentic_mode.
+    bool ladder_ok = s->authentic_mode ? false : (cur=="LADDER");
+    bool can_jump = (cur=="UPSPRING") || is_pipe(below) || ladder_ok || (s->wy==W_MAXROWS-1);
     if(can_jump) {
         s->jumping = true;
-        // Pascal jcount goes 1-7: 3 up steps + 1 flat + 3 down = 3 rows height
-        s->willy_velocity_y = (cur=="UPSPRING") ? -4 : -3;
+        s->jump_arc_tick = 0;
+        s->jump_apex_flat_pending = true;
+        // Pascal jcount goes 1-7: 3 up steps + 1 flat + 3 down = 3 rows height.
+        // authentic_mode: WILLY.PAS's spring case (wc=133) just does
+        // `jcount:=1` — the exact same table as a plain jump, no bonus
+        // height. The extra -4 (vs. -3) here is this port's own embellishment.
+        s->willy_velocity_y = (cur=="UPSPRING" && !s->authentic_mode) ? -4 : -3;
         // moving_continuously and continuous_direction are intentionally NOT touched
         // Play jump sound: ascending tone per Pascal (25-wy)*100
         ww_snd_climb(s->wy - 1);
@@ -614,6 +637,8 @@ static void ww_load_level(WillyWoprState *s, int num) {
     s->willy_velocity_y = 0;
     s->jumping          = false;
     s->fall_speed       = 0;
+    s->jump_arc_tick     = 0;
+    s->jump_apex_flat_pending = false;
     s->moving_continuously = false;
     s->continuous_direction.clear();
     s->up_pressed = s->down_pressed = false;
@@ -769,18 +794,55 @@ static void ww_tick(WillyWoprState *s) {
         }
     }
 
-    // Horizontal movement — moving_continuously persists through jumps
+    // Horizontal movement — moving_continuously persists through jumps.
+    //
+    // authentic_mode, active jump: WILLY.PAS computes wxdir and wydir
+    // together and applies them as ONE atomic step — it checks only the
+    // single combined target cell (wx+wxdir, wy+wydir); if that's blocked,
+    // NEITHER axis moves that tick. Our engine normally checks horizontal
+    // and vertical as two independent steps, which behaves differently on
+    // terrain like stairs: a corner that would only block the diagonal step
+    // can end up blocking (or wrongly permitting) just one axis instead of
+    // freezing both. So for this case we only compute the intended
+    // horizontal delta here and defer applying it to the gravity/jump block
+    // below, where it's combined with the vertical delta into one check.
+    // Crucially, WILLY.PAS also never cancels lfrt (the persistent movement
+    // direction) on a mid-jump block — that only happens while grounded
+    // (jcount=0) — so a diagonal block here does NOT clear
+    // moving_continuously; it just skips this tick and retries next tick,
+    // when the vertical offset (and so the target cell) will differ.
+    int  intended_dx = 0;
+    bool combine_with_vertical = s->authentic_mode && s->jumping && !moved_ladder;
     if(!moved_ladder) {
-        if(s->moving_continuously && !s->continuous_direction.empty()) {
-            bool hit = false;
-            if(s->continuous_direction=="LEFT") {
-                if(can_move(s,s->wy,s->wx-1)) s->wx--;
-                else hit=true;
-            } else if(s->continuous_direction=="RIGHT") {
-                if(can_move(s,s->wy,s->wx+1)) s->wx++;
-                else hit=true;
+        // authentic_mode: WILLY.PAS lines 306-311 only zero the *derived*
+        // wxdir for this one tick — the persistent lfrt (which way Willy is
+        // currently moving) is untouched. That's different from the ladder
+        // grab (lines 322-328), which explicitly does `lfrt:=0`, a real
+        // permanent stop. Clearing moving_continuously/continuous_direction
+        // here (a permanent stop) was wrong: it meant the direction was
+        // gone for good the moment a fall's drift got suppressed — even a
+        // jump whose fixed arc simply timed out mid-air — so landing
+        // afterward left Willy standing still with nothing to resume him
+        // short of a fresh keypress. Suppressing just this tick's move
+        // while leaving the state intact lets him pick the same direction
+        // back up the instant he's grounded again, same as the original.
+        bool passive_fall = (!s->jumping && s->willy_velocity_y != 0);
+        bool suppress_drift = s->authentic_mode && passive_fall;
+        if(s->moving_continuously && !s->continuous_direction.empty() && !suppress_drift) {
+            if(combine_with_vertical) {
+                intended_dx = (s->continuous_direction=="LEFT")  ? -1
+                            : (s->continuous_direction=="RIGHT") ?  1 : 0;
+            } else {
+                bool hit = false;
+                if(s->continuous_direction=="LEFT") {
+                    if(can_move(s,s->wy,s->wx-1)) s->wx--;
+                    else hit=true;
+                } else if(s->continuous_direction=="RIGHT") {
+                    if(can_move(s,s->wy,s->wx+1)) s->wx++;
+                    else hit=true;
+                }
+                if(hit) { s->moving_continuously=false; s->continuous_direction.clear(); }
             }
-            if(hit) { s->moving_continuously=false; s->continuous_direction.clear(); }
         }
     }
 
@@ -788,67 +850,133 @@ static void ww_tick(WillyWoprState *s) {
     cur_tile  = wg(s,s->wy,s->wx);
     on_ladder = (cur_tile=="LADDER");
 
-    // Mid-air ladder snap: only when Willy is airborne, hits a LADDER tile,
-    // AND a key was explicitly pressed this tick (grab_ladder). Passive flight
-    // passes through ladders freely — you must press a key to grab.
+    // Mid-air ladder snap. authentic_mode: WILLY.PAS lines 322-328 — the
+    // instant Willy's position is a LADDER tile while a jump is in progress,
+    // the jump ends and BOTH directions of movement zero out immediately,
+    // unconditionally (no keypress needed — this is the ladder's normal
+    // "grab" behavior, not a special move). Off: only catches if a key was
+    // pressed this tick while airborne (grab_ladder) — lets a jump sail
+    // clean over a ladder if you're not touching input, which is this
+    // port's more forgiving default.
     bool was_airborne_before_snap = (s->willy_velocity_y != 0);
-    bool grabbed_ladder_now = false;
-    if(on_ladder && s->willy_velocity_y != 0 && s->grab_ladder) {
+    bool should_snap_to_ladder = on_ladder && was_airborne_before_snap &&
+                                  (s->authentic_mode || s->grab_ladder);
+    if(should_snap_to_ladder) {
         s->willy_velocity_y = 0;
         s->jumping = false;
         s->moving_continuously = false;
         s->continuous_direction.clear();
-        grabbed_ladder_now = true;
     }
     s->grab_ladder = false; // consumed — clear every tick
 
-    // A ladder tile only "catches" Willy if he grabbed it this tick or wasn't
-    // already flying through the air. Otherwise (mid-jump, no grab) treat it
-    // as empty space below so the gravity/jump code lets the arc continue
-    // straight over it instead of halting the jump.
-    bool on_solid_ladder = on_ladder && (grabbed_ladder_now || !was_airborne_before_snap);
+    // A ladder tile only "catches" Willy if he was just snapped onto it or
+    // wasn't already flying through the air. Otherwise (mid-jump, no snap)
+    // treat it as empty space below so the gravity/jump code lets the arc
+    // continue straight over it instead of halting the jump.
+    bool on_solid_ladder = on_ladder && (should_snap_to_ladder || !was_airborne_before_snap);
 
     if(!on_solid_ladder) {
         if(s->willy_velocity_y < 0) {
             // Moving upward (jumping) — just advance velocity toward 0, no gravity yet
             int ny = s->wy - 1;
-            if(can_move(s,ny,s->wx)) s->wy = ny;
+            if(combine_with_vertical) {
+                int nx = s->wx + intended_dx;
+                if(can_move(s,ny,nx)) { s->wy = ny; s->wx = nx; }
+            } else {
+                if(can_move(s,ny,s->wx)) s->wy = ny;
+            }
             s->willy_velocity_y++;
             s->fall_speed = 0;  // airborne going up, reset fall counter
-        } else {
-            // Not jumping upward — apply gravity. ladder_counts=false: if
-            // we're here at all with on_ladder true, it's the pass-through
-            // case above, so the ladder must not be treated as ground.
-            if(!on_solid(s, /*ladder_counts=*/false)) {
-                s->willy_velocity_y += 1;
-            } else {
-                if(s->willy_velocity_y > 0) {
-                    // Just landed — play thud scaled to fall distance
-                    if(s->fall_speed > 1) ww_snd_climb(s->wy);
-                    s->fall_speed = 0;
-                    s->willy_velocity_y=0; s->jumping=false;
-                }
+        } else if(s->authentic_mode && s->jumping && s->willy_velocity_y==0 &&
+                  s->jump_apex_flat_pending) {
+            // authentic_mode: WILLY.PAS jcount=4 is a genuine flat tick —
+            // wydir:=0, Willy neither rises nor falls, before gravity takes
+            // over on jcount=5 the next tick. Our continuous-velocity model
+            // would otherwise start falling the very same tick it reaches
+            // the apex, which costs the jump a whole tick — and so a whole
+            // tile — of horizontal reach versus the original. Fires once
+            // per jump. Horizontal drift still applies this tick (jcount=4
+            // still runs wxdir:=lfrt, only wydir is held at 0).
+            if(combine_with_vertical && intended_dx != 0) {
+                int nx = s->wx + intended_dx;
+                if(can_move(s,s->wy,nx)) s->wx = nx;
             }
-            if(s->willy_velocity_y > 0) {
+            s->jump_apex_flat_pending = false;
+            s->fall_speed = 0;
+        } else {
+            // Not jumping upward — gravity/descent.
+            //
+            // Landing is detected the same way regardless of which path got
+            // Willy here — still actively jumping (combine_with_vertical),
+            // or already in a passive fall because the jump's fixed arc
+            // timed out before he actually reached the ground (the common
+            // case: most jumps land before their 7th tick). Whichever it
+            // is, the instant he's resting on solid ground this ends here
+            // and immediately tries a horizontal step in whatever direction
+            // is currently held — landing shouldn't cost a beat of movement
+            // no matter how Willy got down.
+            bool now_landed = on_solid(s, /*ladder_counts=*/false);
+            if(!now_landed) {
+                s->willy_velocity_y += 1;
                 int ny = s->wy + 1;
-                if(can_move(s,ny,s->wx)) {
-                    s->wy = ny;
-                    s->fall_speed++;
+                if(combine_with_vertical) {
+                    int nx = s->wx + intended_dx;
+                    if(can_move(s,ny,nx)) { s->wy = ny; s->wx = nx; s->fall_speed++; }
+                    // else: diagonal step blocked by something other than
+                    // landing (e.g. a wall to the side) — freeze this tick
+                    // only. WILLY.PAS never clears lfrt on a mid-jump block,
+                    // so we don't touch moving_continuously either; retried
+                    // next tick with a different vertical offset.
+                } else {
+                    if(can_move(s,ny,s->wx)) { s->wy = ny; s->fall_speed++; }
+                }
+            } else if(s->willy_velocity_y > 0 || s->jumping) {
+                // Just landed — play thud scaled to fall distance
+                if(s->fall_speed > 1) ww_snd_climb(s->wy);
+                s->fall_speed = 0;
+                s->jump_arc_tick = 0;
+                s->jump_apex_flat_pending = false;
+                s->willy_velocity_y = 0;
+                s->jumping = false;
+                if(s->moving_continuously && !s->continuous_direction.empty()) {
+                    int dx = (s->continuous_direction=="LEFT")  ? -1
+                           : (s->continuous_direction=="RIGHT") ?  1 : 0;
+                    if(dx != 0) {
+                        int nx = s->wx + dx;
+                        if(can_move(s,s->wy,nx)) s->wx = nx;
+                    }
                 }
             }
         }
     } else {
         if(s->fall_speed > 1) ww_snd_climb(s->wy);
         s->fall_speed = 0;
+        s->jump_arc_tick = 0;
+        s->jump_apex_flat_pending = false;
         s->willy_velocity_y=0; s->jumping=false;
+    }
+
+    // authentic_mode: end the jump's fixed-length arc even if Willy hasn't
+    // landed — mirrors WILLY.PAS's jcount wrapping from 7 back to 0 after
+    // exactly W_JUMP_ARC_TICKS ticks (line 337). From here he's an ordinary
+    // passive fall: horizontal drift is forced off starting next tick (see
+    // the horizontal-movement block above), same as walking off a ledge.
+    if(s->authentic_mode && s->jumping) {
+        s->jump_arc_tick++;
+        if(s->jump_arc_tick >= W_JUMP_ARC_TICKS) s->jumping = false;
     }
 
     // ── willy_game_check_collisions ───────────────────────────────────────────
     int y=s->wy, x=s->wx;
     cur_tile = wg(s,y,x);
 
-    // Destroyable pipe left behind
-    if((s->pwy!=y||s->pwx!=x) && s->pwy+1<W_ROWS) {
+    // Destroyable pipe left behind. WILLY.PAS: `if (wxdir<>0) and
+    // (screen[wx,wy+1]=196) then destroy` — gated on horizontal movement
+    // specifically, not on any movement. A pure vertical move (jumping
+    // straight up, climbing a ladder) leaves the pipe intact even though
+    // Willy's row changed; only walking (or drifting sideways mid-jump)
+    // across it destroys it.
+    if(s->pwx!=x && s->pwy+1<W_ROWS) {
         if(wg(s,s->pwy+1,s->pwx)=="PIPE18") {
             ws(s,s->pwy+1,s->pwx,"EMPTY");
             s->score += 50;
@@ -1087,6 +1215,12 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
             {{{"Good luck, and don't let Willy step on", -1}}, 1},
             {{{"", -1}}, 1},
             {{{"a tack or get ran over by a ball!", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"", -1}}, 1},
+
+            {{{"Ctrl+A toggles Authentic Mode: jump only from a ladder's", -1}}, 1},
+            {{{"", -1}}, 1},
+            {{{"bottom rung, and falling drift capped, as in the original.", -1}}, 1},
             {{{"", -1}}, 1},
             {{{"", -1}}, 1},
 
@@ -1337,6 +1471,14 @@ void wopr_willy_render(WoprState *w, int px, int py, int cw, int ch, int /*cols*
             ww_draw_sprite(0 /* Willy, facing right */, icon_x + i*icon_gap,
                             sy - WW_LIFE_ICON_Y_NUDGE*icon_cs, icon_cs, icon_cs);
         }
+
+        // Small right-aligned reminder while Ctrl+A's authentic mode is on —
+        // easy to forget it's toggled since it only changes jump/fall feel.
+        if(s->authentic_mode) {
+            const char *tag = "AUTHENTIC";
+            float tag_w = gl_text_width(tag, 1.f);
+            gl_draw_text(tag, (float)ww - (float)px - tag_w, sy, 1.f,1.f,0.f,1.f,1.f);
+        }
     }
 
     gl_flush_verts();
@@ -1403,6 +1545,15 @@ bool wopr_willy_keydown(WoprState *w, SDL_Keycode sym) {
     // Global: cycle the background color from anywhere in the sub-game.
     if(sym==SDLK_LEFTBRACKET)  { s->bg_color_idx = (s->bg_color_idx + WW_BG_COLOR_COUNT - 1) % WW_BG_COLOR_COUNT; return true; }
     if(sym==SDLK_RIGHTBRACKET) { s->bg_color_idx = (s->bg_color_idx + 1) % WW_BG_COLOR_COUNT; return true; }
+
+    // Global: Ctrl+A toggles authentic mode (original Pascal jump/fall
+    // rules vs. this port's more permissive defaults — see the flag's
+    // comment on WillyWoprState). Available from anywhere, including
+    // mid-fall, so it can be A/B tested live.
+    if(sym==SDLK_a && (SDL_GetModState() & KMOD_CTRL)) {
+        s->authentic_mode = !s->authentic_mode;
+        return true;
+    }
 
     if(s->sub==WSub::PROMPT_LEVELS) {
         if(sym==SDLK_o || sym==SDLK_n) {
