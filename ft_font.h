@@ -16,6 +16,7 @@ extern FT_Face    s_ft_face_obl;  // Oblique
 extern FT_Face    s_ft_face_bobl; // BoldOblique
 extern FT_Face    s_emoji_face;
 extern FT_Face    s_symbols_face;
+extern FT_Face    s_cjk_face;     // system CJK fallback (nullptr if none found)
 
 // ============================================================================
 // API
@@ -52,6 +53,9 @@ float   draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
                    int font_px, int emoji_px, float r, float g, float b, float a,
                    std::vector<Vertex> &verts);
 
+// box_w: width of the "missing glyph" box when no font has the character
+// (0 = one cell). term_render passes two cells for double-width characters.
 float   draw_text(const char *text, float x, float y, int font_px, int emoji_px,
-                  float r, float g, float b, float a, uint8_t attrs = 0);
+                  float r, float g, float b, float a, uint8_t attrs = 0,
+                  float box_w = 0.f);
 float   measure_text(const char *text, int font_px);

@@ -13,6 +13,10 @@
 #include <SDL2/SDL.h>
 #include <math.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <string>
+#include <vector>
 
 // ============================================================================
 // GLOBALS
@@ -25,6 +29,7 @@ FT_Face    s_ft_face_obl  = NULL;
 FT_Face    s_ft_face_bobl = NULL;
 FT_Face    s_emoji_face   = NULL;
 FT_Face    s_symbols_face = NULL;
+FT_Face    s_cjk_face     = NULL;
 
 unsigned char *s_font_buf      = NULL;
 unsigned char *s_font_buf_reg  = NULL;
@@ -33,6 +38,8 @@ unsigned char *s_font_buf_bobl = NULL;
 static unsigned char *s_emoji_buf = NULL;
 
 extern int g_font_size;
+
+static void load_cjk_fallback(void);  // defined below ft_init
 
 // ============================================================================
 // INIT
@@ -82,6 +89,71 @@ void ft_init(void) {
             }
         }
     }
+
+    load_cjk_fallback();
+}
+
+// ============================================================================
+// CJK FALLBACK — none of the embedded fonts cover Chinese/Japanese/Korean,
+// and embedding one would add 15+ MB, so borrow one from the system.
+// Order: $FELIX_CJK_FONT, then fontconfig (Linux), then well-known paths.
+// ============================================================================
+
+static bool try_cjk_face(const char *path, long index) {
+    if (!path || !*path) return false;
+    FT_Face f = nullptr;
+    if (FT_New_Face(s_ft_lib, path, index, &f) != 0) return false;
+    // Must actually contain CJK (fc-match falls back to anything)
+    if (!FT_Get_Char_Index(f, 0x4E2D) || !FT_Get_Char_Index(f, 0x3042)) {  // 中, あ
+        FT_Done_Face(f);
+        return false;
+    }
+    s_cjk_face = f;
+    SDL_Log("[Font] CJK fallback: %s %s (%s)\n", f->family_name, f->style_name, path);
+    return true;
+}
+
+static void load_cjk_fallback(void) {
+    if (try_cjk_face(getenv("FELIX_CJK_FONT"), 0)) return;
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+    // Ask fontconfig without linking it: fc-match prints file and face index
+    if (FILE *fp = popen("fc-match -f '%{file}\\n%{index}' 'monospace:lang=ja' 2>/dev/null", "r")) {
+        char file[1024] = {0}, idx[32] = {0};
+        if (fgets(file, sizeof(file), fp)) {
+            file[strcspn(file, "\r\n")] = 0;
+            if (!fgets(idx, sizeof(idx), fp)) idx[0] = 0;
+        }
+        pclose(fp);
+        if (try_cjk_face(file, atol(idx))) return;
+    }
+#endif
+
+    std::vector<std::string> paths;
+#ifdef _WIN32
+    const char *windir = getenv("WINDIR");
+    std::string fonts = std::string(windir ? windir : "C:\\Windows") + "\\Fonts\\";
+    for (const char *n : { "msgothic.ttc", "YuGothM.ttc", "msyh.ttc", "simsun.ttc", "malgun.ttf" })
+        paths.push_back(fonts + n);
+#elif defined(__APPLE__)
+    paths = { "/System/Library/Fonts/Hiragino Sans GB.ttc",
+              "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+              "/Library/Fonts/Arial Unicode.ttf" };
+#else
+    paths = { "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+              "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+              "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+              "/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
+              "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+              "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
+              "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+              "/usr/share/fonts/google-droid/DroidSansFallbackFull.ttf" };
+#endif
+    for (const std::string &p : paths)
+        if (try_cjk_face(p.c_str(), 0)) return;
+
+    SDL_Log("[Font] no CJK font found — CJK text will show as boxes "
+            "(install Noto Sans CJK, or set FELIX_CJK_FONT=/path/to/font)\n");
 }
 
 void ft_shutdown(void) {
@@ -91,6 +163,7 @@ void ft_shutdown(void) {
         if (s_symbols_face->generic.data) free(s_symbols_face->generic.data);
         FT_Done_Face(s_symbols_face); s_symbols_face = nullptr;
     }
+    if (s_cjk_face)      { FT_Done_Face(s_cjk_face); s_cjk_face = nullptr; }
     if (s_emoji_face)    FT_Done_Face(s_emoji_face);
     if (s_ft_face_bobl)  FT_Done_Face(s_ft_face_bobl);
     if (s_ft_face_obl)   FT_Done_Face(s_ft_face_obl);
@@ -276,7 +349,7 @@ float draw_glyph(FT_Face face, uint32_t cp, float cx, float baseline_y,
 
 // ── draw_text: atlas-backed, one textured quad per glyph ─────────────────────
 float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
-                float r, float g, float b, float a, uint8_t attrs) {
+                float r, float g, float b, float a, uint8_t attrs, float box_w) {
     if (!s_ft_face || !text || !*text) return x;
 
     // Thread-local reused vector to avoid heap churn per call
@@ -308,6 +381,11 @@ float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
         // Try primary face
         const GlyphEntry *e = g_atlas.get(face, cp, font_px, emoji_px);
 
+        // CJK comes before the emoji/symbol fallbacks — the embedded fonts
+        // have no CJK at all, so this is the only face that can supply it.
+        if (!e && s_cjk_face && face != s_cjk_face && !is_emoji_codepoint(cp))
+            e = g_atlas.get(s_cjk_face, cp, font_px, font_px);
+
         // Fallback chain — same order as original draw_text
         if (!e && face != s_emoji_face && s_emoji_face)
             e = g_atlas.get(s_emoji_face, cp, font_px, emoji_px);
@@ -338,6 +416,7 @@ float draw_text(const char *text, float x, float y, int font_px, int emoji_px,
             if (adv == 0.f) adv = (float)font_px * 0.6f;
 
             float t  = 1.f;
+            if (box_w > 0.f) adv = box_w;   // double-width cell: box spans both
             float bh = (float)font_px * 0.7f;
             float bw = adv - 2.f;
             float bx = cx + 1.f;

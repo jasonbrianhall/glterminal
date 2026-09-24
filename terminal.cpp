@@ -273,6 +273,12 @@ static void dispatch_csi(Terminal *t) {
     char final = t->csi[t->csi_len-1];
     t->csi[t->csi_len-1] = '\0';
     const char *p = t->csi;
+    // Sequences with intermediate bytes (e.g. CSI 2 SP q = cursor style,
+    // CSI SP @ = scroll left) are different commands that share a final byte
+    // with ones handled below — none are supported yet, so ignore them
+    // rather than misreading them.
+    for (const char *q = p; *q; q++)
+        if (*q >= 0x20 && *q <= 0x2F) { t->csi_len = 0; return; }
     switch (final) {
     case 'm': sgr(t, p); break;
     case 'H': case 'f': {
@@ -628,11 +634,14 @@ void term_feed(Terminal *t, const char *data, int size) {
             break;
 
         case PS_CSI:
-            if (ch >= '0' && ch <= '9') {
+            // ECMA-48: parameter bytes 0x30-0x3F (digits ; : < = > ?),
+            // intermediate bytes 0x20-0x2F (space ! " $ ' ...), final byte
+            // 0x40-0x7E. The final byte used to be limited to A-Z/a-z, which
+            // silently dropped ICH (CSI @) — readline's insert-character — so
+            // typing after Home overwrote text instead of inserting.
+            if (ch >= 0x20 && ch <= 0x3F) {
                 if (t->csi_len < (int)sizeof(t->csi) - 1) t->csi[t->csi_len++] = (char)ch;
-            } else if (ch == ';' || ch == '?' || ch == '>' || ch == '<' || ch == '=') {
-                if (t->csi_len < (int)sizeof(t->csi) - 1) t->csi[t->csi_len++] = (char)ch;
-            } else if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
+            } else if (ch >= 0x40 && ch <= 0x7E) {
                 if (t->csi_len < (int)sizeof(t->csi) - 1) t->csi[t->csi_len++] = (char)ch;
                 dispatch_csi(t);
                 t->state = PS_NORMAL;

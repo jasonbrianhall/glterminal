@@ -866,7 +866,8 @@ void term_render(Terminal *t, int ox, int oy) {
                     char tmp[5] = {};
                     cp_to_utf8(cp, tmp);
                     float baseline = py + ch * 0.82f;
-                    draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
+                    draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs,
+                              cell_is_wide(c) ? cw * 2.f : 0.f);
                 }
                 dirty_cells++;
             }
