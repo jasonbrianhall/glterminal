@@ -1381,6 +1381,94 @@ void action_new_serial_session() {
 #endif
 }
 
+
+// ============================================================================
+// TOAST — brief status notification (e.g. F9 web server on/off).
+// Top-centre panel: fades in, holds, fades out. Drawn after post-processing
+// so CRT/VHS effects never distort it.
+// ============================================================================
+
+#define TOAST_FADE_IN_MS   150
+#define TOAST_HOLD_MS      1800
+#define TOAST_FADE_OUT_MS  450
+
+static std::string s_toast_title, s_toast_sub;
+static float       s_toast_r = 1, s_toast_g = 1, s_toast_b = 1;
+static Uint32      s_toast_start = 0;
+static bool        s_toast_on = false;
+
+static float measure_text_menu(const char *text) {
+    ensure_menu_face();
+    if (!s_menu_face) return measure_text(text, MENU_FONT_SIZE);
+    FT_Face saved = s_ft_face;
+    s_ft_face = s_menu_face;
+    float w = measure_text(text, MENU_FONT_SIZE);
+    s_ft_face = saved;
+    return w;
+}
+
+void toast_show(const char *title, const char *subtitle, float r, float g, float b) {
+    s_toast_title = title ? title : "";
+    s_toast_sub   = subtitle ? subtitle : "";
+    s_toast_r = r; s_toast_g = g; s_toast_b = b;
+    s_toast_start = SDL_GetTicks();
+    s_toast_on = true;
+}
+
+bool toast_active() {
+    if (!s_toast_on) return false;
+    if (SDL_GetTicks() - s_toast_start > TOAST_FADE_IN_MS + TOAST_HOLD_MS + TOAST_FADE_OUT_MS)
+        s_toast_on = false;
+    return s_toast_on;
+}
+
+void toast_render(int win_w, int win_h) {
+    (void)win_h;
+    if (!toast_active()) return;
+
+    Uint32 el = SDL_GetTicks() - s_toast_start;
+    float a;
+    if (el < TOAST_FADE_IN_MS)
+        a = (float)el / TOAST_FADE_IN_MS;
+    else if (el < TOAST_FADE_IN_MS + TOAST_HOLD_MS)
+        a = 1.f;
+    else
+        a = 1.f - (float)(el - TOAST_FADE_IN_MS - TOAST_HOLD_MS) / TOAST_FADE_OUT_MS;
+    if (a <= 0.f) return;
+    // Slide down a few pixels while fading in
+    float slide = (el < TOAST_FADE_IN_MS) ? (1.f - a) * -8.f : 0.f;
+
+    const float pad = 14.f, dot = 10.f, gap = 10.f;
+    const float line_h = MENU_FONT_SIZE * 1.45f;
+    bool  has_sub = !s_toast_sub.empty();
+    float tw = measure_text_menu(s_toast_title.c_str());
+    float sw = has_sub ? measure_text_menu(s_toast_sub.c_str()) : 0.f;
+    float w  = pad + dot + gap + SDL_max(tw, sw) + pad;
+    float h  = pad * 0.8f * 2 + line_h * (has_sub ? 2 : 1);
+    if (w > win_w - 16) w = (float)(win_w - 16);
+    float x = (win_w - w) * 0.5f;
+    float y = 18.f + slide;
+
+    // Shadow, body, accent bar in the status colour, thin border
+    draw_rect(x + 3, y + 3, w, h, 0, 0, 0, 0.35f * a);
+    draw_rect(x, y, w, h, 0.09f, 0.09f, 0.12f, 0.94f * a);
+    draw_rect(x, y, 3, h, s_toast_r, s_toast_g, s_toast_b, a);
+    draw_rect(x,         y,         w, 1, 0.35f, 0.35f, 0.50f, a);
+    draw_rect(x,         y + h - 1, w, 1, 0.35f, 0.35f, 0.50f, a);
+    draw_rect(x + w - 1, y,         1, h, 0.35f, 0.35f, 0.50f, a);
+
+    // Status dot, vertically centred on the title line
+    float ty = y + pad * 0.8f;
+    draw_rect(x + pad, ty + (line_h - dot) * 0.5f, dot, dot, s_toast_r, s_toast_g, s_toast_b, a);
+
+    float tx = x + pad + dot + gap;
+    draw_text_menu(s_toast_title.c_str(), tx, ty + line_h * 0.75f,
+                   s_toast_r, s_toast_g, s_toast_b, a);
+    if (has_sub)
+        draw_text_menu(s_toast_sub.c_str(), tx, ty + line_h + line_h * 0.75f,
+                       0.82f, 0.82f, 0.88f, a);
+}
+
 // ============================================================================
 // HELP OVERLAY
 // ============================================================================

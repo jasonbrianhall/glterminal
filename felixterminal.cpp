@@ -1584,20 +1584,35 @@ int main(int argc, char **argv) {
                 // F9 — toggle web file browser. Remote (SFTP-backed) when an
                 // SSH session is active, local filesystem browser otherwise.
                 if (ev.key.keysym.sym == SDLK_F9) {
+                    char url[64];
                     if (sftp_webserver_running()) {
                         sftp_webserver_stop();
                         SDL_Log("[WebServer] File browser stopped\n");
+                        toast_show("Web file browser OFF", nullptr, 0.62f, 0.62f, 0.68f);
                     } else if (use_ssh && ssh_active()) {
                         if (sftp_webserver_start()) {
                             SDL_Log("[WebServer] Remote file browser: http://localhost:%d\n",
                                     sftp_webserver_get_port());
+                            snprintf(url, sizeof(url), "http://localhost:%d  (remote, via SFTP)",
+                                     sftp_webserver_get_port());
+                            toast_show("Web file browser ON", url, 0.30f, 0.85f, 0.45f);
+                        } else {
+                            toast_show("Web file browser failed to start", "See the debug log (F12)",
+                                       0.95f, 0.35f, 0.35f);
                         }
                     } else {
                         if (sftp_webserver_start_local("/")) {
                             SDL_Log("[WebServer] Local file browser: http://localhost:%d\n",
                                     sftp_webserver_get_port());
+                            snprintf(url, sizeof(url), "http://localhost:%d  (local files)",
+                                     sftp_webserver_get_port());
+                            toast_show("Web file browser ON", url, 0.30f, 0.85f, 0.45f);
+                        } else {
+                            toast_show("Web file browser failed to start", "See the debug log (F12)",
+                                       0.95f, 0.35f, 0.35f);
                         }
                     }
+                    needs_render = true;
                     break;
                 }
 #endif
@@ -2281,6 +2296,8 @@ int main(int argc, char **argv) {
         // Synchronized output: keep polling while it's held so the frame
         // appears as soon as the app releases it (or the 200 ms timeout hits).
         if (term.sync_output) needs_render = true;
+        // Keep redrawing while a toast is fading in/out
+        if (toast_active()) needs_render = true;
 
         if (needs_render) {
             // Re-render the terminal FBO if rows are dirty, BASIC has commands,
@@ -2345,6 +2362,7 @@ int main(int argc, char **argv) {
             // Help overlay renders last (topmost layer)
             help_render(win_w, win_h);
             debuglog_render(win_w, win_h);
+            toast_render(win_w, win_h);
             // WOPR overlay — above everything including help
             if (g_wopr.visible) wopr_render(win_w, win_h);
 

@@ -135,6 +135,17 @@ void action_new_terminal_custom(int idx);
 void menu_font_shutdown();
 
 // ============================================================================
+// TOAST — brief top-centre status popup (~2 s, fades out)
+// ============================================================================
+
+// Show a notification; the colour tints the title, dot and accent bar.
+void toast_show(const char *title, const char *subtitle, float r, float g, float b);
+// True while visible — the main loop keeps redrawing so the fade animates.
+bool toast_active();
+// Draw it. Call with the other overlays, after gl_end_frame().
+void toast_render(int win_w, int win_h);
+
+// ============================================================================
 // HELP OVERLAY  (F1)
 // ============================================================================
 
