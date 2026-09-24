@@ -45,6 +45,7 @@ struct SixelPlacement {
     SixelImage img;
     int x_cell = 0, y_cell = 0;   // top-left cell at time of placement
     int cols = 0, rows = 0;       // cell footprint
+    bool alt = false;             // placed on the alternate screen
 };
 
 struct SixelTermState {
@@ -314,6 +315,7 @@ void sixel_handle_dcs(Terminal *t, const char *params, int params_len,
     pl.img    = img;
     pl.x_cell = t->cur_col;
     pl.y_cell = t->cur_row;
+    pl.alt    = t->in_alt_screen;
     pl.cols   = std::max(1, (int)((w + (int)t->cell_w - 1) / (int)t->cell_w));
     pl.rows   = std::max(1, (int)((h + (int)t->cell_h - 1) / (int)t->cell_h));
 
@@ -357,7 +359,7 @@ static bool clip_vertical(float &dy, float &dh, float &v0, float &v1,
     return dh > 0 && v1 > v0;
 }
 
-void sixel_render(Terminal *t, int ox, int oy) {
+void sixel_render(Terminal *t, int ox, int oy, int clip_rows) {
     auto tit = s_terms.find(t);
     if (tit == s_terms.end() || tit->second.placements.empty()) return;
 
@@ -369,16 +371,17 @@ void sixel_render(Terminal *t, int ox, int oy) {
     }
 
     float cw = t->cell_w, ch = t->cell_h;
+    int vis_rows = (clip_rows > 0 && clip_rows < t->rows) ? clip_rows : t->rows;
 
     if (g_use_sdl_renderer) {
         gl_flush_verts();
         for (const SixelPlacement &pl : tit->second.placements) {
-            if (!pl.img.sdl_tex) continue;
+            if (!pl.img.sdl_tex || pl.alt != t->in_alt_screen) continue;
             float vis_row = (float)(pl.y_cell + t->sb_offset);
-            if (vis_row + pl.rows <= 0 || vis_row >= (float)t->rows) continue;
+            if (vis_row + pl.rows <= 0 || vis_row >= (float)vis_rows) continue;
             float dy = oy + vis_row * ch, dh = pl.rows * ch;
             float v0 = 0.f, v1 = 1.f;
-            if (!clip_vertical(dy, dh, v0, v1, (float)oy, oy + t->rows * ch)) continue;
+            if (!clip_vertical(dy, dh, v0, v1, (float)oy, oy + vis_rows * ch)) continue;
             SDL_Rect src = { 0, (int)(v0 * pl.img.ph), pl.img.pw,
                              (int)((v1 - v0) * pl.img.ph) };
             if (src.h <= 0) continue;
@@ -399,16 +402,16 @@ void sixel_render(Terminal *t, int ox, int oy) {
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
 
     for (const SixelPlacement &pl : tit->second.placements) {
-        if (!pl.img.tex) continue;
+        if (!pl.img.tex || pl.alt != t->in_alt_screen) continue;
         float vis_row = (float)(pl.y_cell + t->sb_offset);
-        if (vis_row + pl.rows <= 0 || vis_row >= (float)t->rows) continue;
+        if (vis_row + pl.rows <= 0 || vis_row >= (float)vis_rows) continue;
 
         float dx = ox + pl.x_cell * cw;
         float dy = oy + vis_row * ch;
         float dw = pl.cols * cw;
         float dh = pl.rows * ch;
         float v0 = 0.f, v1 = 1.f;
-        if (!clip_vertical(dy, dh, v0, v1, (float)oy, oy + t->rows * ch)) continue;
+        if (!clip_vertical(dy, dh, v0, v1, (float)oy, oy + vis_rows * ch)) continue;
 
         float verts[24] = {
             dx,      dy,      0.f, v0,
@@ -441,15 +444,27 @@ void sixel_scroll(Terminal *t, int lines) {
     auto it = s_terms.find(t);
     if (it == s_terms.end()) return;
     auto &pv = it->second.placements;
-    for (auto &pl : pv) pl.y_cell -= lines;
+    bool alt = t->in_alt_screen;
+    for (auto &pl : pv) if (pl.alt == alt) pl.y_cell -= lines;   // this screen only
     // Keep images while they're still reachable in the scrollback (y_cell is
     // negative once above the live screen); free them only when they fall off
     // the top of the scrollback buffer. The alternate screen has no
     // scrollback, so there they go as soon as they leave the screen.
     // (Called after sb_push(), so sb_count already includes the new line.)
-    int limit = t->in_alt_screen ? 0 : -t->sb_count;
-    pv.erase(std::remove_if(pv.begin(), pv.end(), [limit](SixelPlacement &pl) {
+    int limit = alt ? 0 : -t->sb_count;
+    pv.erase(std::remove_if(pv.begin(), pv.end(), [limit, alt](SixelPlacement &pl) {
+        if (pl.alt != alt) return false;
         if (pl.y_cell + pl.rows <= limit) { free_sixel_image(pl.img); return true; }
+        return false;
+    }), pv.end());
+}
+
+void sixel_leave_alt_screen(Terminal *t) {
+    auto it = s_terms.find(t);
+    if (it == s_terms.end()) return;
+    auto &pv = it->second.placements;
+    pv.erase(std::remove_if(pv.begin(), pv.end(), [](SixelPlacement &pl) {
+        if (pl.alt) { free_sixel_image(pl.img); return true; }
         return false;
     }), pv.end());
 }
@@ -463,6 +478,7 @@ std::vector<KittyPngImage> sixel_get_png_images(Terminal *t, int row_start, int 
         // y_cell is a live-screen row; selections use virtual rows
         int vrow = t->sb_count + pl.y_cell;
         if (vrow < row_start || vrow > row_end) continue;
+        if (pl.alt != t->in_alt_screen) continue;   // not on the visible screen
         const SixelImage &img = pl.img;
         if ((!img.tex && !img.sdl_tex) || img.pw <= 0 || img.ph <= 0) continue;
 

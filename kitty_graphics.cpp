@@ -193,6 +193,7 @@ struct KittyPlacement {
     int      src_w, src_h;     // source pixel region (0=full)
     int      cols, rows;       // display size in cells (0=auto)
     int      z_index;          // z= layering (-inf..+inf, 0=default over text)
+    bool     alt;              // placed on the alternate screen (vim, less...)
 };
 
 // Per-image animation playback state (one per unique image_id, shared across
@@ -742,6 +743,7 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
                     pl.cols        = ts.pending.cols;
                     pl.rows        = ts.pending.rows;
                     pl.z_index     = ts.pending.z_index;
+                    pl.alt         = t->in_alt_screen;
                     ts.placements.push_back(pl);
 
                     // Advance cursor past image using newline() so the scroll
@@ -773,6 +775,7 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len) {
         pl.src_w        = p.w; pl.src_h = p.h;
         pl.cols         = p.c; pl.rows  = p.r;
         pl.z_index      = p.z;
+        pl.alt          = t->in_alt_screen;
         ts.placements.push_back(pl);
         // Advance cursor for a=p placement too
         const KittyImage &pimg = s_images[p.i];
@@ -846,7 +849,8 @@ bool kitty_tick(double dt) {
 // kitty_render
 // ============================================================================
 
-void kitty_render(Terminal *t, int ox, int oy) {
+void kitty_render(Terminal *t, int ox, int oy, int clip_rows) {
+    int vis_rows = (clip_rows > 0 && clip_rows < t->rows) ? clip_rows : t->rows;
     auto tit = s_terms.find(t);
     if (tit == s_terms.end()) return;
     KittyTermState &ts = tit->second;
@@ -859,6 +863,7 @@ void kitty_render(Terminal *t, int ox, int oy) {
         // SDL path: flush vertex geometry, then RenderCopyF each placement
         gl_flush_verts();
         for (const KittyPlacement &pl : ts.placements) {
+            if (pl.alt != t->in_alt_screen) continue;   // other screen's image
             auto iit = s_images.find(pl.image_id);
             if (iit == s_images.end()) continue;
             const KittyImage &img = iit->second;
@@ -880,7 +885,7 @@ void kitty_render(Terminal *t, int ox, int oy) {
             float disp_h = pl.rows ? pl.rows * ch : (float)iph;
             float vis_row = (float)(pl.y_cell + t->sb_offset);
 
-            if (vis_row + disp_h / ch <= 0 || vis_row >= (float)t->rows) continue;
+            if (vis_row + disp_h / ch <= 0 || vis_row >= (float)vis_rows) continue;
 
             float dx = ox + pl.x_cell * cw;
             float dy = oy + vis_row * ch;
@@ -894,7 +899,7 @@ void kitty_render(Terminal *t, int ox, int oy) {
 
             // Clip to terminal viewport
             float top_limit    = (float)oy;
-            float bottom_limit = oy + t->rows * ch;
+            float bottom_limit = oy + vis_rows * ch;
 
             if (dy < top_limit) {
                 float clip = top_limit - dy;
@@ -929,6 +934,7 @@ void kitty_render(Terminal *t, int ox, int oy) {
     glBindBuffer(GL_ARRAY_BUFFER, s_img_vbo);
 
     for (const KittyPlacement &pl : ts.placements) {
+        if (pl.alt != t->in_alt_screen) continue;   // other screen's image
         auto iit = s_images.find(pl.image_id);
         if (iit == s_images.end()) continue;
         const KittyImage &img = iit->second;
@@ -952,7 +958,7 @@ void kitty_render(Terminal *t, int ox, int oy) {
 
         float vis_row = (float)(pl.y_cell + t->sb_offset);
         float img_rows = disp_h / ch;
-        if (vis_row + img_rows <= 0 || vis_row >= (float)t->rows) continue;
+        if (vis_row + img_rows <= 0 || vis_row >= (float)vis_rows) continue;
 
         float dx = ox + pl.x_cell * cw;
         float dy = oy + vis_row * ch;
@@ -972,7 +978,7 @@ void kitty_render(Terminal *t, int ox, int oy) {
             dy  = (float)oy;
             disp_h -= clip;
         }
-        float bottom_limit = oy + t->rows * ch;
+        float bottom_limit = oy + vis_rows * ch;
         if (dy + disp_h > bottom_limit) {
             float clip = (dy + disp_h) - bottom_limit;
             float frac = clip / disp_h;
@@ -1151,6 +1157,7 @@ std::vector<KittyPngImage> kitty_get_png_images(Terminal *t, int row_start, int 
     if (tit == s_terms.end()) return result;
 
     for (const KittyPlacement &pl : tit->second.placements) {
+        if (pl.alt != t->in_alt_screen) continue;   // not on the visible screen
         // pl.y_cell is a live-screen row (0 = top of current screen).
         // Selection rows use virtual coordinates: 0..sb_count-1 = scrollback,
         // sb_count..sb_count+rows-1 = live screen.
@@ -1265,7 +1272,10 @@ void kitty_scroll(Terminal *t, int lines) {
     auto it = s_terms.find(t);
     if (it == s_terms.end()) return;
     auto &pv = it->second.placements;
-    for (auto &pl : pv) pl.y_cell -= lines;
+    bool alt = t->in_alt_screen;
+    // Only the screen being scrolled moves; the other screen's images stay
+    // put (e.g. an image on the normal screen while vim scrolls).
+    for (auto &pl : pv) if (pl.alt == alt) pl.y_cell -= lines;
 
     // Keep placements while any part of them is still reachable in the
     // scrollback, so scrolling back (Shift+PgUp / wheel) shows the image
@@ -1274,9 +1284,10 @@ void kitty_scroll(Terminal *t, int lines) {
     // off the top of the scrollback buffer too. The alternate screen has no
     // scrollback, so there it's dropped as soon as it leaves the screen.
     // (Called after sb_push(), so sb_count already includes the new line.)
-    int limit = t->in_alt_screen ? 0 : -t->sb_count;
+    int limit = alt ? 0 : -t->sb_count;
     pv.erase(std::remove_if(pv.begin(), pv.end(),
         [&](const KittyPlacement &pl) {
+            if (pl.alt != alt) return false;
             int h = pl.rows;
             if (!h) {
                 auto iit = s_images.find(pl.image_id);
@@ -1285,6 +1296,14 @@ void kitty_scroll(Terminal *t, int lines) {
             }
             return (pl.y_cell + h) <= limit;
         }), pv.end());
+}
+
+void kitty_leave_alt_screen(Terminal *t) {
+    auto it = s_terms.find(t);
+    if (it == s_terms.end()) return;
+    auto &pv = it->second.placements;
+    pv.erase(std::remove_if(pv.begin(), pv.end(),
+        [](const KittyPlacement &pl) { return pl.alt; }), pv.end());
 }
 
 void kitty_shutdown(void) {

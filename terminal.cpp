@@ -6,6 +6,9 @@
 #include "sixel_graphics.h"
 #include "basic_graphics.h"
 #include "term_width.h"
+#include <string>
+#include <vector>
+#include <unordered_map>
 
 #include <SDL2/SDL.h>
 #include <stdio.h>
@@ -128,6 +131,30 @@ static void newline(Terminal *t) {
 // Public wrapper used by kitty_graphics to advance the cursor with proper scrolling
 void term_newline(Terminal *t) { newline(t); }
 
+// ============================================================================
+// OSC 8 HYPERLINK TABLE — cells store a 16-bit id; ids map to URIs here.
+// Identical (id-param, URI) pairs share one id so a link split across lines
+// or redrawn by an app stays one link.
+// ============================================================================
+
+static std::vector<std::string>                  s_link_uris(1);  // [0] unused
+static std::unordered_map<std::string, uint16_t> s_link_ids;
+
+static uint16_t link_intern(const std::string &params, const std::string &uri) {
+    std::string key = params + '\x01' + uri;
+    auto it = s_link_ids.find(key);
+    if (it != s_link_ids.end()) return it->second;
+    if (s_link_uris.size() >= 65535) return 0;   // table full: plain text
+    uint16_t id = (uint16_t)s_link_uris.size();
+    s_link_uris.push_back(uri);
+    s_link_ids.emplace(std::move(key), id);
+    return id;
+}
+
+const char *term_link_uri(uint16_t id) {
+    return (id && id < s_link_uris.size()) ? s_link_uris[id].c_str() : nullptr;
+}
+
 // If (row, col) is one half of a double-width character, blank the OTHER
 // half so overwriting it never leaves an orphaned half-glyph behind.
 static void break_wide_pair(Terminal *t, int row, int col) {
@@ -199,13 +226,14 @@ static void term_put_char(Terminal *t, uint32_t cp) {
         uint8_t ul = (t->cur_attrs & ATTR_UNDERLINE)
                    ? (uint8_t)((t->cur_ul_style << CELL_UL_SHIFT) & CELL_UL_MASK) : 0;
         if (t->cur_hidden) ul |= CELL_F_HIDDEN;
+        uint8_t lk0 = (uint8_t)(t->cur_link & 0xFF), lk1 = (uint8_t)(t->cur_link >> 8);
         uint32_t ulc = (t->cur_attrs & ATTR_UNDERLINE) ? t->cur_ul_color : 0;
         if (w == 2) {
             break_wide_pair(t, row, col + 1);
-            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {(uint8_t)(CELL_F_WIDE | ul), 0, 0}, ulc};
-            CELL(t, row, col + 1) = {0,  t->cur_fg, t->cur_bg, t->cur_attrs, {(uint8_t)(CELL_F_WIDE_TAIL | ul), 0, 0}, ulc};
+            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {(uint8_t)(CELL_F_WIDE | ul), lk0, lk1}, ulc};
+            CELL(t, row, col + 1) = {0,  t->cur_fg, t->cur_bg, t->cur_attrs, {(uint8_t)(CELL_F_WIDE_TAIL | ul), lk0, lk1}, ulc};
         } else {
-            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {ul, 0, 0}, ulc};
+            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {ul, lk0, lk1}, ulc};
         }
         term_dirty_row(t, row);
     }
@@ -567,6 +595,9 @@ static void dispatch_csi(Terminal *t) {
                     t->cells = t->alt_cells;
                     t->alt_cells = tmp;
                     t->in_alt_screen = false;
+                    // The alternate screen is discarded — so are its images
+                    kitty_leave_alt_screen(t);
+                    sixel_leave_alt_screen(t);
                     t->scroll_top = 0; t->scroll_bot = t->rows - 1;
                     if (mode == 1049) {
                         t->cur_row   = SDL_clamp(t->saved_cur_row, 0, t->rows - 1);
@@ -713,6 +744,89 @@ static void dispatch_csi(Terminal *t) {
     }
     }
     t->csi_len = 0;
+}
+
+// ============================================================================
+// OSC DISPATCH
+// ============================================================================
+
+static int b64_val(unsigned char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+// `s` is NUL-terminated, `len` bytes. `bel` = terminated by BEL (reply the same way).
+static void dispatch_osc(Terminal *t, char *s, int len, bool bel) {
+    char *semi = strchr(s, ';');
+    if (!semi) return;
+    int ps = atoi(s);
+    char *arg = semi + 1;
+
+    if ((ps == 0 || ps == 2) && g_sdl_window) {
+        SDL_SetWindowTitle(g_sdl_window, arg);
+    }
+    else if ((ps == 10 || ps == 11) && strcmp(arg, "?") == 0) {
+        // OSC 10/11 query: report default foreground/background color.
+        // timg and others use this to blend transparent images onto the
+        // real background (sixel has no alpha).
+        float r, g, b;
+        if (ps == 11) {
+            const Theme &th = THEMES[g_theme_idx];
+            r = th.bg_r; g = th.bg_g; b = th.bg_b;
+        } else {
+            TermColor fg = tcolor_resolve(TCOLOR_PALETTE(7));
+            r = fg.r; g = fg.g; b = fg.b;
+        }
+        auto c16 = [](float v) { return (int)(SDL_clamp(v, 0.f, 1.f) * 65535.f + .5f); };
+        char resp[64];
+        int n = snprintf(resp, sizeof(resp), "\x1b]%d;rgb:%04x/%04x/%04x%s",
+                         ps, c16(r), c16(g), c16(b), bel ? "\x07" : "\x1b\\");
+        term_write(t, resp, n);
+    }
+    else if (ps == 8) {
+        // OSC 8 ; params ; URI — start a hyperlink; empty URI ends it.
+        // params is "id=xyz:key=val" (only id matters: it groups cells).
+        char *semi2 = strchr(arg, ';');
+        if (!semi2) return;
+        std::string params(arg, semi2 - arg);
+        std::string uri(semi2 + 1);
+        if (uri.empty()) { t->cur_link = 0; return; }
+        std::string id;
+        size_t ip = params.find("id=");
+        if (ip != std::string::npos) {
+            size_t e = params.find(':', ip);
+            id = params.substr(ip + 3, e == std::string::npos ? std::string::npos : e - ip - 3);
+        }
+        t->cur_link = link_intern(id, uri);
+    }
+    else if (ps == 52) {
+        // OSC 52 ; selection ; base64 — set the clipboard (neovim/tmux/ssh
+        // "yank to system clipboard"). Reading the clipboard ("?") is refused:
+        // any program — including one on a remote host — could otherwise
+        // silently read whatever you last copied.
+        char *semi2 = strchr(arg, ';');
+        if (!semi2) return;
+        const char *data = semi2 + 1;
+        if (strcmp(data, "?") == 0) return;
+        std::string out;
+        out.reserve((len * 3) / 4);
+        uint32_t acc = 0; int bits = 0;
+        for (const char *q = data; *q; q++) {
+            int v = b64_val((unsigned char)*q);
+            if (v < 0) continue;              // skip '=', whitespace
+            acc = (acc << 6) | (uint32_t)v; bits += 6;
+            if (bits >= 8) { bits -= 8; out += (char)((acc >> bits) & 0xFF); }
+        }
+        SDL_SetClipboardText(out.c_str());    // empty payload clears it
+        SDL_Log("[OSC52] clipboard set by application (%zu bytes)\n", out.size());
+    }
+    else if (ps == 666) {
+        basic_handle_osc(t, arg, (int)(s + len - arg), g_basic_win_w, g_basic_win_h);
+    }
 }
 
 void term_feed(Terminal *t, const char *data, int size) {
@@ -981,41 +1095,21 @@ void term_feed(Terminal *t, const char *data, int size) {
             break;
         case PS_OSC:
             if (ch == 0x07 || ch == 0x1b) {
-                t->osc[t->osc_len] = '\0';
-                const char *semi = strchr(t->osc, ';');
-                if (semi) {
-                    int ps = atoi(t->osc);
-                    //SDL_Log("[OSC] ps=%d payload='%s'\n", ps, semi + 1);
-                    if ((ps == 0 || ps == 2) && g_sdl_window)
-                        SDL_SetWindowTitle(g_sdl_window, semi + 1);
-                    else if ((ps == 10 || ps == 11) && strcmp(semi + 1, "?") == 0) {
-                        // OSC 10/11 query: report default foreground/background
-                        // color. timg and others use this to blend transparent
-                        // images onto the real background (sixel has no alpha).
-                        float r, g, b;
-                        if (ps == 11) {
-                            const Theme &th = THEMES[g_theme_idx];
-                            r = th.bg_r; g = th.bg_g; b = th.bg_b;
-                        } else {
-                            TermColor fg = tcolor_resolve(TCOLOR_PALETTE(7));
-                            r = fg.r; g = fg.g; b = fg.b;
-                        }
-                        auto c16 = [](float v) { return (int)(SDL_clamp(v, 0.f, 1.f) * 65535.f + .5f); };
-                        char resp[64];
-                        int n = snprintf(resp, sizeof(resp), "\x1b]%d;rgb:%04x/%04x/%04x%s",
-                                         ps, c16(r), c16(g), c16(b),
-                                         ch == 0x07 ? "\x07" : "\x1b\\");
-                        term_write(t, resp, n);
-                    }
-                    else if (ps == 666)
-                        basic_handle_osc(t, semi + 1, (int)(t->osc + t->osc_len - (semi + 1)),
-                                         g_basic_win_w, g_basic_win_h);
+                if (t->osc_buf) {
+                    t->osc_buf[t->osc_len] = '\0';
+                    dispatch_osc(t, t->osc_buf, t->osc_len, ch == 0x07);
                 }
                 t->osc_len = 0;
                 t->state = (ch == 0x1b) ? PS_ESC : PS_NORMAL;
             } else {
-                if (t->osc_len < (int)sizeof(t->osc) - 1)
-                    t->osc[t->osc_len++] = (char)ch;
+                if (t->osc_len + 1 >= t->osc_cap) {
+                    int new_cap = t->osc_cap ? t->osc_cap * 2 : 1024;
+                    if (new_cap > 16*1024*1024) break;   // cap: drop the excess
+                    char *nb = (char*)realloc(t->osc_buf, new_cap);
+                    if (!nb) break;
+                    t->osc_buf = nb; t->osc_cap = new_cap;
+                }
+                t->osc_buf[t->osc_len++] = (char)ch;
             }
             break;
         }
@@ -1109,7 +1203,11 @@ void term_soft_reset(Terminal *t) {
         free(t->alt_cells);
         t->alt_cells = nullptr;
     }
-    t->in_alt_screen = false;
+    if (t->in_alt_screen) {
+        t->in_alt_screen = false;
+        kitty_leave_alt_screen(t);
+        sixel_leave_alt_screen(t);
+    }
 
     t->cur_row = t->cur_col = 0;
     t->cur_fg  = TCOLOR_PALETTE(7);
@@ -1118,6 +1216,7 @@ void term_soft_reset(Terminal *t) {
     t->cur_ul_style = UL_SINGLE;
     t->cur_ul_color = 0;
     t->cur_hidden   = false;
+    t->cur_link     = 0;
     t->last_cp      = 0;
     t->sync_output  = false;
     if (t->cursor_default_saved) {
@@ -1180,6 +1279,11 @@ void term_free(Terminal *t) {
         free(t->dcs_buf);
         t->dcs_buf = nullptr;
     }
+    if (t->osc_buf) {
+        free(t->osc_buf);
+        t->osc_buf = nullptr;
+        t->osc_cap = 0;
+    }
 }
 
 void term_resize(Terminal *t, int win_w, int win_h) {
@@ -1204,7 +1308,14 @@ void term_resize(Terminal *t, int win_w, int win_h) {
     free(t->cells);
     t->cells = new_cells;
 
-    if (t->alt_cells) { free(t->alt_cells); t->alt_cells = nullptr; t->in_alt_screen = false; }
+    if (t->alt_cells) {
+        free(t->alt_cells); t->alt_cells = nullptr;
+        if (t->in_alt_screen) {
+            t->in_alt_screen = false;
+            kitty_leave_alt_screen(t);
+            sixel_leave_alt_screen(t);
+        }
+    }
 
     // Scrollback buffer: width only increases, never decreases
     // This preserves old data when shrinking the window; we just don't display

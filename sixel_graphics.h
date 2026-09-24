@@ -28,7 +28,8 @@ void sixel_handle_dcs(Terminal *t, const char *params, int params_len,
 
 // Render all placed sixel images for this terminal. Call from term_render()
 // right after kitty_render(), before gl_flush_verts().
-void sixel_render(Terminal *t, int ox, int oy);
+// clip_rows: draw only within the first N rows (0 = all). See kitty_render().
+void sixel_render(Terminal *t, int ox, int oy, int clip_rows = 0);
 
 // Drop all images associated with this terminal (reset / alt-screen swap).
 void sixel_clear(Terminal *t);
@@ -41,6 +42,9 @@ void sixel_scroll(Terminal *t, int lines);
 // [row_start, row_end] (virtual rows, matching the selection), as PNG bytes.
 // Reuses the KittyPngImage struct so both kinds can be merged by the caller.
 std::vector<KittyPngImage> sixel_get_png_images(Terminal *t, int row_start, int row_end);
+
+// Leaving the alternate screen: drop images placed on it (see kitty version).
+void sixel_leave_alt_screen(Terminal *t);
 
 // Free GL resources on shutdown.
 void sixel_shutdown(void);

@@ -16,6 +16,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <ctype.h>
+#ifndef _WIN32
+#  include <strings.h>   // strcasecmp
+#  include <unistd.h>    // gethostname
+#else
+#  define strcasecmp _stricmp
+#endif
 #include <string>
 #include <vector>
 #include <deque>
@@ -106,6 +113,7 @@ struct UrlSpan {
     int row, col_start, col_end;  // col_end is inclusive
     std::string url;   // display text
     std::string href;  // actual href (may prepend https:// for www. links)
+    int link_id = 0;   // OSC 8 link id (0 = detected from text)
 };
 
 static std::vector<UrlSpan> s_urls;
@@ -136,6 +144,61 @@ static std::string trim_url(const std::string &s) {
     return s.substr(0, end);
 }
 
+// OSC 8 links come from the program, not the user, so only open schemes a
+// browser/file manager should handle. file://HOST/path from `ls --hyperlink`
+// is rewritten to file:///path when HOST is this machine (xdg-open and the
+// Windows shell don't accept a hostname); a different host (e.g. over SSH)
+// is refused, since the path doesn't exist here.
+static std::string osc8_href(const char *uri) {
+    if (!uri) return {};
+    std::string u(uri);
+    auto lower_starts = [&](const char *pfx) {
+        size_t n = strlen(pfx);
+        if (u.size() < n) return false;
+        for (size_t i = 0; i < n; i++)
+            if (tolower((unsigned char)u[i]) != pfx[i]) return false;
+        return true;
+    };
+    if (lower_starts("http://") || lower_starts("https://") ||
+        lower_starts("ftp://")  || lower_starts("mailto:"))
+        return u;
+    if (lower_starts("file://")) {
+        size_t slash = u.find('/', 7);
+        if (slash == std::string::npos) return {};
+        std::string host = u.substr(7, slash - 7);
+        if (!host.empty() && host != "localhost") {
+            char me[256] = {0};
+#ifdef _WIN32
+            DWORD n = sizeof(me);
+            GetComputerNameA(me, &n);
+#else
+            gethostname(me, sizeof(me) - 1);
+#endif
+            if (strcasecmp(host.c_str(), me) != 0) return {};   // remote file
+        }
+        return "file://" + u.substr(slash);
+    }
+    return {};   // javascript:, custom app schemes, etc.
+}
+
+// Add a span for each run of cells sharing an OSC 8 link id on this row.
+static void append_osc8_spans(Terminal *t, int row, std::vector<UrlSpan> &out,
+                              const std::function<Cell*(int, int)> &resolve_cell) {
+    int col = 0;
+    while (col < t->cols) {
+        uint16_t id = cell_link(resolve_cell(row, col));
+        if (!id) { col++; continue; }
+        int start = col;
+        while (col < t->cols && cell_link(resolve_cell(row, col)) == id) col++;
+        std::string href = osc8_href(term_link_uri(id));
+        if (href.empty()) continue;
+        UrlSpan span;
+        span.row = row; span.col_start = start; span.col_end = col - 1;
+        span.url = term_link_uri(id); span.href = href; span.link_id = id;
+        out.push_back(span);
+    }
+}
+
 // Scan the visible grid and rebuild s_urls
 static void detect_urls(Terminal *t,
                          std::function<Cell*(int row, int col)> resolve_cell) {
@@ -143,6 +206,10 @@ static void detect_urls(Terminal *t,
     const char *prefixes[] = { "https://", "http://", "ftp://", "file://", "www.", nullptr };
 
     for (int row = 0; row < t->rows; row++) {
+        // Explicit OSC 8 links first; their cells are excluded from the
+        // text scan below so a link whose text looks like a URL isn't doubled
+        append_osc8_spans(t, row, s_urls, resolve_cell);
+
         // Build a plain-text string for this row
         std::string line;
         line.reserve(t->cols);
@@ -150,6 +217,7 @@ static void detect_urls(Terminal *t,
             Cell *c = resolve_cell(row, col);
             uint32_t cp = c->cp;
             if (!cp) cp = ' ';
+            if (cell_link(c)) cp = ' ';   // part of an OSC 8 link
             // Only handle ASCII for URL scanning simplicity
             if (cp < 0x80) line += (char)cp;
             else            line += '?';  // non-ASCII placeholder keeps column alignment
@@ -193,6 +261,27 @@ static int url_at(int row, int col) {
             return i;
     }
     return -1;
+}
+
+// Link underline for a screen cell (text URLs and OSC 8 links). All cells
+// of the hovered link light up — for OSC 8 that includes other rows.
+void term_draw_url_underline(int row, int col, float px, float py, float cw, float ch) {
+    int uid = url_at(row, col);
+    if (uid < 0) return;
+    bool hovered = (uid == s_hovered_url);
+    if (!hovered && s_hovered_url >= 0 && s_hovered_url < (int)s_urls.size()) {
+        int lid = s_urls[uid].link_id;
+        hovered = lid && lid == s_urls[s_hovered_url].link_id;
+    }
+    float ur = hovered ? 0.4f : 0.35f;
+    float ug = hovered ? 0.8f : 0.6f;
+    float ub = hovered ? 1.0f : 0.9f;
+    float uh = hovered ? 2.f : 1.f;
+    draw_rect(px, py + ch - uh - 1, cw, uh, ur, ug, ub, 1.f);
+}
+
+void term_detect_urls(Terminal *t, std::function<Cell*(int row, int col)> resolve_cell) {
+    detect_urls(t, resolve_cell);
 }
 
 void open_url(const std::string &url) {
@@ -491,12 +580,14 @@ void term_copy_selection_html(Terminal *t) {
     // Build a helper to detect URLs in a row of cells (selection-relative row index)
     auto row_url_spans = [&](int r) -> std::vector<UrlSpan> {
         std::vector<UrlSpan> spans;
+        append_osc8_spans(t, r, spans, [&](int rr, int cc) { return vcell(t, rr, cc); });
         const char *prefixes[] = { "https://", "http://", "ftp://", "file://", "www.", nullptr };
         std::string line;
         line.reserve(t->cols);
         for (int col = 0; col < t->cols; col++) {
             uint32_t cp = vcell(t, r, col)->cp;
             if (!cp) cp = ' ';
+            if (cell_link(vcell(t, r, col))) cp = ' ';
             line += (cp < 0x80) ? (char)cp : '?';
         }
         size_t pos = 0;
@@ -721,6 +812,51 @@ void term_paste(Terminal *t) {
 // RENDERING
 // ============================================================================
 
+// Block Elements (U+2580-259F): draw as exact procedural rectangles instead
+// of going through the font atlas. Font anti-aliasing/hinting on solid block
+// glyphs leaves partial-coverage pixels at the edges, which produces a
+// visible seam/grid pattern once thousands of them tile together (as in
+// ANSI-art image rendering) — and several of these codepoints aren't even in
+// the embedded font. Returns false if cp isn't a block element.
+// Shared with the sticky-prompt renderer.
+bool term_draw_block_element(uint32_t cp, float px, float py, float cw, float ch, TermColor fc) {
+    if (cp == 0x2580) {
+        draw_rect(px, py, cw, ch * 0.5f, fc.r, fc.g, fc.b, 1.f); // upper half
+    } else if (cp >= 0x2581 && cp <= 0x2588) {
+        // Lower N-eighths block, bottom-aligned (2581=1/8 .. 2588=8/8)
+        float frac = (float)(cp - 0x2580) / 8.f;
+        draw_rect(px, py + ch * (1.f - frac), cw, ch * frac, fc.r, fc.g, fc.b, 1.f);
+    } else if (cp >= 0x2589 && cp <= 0x258F) {
+        // Left N-eighths block, left-aligned (2589=7/8 .. 258F=1/8)
+        float frac = (float)(0x2590 - cp) / 8.f;
+        draw_rect(px, py, cw * frac, ch, fc.r, fc.g, fc.b, 1.f);
+    } else if (cp == 0x2590) {
+        draw_rect(px + cw * 0.5f, py, cw * 0.5f, ch, fc.r, fc.g, fc.b, 1.f); // right half
+    } else if (cp == 0x2591) {
+        draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.25f); // light shade
+    } else if (cp == 0x2592) {
+        draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.50f); // medium shade
+    } else if (cp == 0x2593) {
+        draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.75f); // dark shade
+    } else if (cp == 0x2594) {
+        draw_rect(px, py, cw, ch * 0.125f, fc.r, fc.g, fc.b, 1.f); // upper 1/8
+    } else if (cp == 0x2595) {
+        draw_rect(px + cw * 0.875f, py, cw * 0.125f, ch, fc.r, fc.g, fc.b, 1.f); // right 1/8
+    } else if (cp >= 0x2596 && cp <= 0x259F) {
+        // Quadrant blocks: bit0=TL bit1=TR bit2=BL bit3=BR
+        static const uint8_t quad_mask[10] = { 4, 8, 1, 13, 9, 7, 11, 2, 6, 14 };
+        uint8_t m = quad_mask[cp - 0x2596];
+        float hw = cw * 0.5f, hh = ch * 0.5f;
+        if (m & 1) draw_rect(px,      py,      hw, hh, fc.r, fc.g, fc.b, 1.f); // TL
+        if (m & 2) draw_rect(px + hw, py,      hw, hh, fc.r, fc.g, fc.b, 1.f); // TR
+        if (m & 4) draw_rect(px,      py + hh, hw, hh, fc.r, fc.g, fc.b, 1.f); // BL
+        if (m & 8) draw_rect(px + hw, py + hh, hw, hh, fc.r, fc.g, fc.b, 1.f); // BR
+    } else {
+        return false;
+    }
+    return true;
+}
+
 // Underline (all SGR 4:n styles, SGR 58 color), strikethrough and overline
 // for one cell. Shared by term_render() and sticky_prompt_render_split().
 void term_draw_decorations(const Cell *c, float px, float py, float cw, float ch, TermColor fc) {
@@ -860,53 +996,8 @@ void term_render(Terminal *t, int ox, int oy) {
             uint32_t cp = c->cp;
             bool blink_hidden = ((c->attrs & ATTR_BLINK) && !g_blink_text_on) || cell_is_hidden(c);
             if (cp && cp != ' ' && !blink_hidden) {
-                // Block Elements (U+2580-259F): draw as exact procedural
-                // rectangles instead of going through the font atlas. Font
-                // anti-aliasing/hinting on solid block glyphs leaves
-                // partial-coverage pixels at the edges, which produces a
-                // visible seam/grid pattern once thousands of them tile
-                // together (as in ANSI-art image rendering) — and several
-                // of these codepoints (eighth-blocks, shades, quadrants)
-                // aren't even present in the embedded font at all, which
-                // drew_text's "unknown glyph" fallback renders as a small
-                // bordered box, another visible artifact. draw_rect fills
-                // exact pixel rects with neither problem — same reason the
-                // background-fill pass above already tiles cleanly.
-                bool drew_block = true;
-                if (cp == 0x2580) {
-                    draw_rect(px, py, cw, ch * 0.5f, fc.r, fc.g, fc.b, 1.f); // upper half
-                } else if (cp >= 0x2581 && cp <= 0x2588) {
-                    // Lower N-eighths block, bottom-aligned (2581=1/8 .. 2588=8/8)
-                    float frac = (float)(cp - 0x2580) / 8.f;
-                    draw_rect(px, py + ch * (1.f - frac), cw, ch * frac, fc.r, fc.g, fc.b, 1.f);
-                } else if (cp >= 0x2589 && cp <= 0x258F) {
-                    // Left N-eighths block, left-aligned (2589=7/8 .. 258F=1/8)
-                    float frac = (float)(0x2590 - cp) / 8.f;
-                    draw_rect(px, py, cw * frac, ch, fc.r, fc.g, fc.b, 1.f);
-                } else if (cp == 0x2590) {
-                    draw_rect(px + cw * 0.5f, py, cw * 0.5f, ch, fc.r, fc.g, fc.b, 1.f); // right half
-                } else if (cp == 0x2591) {
-                    draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.25f); // light shade
-                } else if (cp == 0x2592) {
-                    draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.50f); // medium shade
-                } else if (cp == 0x2593) {
-                    draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.75f); // dark shade
-                } else if (cp == 0x2594) {
-                    draw_rect(px, py, cw, ch * 0.125f, fc.r, fc.g, fc.b, 1.f); // upper 1/8
-                } else if (cp == 0x2595) {
-                    draw_rect(px + cw * 0.875f, py, cw * 0.125f, ch, fc.r, fc.g, fc.b, 1.f); // right 1/8
-                } else if (cp >= 0x2596 && cp <= 0x259F) {
-                    // Quadrant blocks: bit0=TL bit1=TR bit2=BL bit3=BR
-                    static const uint8_t quad_mask[10] = { 4, 8, 1, 13, 9, 7, 11, 2, 6, 14 };
-                    uint8_t m = quad_mask[cp - 0x2596];
-                    float hw = cw * 0.5f, hh = ch * 0.5f;
-                    if (m & 1) draw_rect(px,      py,      hw, hh, fc.r, fc.g, fc.b, 1.f); // TL
-                    if (m & 2) draw_rect(px + hw, py,      hw, hh, fc.r, fc.g, fc.b, 1.f); // TR
-                    if (m & 4) draw_rect(px,      py + hh, hw, hh, fc.r, fc.g, fc.b, 1.f); // BL
-                    if (m & 8) draw_rect(px + hw, py + hh, hw, hh, fc.r, fc.g, fc.b, 1.f); // BR
-                } else {
-                    drew_block = false;
-                }
+                // Block elements as exact rectangles (see term_draw_block_element)
+                bool drew_block = term_draw_block_element(cp, px, py, cw, ch, fc);
                 if (!drew_block) {
                     char tmp[5] = {};
                     cp_to_utf8(cp, tmp);
@@ -919,16 +1010,8 @@ void term_render(Terminal *t, int ox, int oy) {
             if (!blink_hidden)
                 term_draw_decorations(c, px, py, cw, ch, fc);
 
-            // URL underline
-            int uid = url_at(row, col);
-            if (uid >= 0) {
-                bool hovered = (uid == s_hovered_url);
-                float ur = hovered ? 0.4f : 0.35f;
-                float ug = hovered ? 0.8f : 0.6f;
-                float ub = hovered ? 1.0f : 0.9f;
-                float uh = hovered ? 2.f : 1.f;
-                draw_rect(px, py + ch - uh - 1, cw, uh, ur, ug, ub, 1.f);
-            }
+            // URL / OSC 8 link underline
+            term_draw_url_underline(row, col, px, py, cw, ch);
         }
     }
 

@@ -241,9 +241,30 @@ static std::string selection_to_html_fragment(Terminal *t, int r0, int c0, int r
         std::string h;
         std::string cur_style;
         bool open = false;
+        uint16_t cur_link = 0;   // OSC 8 link currently open as <a>
         for (int c = cs; c <= last; c++) {
             Cell *cell = vcell(t, r, c);
             if (cell_is_wide_tail(cell)) continue;  // 2nd half of a wide char
+
+            // OSC 8 hyperlinks -> <a href>, so Word/LibreOffice keep them clickable
+            uint16_t lk = cell_link(cell);
+            const char *uri = lk ? term_link_uri(lk) : nullptr;
+            if (!uri) lk = 0;
+            if (lk != cur_link) {
+                if (open) { h += "</span>"; open = false; }
+                if (cur_link) h += "</a>";
+                if (lk) {
+                    h += "<a href=\"";
+                    for (const char *q = uri; *q; q++) {
+                        if      (*q == '"') h += "&quot;";
+                        else if (*q == '&') h += "&amp;";
+                        else if (*q == '<') h += "&lt;";
+                        else                h += *q;
+                    }
+                    h += "\">";
+                }
+                cur_link = lk;
+            }
             uint32_t cp = cell->cp ? cell->cp : ' ';
             TermColorVal fg = cell->fg;
             uint8_t a = cell->attrs;
@@ -299,6 +320,7 @@ static std::string selection_to_html_fragment(Terminal *t, int r0, int c0, int r
             append_escaped(h, cp);
         }
         if (open) h += "</span>";
+        if (cur_link) h += "</a>";
         lines.push_back(std::move(h));
     }
 

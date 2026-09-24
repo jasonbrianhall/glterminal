@@ -39,6 +39,17 @@ void term_render(Terminal *t, int ox, int oy);
 // fc = the cell's resolved text color. Used by the sticky-prompt renderer too.
 void term_draw_decorations(const Cell *c, float px, float py, float cw, float ch, TermColor fc);
 
+// Block elements (U+2580-259F) as exact rectangles; false if cp isn't one.
+bool term_draw_block_element(uint32_t cp, float px, float py, float cw, float ch, TermColor fc);
+
+// Rebuild the clickable-link list for the visible screen (text URLs + OSC 8).
+// resolve_cell maps a screen (row, col) to the cell shown there.
+#include <functional>
+void term_detect_urls(Terminal *t, std::function<Cell*(int row, int col)> resolve_cell);
+
+// Link underline for screen cell (row, col), if it's part of a link.
+void term_draw_url_underline(int row, int col, float px, float py, float cw, float ch);
+
 // ============================================================================
 // KEYBOARD
 // ============================================================================

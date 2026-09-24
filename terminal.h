@@ -49,6 +49,11 @@ static inline bool cell_is_wide_tail(const Cell *c) { return (c->_pad[0] & CELL_
 static inline int cell_ul_style(const Cell *c) { return (c->_pad[0] & CELL_UL_MASK) >> CELL_UL_SHIFT; }
 static inline bool cell_is_hidden(const Cell *c) { return (c->_pad[0] & CELL_F_HIDDEN) != 0; }
 
+// OSC 8 hyperlink id, stored in _pad[1..2] (0 = not a link).
+// term_link_uri() maps it back to the URI.
+static inline uint16_t cell_link(const Cell *c) { return (uint16_t)(c->_pad[1] | (c->_pad[2] << 8)); }
+const char *term_link_uri(uint16_t id);   // nullptr if unknown
+
 // ============================================================================
 // TERMINAL
 // ============================================================================
@@ -64,14 +69,17 @@ struct Terminal {
     uint8_t       cur_ul_style;   // UL_* for newly written cells
     uint32_t      cur_ul_color;   // 0 or CELL_UL_COLOR_SET | TermColorVal
     bool          cur_hidden;     // SGR 8 conceal active
+    uint16_t      cur_link;       // OSC 8 hyperlink id for new cells (0 = none)
     uint32_t      last_cp;        // last printed character, for REP (CSI b)
     ParseState    state;
     char          charset_slot;   // which Gn ('(' ')' '*' '+') a PS_CHARSET byte designates
     bool          g0_line_drawing; // true if G0 currently designated as DEC special graphics
     char          csi[256];
     int           csi_len;
-    char          osc[512];
-    int           osc_len;
+    char          osc[512];       // (legacy, unused — OSC now goes to osc_buf)
+    int           osc_len;        // bytes collected in osc_buf
+    char         *osc_buf;        // growable OSC buffer (OSC 52 clipboard
+    int           osc_cap;        //  payloads can be megabytes)
     // UTF-8 decode state — persists across term_feed() calls since a
     // multi-byte sequence can be split across separate reads.
     uint32_t      utf8_cp;

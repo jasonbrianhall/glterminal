@@ -18,7 +18,9 @@ void kitty_handle_apc(Terminal *t, const char *payload, int len);
 
 // Render all placed images for this terminal into the current FBO.
 // Call from term_render() after the glyph pass, before gl_flush_verts().
-void kitty_render(Terminal *t, int ox, int oy);
+// clip_rows: draw only within the first N rows (0 = all rows). The sticky
+// prompt passes rows-1 so images never cover its fixed input line.
+void kitty_render(Terminal *t, int ox, int oy, int clip_rows = 0);
 
 // Advance animation timers by dt seconds.
 // Returns true if any animated image changed frame (caller should set needs_render).
@@ -58,6 +60,10 @@ void kitty_clear(Terminal *t);
 // Called by scroll_up() — shift all placement y_cells up by `lines`,
 // removing any that scroll off the top.
 void kitty_scroll(Terminal *t, int lines);
+
+// Leaving the alternate screen (vim, less... exiting): drop images that were
+// placed on it. Images from the normal screen are kept and shown again.
+void kitty_leave_alt_screen(Terminal *t);
 
 // Free GL resources on shutdown.
 void kitty_shutdown(void);

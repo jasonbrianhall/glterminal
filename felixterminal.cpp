@@ -2061,8 +2061,9 @@ int main(int argc, char **argv) {
                 } else {
                     // Update URL hover highlight — only redraw the affected row
                     if (url_update_hover(&term, ev.motion.x, ev.motion.y, 2, 2)) {
-                        int hrow = (int)((ev.motion.y - 2) / term.cell_h);
-                        term_dirty_row(&term, hrow);
+                        // Redraw everything: the link being left may be on
+                        // another row, and an OSC 8 link can span several
+                        term_dirty_all(&term);
                         needs_render = true;
                     }
                     // Show pointer cursor when over a URL (Ctrl = clickable)
