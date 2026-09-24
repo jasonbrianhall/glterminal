@@ -277,6 +277,17 @@ static std::string selection_to_html_fragment(Terminal *t, int r0, int c0, int r
             if (a & ATTR_STRIKE)    deco += " line-through";
             if (a & ATTR_OVERLINE)  deco += " overline";
             if (!deco.empty()) add(("text-decoration:" + deco.substr(1)).c_str());
+            if (a & ATTR_UNDERLINE) {
+                static const char *ul_css[] = { nullptr, "double", "wavy", "dotted", "dashed" };
+                int us = cell_ul_style(cell);
+                if (us > 0 && us <= 4)
+                    add((std::string("text-decoration-style:") + ul_css[us]).c_str());
+                if (cell->ul_color) {
+                    char hex[8];
+                    hex_of(hex, tcolor_resolve(CELL_UL_COLOR(cell)));
+                    add((std::string("text-decoration-color:") + hex).c_str());
+                }
+            }
 
             if (!open || style != cur_style) {
                 if (open) h += "</span>";

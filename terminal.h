@@ -15,7 +15,13 @@ struct Cell {
     uint32_t     cp;
     TermColorVal fg, bg;
     uint8_t      attrs, _pad[3];   // _pad[0] = CELL_F_* flags (see below)
+    // Underline color (SGR 58). 0 = none (underline uses the text color);
+    // otherwise CELL_UL_COLOR_SET | TermColorVal. Last member on purpose:
+    // existing {cp, fg, bg, attrs, {..}} initializers leave it 0.
+    uint32_t     ul_color;
 };
+#define CELL_UL_COLOR_SET   0x80000000u
+#define CELL_UL_COLOR(c)    ((TermColorVal)((c)->ul_color & ~CELL_UL_COLOR_SET))
 
 #define CELL(t,r,c) ((t)->cells[(r)*(t)->cols+(c)])
 
@@ -30,6 +36,17 @@ struct Cell {
 static inline bool cell_is_wide(const Cell *c)      { return (c->_pad[0] & CELL_F_WIDE) != 0; }
 static inline bool cell_is_wide_tail(const Cell *c) { return (c->_pad[0] & CELL_F_WIDE_TAIL) != 0; }
 
+// Underline style (SGR 4:n / 21), bits 2-4 of _pad[0]. Only meaningful when
+// ATTR_UNDERLINE is set; 0 = the classic single line.
+#define UL_SINGLE  0
+#define UL_DOUBLE  1
+#define UL_CURLY   2
+#define UL_DOTTED  3
+#define UL_DASHED  4
+#define CELL_UL_SHIFT  2
+#define CELL_UL_MASK   (0x7 << CELL_UL_SHIFT)
+static inline int cell_ul_style(const Cell *c) { return (c->_pad[0] & CELL_UL_MASK) >> CELL_UL_SHIFT; }
+
 // ============================================================================
 // TERMINAL
 // ============================================================================
@@ -42,6 +59,8 @@ struct Terminal {
     int           cur_row, cur_col;
     TermColorVal  cur_fg, cur_bg;
     uint8_t       cur_attrs;
+    uint8_t       cur_ul_style;   // UL_* for newly written cells
+    uint32_t      cur_ul_color;   // 0 or CELL_UL_COLOR_SET | TermColorVal
     ParseState    state;
     char          charset_slot;   // which Gn ('(' ')' '*' '+') a PS_CHARSET byte designates
     bool          g0_line_drawing; // true if G0 currently designated as DEC special graphics
@@ -75,6 +94,11 @@ struct Terminal {
     bool          cursor_on;
     bool          cursor_blink_enabled;
     int           cursor_shape;        // 0=block, 1=underline bar, 2=beam
+    // DECSCUSR "CSI 0 SP q" restores the user's own cursor style, captured
+    // the first time an application changes it.
+    bool          cursor_default_saved;
+    int           cursor_default_shape;
+    bool          cursor_default_blink;
     bool          autowrap;
     bool          mouse_report;
     bool          bracketed_paste;

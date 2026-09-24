@@ -135,11 +135,11 @@ static void break_wide_pair(Terminal *t, int row, int col) {
     Cell &c = CELL(t, row, col);
     if (cell_is_wide_tail(&c) && col > 0) {
         Cell &h = CELL(t, row, col - 1);
-        h.cp = ' '; h._pad[0] = 0;
+        h.cp = ' '; h._pad[0] &= ~(CELL_F_WIDE | CELL_F_WIDE_TAIL);
     }
     if (cell_is_wide(&c) && col + 1 < t->cols) {
         Cell &tl = CELL(t, row, col + 1);
-        tl.cp = ' '; tl._pad[0] = 0;
+        tl.cp = ' '; tl._pad[0] &= ~(CELL_F_WIDE | CELL_F_WIDE_TAIL);
     }
 }
 
@@ -196,12 +196,15 @@ static void term_put_char(Terminal *t, uint32_t cp) {
     if (t->cur_col < t->cols) {
         int row = t->cur_row, col = t->cur_col;
         break_wide_pair(t, row, col);
+        uint8_t ul = (t->cur_attrs & ATTR_UNDERLINE)
+                   ? (uint8_t)((t->cur_ul_style << CELL_UL_SHIFT) & CELL_UL_MASK) : 0;
+        uint32_t ulc = (t->cur_attrs & ATTR_UNDERLINE) ? t->cur_ul_color : 0;
         if (w == 2) {
             break_wide_pair(t, row, col + 1);
-            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {CELL_F_WIDE, 0, 0}};
-            CELL(t, row, col + 1) = {0,  t->cur_fg, t->cur_bg, t->cur_attrs, {CELL_F_WIDE_TAIL, 0, 0}};
+            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {(uint8_t)(CELL_F_WIDE | ul), 0, 0}, ulc};
+            CELL(t, row, col + 1) = {0,  t->cur_fg, t->cur_bg, t->cur_attrs, {(uint8_t)(CELL_F_WIDE_TAIL | ul), 0, 0}, ulc};
         } else {
-            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0, 0, 0}};
+            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {ul, 0, 0}, ulc};
         }
         term_dirty_row(t, row);
     }
@@ -216,51 +219,110 @@ static void term_put_char(Terminal *t, uint32_t cp) {
 // SGR
 // ============================================================================
 
-static void sgr(Terminal *t, const char *p) {
-    char buf[128]; strncpy(buf, p, 127); buf[127]='\0';
-    int params[32]; int pc = 0;
-    char *tok = strtok(buf, ";");
-    while (tok && pc < 32) { params[pc++] = atoi(tok); tok = strtok(NULL, ";"); }
-    if (!pc) { params[0]=0; pc=1; }
+// Parse an extended color starting at group[gi] (value 38/48/58).
+// Handles both forms:
+//   semicolon:  38;5;N   38;2;R;G;B            (consumes following groups)
+//   colon:      38:5:N   38:2::R:G:B  38:2:R:G:B   38:2:CS:R:G:B (one group)
+// Returns true and sets *out if a color was parsed; *gi is advanced past any
+// groups consumed.
+struct SgrGroup { int v[8]; int n; };
 
-    for (int i = 0; i < pc; i++) {
-        int v = params[i];
-        if      (v == 0)  { t->cur_fg=TCOLOR_PALETTE(7); t->cur_bg=TCOLOR_PALETTE(0); t->cur_attrs=0; }
+static bool sgr_ext_color(const SgrGroup *g, int ng, int *gi, TermColorVal *out) {
+    const SgrGroup &cur = g[*gi];
+    auto c8 = [](int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); };
+    if (cur.n > 1) {                       // colon form, self-contained
+        int mode = cur.v[1];
+        if (mode == 5 && cur.n >= 3) { *out = TCOLOR_PALETTE(c8(cur.v[2])); return true; }
+        if (mode == 2) {
+            // 38:2:CS:R:G:B (6+ subs, CS = colorspace, usually empty) or 38:2:R:G:B
+            int o = (cur.n >= 6) ? 3 : 2;
+            if (cur.n >= o + 3) {
+                *out = TCOLOR_RGB(c8(cur.v[o]), c8(cur.v[o+1]), c8(cur.v[o+2]));
+                return true;
+            }
+        }
+        return false;
+    }
+    // semicolon form
+    int i = *gi;
+    if (i + 2 < ng && g[i+1].v[0] == 5) {
+        *out = TCOLOR_PALETTE(c8(g[i+2].v[0])); *gi = i + 2; return true;
+    }
+    if (i + 4 < ng && g[i+1].v[0] == 2) {
+        *out = TCOLOR_RGB(c8(g[i+2].v[0]), c8(g[i+3].v[0]), c8(g[i+4].v[0]));
+        *gi = i + 4; return true;
+    }
+    return false;
+}
+
+static void sgr(Terminal *t, const char *p) {
+    // Split into ';'-separated groups, each with ':'-separated sub-params.
+    // Empty fields count as 0 (ECMA-48 default).
+    SgrGroup g[32];
+    int ng = 0;
+    {
+        SgrGroup cur = {{0}, 1};
+        bool any = false;
+        for (const char *q = p; ; q++) {
+            char ch = *q;
+            if (ch >= '0' && ch <= '9') {
+                int &v = cur.v[cur.n - 1];
+                if (v < 100000) v = v * 10 + (ch - '0');
+                any = true;
+            } else if (ch == ':') {
+                if (cur.n < 8) cur.v[cur.n++] = 0;
+                any = true;
+            } else if (ch == ';' || ch == '\0') {
+                if (ng < 32) g[ng++] = cur;
+                cur = SgrGroup{{0}, 1};
+                if (ch == '\0') break;
+                any = true;
+            }
+        }
+        if (!any) ng = 1;   // "CSI m" == "CSI 0 m" (g[0] is already {0})
+    }
+
+    for (int i = 0; i < ng; i++) {
+        int v = g[i].v[0];
+        if (v == 0) {
+            t->cur_fg = TCOLOR_PALETTE(7); t->cur_bg = TCOLOR_PALETTE(0); t->cur_attrs = 0;
+            t->cur_ul_style = UL_SINGLE; t->cur_ul_color = 0;
+        }
         else if (v == 1)  t->cur_attrs |= ATTR_BOLD;
         else if (v == 2)  t->cur_attrs |= ATTR_DIM;
         else if (v == 3)  t->cur_attrs |= ATTR_ITALIC;
-        else if (v == 4)  t->cur_attrs |= ATTR_UNDERLINE;
+        else if (v == 4) {
+            // 4 = single; 4:0 none, 4:1 single, 4:2 double, 4:3 curly,
+            // 4:4 dotted, 4:5 dashed
+            int style = (g[i].n > 1) ? g[i].v[1] : 1;
+            if (style == 0) t->cur_attrs &= ~ATTR_UNDERLINE;
+            else {
+                t->cur_attrs |= ATTR_UNDERLINE;
+                t->cur_ul_style = (style >= 2 && style <= 5) ? (uint8_t)(style - 1) : UL_SINGLE;
+            }
+        }
         else if (v == 5)  t->cur_attrs |= ATTR_BLINK;
         else if (v == 7)  t->cur_attrs |= ATTR_REVERSE;
         else if (v == 9)  t->cur_attrs |= ATTR_STRIKE;
+        else if (v == 21) { t->cur_attrs |= ATTR_UNDERLINE; t->cur_ul_style = UL_DOUBLE; }
         else if (v == 22) t->cur_attrs &= ~(ATTR_BOLD | ATTR_DIM);
         else if (v == 23) t->cur_attrs &= ~ATTR_ITALIC;
-        else if (v == 24) t->cur_attrs &= ~ATTR_UNDERLINE;
+        else if (v == 24) { t->cur_attrs &= ~ATTR_UNDERLINE; t->cur_ul_style = UL_SINGLE; }
         else if (v == 25) t->cur_attrs &= ~ATTR_BLINK;
         else if (v == 27) t->cur_attrs &= ~ATTR_REVERSE;
         else if (v == 29) t->cur_attrs &= ~ATTR_STRIKE;
         else if (v == 53) t->cur_attrs |= ATTR_OVERLINE;
         else if (v == 55) t->cur_attrs &= ~ATTR_OVERLINE;
-        else if (v>=30 && v<=37)   t->cur_fg = TCOLOR_PALETTE(v-30);
-        else if (v == 38) {
-            if (i+1 < pc && params[i+1] == 5 && i+2 < pc) {
-                t->cur_fg = TCOLOR_PALETTE(params[i+2] & 0xFF); i += 2;
-            } else if (i+1 < pc && params[i+1] == 2 && i+4 < pc) {
-                t->cur_fg = TCOLOR_RGB(params[i+2], params[i+3], params[i+4]); i += 4;
-            }
-        }
-        else if (v == 39)            t->cur_fg = TCOLOR_PALETTE(7);
-        else if (v>=40 && v<=47)   t->cur_bg = TCOLOR_PALETTE(v-40);
-        else if (v == 48) {
-            if (i+1 < pc && params[i+1] == 5 && i+2 < pc) {
-                t->cur_bg = TCOLOR_PALETTE(params[i+2] & 0xFF); i += 2;
-            } else if (i+1 < pc && params[i+1] == 2 && i+4 < pc) {
-                t->cur_bg = TCOLOR_RGB(params[i+2], params[i+3], params[i+4]); i += 4;
-            }
-        }
-        else if (v == 49)            t->cur_bg = TCOLOR_PALETTE(0);
-        else if (v>=90 && v<=97)   t->cur_fg = TCOLOR_PALETTE(v-90+8);
-        else if (v>=100 && v<=107) t->cur_bg = TCOLOR_PALETTE(v-100+8);
+        else if (v >= 30 && v <= 37)   t->cur_fg = TCOLOR_PALETTE(v - 30);
+        else if (v == 38) { TermColorVal c; if (sgr_ext_color(g, ng, &i, &c)) t->cur_fg = c; }
+        else if (v == 39)              t->cur_fg = TCOLOR_PALETTE(7);
+        else if (v >= 40 && v <= 47)   t->cur_bg = TCOLOR_PALETTE(v - 40);
+        else if (v == 48) { TermColorVal c; if (sgr_ext_color(g, ng, &i, &c)) t->cur_bg = c; }
+        else if (v == 49)              t->cur_bg = TCOLOR_PALETTE(0);
+        else if (v == 58) { TermColorVal c; if (sgr_ext_color(g, ng, &i, &c)) t->cur_ul_color = CELL_UL_COLOR_SET | c; }
+        else if (v == 59)              t->cur_ul_color = 0;
+        else if (v >= 90 && v <= 97)   t->cur_fg = TCOLOR_PALETTE(v - 90 + 8);
+        else if (v >= 100 && v <= 107) t->cur_bg = TCOLOR_PALETTE(v - 100 + 8);
     }
 }
 
@@ -277,8 +339,42 @@ static void dispatch_csi(Terminal *t) {
     // CSI SP @ = scroll left) are different commands that share a final byte
     // with ones handled below — none are supported yet, so ignore them
     // rather than misreading them.
+    char inter = 0;
     for (const char *q = p; *q; q++)
-        if (*q >= 0x20 && *q <= 0x2F) { t->csi_len = 0; return; }
+        if (*q >= 0x20 && *q <= 0x2F) { inter = *q; break; }
+    if (inter) {
+        if (inter == ' ' && final == 'q') {
+            // DECSCUSR — cursor style: 0/1 blinking block, 2 steady block,
+            // 3/4 blinking/steady underline, 5/6 blinking/steady bar.
+            // 0 restores the user's own style (captured on first change).
+            if (!t->cursor_default_saved) {
+                t->cursor_default_saved = true;
+                t->cursor_default_shape = t->cursor_shape;
+                t->cursor_default_blink = t->cursor_blink_enabled;
+            }
+            int n = atoi(p);
+            if (n == 0) {
+                t->cursor_shape         = t->cursor_default_shape;
+                t->cursor_blink_enabled = t->cursor_default_blink;
+            } else if (n <= 6) {
+                static const int shape[7] = { 0, 0, 0, 1, 1, 2, 2 };
+                t->cursor_shape         = shape[n];
+                t->cursor_blink_enabled = (n % 2) == 1;
+            }
+            term_dirty_row(t, t->cur_row);
+        }
+        // Other intermediate sequences (CSI SP @ scroll-left, CSI ! p soft
+        // reset, CSI $ ...) share final bytes with commands below — ignore
+        // them rather than misreading them.
+        t->csi_len = 0;
+        return;
+    }
+    // Private-prefixed 'm' (e.g. vim's "CSI > 4;2 m" modifyOtherKeys) is NOT
+    // SGR — treating it as one reset all text attributes.
+    if (final == 'm' && (p[0] == '<' || p[0] == '=' || p[0] == '>' || p[0] == '?')) {
+        t->csi_len = 0;
+        return;
+    }
     switch (final) {
     case 'm': sgr(t, p); break;
     case 'H': case 'f': {
@@ -901,6 +997,11 @@ void term_soft_reset(Terminal *t) {
     t->cur_fg  = TCOLOR_PALETTE(7);
     t->cur_bg  = TCOLOR_PALETTE(0);
     t->cur_attrs = 0;
+    t->cur_ul_style = UL_SINGLE;
+    t->cur_ul_color = 0;
+    if (t->cursor_default_saved) {
+        t->cursor_shape = t->cursor_default_shape;
+    }
 
     t->scroll_top = 0;
     t->scroll_bot = t->rows - 1;
@@ -917,7 +1018,7 @@ void term_soft_reset(Terminal *t) {
     t->dcs_determined = false;
 
     t->cursor_on            = true;
-    t->cursor_blink_enabled = true;
+    t->cursor_blink_enabled = t->cursor_default_saved ? t->cursor_default_blink : true;
     t->autowrap             = true;
     t->mouse_report         = false;
     t->bracketed_paste      = false;

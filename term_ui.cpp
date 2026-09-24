@@ -721,6 +721,51 @@ void term_paste(Terminal *t) {
 // RENDERING
 // ============================================================================
 
+// Underline (all SGR 4:n styles, SGR 58 color), strikethrough and overline
+// for one cell. Shared by term_render() and sticky_prompt_render_split().
+void term_draw_decorations(const Cell *c, float px, float py, float cw, float ch, TermColor fc) {
+    if (c->attrs & ATTR_UNDERLINE) {
+        // SGR 58 underline color, else the text color
+        TermColor uc = c->ul_color ? tcolor_resolve(CELL_UL_COLOR(c)) : fc;
+        switch (cell_ul_style(c)) {
+        case UL_DOUBLE:
+            draw_rect(px, py+ch-4, cw, 1, uc.r, uc.g, uc.b, 1.f);
+            draw_rect(px, py+ch-2, cw, 1, uc.r, uc.g, uc.b, 1.f);
+            break;
+        case UL_CURLY: {
+            // Sine wave, phase taken from the absolute x so it runs
+            // continuously across cells. One 1px-wide column per x.
+            float amp    = SDL_max(1.f, ch * 0.07f);
+            float period = SDL_max(4.f, cw);
+            float base   = py + ch - 1.5f - amp;
+            for (int x = 0; x < (int)cw; x++) {
+                float ax = px + x;
+                float y  = base + amp * sinf(ax * 6.2831853f / period);
+                draw_rect(ax, y, 1, 1.5f, uc.r, uc.g, uc.b, 1.f);
+            }
+            break;
+        }
+        case UL_DOTTED:
+            for (int x = 0; x < (int)cw; x++)
+                if ((((int)px + x) & 3) < 2)
+                    draw_rect(px + x, py+ch-2, 1, 1.5f, uc.r, uc.g, uc.b, 1.f);
+            break;
+        case UL_DASHED:
+            for (int x = 0; x < (int)cw; x++)
+                if ((((int)px + x) % 6) < 4)
+                    draw_rect(px + x, py+ch-2, 1, 1.5f, uc.r, uc.g, uc.b, 1.f);
+            break;
+        default:
+            draw_rect(px, py+ch-2, cw, 2, uc.r, uc.g, uc.b, 1.f);
+            break;
+        }
+    }
+    if (c->attrs & ATTR_STRIKE)
+        draw_rect(px, py+ch*0.45f, cw, 1, fc.r, fc.g, fc.b, 1.f);
+    if (c->attrs & ATTR_OVERLINE)
+        draw_rect(px, py+1, cw, 1, fc.r, fc.g, fc.b, 1.f);
+}
+
 void term_render(Terminal *t, int ox, int oy) {
     // If sticky prompt is enabled, use split rendering
     if (g_sticky_prompt_enabled) {
@@ -871,12 +916,8 @@ void term_render(Terminal *t, int ox, int oy) {
                 }
                 dirty_cells++;
             }
-            if ((c->attrs & ATTR_UNDERLINE) && !blink_hidden)
-                draw_rect(px, py+ch-2, cw, 2, fc.r, fc.g, fc.b, 1.f);
-            if ((c->attrs & ATTR_STRIKE) && !blink_hidden)
-                draw_rect(px, py+ch*0.45f, cw, 1, fc.r, fc.g, fc.b, 1.f);
-            if ((c->attrs & ATTR_OVERLINE) && !blink_hidden)
-                draw_rect(px, py+1, cw, 1, fc.r, fc.g, fc.b, 1.f);
+            if (!blink_hidden)
+                term_draw_decorations(c, px, py, cw, ch, fc);
 
             // URL underline
             int uid = url_at(row, col);

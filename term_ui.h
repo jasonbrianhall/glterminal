@@ -35,6 +35,10 @@ void term_paste(Terminal *t);
 
 void term_render(Terminal *t, int ox, int oy);
 
+// Underline (styles + color), strikethrough, overline for one cell.
+// fc = the cell's resolved text color. Used by the sticky-prompt renderer too.
+void term_draw_decorations(const Cell *c, float px, float py, float cw, float ch, TermColor fc);
+
 // ============================================================================
 // KEYBOARD
 // ============================================================================

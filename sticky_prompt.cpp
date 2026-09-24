@@ -13,6 +13,7 @@ extern bool g_blink_text_on;
 extern bool s_basic_palette_active;
 extern bool cell_in_sel(Terminal *t, int r, int c);
 extern bool g_line_numbers_enabled;
+extern void term_draw_decorations(const Cell *c, float px, float py, float cw, float ch, TermColor fc);
 
 // ============================================================================
 // STATE
@@ -107,10 +108,11 @@ void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
                 char tmp[5] = {};
                 cp_to_utf8(cp, tmp);
                 float baseline = py + ch * 0.82f;
-                draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
+                draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs,
+                          cell_is_wide(c) ? cw * 2.f : 0.f);
             }
-            if ((c->attrs & ATTR_UNDERLINE) && !blink_hidden)
-                draw_rect(px, py+ch-2, cw, 2, fc.r, fc.g, fc.b, 1.f);
+            if (!blink_hidden)
+                term_draw_decorations(c, px, py, cw, ch, fc);
         }
     }
     
@@ -155,10 +157,11 @@ void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
             char tmp[5] = {};
             cp_to_utf8(cp, tmp);
             float baseline = input_y + ch * 0.82f;
-            draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
+            draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs,
+                      cell_is_wide(c) ? cw * 2.f : 0.f);
         }
-        if ((c->attrs & ATTR_UNDERLINE) && !blink_hidden)
-            draw_rect(px, input_y+ch-2, cw, 2, fc.r, fc.g, fc.b, 1.f);
+        if (!blink_hidden)
+            term_draw_decorations(c, px, input_y, cw, ch, fc);
     }
     
     // Draw cursor if visible (only in the fixed input line)
