@@ -132,7 +132,7 @@ set(SRCS_COMMON
     sftp_webserver.cpp midi_render.cpp dbopl.cpp dbopl_wrapper.cpp
     instruments.cpp voc_render.cpp au_render.cpp aiff_render.cpp
     convertm4atowavlin.cpp convertm4atowavwin.cpp
-    vfs.cpp sixel_graphics.cpp
+    vfs.cpp sixel_graphics.cpp term_clipboard.cpp
 )
 
 if(WIN32)

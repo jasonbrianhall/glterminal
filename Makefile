@@ -236,7 +236,8 @@ SRCS_COMMON = felixterminal.cpp     gl_renderer.cpp       \
               instruments.cpp         voc_render.cpp           \
               au_render.cpp           aiff_render.cpp          \
               convertm4atowavlin.cpp  convertm4atowavwin.cpp   \
-              vfs.cpp                 sixel_graphics.cpp
+              vfs.cpp                 sixel_graphics.cpp       \
+              term_clipboard.cpp
 
 SRCS_MINIZ = libtelnet.c felixchirp/miniz.c felixchirp/miniz_tdef.c felixchirp/miniz_tinfl.c felixchirp/miniz_zip.c \
             wopr/zork/actors.c            wopr/zork/ballop.c        \

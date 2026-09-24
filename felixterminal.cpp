@@ -9,6 +9,7 @@
 #include "terminal.h"
 #include "term_pty.h"
 #include "term_ui.h"
+#include "term_clipboard.h"
 #include "sticky_prompt.h"
 #include "ssh_key_manager.h"
 #include "gl_bouncingcircle.h"
@@ -1638,7 +1639,7 @@ int main(int argc, char **argv) {
                         term_copy_selection_html(&term); break;
                     }
                     if (ev.key.keysym.sym == SDLK_c && term.sel_exists) {
-                        term_copy_selection(&term); break;
+                        term_copy_selection_rich(&term); break;
                     }
                     if (ev.key.keysym.sym == SDLK_v) { term_paste(&term); break; }
                     if (ev.key.keysym.sym == SDLK_LSHIFT ||
@@ -1871,7 +1872,7 @@ int main(int argc, char **argv) {
                                                   hit==MENU_ID_ADV_OPTIONS);
                             if (!is_sub_parent) g_menu.visible = false;
                             switch (hit) {
-                            case MENU_ID_COPY:      g_menu_copy_pending = true; term_copy_selection(&term); break;
+                            case MENU_ID_COPY:      g_menu_copy_pending = true; term_copy_selection_rich(&term); break;
                             case MENU_ID_COPY_HTML: g_menu_copy_pending = true; term_copy_selection_html(&term); break;
                             case MENU_ID_COPY_ANSI: g_menu_copy_pending = true; term_copy_selection_ansi(&term); break;
                             case MENU_ID_PASTE:     term_paste(&term); break;
