@@ -700,6 +700,17 @@ static void dispatch_csi(Terminal *t) {
         t->cur_col = 0;
         break;
     }
+    case 'q':
+        // XTVERSION (CSI > q / CSI > 0 q) — report terminal name and version
+        // as DCS > | name(version) ST. (CSI Ps SP q, cursor style, has an
+        // intermediate byte and is handled above.)
+        if (p[0] == '>') {
+            char resp[64];
+            int len = snprintf(resp, sizeof(resp), "\x1bP>|%s(%s)\x1b\\",
+                               FELIX_TERM_NAME, FELIX_TERM_VERSION);
+            term_write(t, resp, len);
+        }
+        break;
     case 'c': {
         // DA - device attributes. '>' prefix = secondary (DA2), else primary (DA1).
         char resp[32];

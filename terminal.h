@@ -7,6 +7,14 @@
 #include "msvc_posix_compat.h"  // pid_t isn't in MSVC's sys/types.h
 #endif
 
+// Reported to applications via XTVERSION (CSI > q).
+#ifndef FELIX_TERM_NAME
+#define FELIX_TERM_NAME    "FelixTerminal"
+#endif
+#ifndef FELIX_TERM_VERSION
+#define FELIX_TERM_VERSION "1.0"
+#endif
+
 // ============================================================================
 // CELL
 // ============================================================================
