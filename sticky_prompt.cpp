@@ -165,7 +165,7 @@ void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
     }
     
     // Draw cursor if visible (only in the fixed input line)
-    if (t->cursor_on && input_row == t->cur_row) {
+    if (term_cursor_visible(t) && input_row == t->cur_row) {
         float cx = ox + t->cur_col * cw;
         switch (t->cursor_shape) {
         case 0: draw_rect(cx, input_y, cw, ch, 1,1,1, 0.3f); break;

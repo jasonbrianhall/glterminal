@@ -361,6 +361,9 @@ static void dispatch_csi(Terminal *t) {
                 t->cursor_shape         = shape[n];
                 t->cursor_blink_enabled = (n % 2) == 1;
             }
+            // Restart the blink cycle lit, so the new shape shows immediately
+            t->cursor_blink_phase = true;
+            t->cursor_blink       = 0;
             term_dirty_row(t, t->cur_row);
         }
         // Other intermediate sequences (CSI SP @ scroll-left, CSI ! p soft
@@ -931,6 +934,7 @@ void term_init(Terminal *t) {
     t->state                = PS_NORMAL;
     t->cursor_on            = true;
     t->cursor_blink_enabled = true;
+    t->cursor_blink_phase   = true;
     t->cursor_shape         = 1;
     t->autowrap             = true;
     t->saved7_fg            = TCOLOR_PALETTE(7);
@@ -1019,6 +1023,7 @@ void term_soft_reset(Terminal *t) {
 
     t->cursor_on            = true;
     t->cursor_blink_enabled = t->cursor_default_saved ? t->cursor_default_blink : true;
+    t->cursor_blink_phase   = true;
     t->autowrap             = true;
     t->mouse_report         = false;
     t->bracketed_paste      = false;

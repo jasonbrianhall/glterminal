@@ -91,8 +91,12 @@ struct Terminal {
     float         cell_w, cell_h;
     double        blink;
     double        cursor_blink;
-    bool          cursor_on;
+    bool          cursor_on;            // DECTCEM (?25h/l): app wants the cursor shown
     bool          cursor_blink_enabled;
+    bool          cursor_blink_phase;   // blink timer: true = lit. Kept separate from
+                                        // cursor_on so blinking never un-hides a hidden
+                                        // cursor, and stopping the blink can't freeze
+                                        // it in the "off" phase.
     int           cursor_shape;        // 0=block, 1=underline bar, 2=beam
     // DECSCUSR "CSI 0 SP q" restores the user's own cursor style, captured
     // the first time an application changes it.
@@ -139,6 +143,11 @@ struct Terminal {
 // ============================================================================
 // DIRTY ROW HELPERS
 // ============================================================================
+
+// Should the cursor be drawn this frame?
+static inline bool term_cursor_visible(const Terminal *t) {
+    return t->cursor_on && (!t->cursor_blink_enabled || t->cursor_blink_phase);
+}
 
 static inline void term_dirty_row(Terminal *t, int row) {
     if (row >= 0 && row < t->rows) t->dirty_rows[row] = 1;

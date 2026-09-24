@@ -943,7 +943,7 @@ void term_render(Terminal *t, int ox, int oy) {
     sixel_render(t, ox, oy);
 
     // Cursor
-    if (!scrolled && t->cursor_on) {
+    if (!scrolled && term_cursor_visible(t)) {
         float cx = ox + t->cur_col * cw;
         float cy = oy + t->cur_row * ch;
         switch (t->cursor_shape) {

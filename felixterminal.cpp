@@ -813,7 +813,7 @@ int main(int argc, char **argv) {
             term.cursor_blink += dt;
             if (term.cursor_blink >= 0.6) {
                 term.cursor_blink = 0;
-                term.cursor_on = !term.cursor_on;
+                term.cursor_blink_phase = !term.cursor_blink_phase;
                 term_dirty_row(&term, term.cur_row);
                 needs_render = true;
             }
