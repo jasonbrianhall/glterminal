@@ -286,7 +286,7 @@ static_assert(sizeof(RENDER_MODE_NAMES)/sizeof(RENDER_MODE_NAMES[0]) == RENDER_M
 const MenuItem MENU_ITEMS[] = {
     { "New Terminal  >", false },
     { nullptr,           true  },
-    { "Copy",            false },
+    { "Copy as Rich Text", false },
     { "Copy as HTML",    false },
     { "Copy as ANSI",    false },
     { "Paste",           false },
@@ -1277,7 +1277,7 @@ static const HelpRow HELP_ROWS[] = {
     { nullptr, "F12",             "Debug log (mirrors console output)",                  nullptr },
     { nullptr, "Right-click",     "Open context menu",                                   nullptr },
     { nullptr, "Ctrl+A",          "Select all",                                          nullptr },
-    { nullptr, "Ctrl+C",          "Copy selection",                                      nullptr },
+    { nullptr, "Ctrl+C",          "Copy selection as rich text (keeps colors for Word)", nullptr },
     { nullptr, "Ctrl+Shift+C",    "Copy selection as HTML",                              nullptr },
     { nullptr, "Ctrl+V",          "Paste",                                               nullptr },
     { nullptr, "Ctrl+Scroll",     "Zoom font in / out",                                  nullptr },

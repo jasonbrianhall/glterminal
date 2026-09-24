@@ -419,6 +419,60 @@ void sixel_scroll(Terminal *t, int lines) {
     }), pv.end());
 }
 
+std::vector<KittyPngImage> sixel_get_png_images(Terminal *t, int row_start, int row_end) {
+    std::vector<KittyPngImage> result;
+    auto tit = s_terms.find(t);
+    if (tit == s_terms.end()) return result;
+
+    for (const SixelPlacement &pl : tit->second.placements) {
+        // y_cell is a live-screen row; selections use virtual rows
+        int vrow = t->sb_count + pl.y_cell;
+        if (vrow < row_start || vrow > row_end) continue;
+        const SixelImage &img = pl.img;
+        if ((!img.tex && !img.sdl_tex) || img.pw <= 0 || img.ph <= 0) continue;
+
+        // Read the decoded pixels back from the GPU
+        std::vector<uint8_t> pixels((size_t)img.pw * img.ph * 4);
+        if (g_use_sdl_renderer) {
+            SDL_Texture *rt = SDL_CreateTexture(g_sdl_renderer,
+                SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, img.pw, img.ph);
+            if (!rt) continue;
+            SDL_Texture *prev_target = SDL_GetRenderTarget(g_sdl_renderer);
+            SDL_SetRenderTarget(g_sdl_renderer, rt);
+            SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 0);
+            SDL_RenderClear(g_sdl_renderer);
+            SDL_RenderCopy(g_sdl_renderer, img.sdl_tex, nullptr, nullptr);
+            SDL_RenderReadPixels(g_sdl_renderer, nullptr,
+                SDL_PIXELFORMAT_ABGR8888, pixels.data(), img.pw * 4);
+            SDL_SetRenderTarget(g_sdl_renderer, prev_target);
+            SDL_DestroyTexture(rt);
+        } else {
+            GLint prev_pack = 4;
+            glGetIntegerv(GL_PACK_ALIGNMENT, &prev_pack);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glBindTexture(GL_TEXTURE_2D, img.tex);
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glPixelStorei(GL_PACK_ALIGNMENT, prev_pack);
+        }
+
+        KittyPngImage entry;
+        if (!kitty_encode_png(pixels.data(), img.pw, img.ph, img.pw * 4, entry.png)) continue;
+        entry.vrow      = vrow;
+        entry.rows_used = pl.rows;
+        entry.cols      = pl.cols;
+        // Paste at the image's true pixel size (on screen it is stretched to
+        // whole cells, which slightly distorts it).
+        entry.disp_w_px = img.pw;
+        entry.disp_h_px = img.ph;
+        result.push_back(std::move(entry));
+    }
+
+    std::stable_sort(result.begin(), result.end(),
+        [](const KittyPngImage &a, const KittyPngImage &b){ return a.vrow < b.vrow; });
+    return result;
+}
+
 void sixel_shutdown(void) {
     for (auto &kv : s_terms)
         for (auto &pl : kv.second.placements) free_sixel_image(pl.img);

@@ -1,6 +1,8 @@
 #pragma once
 #include "terminal.h"
 #include <stdint.h>
+#include <vector>
+#include "kitty_graphics.h"  // KittyPngImage
 
 // ============================================================================
 // DECSIXEL (Sixel graphics) — decodes a complete DCS-wrapped sixel payload
@@ -34,6 +36,11 @@ void sixel_clear(Terminal *t);
 // Called by scroll_up() — shift all placement y_cells up by `lines`,
 // removing any that scroll off the top. Mirrors kitty_scroll().
 void sixel_scroll(Terminal *t, int lines);
+
+// For rich clipboard copy: sixel images whose top row falls within
+// [row_start, row_end] (virtual rows, matching the selection), as PNG bytes.
+// Reuses the KittyPngImage struct so both kinds can be merged by the caller.
+std::vector<KittyPngImage> sixel_get_png_images(Terminal *t, int row_start, int row_end);
 
 // Free GL resources on shutdown.
 void sixel_shutdown(void);

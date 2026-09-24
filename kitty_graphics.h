@@ -36,6 +36,22 @@ struct KittyHtmlImage {
 };
 std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, int row_end);
 
+// For rich clipboard copy: the same placements as kitty_get_html_images, but
+// as raw PNG bytes plus the on-screen display size, so the caller can choose
+// how to embed them (data: URI, temp file, native image clipboard format).
+struct KittyPngImage {
+    int                  vrow;        // virtual row of the image's top edge
+    int                  rows_used;   // terminal rows the image covers
+    int                  cols;        // placement c= (0 = natural size)
+    int                  disp_w_px;   // on-screen display size in pixels
+    int                  disp_h_px;
+    std::vector<uint8_t> png;
+};
+std::vector<KittyPngImage> kitty_get_png_images(Terminal *t, int row_start, int row_end);
+
+// Encode tightly-or-strided RGBA8 pixels to PNG (shared with sixel_graphics).
+bool kitty_encode_png(const uint8_t *rgba, int w, int h, int stride, std::vector<uint8_t> &out);
+
 // Drop all images associated with this terminal (e.g. on reset / alt-screen swap).
 void kitty_clear(Terminal *t);
 

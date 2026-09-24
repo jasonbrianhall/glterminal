@@ -1114,6 +1114,10 @@ static bool encode_png(const uint8_t *rgba, int w, int h, int stride,
     return true;
 }
 
+bool kitty_encode_png(const uint8_t *rgba, int w, int h, int stride, std::vector<uint8_t> &out) {
+    return encode_png(rgba, w, h, stride, out);
+}
+
 // ============================================================================
 // BASE64 ENCODE
 // ============================================================================
@@ -1137,11 +1141,11 @@ static std::string b64_encode(const uint8_t *src, int len) {
 }
 
 // ============================================================================
-// kitty_get_html_images
+// kitty_get_png_images / kitty_get_html_images
 // ============================================================================
 
-std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, int row_end) {
-    std::vector<KittyHtmlImage> result;
+std::vector<KittyPngImage> kitty_get_png_images(Terminal *t, int row_start, int row_end) {
+    std::vector<KittyPngImage> result;
 
     auto tit = s_terms.find(t);
     if (tit == s_terms.end()) return result;
@@ -1150,7 +1154,6 @@ std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, in
         // pl.y_cell is a live-screen row (0 = top of current screen).
         // Selection rows use virtual coordinates: 0..sb_count-1 = scrollback,
         // sb_count..sb_count+rows-1 = live screen.
-        // Convert so we can compare against row_start/row_end.
         int vrow = t->sb_count + pl.y_cell;
         if (vrow < row_start || vrow > row_end) continue;
 
@@ -1161,89 +1164,100 @@ std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, in
         if (img.pw <= 0 || img.ph <= 0) continue;
 
         // Read pixels back from GPU
-        std::vector<uint8_t> pixels(img.pw * img.ph * 4);
+        std::vector<uint8_t> pixels((size_t)img.pw * img.ph * 4);
         if (g_use_sdl_renderer) {
-            // Render the texture to a temporary target and read pixels back
             SDL_Texture *rt = SDL_CreateTexture(g_sdl_renderer,
                 SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET,
                 img.pw, img.ph);
             if (!rt) continue;
+            SDL_Texture *prev_target = SDL_GetRenderTarget(g_sdl_renderer);
             SDL_SetRenderTarget(g_sdl_renderer, rt);
             SDL_SetRenderDrawColor(g_sdl_renderer, 0, 0, 0, 0);
             SDL_RenderClear(g_sdl_renderer);
             SDL_RenderCopy(g_sdl_renderer, img.sdl_tex, nullptr, nullptr);
             SDL_RenderReadPixels(g_sdl_renderer, nullptr,
                 SDL_PIXELFORMAT_ABGR8888, pixels.data(), img.pw * 4);
-            SDL_SetRenderTarget(g_sdl_renderer, nullptr);
+            SDL_SetRenderTarget(g_sdl_renderer, prev_target);
             SDL_DestroyTexture(rt);
         } else {
+            GLint prev_pack = 4;
+            glGetIntegerv(GL_PACK_ALIGNMENT, &prev_pack);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
             glBindTexture(GL_TEXTURE_2D, img.tex);
             glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
             glBindTexture(GL_TEXTURE_2D, 0);
+            glPixelStorei(GL_PACK_ALIGNMENT, prev_pack);
         }
 
         // Apply source crop if specified
-        int sx = pl.src_x, sy = pl.src_y;
-        int sw = pl.src_w ? pl.src_w : img.pw;
-        int sh = pl.src_h ? pl.src_h : img.ph;
-        sx = SDL_clamp(sx, 0, img.pw - 1);
-        sy = SDL_clamp(sy, 0, img.ph - 1);
-        sw = SDL_min(sw, img.pw - sx);
-        sh = SDL_min(sh, img.ph - sy);
+        int sx = SDL_clamp(pl.src_x, 0, img.pw - 1);
+        int sy = SDL_clamp(pl.src_y, 0, img.ph - 1);
+        int sw = SDL_min(pl.src_w ? pl.src_w : img.pw, img.pw - sx);
+        int sh = SDL_min(pl.src_h ? pl.src_h : img.ph, img.ph - sy);
 
-        // Crop to region if needed
         const uint8_t *src_ptr = pixels.data();
         std::vector<uint8_t> cropped;
         int stride = img.pw * 4;
         if (sx != 0 || sy != 0 || sw != img.pw || sh != img.ph) {
-            cropped.resize(sw * sh * 4);
+            cropped.resize((size_t)sw * sh * 4);
             for (int row = 0; row < sh; row++)
-                memcpy(cropped.data() + row * sw * 4,
-                       pixels.data() + (sy + row) * stride + sx * 4,
-                       sw * 4);
+                memcpy(cropped.data() + (size_t)row * sw * 4,
+                       pixels.data() + (size_t)(sy + row) * stride + sx * 4,
+                       (size_t)sw * 4);
             src_ptr = cropped.data();
             stride  = sw * 4;
         }
 
-        // Encode to PNG in memory
-        std::vector<uint8_t> png_data;
-        png_data.reserve(sw * sh);
-        if (!encode_png(src_ptr, sw, sh, stride, png_data)) continue;
+        KittyPngImage entry;
+        if (!encode_png(src_ptr, sw, sh, stride, entry.png)) continue;
+
+        // Same sizing rules as kitty_render()
+        float cw = t->cell_w, ch = t->cell_h;
+        entry.vrow      = vrow;
+        entry.cols      = pl.cols;
+        entry.disp_w_px = pl.cols ? (int)(pl.cols * cw) : img.pw;
+        entry.disp_h_px = pl.rows ? (int)(pl.rows * ch) : img.ph;
+        entry.rows_used = pl.rows ? pl.rows :
+            (ch > 0 ? (int)((entry.disp_h_px + (int)ch - 1) / (int)ch) : 1);
+        if (entry.rows_used < 1) entry.rows_used = 1;
+        result.push_back(std::move(entry));
+    }
+
+    std::stable_sort(result.begin(), result.end(),
+        [](const KittyPngImage &a, const KittyPngImage &b){ return a.vrow < b.vrow; });
+    return result;
+}
+
+std::vector<KittyHtmlImage> kitty_get_html_images(Terminal *t, int row_start, int row_end) {
+    std::vector<KittyHtmlImage> result;
+    std::vector<KittyPngImage> pngs = kitty_get_png_images(t, row_start, row_end);
+
+    for (size_t i = 0; i < pngs.size(); i++) {
+        const KittyPngImage &pi = pngs[i];
+        int cols = pi.cols;
 
         // Build <img> tag with data URI, wrapped in a download-anchor so
         // "Save Image As" offers a sequential filename (image1.png, image2.png,
         // ...) instead of falling back to a generic default like "untitled.png".
-        int display_cols = pl.cols ? pl.cols : 0;
-        std::string data_uri = "data:image/png;base64," + b64_encode(png_data.data(), (int)png_data.size());
-
+        std::string data_uri = "data:image/png;base64," +
+                               b64_encode(pi.png.data(), (int)pi.png.size());
         char fname[32];
-        snprintf(fname, sizeof(fname), "image%d.png", (int)result.size() + 1);
+        snprintf(fname, sizeof(fname), "image%d.png", (int)i + 1);
 
         std::string tag = "<a class=\"img-dl\" href=\"" + data_uri + "\" download=\"" + fname + "\">";
         tag += "<img src=\"" + data_uri + "\"";
-        if (display_cols > 0) {
-            // Express width as number of 'ch' units (monospace character widths)
-            char wbuf[64];
-            snprintf(wbuf, sizeof(wbuf), " style=\"width:%dch\"", display_cols);
-            tag += wbuf;
-        } else {
-            // Natural size but cap at 100% of container
-            tag += " style=\"max-width:100%\"";
-        }
+        char wbuf[64];
+        snprintf(wbuf, sizeof(wbuf), " style=\"width:%dch\"", cols);
+        tag += (cols > 0) ? wbuf : " style=\"max-width:100%\"";
         tag += " alt=\"[terminal image]\">";
         tag += "</a>";
 
         KittyHtmlImage entry;
-        entry.y_cell  = vrow;
-        entry.cols    = display_cols;
+        entry.y_cell  = pi.vrow;
+        entry.cols    = cols;
         entry.img_tag = std::move(tag);
         result.push_back(std::move(entry));
     }
-
-    // Sort by y_cell so caller gets them in order
-    std::sort(result.begin(), result.end(),
-        [](const KittyHtmlImage &a, const KittyHtmlImage &b){ return a.y_cell < b.y_cell; });
-
     return result;
 }
 

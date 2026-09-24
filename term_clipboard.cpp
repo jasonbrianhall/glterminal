@@ -6,15 +6,26 @@
 //   Linux/X11: a tiny detached helper process owns CLIPBOARD and serves
 //              text/html + UTF8_STRING (link with -lX11)
 // Anything else falls back to plain SDL_SetClipboardText().
+//
+// Kitty and Sixel graphics inside the selection are included as images:
+//   Linux:   embedded as data: URIs (LibreOffice embeds them on paste)
+//   Windows: written to %TEMP%\FelixTerminalClip\ and referenced by file://
+//            URL, since Word does not reliably accept data: URIs on paste
+// When the selection is ONLY an image (no text), the PNG is also offered as
+// a plain image (image/png on X11, "PNG" on Windows) for image editors.
 
 #include "term_clipboard.h"
 #include "terminal.h"
 #include "term_color.h"
 #include "gl_terminal.h"
+#include "kitty_graphics.h"
+#include "sixel_graphics.h"
 
 #include <SDL2/SDL.h>
 #include <string>
+#include <vector>
 #include <string.h>
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -29,8 +40,11 @@ extern SDL_Window *g_sdl_window;
 #  include <sys/wait.h>
 #endif
 
+// Widest an image may paste at, in CSS px (6.5in text column at 96 dpi).
+#define CLIP_IMG_MAX_W 624
+
 // ============================================================================
-// SELECTION -> TEXT / HTML
+// HELPERS
 // ============================================================================
 
 static void append_utf8(std::string &s, uint32_t cp) {
@@ -52,6 +66,23 @@ static void hex_of(char out[8], TermColor c) {
              (int)(c.r*255+.5f), (int)(c.g*255+.5f), (int)(c.b*255+.5f));
 }
 
+static std::string b64_encode(const std::vector<uint8_t> &src) {
+    static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    size_t len = src.size();
+    out.reserve(((len + 2) / 3) * 4);
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t b = (uint32_t)src[i] << 16;
+        if (i+1 < len) b |= (uint32_t)src[i+1] << 8;
+        if (i+2 < len) b |= (uint32_t)src[i+2];
+        out += T[(b >> 18) & 0x3F];
+        out += T[(b >> 12) & 0x3F];
+        out += (i+1 < len) ? T[(b >> 6) & 0x3F] : '=';
+        out += (i+2 < len) ? T[b & 0x3F] : '=';
+    }
+    return out;
+}
+
 // Normalized selection bounds; returns false if nothing is selected.
 static bool sel_bounds(Terminal *t, int &r0, int &c0, int &r1, int &c1) {
     if (!t->sel_exists && !t->sel_active) return false;
@@ -70,10 +101,12 @@ static int last_nonspace_col(Terminal *t, int r, int cs, int ce) {
     return last;
 }
 
-static std::string selection_to_text(Terminal *t) {
+// ============================================================================
+// SELECTION -> TEXT
+// ============================================================================
+
+static std::string selection_to_text(Terminal *t, int r0, int c0, int r1, int c1) {
     std::string out;
-    int r0, c0, r1, c1;
-    if (!sel_bounds(t, r0, c0, r1, c1)) return out;
     for (int r = r0; r <= r1; r++) {
         int cs = (r == r0) ? c0 : 0;
         int ce = (r == r1) ? c1 : t->cols - 1;
@@ -87,23 +120,124 @@ static std::string selection_to_text(Terminal *t) {
     return out;
 }
 
-// An HTML fragment (<pre> block) with inline styles on every run, so
-// Word/LibreOffice keep colors even if they drop the <pre> styling.
-static std::string selection_to_html_fragment(Terminal *t) {
-    std::string h;
-    int r0, c0, r1, c1;
-    if (!sel_bounds(t, r0, c0, r1, c1)) return h;
+static bool text_is_blank(const std::string &s) {
+    for (char ch : s) if (ch != ' ' && ch != '\n') return false;
+    return true;
+}
 
-    // No background and no default text color: the paste inherits the
-    // document's own colors (black on white), keeping only explicit colors.
-    h += "<pre style=\"font-family:'DejaVu Sans Mono',Consolas,'Courier New',monospace;"
-         "font-size:10pt;margin:0\">";
+// ============================================================================
+// IMAGES
+// ============================================================================
+
+struct ClipImage {
+    KittyPngImage k;
+    std::string   src;   // URL for <img src=...>
+};
+
+#ifdef _WIN32
+// Percent-encode a UTF-8 path for use in a file:/// URL.
+static std::string file_url_from_utf8(const std::string &path) {
+    std::string url = "file:///";
+    for (unsigned char ch : path) {
+        if (ch == '\\') ch = '/';
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+            (ch >= '0' && ch <= '9') || strchr("-._~/:", ch)) {
+            url += (char)ch;
+        } else {
+            char esc[4];
+            snprintf(esc, sizeof(esc), "%%%02X", ch);
+            url += esc;
+        }
+    }
+    return url;
+}
+
+// Write PNGs to %TEMP%\FelixTerminalClip\ (cleared on each copy — the
+// previous clipboard contents no longer need them) and return file URLs.
+static bool win_write_temp_pngs(std::vector<ClipImage> &imgs) {
+    wchar_t tmp[MAX_PATH];
+    DWORD n = GetTempPathW(MAX_PATH, tmp);
+    if (n == 0 || n >= MAX_PATH - 32) return false;
+    std::wstring dir = std::wstring(tmp) + L"FelixTerminalClip\\";
+    CreateDirectoryW(dir.c_str(), nullptr);
+
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"*.png").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do { DeleteFileW((dir + fd.cFileName).c_str()); } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+
+    DWORD tick = GetTickCount();
+    for (size_t i = 0; i < imgs.size(); i++) {
+        wchar_t name[64];
+        _snwprintf(name, 64, L"clip_%lu_%u.png", (unsigned long)tick, (unsigned)i + 1);
+        std::wstring wpath = dir + name;
+        FILE *f = _wfopen(wpath.c_str(), L"wb");
+        if (!f) return false;
+        size_t wr = fwrite(imgs[i].k.png.data(), 1, imgs[i].k.png.size(), f);
+        fclose(f);
+        if (wr != imgs[i].k.png.size()) return false;
+
+        int un = WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string upath(un > 0 ? un - 1 : 0, '\0');
+        if (un > 1) WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, &upath[0], un, nullptr, nullptr);
+        imgs[i].src = file_url_from_utf8(upath);
+    }
+    return true;
+}
+#endif
+
+static void assign_image_urls(std::vector<ClipImage> &imgs) {
+#ifdef _WIN32
+    if (win_write_temp_pngs(imgs)) return;
+#endif
+    for (ClipImage &ci : imgs)
+        ci.src = "data:image/png;base64," + b64_encode(ci.k.png);
+}
+
+static std::string img_tag(const ClipImage &ci) {
+    int w = ci.k.disp_w_px > 0 ? ci.k.disp_w_px : 1;
+    int h = ci.k.disp_h_px > 0 ? ci.k.disp_h_px : 1;
+    if (w > CLIP_IMG_MAX_W) { h = (int)((long long)h * CLIP_IMG_MAX_W / w); w = CLIP_IMG_MAX_W; }
+    char dims[64];
+    snprintf(dims, sizeof(dims), " width=\"%d\" height=\"%d\"", w, h);
+    return "<img src=\"" + ci.src + "\"" + dims + " alt=\"[terminal image]\">";
+}
+
+// ============================================================================
+// SELECTION -> HTML FRAGMENT
+// ============================================================================
+
+// A <pre> block with inline styles on every run, so Word/LibreOffice keep
+// colors even if they drop the <pre> styling. No background and no default
+// text color: the paste inherits the document's own colors.
+static std::string selection_to_html_fragment(Terminal *t, int r0, int c0, int r1, int c1,
+                                              const std::vector<ClipImage> &imgs) {
+    std::vector<std::string> lines;
+    size_t img_idx = 0;
+    int covered_until = -1;  // last row covered by an already-emitted image
 
     for (int r = r0; r <= r1; r++) {
+        // Images whose top edge is on this row go above the row's text
+        while (img_idx < imgs.size() && imgs[img_idx].k.vrow <= r) {
+            if (imgs[img_idx].k.vrow == r) {
+                lines.push_back(img_tag(imgs[img_idx]));
+                int end = r + imgs[img_idx].k.rows_used - 1;
+                if (end > covered_until) covered_until = end;
+            }
+            img_idx++;
+        }
+
         int cs = (r == r0) ? c0 : 0;
         int ce = (r == r1) ? c1 : t->cols - 1;
         int last = last_nonspace_col(t, r, cs, ce);
 
+        // Blank rows underneath an image are just the space it occupies on
+        // screen — the <img> already takes that room, so drop them.
+        if (r <= covered_until && last < cs) continue;
+
+        std::string h;
         std::string cur_style;
         bool open = false;
         for (int c = cs; c <= last; c++) {
@@ -152,10 +286,17 @@ static std::string selection_to_html_fragment(Terminal *t) {
             append_escaped(h, cp);
         }
         if (open) h += "</span>";
-        if (r < r1) h += '\n';
+        lines.push_back(std::move(h));
     }
-    h += "</pre>";
-    return h;
+
+    std::string out = "<pre style=\"font-family:'DejaVu Sans Mono',Consolas,'Courier New',monospace;"
+                      "font-size:10pt;margin:0\">";
+    for (size_t i = 0; i < lines.size(); i++) {
+        if (i) out += '\n';
+        out += lines[i];
+    }
+    out += "</pre>";
+    return out;
 }
 
 // ============================================================================
@@ -164,7 +305,8 @@ static std::string selection_to_html_fragment(Terminal *t) {
 
 #ifdef _WIN32
 
-static bool clipboard_set_rich(const std::string &plain, const std::string &frag) {
+static bool clipboard_set_rich(const std::string &plain, const std::string &frag,
+                               const std::vector<uint8_t> *png) {
     // CF_HTML requires a header with byte offsets into the payload.
     const std::string pre  = "<html><head><meta charset=\"utf-8\"></head><body>\r\n<!--StartFragment-->";
     const std::string post = "<!--EndFragment-->\r\n</body></html>";
@@ -192,15 +334,26 @@ static bool clipboard_set_rich(const std::string &plain, const std::string &frag
         SetClipboardData(cf_html, g);
     }
 
-    std::string crlf;
-    crlf.reserve(plain.size() + 64);
-    for (char ch : plain) { if (ch == '\n') crlf += '\r'; crlf += ch; }
-    int wn = MultiByteToWideChar(CP_UTF8, 0, crlf.c_str(), -1, nullptr, 0);
-    if (wn > 0) {
-        if (HGLOBAL w = GlobalAlloc(GMEM_MOVEABLE, wn * sizeof(wchar_t))) {
-            MultiByteToWideChar(CP_UTF8, 0, crlf.c_str(), -1, (wchar_t *)GlobalLock(w), wn);
-            GlobalUnlock(w);
-            SetClipboardData(CF_UNICODETEXT, w);
+    if (png && !png->empty()) {
+        static UINT cf_png = RegisterClipboardFormatA("PNG");
+        if (HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, png->size())) {
+            memcpy(GlobalLock(g), png->data(), png->size());
+            GlobalUnlock(g);
+            SetClipboardData(cf_png, g);
+        }
+    }
+
+    if (!plain.empty()) {
+        std::string crlf;
+        crlf.reserve(plain.size() + 64);
+        for (char ch : plain) { if (ch == '\n') crlf += '\r'; crlf += ch; }
+        int wn = MultiByteToWideChar(CP_UTF8, 0, crlf.c_str(), -1, nullptr, 0);
+        if (wn > 0) {
+            if (HGLOBAL w = GlobalAlloc(GMEM_MOVEABLE, wn * sizeof(wchar_t))) {
+                MultiByteToWideChar(CP_UTF8, 0, crlf.c_str(), -1, (wchar_t *)GlobalLock(w), wn);
+                GlobalUnlock(w);
+                SetClipboardData(CF_UNICODETEXT, w);
+            }
         }
     }
     CloseClipboard();
@@ -212,7 +365,8 @@ static bool clipboard_set_rich(const std::string &plain, const std::string &frag
 // Runs in a detached helper process: owns CLIPBOARD until another app
 // (or our own SDL_SetClipboardText) takes it, then exits. Also means the
 // copied text survives the terminal being closed.
-static void x11_clip_serve(const std::string &plain, const std::string &html) {
+static void x11_clip_serve(const std::string &plain, const std::string &html,
+                           const std::vector<uint8_t> &png) {
     Display *d = XOpenDisplay(nullptr);
     if (!d) return;
     Window w = XCreateSimpleWindow(d, DefaultRootWindow(d), 0, 0, 1, 1, 0, 0, 0);
@@ -222,6 +376,7 @@ static void x11_clip_serve(const std::string &plain, const std::string &html) {
     Atom TEXT      = XInternAtom(d, "TEXT", False);
     Atom PLAIN     = XInternAtom(d, "text/plain;charset=utf-8", False);
     Atom HTML      = XInternAtom(d, "text/html", False);
+    Atom PNG       = XInternAtom(d, "image/png", False);
 
     XSetSelectionOwner(d, CLIPBOARD, w, CurrentTime);
     if (XGetSelectionOwner(d, CLIPBOARD) != w) { XCloseDisplay(d); return; }
@@ -247,18 +402,29 @@ static void x11_clip_serve(const std::string &plain, const std::string &html) {
         se.property  = rq->property != None ? rq->property : rq->target;
 
         if (rq->target == TARGETS) {
-            Atom list[] = { TARGETS, HTML, UTF8, PLAIN, XA_STRING, TEXT };
+            Atom list[8]; int n = 0;
+            list[n++] = TARGETS;
+            list[n++] = HTML;
+            if (!png.empty())   list[n++] = PNG;
+            if (!plain.empty()) { list[n++] = UTF8; list[n++] = PLAIN; list[n++] = XA_STRING; list[n++] = TEXT; }
             XChangeProperty(d, rq->requestor, se.property, XA_ATOM, 32, PropModeReplace,
-                            (unsigned char *)list, (int)(sizeof(list) / sizeof(list[0])));
+                            (unsigned char *)list, n);
         } else {
-            const std::string *src = nullptr;
-            if (rq->target == HTML) src = &html;
-            else if (rq->target == UTF8 || rq->target == PLAIN ||
-                     rq->target == XA_STRING || rq->target == TEXT) src = &plain;
-            if (src && (long)src->size() <= max_bytes) {
+            const unsigned char *data = nullptr;
+            long size = 0;
+            if (rq->target == HTML) {
+                data = (const unsigned char *)html.data(); size = (long)html.size();
+            } else if (rq->target == PNG && !png.empty()) {
+                data = png.data(); size = (long)png.size();
+            } else if (!plain.empty() &&
+                       (rq->target == UTF8 || rq->target == PLAIN ||
+                        rq->target == XA_STRING || rq->target == TEXT)) {
+                data = (const unsigned char *)plain.data(); size = (long)plain.size();
+            }
+            if (data && size <= max_bytes) {
                 Atom type = (rq->target == TEXT) ? UTF8 : rq->target;
                 XChangeProperty(d, rq->requestor, se.property, type, 8, PropModeReplace,
-                                (const unsigned char *)src->data(), (int)src->size());
+                                data, (int)size);
             } else {
                 se.property = None;
             }
@@ -269,9 +435,11 @@ static void x11_clip_serve(const std::string &plain, const std::string &html) {
     XCloseDisplay(d);
 }
 
-static bool clipboard_set_rich(const std::string &plain, const std::string &frag) {
+static bool clipboard_set_rich(const std::string &plain, const std::string &frag,
+                               const std::vector<uint8_t> *png) {
     if (!getenv("DISPLAY")) return false;  // pure Wayland without XWayland
     std::string html = "<html><head><meta charset=\"utf-8\"></head><body>" + frag + "</body></html>";
+    static const std::vector<uint8_t> no_png;
 
     pid_t pid = fork();
     if (pid < 0) return false;
@@ -284,7 +452,7 @@ static bool clipboard_set_rich(const std::string &plain, const std::string &frag
         long maxfd = sysconf(_SC_OPEN_MAX);
         if (maxfd < 0 || maxfd > 65536) maxfd = 65536;
         for (int fd = 3; fd < maxfd; fd++) close(fd);
-        x11_clip_serve(plain, html);
+        x11_clip_serve(plain, html, png ? *png : no_png);
         _exit(0);
     }
     waitpid(pid, nullptr, 0);
@@ -293,7 +461,8 @@ static bool clipboard_set_rich(const std::string &plain, const std::string &frag
 
 #else
 
-static bool clipboard_set_rich(const std::string &, const std::string &) { return false; }
+static bool clipboard_set_rich(const std::string &, const std::string &,
+                               const std::vector<uint8_t> *) { return false; }
 
 #endif
 
@@ -302,9 +471,35 @@ static bool clipboard_set_rich(const std::string &, const std::string &) { retur
 // ============================================================================
 
 void term_copy_selection_rich(Terminal *t) {
-    std::string plain = selection_to_text(t);
-    if (plain.empty()) return;
-    std::string frag = selection_to_html_fragment(t);
-    if (!clipboard_set_rich(plain, frag))
+    int r0, c0, r1, c1;
+    if (!sel_bounds(t, r0, c0, r1, c1)) return;
+
+    std::string plain = selection_to_text(t, r0, c0, r1, c1);
+
+    std::vector<ClipImage> imgs;
+    for (KittyPngImage &k : kitty_get_png_images(t, r0, r1)) {
+        ClipImage ci;
+        ci.k = std::move(k);
+        imgs.push_back(std::move(ci));
+    }
+    for (KittyPngImage &k : sixel_get_png_images(t, r0, r1)) {
+        ClipImage ci;
+        ci.k = std::move(k);
+        imgs.push_back(std::move(ci));
+    }
+    std::stable_sort(imgs.begin(), imgs.end(),
+        [](const ClipImage &a, const ClipImage &b){ return a.k.vrow < b.k.vrow; });
+
+    bool blank = text_is_blank(plain);
+    if (blank && imgs.empty()) return;
+    if (blank) plain.clear();
+
+    assign_image_urls(imgs);
+    std::string frag = selection_to_html_fragment(t, r0, c0, r1, c1, imgs);
+
+    // Image-only selection of a single image: also offer it as a bare PNG.
+    const std::vector<uint8_t> *png = (blank && imgs.size() == 1) ? &imgs[0].k.png : nullptr;
+
+    if (!clipboard_set_rich(plain, frag, png) && !plain.empty())
         SDL_SetClipboardText(plain.c_str());
 }
