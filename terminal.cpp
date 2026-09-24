@@ -393,7 +393,7 @@ static void dispatch_csi(Terminal *t) {
         if (p[0] == '>')
             len = snprintf(resp, sizeof(resp), "\x1b[>1;100;0c");
         else
-            len = snprintf(resp, sizeof(resp), "\x1b[?1;2c");
+            len = snprintf(resp, sizeof(resp), "\x1b[?1;2;4c");  // 4 = sixel graphics
         term_write(t, resp, len);
         break;
     }
@@ -702,6 +702,25 @@ void term_feed(Terminal *t, const char *data, int size) {
                     //SDL_Log("[OSC] ps=%d payload='%s'\n", ps, semi + 1);
                     if ((ps == 0 || ps == 2) && g_sdl_window)
                         SDL_SetWindowTitle(g_sdl_window, semi + 1);
+                    else if ((ps == 10 || ps == 11) && strcmp(semi + 1, "?") == 0) {
+                        // OSC 10/11 query: report default foreground/background
+                        // color. timg and others use this to blend transparent
+                        // images onto the real background (sixel has no alpha).
+                        float r, g, b;
+                        if (ps == 11) {
+                            const Theme &th = THEMES[g_theme_idx];
+                            r = th.bg_r; g = th.bg_g; b = th.bg_b;
+                        } else {
+                            TermColor fg = tcolor_resolve(TCOLOR_PALETTE(7));
+                            r = fg.r; g = fg.g; b = fg.b;
+                        }
+                        auto c16 = [](float v) { return (int)(SDL_clamp(v, 0.f, 1.f) * 65535.f + .5f); };
+                        char resp[64];
+                        int n = snprintf(resp, sizeof(resp), "\x1b]%d;rgb:%04x/%04x/%04x%s",
+                                         ps, c16(r), c16(g), c16(b),
+                                         ch == 0x07 ? "\x07" : "\x1b\\");
+                        term_write(t, resp, n);
+                    }
                     else if (ps == 666)
                         basic_handle_osc(t, semi + 1, (int)(t->osc + t->osc_len - (semi + 1)),
                                          g_basic_win_w, g_basic_win_h);

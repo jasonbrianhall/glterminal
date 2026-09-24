@@ -327,8 +327,14 @@ void sixel_handle_dcs(Terminal *t, const char *params, int params_len,
 
     // Cursor moves below the image and back to column 0 — matches common
     // xterm/mlterm behavior for the default (non-DECSDM) cursor mode.
-    t->cur_row = std::min(t->rows - 1, pl.y_cell + pl.rows);
+    // Advance with term_newline() (same as kitty_graphics) rather than
+    // clamping cur_row: when the image runs past the bottom of the screen,
+    // the screen must scroll up (sixel_scroll() moves the placement with it)
+    // so the next prompt lands BELOW the image instead of on top of it.
+    for (int r = 0; r < pl.rows; r++)
+        term_newline(t);
     t->cur_col = 0;
+    term_dirty_all(t);
 }
 
 void sixel_render(Terminal *t, int ox, int oy) {
