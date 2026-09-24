@@ -198,6 +198,7 @@ static void term_put_char(Terminal *t, uint32_t cp) {
         break_wide_pair(t, row, col);
         uint8_t ul = (t->cur_attrs & ATTR_UNDERLINE)
                    ? (uint8_t)((t->cur_ul_style << CELL_UL_SHIFT) & CELL_UL_MASK) : 0;
+        if (t->cur_hidden) ul |= CELL_F_HIDDEN;
         uint32_t ulc = (t->cur_attrs & ATTR_UNDERLINE) ? t->cur_ul_color : 0;
         if (w == 2) {
             break_wide_pair(t, row, col + 1);
@@ -208,10 +209,17 @@ static void term_put_char(Terminal *t, uint32_t cp) {
         }
         term_dirty_row(t, row);
     }
+    t->last_cp = cp;
     t->cur_col += w;
-    if (t->autowrap && t->cur_col >= t->cols) {
-        t->cur_col = 0;
-        newline(t);
+    if (t->cur_col >= t->cols) {
+        if (t->autowrap) {
+            t->cur_col = 0;
+            newline(t);
+        } else {
+            // ?7l: no wrap — stay on the last column; the next character
+            // overwrites it (xterm/VT100 behaviour)
+            t->cur_col = t->cols - 1;
+        }
     }
 }
 
@@ -287,6 +295,7 @@ static void sgr(Terminal *t, const char *p) {
         if (v == 0) {
             t->cur_fg = TCOLOR_PALETTE(7); t->cur_bg = TCOLOR_PALETTE(0); t->cur_attrs = 0;
             t->cur_ul_style = UL_SINGLE; t->cur_ul_color = 0;
+            t->cur_hidden = false;
         }
         else if (v == 1)  t->cur_attrs |= ATTR_BOLD;
         else if (v == 2)  t->cur_attrs |= ATTR_DIM;
@@ -303,6 +312,7 @@ static void sgr(Terminal *t, const char *p) {
         }
         else if (v == 5)  t->cur_attrs |= ATTR_BLINK;
         else if (v == 7)  t->cur_attrs |= ATTR_REVERSE;
+        else if (v == 8)  t->cur_hidden = true;
         else if (v == 9)  t->cur_attrs |= ATTR_STRIKE;
         else if (v == 21) { t->cur_attrs |= ATTR_UNDERLINE; t->cur_ul_style = UL_DOUBLE; }
         else if (v == 22) t->cur_attrs &= ~(ATTR_BOLD | ATTR_DIM);
@@ -310,6 +320,7 @@ static void sgr(Terminal *t, const char *p) {
         else if (v == 24) { t->cur_attrs &= ~ATTR_UNDERLINE; t->cur_ul_style = UL_SINGLE; }
         else if (v == 25) t->cur_attrs &= ~ATTR_BLINK;
         else if (v == 27) t->cur_attrs &= ~ATTR_REVERSE;
+        else if (v == 28) t->cur_hidden = false;
         else if (v == 29) t->cur_attrs &= ~ATTR_STRIKE;
         else if (v == 53) t->cur_attrs |= ATTR_OVERLINE;
         else if (v == 55) t->cur_attrs &= ~ATTR_OVERLINE;
@@ -366,6 +377,27 @@ static void dispatch_csi(Terminal *t) {
             t->cursor_blink       = 0;
             term_dirty_row(t, t->cur_row);
         }
+        else if (inter == '$' && final == 'p' && p[0] == '?') {
+            // DECRQM — "is private mode N set?" Apps use it to detect
+            // features (notably ?2026 synchronized output) before using them.
+            // Reply: CSI ? N ; S $ y  with S = 1 set, 2 reset, 0 unknown.
+            int mode = atoi(p + 1), st = 0;
+            switch (mode) {
+            case 1:    st = t->app_cursor_keys ? 1 : 2; break;
+            case 7:    st = t->autowrap        ? 1 : 2; break;
+            case 25:   st = t->cursor_on       ? 1 : 2; break;
+            case 1000: case 1002: case 1003:
+                       st = t->mouse_report    ? 1 : 2; break;
+            case 1006: st = t->mouse_sgr       ? 1 : 2; break;
+            case 47: case 1047: case 1049:
+                       st = t->in_alt_screen   ? 1 : 2; break;
+            case 2004: st = t->bracketed_paste ? 1 : 2; break;
+            case 2026: st = t->sync_output     ? 1 : 2; break;
+            }
+            char resp[32];
+            int len = snprintf(resp, sizeof(resp), "\x1b[?%d;%d$y", mode, st);
+            term_write(t, resp, len);
+        }
         // Other intermediate sequences (CSI SP @ scroll-left, CSI ! p soft
         // reset, CSI $ ...) share final bytes with commands below — ignore
         // them rather than misreading them.
@@ -393,14 +425,85 @@ static void dispatch_csi(Terminal *t) {
     case 'G': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_clamp(n-1,0,t->cols-1); break; }
     case 'd': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_clamp(n-1,0,t->rows-1); break; }
     case 'e': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_min(t->rows-1,t->cur_row+n); break; }
+    // CNL / CPL — cursor next/previous line, to column 1
+    case 'E': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_min(t->rows-1,t->cur_row+n); t->cur_col=0; break; }
+    case 'F': { int n=atoi(p); if(n<1)n=1; t->cur_row=SDL_max(0,t->cur_row-n);         t->cur_col=0; break; }
+    // HPA / HPR — absolute / relative column
+    case '`': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_clamp(n-1,0,t->cols-1); break; }
+    case 'a': { int n=atoi(p); if(n<1)n=1; t->cur_col=SDL_min(t->cols-1,t->cur_col+n); break; }
+    // SU / SD — scroll the region up / down n lines, cursor stays put
+    case 'S': {
+        if (p[0] == '?') {
+            // XTSMGRAPHICS query (CSI ? Pi ; Pa ; Pv S) — sixel tools ask for
+            // color registers (Pi=1) and max geometry (Pi=2). Pa=1 = read.
+            // Reply CSI ? Pi ; Ps ; Pv S (Ps 0 = ok, 1 = unknown item).
+            int pi = 0, pa = 0;
+            sscanf(p + 1, "%d;%d", &pi, &pa);
+            char resp[48]; int len = 0;
+            if      (pi == 1 && (pa == 1 || pa == 4)) len = snprintf(resp, sizeof(resp), "\x1b[?1;0;256S");
+            else if (pi == 2 && (pa == 1 || pa == 4)) len = snprintf(resp, sizeof(resp), "\x1b[?2;0;4096;4096S");
+            else                                      len = snprintf(resp, sizeof(resp), "\x1b[?%d;1;0S", pi);
+            term_write(t, resp, len);
+            break;
+        }
+        int n=atoi(p); if(n<1)n=1;
+        n = SDL_min(n, t->rows);
+        for (int i = 0; i < n; i++) scroll_up(t);
+        break;
+    }
+    case 'T': {
+        // CSI Ps;Ps;Ps;Ps;Ps T = mouse highlight tracking and CSI > Ps T =
+        // title-mode reset — neither is SD
+        if (strchr(p, ';') || (p[0] && (p[0] < '0' || p[0] > '9'))) break;
+        int n=atoi(p); if(n<1)n=1;
+        n = SDL_min(n, t->rows);
+        for (int i = 0; i < n; i++) scroll_down(t);
+        break;
+    }
+    // SCOSC / SCORC — save / restore cursor (same slot as ESC 7 / ESC 8)
+    case 's':
+        if (p[0] == '?') break;       // CSI ? Pm s = XTSAVE (save DEC modes), not supported
+        t->saved7_row = t->cur_row;   t->saved7_col = t->cur_col;
+        t->saved7_fg  = t->cur_fg;    t->saved7_bg  = t->cur_bg;
+        t->saved7_attrs = t->cur_attrs;
+        break;
+    case 'u':
+        if (p[0]) break;              // CSI > u / CSI = u ... are kitty keyboard protocol
+        t->cur_row = SDL_clamp(t->saved7_row, 0, t->rows - 1);
+        t->cur_col = SDL_clamp(t->saved7_col, 0, t->cols - 1);
+        t->cur_fg  = t->saved7_fg;    t->cur_bg  = t->saved7_bg;
+        t->cur_attrs = t->saved7_attrs;
+        break;
+    // REP — repeat the last printed character n times (ncurses uses it
+    // for long runs of the same character)
+    case 'b': {
+        int n=atoi(p); if(n<1)n=1;
+        if (!t->last_cp) break;
+        n = SDL_min(n, t->cols * t->rows);
+        uint32_t cp = t->last_cp;
+        for (int i = 0; i < n; i++) term_put_char(t, cp);
+        break;
+    }
     case 'J': {
         int n=atoi(p);
-        if (n==2||n==3) {
+        if (n==3) {
+            // ED 3 — erase the scrollback only (xterm). `clear` sends this
+            // after ED 2 so old output can't be scrolled back to.
+            t->sb_count  = 0;
+            t->sb_head   = 0;
+            t->sb_offset = 0;
+            t->sel_exists = t->sel_active = false;
+            kitty_scroll(t, 0);   // lines=0: just drops images that were
+            sixel_scroll(t, 0);   // only reachable in the scrollback
+            term_dirty_all(t);
+        } else if (n==2) {
             for(int r=0;r<t->rows;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
             t->cur_row=t->cur_col=0;
             term_dirty_all(t);
         } else if(n==1) {
+            // Start of screen through the cursor, inclusive
             for(int r=0;r<t->cur_row;r++) for(int c=0;c<t->cols;c++) CELL(t,r,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
+            for(int c=0;c<=t->cur_col && c<t->cols;c++) CELL(t,t->cur_row,c)={' ',t->cur_fg,t->cur_bg,0,{0,0,0}};
             term_dirty_rows(t, 0, t->cur_row);
         } else {
             for(int r=t->cur_row;r<t->rows;r++)
@@ -430,6 +533,11 @@ static void dispatch_csi(Terminal *t) {
             case 1000: case 1002: case 1003: t->mouse_report = set; break;
             case 1006: t->mouse_sgr = set; break;
             case 2004: t->bracketed_paste = set; break;
+            case 7:    t->autowrap = set; break;
+            case 2026:
+                t->sync_output = set;
+                if (set) t->sync_start_ms = SDL_GetTicks();
+                break;
             case 47: case 1047: case 1049: {
                 // Alternate screen buffer (smcup/rmcup) — used by ncurses
                 // apps like top/sl/vim/less. Without this their full-screen
@@ -922,6 +1030,12 @@ void term_feed(Terminal *t, const char *data, int size) {
     }
 }
 
+bool term_sync_active(Terminal *t) {
+    if (!t->sync_output) return false;
+    if (SDL_GetTicks() - t->sync_start_ms > 200) return false;  // app forgot ?2026l
+    return true;
+}
+
 // ============================================================================
 // LIFECYCLE
 // ============================================================================
@@ -1003,6 +1117,9 @@ void term_soft_reset(Terminal *t) {
     t->cur_attrs = 0;
     t->cur_ul_style = UL_SINGLE;
     t->cur_ul_color = 0;
+    t->cur_hidden   = false;
+    t->last_cp      = 0;
+    t->sync_output  = false;
     if (t->cursor_default_saved) {
         t->cursor_shape = t->cursor_default_shape;
     }

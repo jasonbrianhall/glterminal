@@ -858,7 +858,7 @@ void term_render(Terminal *t, int ox, int oy) {
             }
 
             uint32_t cp = c->cp;
-            bool blink_hidden = (c->attrs & ATTR_BLINK) && !g_blink_text_on;
+            bool blink_hidden = ((c->attrs & ATTR_BLINK) && !g_blink_text_on) || cell_is_hidden(c);
             if (cp && cp != ' ' && !blink_hidden) {
                 // Block Elements (U+2580-259F): draw as exact procedural
                 // rectangles instead of going through the font atlas. Font

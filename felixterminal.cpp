@@ -2277,6 +2277,9 @@ int main(int argc, char **argv) {
         // The extra needs_render when s_basic_has_content is true ensures SDL's double
         // buffer always gets the composited frame presented on both back and front buffers.
         if (s_dl_dirty || s_basic_has_content) needs_render = true;
+        // Synchronized output: keep polling while it's held so the frame
+        // appears as soon as the app releases it (or the 200 ms timeout hits).
+        if (term.sync_output) needs_render = true;
 
         if (needs_render) {
             // Re-render the terminal FBO if rows are dirty, BASIC has commands,
@@ -2288,6 +2291,10 @@ int main(int argc, char **argv) {
                 for (int r = 0; r < term.rows && !any_dirty; r++)
                     any_dirty = term.dirty_rows[r] != 0;
             }
+            // App is mid-frame (?2026h): keep showing the previous frame; the
+            // dirty rows stay dirty and get drawn once the frame is complete.
+            if (any_dirty && !s_basic_has_content && term_sync_active(&term))
+                any_dirty = false;
 
             if (any_dirty) {
                 float bg_r = THEMES[g_theme_idx].bg_r;

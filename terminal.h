@@ -43,9 +43,11 @@ static inline bool cell_is_wide_tail(const Cell *c) { return (c->_pad[0] & CELL_
 #define UL_CURLY   2
 #define UL_DOTTED  3
 #define UL_DASHED  4
+#define CELL_F_HIDDEN  0x20   // SGR 8 (conceal): cell keeps its text but draws blank
 #define CELL_UL_SHIFT  2
 #define CELL_UL_MASK   (0x7 << CELL_UL_SHIFT)
 static inline int cell_ul_style(const Cell *c) { return (c->_pad[0] & CELL_UL_MASK) >> CELL_UL_SHIFT; }
+static inline bool cell_is_hidden(const Cell *c) { return (c->_pad[0] & CELL_F_HIDDEN) != 0; }
 
 // ============================================================================
 // TERMINAL
@@ -61,6 +63,8 @@ struct Terminal {
     uint8_t       cur_attrs;
     uint8_t       cur_ul_style;   // UL_* for newly written cells
     uint32_t      cur_ul_color;   // 0 or CELL_UL_COLOR_SET | TermColorVal
+    bool          cur_hidden;     // SGR 8 conceal active
+    uint32_t      last_cp;        // last printed character, for REP (CSI b)
     ParseState    state;
     char          charset_slot;   // which Gn ('(' ')' '*' '+') a PS_CHARSET byte designates
     bool          g0_line_drawing; // true if G0 currently designated as DEC special graphics
@@ -108,6 +112,10 @@ struct Terminal {
     bool          bracketed_paste;
     bool          app_cursor_keys;
     bool          mouse_sgr;
+    // Synchronized output (?2026): while set, the app is mid-frame and the
+    // screen shouldn't be redrawn. term_sync_active() adds a safety timeout.
+    bool          sync_output;
+    uint32_t      sync_start_ms;
     // ESC 7/8 saved cursor
     int           saved7_row, saved7_col;
     TermColorVal  saved7_fg, saved7_bg;
@@ -185,6 +193,11 @@ void term_free(Terminal *t);
 // ============================================================================
 
 void term_feed(Terminal *t, const char *buf, int len);
+
+// True while an app holds synchronized output (?2026h) — skip redrawing the
+// terminal so a half-drawn frame is never shown. Gives up after 200 ms in
+// case the app never sends ?2026l.
+bool term_sync_active(Terminal *t);
 
 // Kitty graphics protocol — disable for SSH sessions to prevent APC crashes.
 extern bool g_kitty_enabled;

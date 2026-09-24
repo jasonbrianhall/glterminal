@@ -103,7 +103,7 @@ void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
             if (c->attrs & ATTR_DIM) { fc.r *= 0.5f; fc.g *= 0.5f; fc.b *= 0.5f; }
             
             uint32_t cp = c->cp;
-            bool blink_hidden = (c->attrs & ATTR_BLINK) && !g_blink_text_on;
+            bool blink_hidden = ((c->attrs & ATTR_BLINK) && !g_blink_text_on) || cell_is_hidden(c);
             if (cp && cp != ' ' && !blink_hidden) {
                 char tmp[5] = {};
                 cp_to_utf8(cp, tmp);
@@ -152,7 +152,7 @@ void sticky_prompt_render_split(Terminal *t, int ox, int oy) {
         if (c->attrs & ATTR_DIM) { fc.r *= 0.5f; fc.g *= 0.5f; fc.b *= 0.5f; }
         
         uint32_t cp = c->cp;
-        bool blink_hidden = (c->attrs & ATTR_BLINK) && !g_blink_text_on;
+        bool blink_hidden = ((c->attrs & ATTR_BLINK) && !g_blink_text_on) || cell_is_hidden(c);
         if (cp && cp != ' ' && !blink_hidden) {
             char tmp[5] = {};
             cp_to_utf8(cp, tmp);
