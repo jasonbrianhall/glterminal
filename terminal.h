@@ -14,10 +14,21 @@
 struct Cell {
     uint32_t     cp;
     TermColorVal fg, bg;
-    uint8_t      attrs, _pad[3];
+    uint8_t      attrs, _pad[3];   // _pad[0] = CELL_F_* flags (see below)
 };
 
 #define CELL(t,r,c) ((t)->cells[(r)*(t)->cols+(c)])
+
+// Double-width characters (CJK, emoji) occupy two cells: the left one holds
+// the codepoint and CELL_F_WIDE; the right one has cp == 0 and
+// CELL_F_WIDE_TAIL, and is skipped when drawing glyphs or copying text.
+// Flags live in _pad[0] so every existing {cp, fg, bg, attrs, {0,0,0}}
+// initializer keeps compiling and means "no flags".
+#define CELL_F_WIDE       0x01
+#define CELL_F_WIDE_TAIL  0x02
+
+static inline bool cell_is_wide(const Cell *c)      { return (c->_pad[0] & CELL_F_WIDE) != 0; }
+static inline bool cell_is_wide_tail(const Cell *c) { return (c->_pad[0] & CELL_F_WIDE_TAIL) != 0; }
 
 // ============================================================================
 // TERMINAL

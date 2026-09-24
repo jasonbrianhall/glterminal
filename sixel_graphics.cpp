@@ -337,6 +337,26 @@ void sixel_handle_dcs(Terminal *t, const char *params, int params_len,
     term_dirty_all(t);
 }
 
+// Clip a quad [dy, dy+dh) to [top, bottom), adjusting texture v-range to
+// match. Returns false if nothing is left. Images kept in the scrollback can
+// be partly above the viewport when scrolled back, so this matters now.
+static bool clip_vertical(float &dy, float &dh, float &v0, float &v1,
+                          float top, float bottom) {
+    if (dh <= 0) return false;
+    if (dy < top) {
+        float frac = (top - dy) / dh;
+        v0 += frac * (v1 - v0);
+        dh -= top - dy;
+        dy = top;
+    }
+    if (dy + dh > bottom) {
+        float frac = (dy + dh - bottom) / dh;
+        v1 -= frac * (v1 - v0);
+        dh = bottom - dy;
+    }
+    return dh > 0 && v1 > v0;
+}
+
 void sixel_render(Terminal *t, int ox, int oy) {
     auto tit = s_terms.find(t);
     if (tit == s_terms.end() || tit->second.placements.empty()) return;
@@ -356,13 +376,14 @@ void sixel_render(Terminal *t, int ox, int oy) {
             if (!pl.img.sdl_tex) continue;
             float vis_row = (float)(pl.y_cell + t->sb_offset);
             if (vis_row + pl.rows <= 0 || vis_row >= (float)t->rows) continue;
-            SDL_FRect dst = {
-                ox + pl.x_cell * cw,
-                oy + vis_row * ch,
-                pl.cols * cw,
-                pl.rows * ch
-            };
-            SDL_RenderCopyF(g_sdl_renderer, pl.img.sdl_tex, nullptr, &dst);
+            float dy = oy + vis_row * ch, dh = pl.rows * ch;
+            float v0 = 0.f, v1 = 1.f;
+            if (!clip_vertical(dy, dh, v0, v1, (float)oy, oy + t->rows * ch)) continue;
+            SDL_Rect src = { 0, (int)(v0 * pl.img.ph), pl.img.pw,
+                             (int)((v1 - v0) * pl.img.ph) };
+            if (src.h <= 0) continue;
+            SDL_FRect dst = { ox + pl.x_cell * cw, dy, pl.cols * cw, dh };
+            SDL_RenderCopyF(g_sdl_renderer, pl.img.sdl_tex, &src, &dst);
         }
         return;
     }
@@ -386,14 +407,16 @@ void sixel_render(Terminal *t, int ox, int oy) {
         float dy = oy + vis_row * ch;
         float dw = pl.cols * cw;
         float dh = pl.rows * ch;
+        float v0 = 0.f, v1 = 1.f;
+        if (!clip_vertical(dy, dh, v0, v1, (float)oy, oy + t->rows * ch)) continue;
 
         float verts[24] = {
-            dx,      dy,      0.f, 0.f,
-            dx + dw, dy,      1.f, 0.f,
-            dx + dw, dy + dh, 1.f, 1.f,
-            dx,      dy,      0.f, 0.f,
-            dx + dw, dy + dh, 1.f, 1.f,
-            dx,      dy + dh, 0.f, 1.f,
+            dx,      dy,      0.f, v0,
+            dx + dw, dy,      1.f, v0,
+            dx + dw, dy + dh, 1.f, v1,
+            dx,      dy,      0.f, v0,
+            dx + dw, dy + dh, 1.f, v1,
+            dx,      dy + dh, 0.f, v1,
         };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
         glBindTexture(GL_TEXTURE_2D, pl.img.tex);
@@ -419,8 +442,14 @@ void sixel_scroll(Terminal *t, int lines) {
     if (it == s_terms.end()) return;
     auto &pv = it->second.placements;
     for (auto &pl : pv) pl.y_cell -= lines;
-    pv.erase(std::remove_if(pv.begin(), pv.end(), [](SixelPlacement &pl) {
-        if (pl.y_cell + pl.rows <= 0) { free_sixel_image(pl.img); return true; }
+    // Keep images while they're still reachable in the scrollback (y_cell is
+    // negative once above the live screen); free them only when they fall off
+    // the top of the scrollback buffer. The alternate screen has no
+    // scrollback, so there they go as soon as they leave the screen.
+    // (Called after sb_push(), so sb_count already includes the new line.)
+    int limit = t->in_alt_screen ? 0 : -t->sb_count;
+    pv.erase(std::remove_if(pv.begin(), pv.end(), [limit](SixelPlacement &pl) {
+        if (pl.y_cell + pl.rows <= limit) { free_sixel_image(pl.img); return true; }
         return false;
     }), pv.end());
 }

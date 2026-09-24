@@ -5,6 +5,7 @@
 #include "kitty_graphics.h"
 #include "sixel_graphics.h"
 #include "basic_graphics.h"
+#include "term_width.h"
 
 #include <SDL2/SDL.h>
 #include <stdio.h>
@@ -127,15 +128,84 @@ static void newline(Terminal *t) {
 // Public wrapper used by kitty_graphics to advance the cursor with proper scrolling
 void term_newline(Terminal *t) { newline(t); }
 
+// If (row, col) is one half of a double-width character, blank the OTHER
+// half so overwriting it never leaves an orphaned half-glyph behind.
+static void break_wide_pair(Terminal *t, int row, int col) {
+    if (col < 0 || col >= t->cols) return;
+    Cell &c = CELL(t, row, col);
+    if (cell_is_wide_tail(&c) && col > 0) {
+        Cell &h = CELL(t, row, col - 1);
+        h.cp = ' '; h._pad[0] = 0;
+    }
+    if (cell_is_wide(&c) && col + 1 < t->cols) {
+        Cell &tl = CELL(t, row, col + 1);
+        tl.cp = ' '; tl._pad[0] = 0;
+    }
+}
+
 // Places one decoded codepoint at the cursor and advances it, handling
 // autowrap. Shared by the ASCII path and the UTF-8 decode path below so
 // both go through identical cell-write/advance/wrap behavior.
+//
+// Width-aware: combining marks (width 0) merge into the previous cell,
+// wide characters (width 2) take two cells and wrap early if only one
+// column is left.
 static void term_put_char(Terminal *t, uint32_t cp) {
-    if (t->cur_col < t->cols) {
-        CELL(t, t->cur_row, t->cur_col) = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
-        term_dirty_row(t, t->cur_row);
+    int w = term_char_width(cp);
+
+    if (w == 0) {
+        // Zero-width (combining accent, ZWJ, variation selector...): never
+        // advances. If it composes with the previous character (e + U+0301
+        // -> é), store the precomposed form; otherwise drop it — a cell holds
+        // a single codepoint.
+        int row = t->cur_row, col = t->cur_col - 1;
+        if (col < 0) {
+            // Previous character autowrapped: it's at the end of the line above
+            if (row == 0) return;
+            row--; col = t->cols - 1;
+        }
+        if (col >= t->cols) col = t->cols - 1;
+        Cell *prev = &CELL(t, row, col);
+        if (cell_is_wide_tail(prev) && col > 0) prev = &CELL(t, row, col - 1);
+        uint32_t composed = term_compose(prev->cp, cp);
+        if (composed) {
+            prev->cp = composed;
+            term_dirty_row(t, row);
+        }
+        return;
     }
-    t->cur_col++;
+
+    if (w == 2) {
+        if (t->cols < 2) w = 1;
+        else if (t->cur_col >= t->cols - 1) {
+            // Only one column left: pad it and wrap first, like xterm/VTE
+            if (t->autowrap) {
+                if (t->cur_col < t->cols) {
+                    break_wide_pair(t, t->cur_row, t->cur_col);
+                    CELL(t, t->cur_row, t->cur_col) = {' ', t->cur_fg, t->cur_bg, t->cur_attrs, {0,0,0}};
+                    term_dirty_row(t, t->cur_row);
+                }
+                t->cur_col = 0;
+                newline(t);
+            } else {
+                t->cur_col = t->cols - 2;   // no wrap: overwrite the last two cells
+            }
+        }
+    }
+
+    if (t->cur_col < t->cols) {
+        int row = t->cur_row, col = t->cur_col;
+        break_wide_pair(t, row, col);
+        if (w == 2) {
+            break_wide_pair(t, row, col + 1);
+            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {CELL_F_WIDE, 0, 0}};
+            CELL(t, row, col + 1) = {0,  t->cur_fg, t->cur_bg, t->cur_attrs, {CELL_F_WIDE_TAIL, 0, 0}};
+        } else {
+            CELL(t, row, col)     = {cp, t->cur_fg, t->cur_bg, t->cur_attrs, {0, 0, 0}};
+        }
+        term_dirty_row(t, row);
+    }
+    t->cur_col += w;
     if (t->autowrap && t->cur_col >= t->cols) {
         t->cur_col = 0;
         newline(t);

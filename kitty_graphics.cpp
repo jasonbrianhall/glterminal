@@ -1266,11 +1266,24 @@ void kitty_scroll(Terminal *t, int lines) {
     if (it == s_terms.end()) return;
     auto &pv = it->second.placements;
     for (auto &pl : pv) pl.y_cell -= lines;
-    // Remove placements that have fully scrolled off the top
+
+    // Keep placements while any part of them is still reachable in the
+    // scrollback, so scrolling back (Shift+PgUp / wheel) shows the image
+    // alongside its text. y_cell goes negative once the image is above the
+    // live screen; a placement is gone only when its bottom edge has fallen
+    // off the top of the scrollback buffer too. The alternate screen has no
+    // scrollback, so there it's dropped as soon as it leaves the screen.
+    // (Called after sb_push(), so sb_count already includes the new line.)
+    int limit = t->in_alt_screen ? 0 : -t->sb_count;
     pv.erase(std::remove_if(pv.begin(), pv.end(),
         [&](const KittyPlacement &pl) {
-            int h = pl.rows ? pl.rows : 1;
-            return (pl.y_cell + h) <= 0;
+            int h = pl.rows;
+            if (!h) {
+                auto iit = s_images.find(pl.image_id);
+                int ph = (iit != s_images.end()) ? iit->second.ph : 0;
+                h = (ph > 0 && t->cell_h > 0) ? (int)((ph + (int)t->cell_h - 1) / (int)t->cell_h) : 1;
+            }
+            return (pl.y_cell + h) <= limit;
         }), pv.end());
 }
 

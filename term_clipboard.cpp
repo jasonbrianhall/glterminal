@@ -112,6 +112,7 @@ static std::string selection_to_text(Terminal *t, int r0, int c0, int r1, int c1
         int ce = (r == r1) ? c1 : t->cols - 1;
         int last = last_nonspace_col(t, r, cs, ce);
         for (int c = cs; c <= last; c++) {
+            if (cell_is_wide_tail(vcell(t, r, c))) continue;  // 2nd half of a wide char
             uint32_t cp = vcell(t, r, c)->cp;
             append_utf8(out, cp ? cp : ' ');
         }
@@ -242,6 +243,7 @@ static std::string selection_to_html_fragment(Terminal *t, int r0, int c0, int r
         bool open = false;
         for (int c = cs; c <= last; c++) {
             Cell *cell = vcell(t, r, c);
+            if (cell_is_wide_tail(cell)) continue;  // 2nd half of a wide char
             uint32_t cp = cell->cp ? cell->cp : ' ';
             TermColorVal fg = cell->fg;
             uint8_t a = cell->attrs;

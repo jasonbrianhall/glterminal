@@ -409,6 +409,7 @@ void term_copy_selection(Terminal *t) {
             if (cp && cp != ' ') last_nonspace = c;
         }
         for (int c = cs; c <= last_nonspace; c++) {
+            if (cell_is_wide_tail(vcell(t,r,c))) continue;  // 2nd half of a wide char
             uint32_t cp = vcell(t,r,c)->cp;
             if (!cp) cp = ' ';
             if      (cp < 0x80)    { buf[pos++] = (char)cp; }
@@ -545,6 +546,7 @@ void term_copy_selection_html(Terminal *t) {
 
         for (int c = cs; c <= last_nonspace; c++) {
             Cell *cellp = vcell(t,r,c);
+            if (cell_is_wide_tail(cellp)) continue;  // 2nd half of a wide char
             uint32_t cp = cellp->cp ? cellp->cp : ' ';
             TermColorVal fg = cellp->fg, bg = cellp->bg;
             uint8_t attrs = cellp->attrs;
@@ -680,6 +682,7 @@ void term_copy_selection_ansi(Terminal *t) {
         }
         for (int c = cs; c <= last_nonspace; c++) {
             Cell *cellp = vcell(t,r,c);
+            if (cell_is_wide_tail(cellp)) continue;  // 2nd half of a wide char
             uint32_t cp = cellp->cp ? cellp->cp : ' ';
             TermColorVal fg = cellp->fg, bg = cellp->bg;
             uint8_t attrs = cellp->attrs;
