@@ -47,6 +47,12 @@ bool term_draw_block_element(uint32_t cp, float px, float py, float cw, float ch
 #include <functional>
 void term_detect_urls(Terminal *t, std::function<Cell*(int row, int col)> resolve_cell);
 
+// Links on virtual row `vrow` (selection/scrollback coordinates): OSC 8 links
+// and URLs detected in the text. href is ready to open (www. gets https://,
+// OSC 8 URIs are filtered to safe schemes). Used by Copy as Rich Text.
+struct TermLinkSpan { int col_start, col_end; std::string href; };
+std::vector<TermLinkSpan> term_row_links(Terminal *t, int vrow);
+
 // Link underline for screen cell (row, col), if it's part of a link.
 void term_draw_url_underline(int row, int col, float px, float py, float cw, float ch);
 

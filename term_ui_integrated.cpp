@@ -6,7 +6,6 @@
 #include "gl_terminal.h"
 #include "gl_bouncingcircle.h"
 #include "kitty_graphics.h"
-#include "sixel_graphics.h"
 #include "basic_graphics.h"
 #include "sticky_prompt.h"
 #include "ssh_key_manager.h"
@@ -16,17 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <ctype.h>
-#ifndef _WIN32
-#  include <strings.h>   // strcasecmp
-#  include <unistd.h>    // gethostname
-#else
-#  define strcasecmp _stricmp
-#endif
 #include <string>
 #include <vector>
-#include <deque>
-#include <mutex>
 #include <functional>
 #include <algorithm>
 #ifdef _WIN32
@@ -113,7 +103,6 @@ struct UrlSpan {
     int row, col_start, col_end;  // col_end is inclusive
     std::string url;   // display text
     std::string href;  // actual href (may prepend https:// for www. links)
-    int link_id = 0;   // OSC 8 link id (0 = detected from text)
 };
 
 static std::vector<UrlSpan> s_urls;
@@ -144,130 +133,54 @@ static std::string trim_url(const std::string &s) {
     return s.substr(0, end);
 }
 
-// OSC 8 links come from the program, not the user, so only open schemes a
-// browser/file manager should handle. file://HOST/path from `ls --hyperlink`
-// is rewritten to file:///path when HOST is this machine (xdg-open and the
-// Windows shell don't accept a hostname); a different host (e.g. over SSH)
-// is refused, since the path doesn't exist here.
-static std::string osc8_href(const char *uri) {
-    if (!uri) return {};
-    std::string u(uri);
-    auto lower_starts = [&](const char *pfx) {
-        size_t n = strlen(pfx);
-        if (u.size() < n) return false;
-        for (size_t i = 0; i < n; i++)
-            if (tolower((unsigned char)u[i]) != pfx[i]) return false;
-        return true;
-    };
-    if (lower_starts("http://") || lower_starts("https://") ||
-        lower_starts("ftp://")  || lower_starts("mailto:"))
-        return u;
-    if (lower_starts("file://")) {
-        size_t slash = u.find('/', 7);
-        if (slash == std::string::npos) return {};
-        std::string host = u.substr(7, slash - 7);
-        if (!host.empty() && host != "localhost") {
-            char me[256] = {0};
-#ifdef _WIN32
-            DWORD n = sizeof(me);
-            GetComputerNameA(me, &n);
-#else
-            gethostname(me, sizeof(me) - 1);
-#endif
-            if (strcasecmp(host.c_str(), me) != 0) return {};   // remote file
-        }
-        return "file://" + u.substr(slash);
-    }
-    return {};   // javascript:, custom app schemes, etc.
-}
-
-// Add a span for each run of cells sharing an OSC 8 link id on this row.
-static void append_osc8_spans(Terminal *t, int row, std::vector<UrlSpan> &out,
-                              const std::function<Cell*(int, int)> &resolve_cell) {
-    int col = 0;
-    while (col < t->cols) {
-        uint16_t id = cell_link(resolve_cell(row, col));
-        if (!id) { col++; continue; }
-        int start = col;
-        while (col < t->cols && cell_link(resolve_cell(row, col)) == id) col++;
-        std::string href = osc8_href(term_link_uri(id));
-        if (href.empty()) continue;
-        UrlSpan span;
-        span.row = row; span.col_start = start; span.col_end = col - 1;
-        span.url = term_link_uri(id); span.href = href; span.link_id = id;
-        out.push_back(span);
-    }
-}
-
-// Scan the visible grid and rebuild s_urls
-// All links on one row: OSC 8 links first, then URLs found in the text
-// (https://, http://, ftp://, file://, www.). Cells that are part of an
-// OSC 8 link are skipped by the text scan so a link isn't counted twice.
-// Shared by the on-screen link detection and both HTML copy paths.
-static void scan_row_links(Terminal *t, int row,
-                           const std::function<Cell*(int, int)> &resolve_cell,
-                           std::vector<UrlSpan> &out) {
-    append_osc8_spans(t, row, out, resolve_cell);
-
-    static const char *prefixes[] = { "https://", "http://", "ftp://", "file://", "www.", nullptr };
-
-    // Plain-text copy of the row, one char per cell so columns line up
-    std::string line;
-    line.reserve(t->cols);
-    for (int col = 0; col < t->cols; col++) {
-        Cell *c = resolve_cell(row, col);
-        uint32_t cp = c->cp;
-        if (!cp) cp = ' ';
-        if (cell_link(c)) cp = ' ';   // part of an OSC 8 link
-        // Only handle ASCII for URL scanning simplicity
-        line += (cp < 0x80) ? (char)cp : '?';  // placeholder keeps column alignment
-    }
-
-    size_t pos = 0;
-    while (pos < line.size()) {
-        // Find earliest prefix match from pos
-        size_t best = std::string::npos;
-        for (int pi = 0; prefixes[pi]; pi++) {
-            size_t f = line.find(prefixes[pi], pos);
-            if (f < best) best = f;
-        }
-        if (best == std::string::npos) break;
-
-        // Scan forward to end of URL
-        size_t end = best;
-        while (end < line.size() && is_url_char(line[end])) end++;
-
-        std::string url = trim_url(line.substr(best, end - best));
-        size_t min_len = starts_with(url, "www.") ? 6 : 8; // www.x.com minimum
-        if (url.size() > min_len) {
-            UrlSpan span;
-            span.row       = row;
-            span.col_start = (int)best;
-            span.col_end   = (int)(best + url.size() - 1);
-            span.url       = url;
-            span.href      = starts_with(url, "www.") ? "https://" + url : url;
-            out.push_back(span);
-        }
-        pos = end;
-    }
-}
-
 // Scan the visible grid and rebuild s_urls
 static void detect_urls(Terminal *t,
                          std::function<Cell*(int row, int col)> resolve_cell) {
     s_urls.clear();
-    for (int row = 0; row < t->rows; row++)
-        scan_row_links(t, row, resolve_cell, s_urls);
-}
+    const char *prefixes[] = { "https://", "http://", "ftp://", "file://", "www.", nullptr };
 
-std::vector<TermLinkSpan> term_row_links(Terminal *t, int vrow) {
-    std::vector<UrlSpan> spans;
-    scan_row_links(t, vrow, [t](int r, int c) { return vcell(t, r, c); }, spans);
-    std::vector<TermLinkSpan> out;
-    out.reserve(spans.size());
-    for (const UrlSpan &u : spans)
-        out.push_back({u.col_start, u.col_end, u.href});
-    return out;
+    for (int row = 0; row < t->rows; row++) {
+        // Build a plain-text string for this row
+        std::string line;
+        line.reserve(t->cols);
+        for (int col = 0; col < t->cols; col++) {
+            Cell *c = resolve_cell(row, col);
+            uint32_t cp = c->cp;
+            if (!cp) cp = ' ';
+            // Only handle ASCII for URL scanning simplicity
+            if (cp < 0x80) line += (char)cp;
+            else            line += '?';  // non-ASCII placeholder keeps column alignment
+        }
+
+        size_t pos = 0;
+        while (pos < (size_t)t->cols) {
+            // Find earliest prefix match from pos
+            size_t best = std::string::npos;
+            for (int pi = 0; prefixes[pi]; pi++) {
+                size_t f = line.find(prefixes[pi], pos);
+                if (f < best) best = f;
+            }
+            if (best == std::string::npos) break;
+
+            // Scan forward to end of URL
+            size_t end = best;
+            while (end < (size_t)t->cols && is_url_char(line[end])) end++;
+
+            std::string raw = line.substr(best, end - best);
+            std::string url = trim_url(raw);
+            size_t min_len = starts_with(url, "www.") ? 6 : 8; // www.x.com minimum
+            if (url.size() > min_len) {
+                UrlSpan span;
+                span.row       = row;
+                span.col_start = (int)best;
+                span.col_end   = (int)(best + url.size() - 1);
+                span.url       = url;
+                span.href      = starts_with(url, "www.") ? "https://" + url : url;
+                s_urls.push_back(span);
+            }
+            pos = end;
+        }
+    }
 }
 
 static int url_at(int row, int col) {
@@ -277,27 +190,6 @@ static int url_at(int row, int col) {
             return i;
     }
     return -1;
-}
-
-// Link underline for a screen cell (text URLs and OSC 8 links). All cells
-// of the hovered link light up — for OSC 8 that includes other rows.
-void term_draw_url_underline(int row, int col, float px, float py, float cw, float ch) {
-    int uid = url_at(row, col);
-    if (uid < 0) return;
-    bool hovered = (uid == s_hovered_url);
-    if (!hovered && s_hovered_url >= 0 && s_hovered_url < (int)s_urls.size()) {
-        int lid = s_urls[uid].link_id;
-        hovered = lid && lid == s_urls[s_hovered_url].link_id;
-    }
-    float ur = hovered ? 0.4f : 0.35f;
-    float ug = hovered ? 0.8f : 0.6f;
-    float ub = hovered ? 1.0f : 0.9f;
-    float uh = hovered ? 2.f : 1.f;
-    draw_rect(px, py + ch - uh - 1, cw, uh, ur, ug, ub, 1.f);
-}
-
-void term_detect_urls(Terminal *t, std::function<Cell*(int row, int col)> resolve_cell) {
-    detect_urls(t, resolve_cell);
 }
 
 void open_url(const std::string &url) {
@@ -391,7 +283,7 @@ static_assert(sizeof(RENDER_MODE_NAMES)/sizeof(RENDER_MODE_NAMES[0]) == RENDER_M
 const MenuItem MENU_ITEMS[] = {
     { "New Terminal  >", false },
     { nullptr,           true  },
-    { "Copy as Rich Text", false },
+    { "Copy",            false },
     { "Copy as HTML",    false },
     { "Copy as ANSI",    false },
     { "Paste",           false },
@@ -502,7 +394,7 @@ void term_copy_selection(Terminal *t) {
     if (r0 > r1 || (r0 == r1 && c0 > c1)) {
         int tr=r0,tc=c0; r0=r1;c0=c1;r1=tr;c1=tc;
     }
-    int bufsize = (r1 - r0 + 1) * (t->cols * 4 + 1) + 1;
+    int bufsize = (r1 - r0 + 1) * (t->cols + 1) + 1;
     char *buf = (char*)malloc(bufsize);
     int pos = 0;
     for (int r = r0; r <= r1; r++) {
@@ -514,7 +406,6 @@ void term_copy_selection(Terminal *t) {
             if (cp && cp != ' ') last_nonspace = c;
         }
         for (int c = cs; c <= last_nonspace; c++) {
-            if (cell_is_wide_tail(vcell(t,r,c))) continue;  // 2nd half of a wide char
             uint32_t cp = vcell(t,r,c)->cp;
             if (!cp) cp = ' ';
             if      (cp < 0x80)    { buf[pos++] = (char)cp; }
@@ -573,7 +464,7 @@ void term_copy_selection_html(Terminal *t) {
     html += "    color: "; html += fg_hex; html += ";\n";
     html += "    font-family: 'DejaVu Sans Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;\n";
     html += "    font-size: 14px;\n";
-    html += "    line-height: 1;\n";
+    html += "    line-height: 1.4;\n";
     html += "    white-space: pre;\n";
     html += "    overflow-x: auto;\n";
     html += "  }\n";
@@ -596,7 +487,36 @@ void term_copy_selection_html(Terminal *t) {
     // Build a helper to detect URLs in a row of cells (selection-relative row index)
     auto row_url_spans = [&](int r) -> std::vector<UrlSpan> {
         std::vector<UrlSpan> spans;
-        scan_row_links(t, r, [&](int rr, int cc) { return vcell(t, rr, cc); }, spans);
+        const char *prefixes[] = { "https://", "http://", "ftp://", "file://", "www.", nullptr };
+        std::string line;
+        line.reserve(t->cols);
+        for (int col = 0; col < t->cols; col++) {
+            uint32_t cp = vcell(t, r, col)->cp;
+            if (!cp) cp = ' ';
+            line += (cp < 0x80) ? (char)cp : '?';
+        }
+        size_t pos = 0;
+        while (pos < line.size()) {
+            size_t best = std::string::npos;
+            for (int pi = 0; prefixes[pi]; pi++) {
+                size_t f = line.find(prefixes[pi], pos);
+                if (f < best) best = f;
+            }
+            if (best == std::string::npos) break;
+            size_t end = best;
+            while (end < line.size() && is_url_char(line[end])) end++;
+            std::string raw = line.substr(best, end - best);
+            std::string url = trim_url(raw);
+            size_t min_len = starts_with(url, "www.") ? 6 : 8;
+            if (url.size() > min_len) {
+                UrlSpan sp;
+                sp.row = r; sp.col_start = (int)best; sp.col_end = (int)(best + url.size() - 1);
+                sp.url = url;
+                sp.href = starts_with(url, "www.") ? "https://" + url : url;
+                spans.push_back(sp);
+            }
+            pos = end;
+        }
         return spans;
     };
 
@@ -622,7 +542,6 @@ void term_copy_selection_html(Terminal *t) {
 
         for (int c = cs; c <= last_nonspace; c++) {
             Cell *cellp = vcell(t,r,c);
-            if (cell_is_wide_tail(cellp)) continue;  // 2nd half of a wide char
             uint32_t cp = cellp->cp ? cellp->cp : ' ';
             TermColorVal fg = cellp->fg, bg = cellp->bg;
             uint8_t attrs = cellp->attrs;
@@ -697,18 +616,7 @@ void term_copy_selection_html(Terminal *t) {
         last_fg = ~(TermColorVal)0;
         if (r < r1) html += '\n';
     }
-    html += "</div>\n";
-    html += "<script>\n";
-    html += "document.querySelectorAll('a.img-dl').forEach(function(a){\n";
-    html += "  var m = a.getAttribute('href').match(/^data:([^;]+);base64,(.*)$/);\n";
-    html += "  if (!m) return;\n";
-    html += "  var bin = atob(m[2]);\n";
-    html += "  var bytes = new Uint8Array(bin.length);\n";
-    html += "  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);\n";
-    html += "  a.href = URL.createObjectURL(new Blob([bytes], {type: m[1]}));\n";
-    html += "});\n";
-    html += "</script>\n";
-    html += "</body>\n</html>\n";
+    html += "</div>\n</body>\n</html>\n";
     SDL_SetClipboardText(html.c_str());
 }
 
@@ -758,22 +666,16 @@ void term_copy_selection_ansi(Terminal *t) {
         }
         for (int c = cs; c <= last_nonspace; c++) {
             Cell *cellp = vcell(t,r,c);
-            if (cell_is_wide_tail(cellp)) continue;  // 2nd half of a wide char
             uint32_t cp = cellp->cp ? cellp->cp : ' ';
             TermColorVal fg = cellp->fg, bg = cellp->bg;
             uint8_t attrs = cellp->attrs;
             if (attrs & ATTR_REVERSE) { TermColorVal tmp=fg; fg=bg; bg=tmp; }
             if (fg != last_fg || bg != last_bg || attrs != last_attrs)
                 emit_sgr(fg, bg, attrs);
-            // ANSI output: only ASCII printable (32-126) and common control chars
-            if (cp >= 32 && cp < 127) {
-                out += (char)cp;
-            } else if (cp == '\t') {
-                out += '\t';
-            } else if (cp == ' ') {
-                out += ' ';
-            }
-            // Non-ASCII characters are silently skipped in ANSI mode
+            if      (cp < 0x80)    out += (char)cp;
+            else if (cp < 0x800)   { out+=(char)(0xC0|(cp>>6)); out+=(char)(0x80|(cp&0x3F)); }
+            else if (cp < 0x10000) { out+=(char)(0xE0|(cp>>12)); out+=(char)(0x80|((cp>>6)&0x3F)); out+=(char)(0x80|(cp&0x3F)); }
+            else { out+=(char)(0xF0|(cp>>18)); out+=(char)(0x80|((cp>>12)&0x3F)); out+=(char)(0x80|((cp>>6)&0x3F)); out+=(char)(0x80|(cp&0x3F)); }
         }
         out += "\x1b[0m";
         last_fg = ~(TermColorVal)0;
@@ -796,96 +698,6 @@ void term_paste(Terminal *t) {
 // ============================================================================
 // RENDERING
 // ============================================================================
-
-// Block Elements (U+2580-259F): draw as exact procedural rectangles instead
-// of going through the font atlas. Font anti-aliasing/hinting on solid block
-// glyphs leaves partial-coverage pixels at the edges, which produces a
-// visible seam/grid pattern once thousands of them tile together (as in
-// ANSI-art image rendering) — and several of these codepoints aren't even in
-// the embedded font. Returns false if cp isn't a block element.
-// Shared with the sticky-prompt renderer.
-bool term_draw_block_element(uint32_t cp, float px, float py, float cw, float ch, TermColor fc) {
-    if (cp == 0x2580) {
-        draw_rect(px, py, cw, ch * 0.5f, fc.r, fc.g, fc.b, 1.f); // upper half
-    } else if (cp >= 0x2581 && cp <= 0x2588) {
-        // Lower N-eighths block, bottom-aligned (2581=1/8 .. 2588=8/8)
-        float frac = (float)(cp - 0x2580) / 8.f;
-        draw_rect(px, py + ch * (1.f - frac), cw, ch * frac, fc.r, fc.g, fc.b, 1.f);
-    } else if (cp >= 0x2589 && cp <= 0x258F) {
-        // Left N-eighths block, left-aligned (2589=7/8 .. 258F=1/8)
-        float frac = (float)(0x2590 - cp) / 8.f;
-        draw_rect(px, py, cw * frac, ch, fc.r, fc.g, fc.b, 1.f);
-    } else if (cp == 0x2590) {
-        draw_rect(px + cw * 0.5f, py, cw * 0.5f, ch, fc.r, fc.g, fc.b, 1.f); // right half
-    } else if (cp == 0x2591) {
-        draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.25f); // light shade
-    } else if (cp == 0x2592) {
-        draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.50f); // medium shade
-    } else if (cp == 0x2593) {
-        draw_rect(px, py, cw, ch, fc.r, fc.g, fc.b, 0.75f); // dark shade
-    } else if (cp == 0x2594) {
-        draw_rect(px, py, cw, ch * 0.125f, fc.r, fc.g, fc.b, 1.f); // upper 1/8
-    } else if (cp == 0x2595) {
-        draw_rect(px + cw * 0.875f, py, cw * 0.125f, ch, fc.r, fc.g, fc.b, 1.f); // right 1/8
-    } else if (cp >= 0x2596 && cp <= 0x259F) {
-        // Quadrant blocks: bit0=TL bit1=TR bit2=BL bit3=BR
-        static const uint8_t quad_mask[10] = { 4, 8, 1, 13, 9, 7, 11, 2, 6, 14 };
-        uint8_t m = quad_mask[cp - 0x2596];
-        float hw = cw * 0.5f, hh = ch * 0.5f;
-        if (m & 1) draw_rect(px,      py,      hw, hh, fc.r, fc.g, fc.b, 1.f); // TL
-        if (m & 2) draw_rect(px + hw, py,      hw, hh, fc.r, fc.g, fc.b, 1.f); // TR
-        if (m & 4) draw_rect(px,      py + hh, hw, hh, fc.r, fc.g, fc.b, 1.f); // BL
-        if (m & 8) draw_rect(px + hw, py + hh, hw, hh, fc.r, fc.g, fc.b, 1.f); // BR
-    } else {
-        return false;
-    }
-    return true;
-}
-
-// Underline (all SGR 4:n styles, SGR 58 color), strikethrough and overline
-// for one cell. Shared by term_render() and sticky_prompt_render_split().
-void term_draw_decorations(const Cell *c, float px, float py, float cw, float ch, TermColor fc) {
-    if (c->attrs & ATTR_UNDERLINE) {
-        // SGR 58 underline color, else the text color
-        TermColor uc = c->ul_color ? tcolor_resolve(CELL_UL_COLOR(c)) : fc;
-        switch (cell_ul_style(c)) {
-        case UL_DOUBLE:
-            draw_rect(px, py+ch-4, cw, 1, uc.r, uc.g, uc.b, 1.f);
-            draw_rect(px, py+ch-2, cw, 1, uc.r, uc.g, uc.b, 1.f);
-            break;
-        case UL_CURLY: {
-            // Sine wave, phase taken from the absolute x so it runs
-            // continuously across cells. One 1px-wide column per x.
-            float amp    = SDL_max(1.f, ch * 0.07f);
-            float period = SDL_max(4.f, cw);
-            float base   = py + ch - 1.5f - amp;
-            for (int x = 0; x < (int)cw; x++) {
-                float ax = px + x;
-                float y  = base + amp * sinf(ax * 6.2831853f / period);
-                draw_rect(ax, y, 1, 1.5f, uc.r, uc.g, uc.b, 1.f);
-            }
-            break;
-        }
-        case UL_DOTTED:
-            for (int x = 0; x < (int)cw; x++)
-                if ((((int)px + x) & 3) < 2)
-                    draw_rect(px + x, py+ch-2, 1, 1.5f, uc.r, uc.g, uc.b, 1.f);
-            break;
-        case UL_DASHED:
-            for (int x = 0; x < (int)cw; x++)
-                if ((((int)px + x) % 6) < 4)
-                    draw_rect(px + x, py+ch-2, 1, 1.5f, uc.r, uc.g, uc.b, 1.f);
-            break;
-        default:
-            draw_rect(px, py+ch-2, cw, 2, uc.r, uc.g, uc.b, 1.f);
-            break;
-        }
-    }
-    if (c->attrs & ATTR_STRIKE)
-        draw_rect(px, py+ch*0.45f, cw, 1, fc.r, fc.g, fc.b, 1.f);
-    if (c->attrs & ATTR_OVERLINE)
-        draw_rect(px, py+1, cw, 1, fc.r, fc.g, fc.b, 1.f);
-}
 
 void term_render(Terminal *t, int ox, int oy) {
     // If sticky prompt is enabled, use split rendering
@@ -979,24 +791,31 @@ void term_render(Terminal *t, int ox, int oy) {
             }
 
             uint32_t cp = c->cp;
-            bool blink_hidden = ((c->attrs & ATTR_BLINK) && !g_blink_text_on) || cell_is_hidden(c);
+            bool blink_hidden = (c->attrs & ATTR_BLINK) && !g_blink_text_on;
             if (cp && cp != ' ' && !blink_hidden) {
-                // Block elements as exact rectangles (see term_draw_block_element)
-                bool drew_block = term_draw_block_element(cp, px, py, cw, ch, fc);
-                if (!drew_block) {
-                    char tmp[5] = {};
-                    cp_to_utf8(cp, tmp);
-                    float baseline = py + ch * 0.82f;
-                    draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs,
-                              cell_is_wide(c) ? cw * 2.f : 0.f);
-                }
+                char tmp[5] = {};
+                cp_to_utf8(cp, tmp);
+                float baseline = py + ch * 0.82f;
+                draw_text(tmp, px, baseline, g_font_size, (int)ch, fc.r, fc.g, fc.b, 1.f, c->attrs);
                 dirty_cells++;
             }
-            if (!blink_hidden)
-                term_draw_decorations(c, px, py, cw, ch, fc);
+            if ((c->attrs & ATTR_UNDERLINE) && !blink_hidden)
+                draw_rect(px, py+ch-2, cw, 2, fc.r, fc.g, fc.b, 1.f);
+            if ((c->attrs & ATTR_STRIKE) && !blink_hidden)
+                draw_rect(px, py+ch*0.45f, cw, 1, fc.r, fc.g, fc.b, 1.f);
+            if ((c->attrs & ATTR_OVERLINE) && !blink_hidden)
+                draw_rect(px, py+1, cw, 1, fc.r, fc.g, fc.b, 1.f);
 
-            // URL / OSC 8 link underline
-            term_draw_url_underline(row, col, px, py, cw, ch);
+            // URL underline
+            int uid = url_at(row, col);
+            if (uid >= 0) {
+                bool hovered = (uid == s_hovered_url);
+                float ur = hovered ? 0.4f : 0.35f;
+                float ug = hovered ? 0.8f : 0.6f;
+                float ub = hovered ? 1.0f : 0.9f;
+                float uh = hovered ? 2.f : 1.f;
+                draw_rect(px, py + ch - uh - 1, cw, uh, ur, ug, ub, 1.f);
+            }
         }
     }
 
@@ -1008,10 +827,9 @@ void term_render(Terminal *t, int ox, int oy) {
 
     // Kitty graphics — render placed images over the glyph layer
     kitty_render(t, ox, oy);
-    sixel_render(t, ox, oy);
 
     // Cursor
-    if (!scrolled && term_cursor_visible(t)) {
+    if (!scrolled && t->cursor_on) {
         float cx = ox + t->cur_col * cw;
         float cy = oy + t->cur_row * ch;
         switch (t->cursor_shape) {
@@ -1366,94 +1184,6 @@ void action_new_serial_session() {
 #endif
 }
 
-
-// ============================================================================
-// TOAST — brief status notification (e.g. F9 web server on/off).
-// Top-centre panel: fades in, holds, fades out. Drawn after post-processing
-// so CRT/VHS effects never distort it.
-// ============================================================================
-
-#define TOAST_FADE_IN_MS   150
-#define TOAST_HOLD_MS      1800
-#define TOAST_FADE_OUT_MS  450
-
-static std::string s_toast_title, s_toast_sub;
-static float       s_toast_r = 1, s_toast_g = 1, s_toast_b = 1;
-static Uint32      s_toast_start = 0;
-static bool        s_toast_on = false;
-
-static float measure_text_menu(const char *text) {
-    ensure_menu_face();
-    if (!s_menu_face) return measure_text(text, MENU_FONT_SIZE);
-    FT_Face saved = s_ft_face;
-    s_ft_face = s_menu_face;
-    float w = measure_text(text, MENU_FONT_SIZE);
-    s_ft_face = saved;
-    return w;
-}
-
-void toast_show(const char *title, const char *subtitle, float r, float g, float b) {
-    s_toast_title = title ? title : "";
-    s_toast_sub   = subtitle ? subtitle : "";
-    s_toast_r = r; s_toast_g = g; s_toast_b = b;
-    s_toast_start = SDL_GetTicks();
-    s_toast_on = true;
-}
-
-bool toast_active() {
-    if (!s_toast_on) return false;
-    if (SDL_GetTicks() - s_toast_start > TOAST_FADE_IN_MS + TOAST_HOLD_MS + TOAST_FADE_OUT_MS)
-        s_toast_on = false;
-    return s_toast_on;
-}
-
-void toast_render(int win_w, int win_h) {
-    (void)win_h;
-    if (!toast_active()) return;
-
-    Uint32 el = SDL_GetTicks() - s_toast_start;
-    float a;
-    if (el < TOAST_FADE_IN_MS)
-        a = (float)el / TOAST_FADE_IN_MS;
-    else if (el < TOAST_FADE_IN_MS + TOAST_HOLD_MS)
-        a = 1.f;
-    else
-        a = 1.f - (float)(el - TOAST_FADE_IN_MS - TOAST_HOLD_MS) / TOAST_FADE_OUT_MS;
-    if (a <= 0.f) return;
-    // Slide down a few pixels while fading in
-    float slide = (el < TOAST_FADE_IN_MS) ? (1.f - a) * -8.f : 0.f;
-
-    const float pad = 14.f, dot = 10.f, gap = 10.f;
-    const float line_h = MENU_FONT_SIZE * 1.45f;
-    bool  has_sub = !s_toast_sub.empty();
-    float tw = measure_text_menu(s_toast_title.c_str());
-    float sw = has_sub ? measure_text_menu(s_toast_sub.c_str()) : 0.f;
-    float w  = pad + dot + gap + SDL_max(tw, sw) + pad;
-    float h  = pad * 0.8f * 2 + line_h * (has_sub ? 2 : 1);
-    if (w > win_w - 16) w = (float)(win_w - 16);
-    float x = (win_w - w) * 0.5f;
-    float y = 18.f + slide;
-
-    // Shadow, body, accent bar in the status colour, thin border
-    draw_rect(x + 3, y + 3, w, h, 0, 0, 0, 0.35f * a);
-    draw_rect(x, y, w, h, 0.09f, 0.09f, 0.12f, 0.94f * a);
-    draw_rect(x, y, 3, h, s_toast_r, s_toast_g, s_toast_b, a);
-    draw_rect(x,         y,         w, 1, 0.35f, 0.35f, 0.50f, a);
-    draw_rect(x,         y + h - 1, w, 1, 0.35f, 0.35f, 0.50f, a);
-    draw_rect(x + w - 1, y,         1, h, 0.35f, 0.35f, 0.50f, a);
-
-    // Status dot, vertically centred on the title line
-    float ty = y + pad * 0.8f;
-    draw_rect(x + pad, ty + (line_h - dot) * 0.5f, dot, dot, s_toast_r, s_toast_g, s_toast_b, a);
-
-    float tx = x + pad + dot + gap;
-    draw_text_menu(s_toast_title.c_str(), tx, ty + line_h * 0.75f,
-                   s_toast_r, s_toast_g, s_toast_b, a);
-    if (has_sub)
-        draw_text_menu(s_toast_sub.c_str(), tx, ty + line_h + line_h * 0.75f,
-                       0.82f, 0.82f, 0.88f, a);
-}
-
 // ============================================================================
 // HELP OVERLAY
 // ============================================================================
@@ -1470,15 +1200,12 @@ struct HelpRow {
 static const HelpRow HELP_ROWS[] = {
     { "── General ──",            nullptr, nullptr, nullptr },
     { nullptr, "F1",              "Toggle this help screen",                             nullptr },
-    { nullptr, "F5",              "Felix Chirp - image/audio player (SSH or local)",     nullptr },
-    { nullptr, "F7",              "WOPR terminal (games and entertainment)",              nullptr },
-    { nullptr, "F9",              "Felix Stargate - Web server (SFTP tunnel or local)",  nullptr },
-    { nullptr, "F9 Cont.",        "Default port is 53716 F5E3L7I1X6; see F12",           nullptr },
+    { nullptr, "F5",              "Felix Chirp image/audio player (SSH or local)      ", nullptr },
+    { nullptr, "F7",              "WOPR terminal",                                       nullptr },
     { nullptr, "F11",             "Toggle fullscreen",                                   nullptr },
-    { nullptr, "F12",             "Debug log (mirrors console output)",                  nullptr },
     { nullptr, "Right-click",     "Open context menu",                                   nullptr },
     { nullptr, "Ctrl+A",          "Select all",                                          nullptr },
-    { nullptr, "Ctrl+C",          "Copy selection as rich text (keeps colors for Word)", nullptr },
+    { nullptr, "Ctrl+C",          "Copy selection",                                      nullptr },
     { nullptr, "Ctrl+Shift+C",    "Copy selection as HTML",                              nullptr },
     { nullptr, "Ctrl+V",          "Paste",                                               nullptr },
     { nullptr, "Ctrl+Scroll",     "Zoom font in / out",                                  nullptr },
@@ -1489,7 +1216,7 @@ static const HelpRow HELP_ROWS[] = {
     { nullptr, "--ssh [user@host]","Connect to a remote host via SSH (see CLI options)", nullptr },
     { nullptr, "F2",              "SFTP upload overlay",                                 nullptr },
     { nullptr, "F3",              "SFTP download overlay",                               nullptr },
-    { nullptr, "F4",              "Interactive SFTP console (F9 inside for web server)", nullptr },
+    { nullptr, "F4",              "Interactive SFTP console",                            nullptr },
     { nullptr, "F6",              "Port forwarding console",                             nullptr },
     { nullptr, "F8",              "SSH Key Manager (generate / copy / delete keys)",     nullptr },
     { "── Serial ──",             nullptr, nullptr, nullptr },
@@ -1663,138 +1390,6 @@ bool help_mousemotion(int x, int y) {
 }
 
 // ============================================================================
-// DEBUG LOG OVERLAY (F12) — mirrors everything SDL_Log() prints to console
-// ============================================================================
-
-bool g_debuglog_visible = false;
-
-#define DEBUGLOG_MAX_LINES 2000
-
-static std::deque<std::string> s_debuglog_lines;
-// NOTE: was std::mutex, but on Windows the Debug STL's lazy Mtx_lock init
-// path was crashing with a null internal handle on the very first lock in
-// the process (confirmed via ASan: access-violation, not heap corruption --
-// the mutex object itself is at a valid address, its internal handle is
-// just zero when Mtx_lock dereferences it as if already initialized).
-// A raw CRITICAL_SECTION is eagerly initialized at construction with no
-// lazy-init step, sidestepping whatever that toolset's bug is. CRITICAL_SECTION
-// is Windows-only, so non-Windows builds fall back to a pthread mutex, which
-// is likewise eagerly initialized (via PTHREAD_MUTEX_INITIALIZER).
-#ifdef _WIN32
-struct DebuglogLock {
-    CRITICAL_SECTION cs;
-    DebuglogLock()  { InitializeCriticalSection(&cs); }
-    ~DebuglogLock() { DeleteCriticalSection(&cs); }
-    void lock()   { EnterCriticalSection(&cs); }
-    void unlock() { LeaveCriticalSection(&cs); }
-};
-#else
-#include <pthread.h>
-struct DebuglogLock {
-    pthread_mutex_t cs = PTHREAD_MUTEX_INITIALIZER;
-    void lock()   { pthread_mutex_lock(&cs); }
-    void unlock() { pthread_mutex_unlock(&cs); }
-};
-#endif
-static DebuglogLock            s_debuglog_mutex;
-static SDL_LogOutputFunction   s_debuglog_prev_fn = nullptr;
-static void                   *s_debuglog_prev_ud  = nullptr;
-static int                     s_debuglog_scroll   = 0;  // lines back from bottom
-
-static void debuglog_capture(void *userdata, int category, SDL_LogPriority priority,
-                              const char *message) {
-    if (s_debuglog_prev_fn)
-        s_debuglog_prev_fn(s_debuglog_prev_ud, category, priority, message);
-
-    s_debuglog_mutex.lock();
-    s_debuglog_lines.emplace_back(message);
-    while (s_debuglog_lines.size() > DEBUGLOG_MAX_LINES)
-        s_debuglog_lines.pop_front();
-    s_debuglog_mutex.unlock();
-}
-
-void debuglog_init() {
-    SDL_LogGetOutputFunction(&s_debuglog_prev_fn, &s_debuglog_prev_ud);
-    SDL_LogSetOutputFunction(debuglog_capture, nullptr);
-}
-
-#define DEBUGLOG_ROW_H (int)(MENU_FONT_SIZE * 1.4f)
-#define DEBUGLOG_PAD   (MENU_FONT_SIZE)
-
-void debuglog_render(int win_w, int win_h) {
-    if (!g_debuglog_visible) return;
-    ensure_menu_face();
-
-    int total_w = win_w - DEBUGLOG_PAD * 4;
-    int total_h = win_h - DEBUGLOG_PAD * 4;
-    int ox = DEBUGLOG_PAD * 2;
-    int oy = DEBUGLOG_PAD * 2;
-
-    draw_rect(0, 0, (float)win_w, (float)win_h, 0.f, 0.f, 0.f, 0.55f);
-    draw_rect((float)(ox+3), (float)(oy+3), (float)total_w, (float)total_h, 0,0,0, 0.4f);
-    draw_rect((float)ox, (float)oy, (float)total_w, (float)total_h, 0.08f, 0.08f, 0.10f, 0.97f);
-    draw_rect((float)ox,             (float)oy,             (float)total_w, 1,              0.35f,0.35f,0.55f, 1.f);
-    draw_rect((float)ox,             (float)(oy+total_h-1), (float)total_w, 1,              0.35f,0.35f,0.55f, 1.f);
-    draw_rect((float)ox,             (float)oy,             1,              (float)total_h, 0.35f,0.35f,0.55f, 1.f);
-    draw_rect((float)(ox+total_w-1), (float)oy,             1,              (float)total_h, 0.35f,0.35f,0.55f, 1.f);
-
-    int hdr_h = (int)(MENU_FONT_SIZE * 2.0f);
-    draw_rect((float)ox+1, (float)oy, (float)total_w-2, (float)hdr_h, 0.18f, 0.25f, 0.45f, 1.f);
-    const char *title = "Felix Terminal — Debug Log";
-    draw_text_menu(title, (float)(ox + DEBUGLOG_PAD), (float)oy + hdr_h * 0.72f,
-                   1.f, 1.f, 1.f, 1.f, ATTR_BOLD);
-    const char *hint = "Esc or F12 to close  \xe2\x80\xa2  PgUp/PgDn or wheel to scroll";
-    float hint_x = (float)(ox + total_w) - (float)(strlen(hint) * MENU_FONT_SIZE * 0.56f) - DEBUGLOG_PAD;
-    draw_text_menu(hint, hint_x, (float)oy + hdr_h * 0.72f, 0.50f, 0.50f, 0.62f, 1.f);
-
-    int content_top = oy + hdr_h;
-    int content_h   = total_h - hdr_h - DEBUGLOG_PAD;
-    int max_rows    = content_h / DEBUGLOG_ROW_H;
-    if (max_rows < 1) max_rows = 1;
-
-    s_debuglog_mutex.lock();
-    int count = (int)s_debuglog_lines.size();
-    int max_scroll = count > max_rows ? count - max_rows : 0;
-    if (s_debuglog_scroll > max_scroll) s_debuglog_scroll = max_scroll;
-    if (s_debuglog_scroll < 0) s_debuglog_scroll = 0;
-
-    int end   = count - s_debuglog_scroll;
-    int start = end - max_rows;
-    if (start < 0) start = 0;
-
-    float ty = (float)content_top;
-    for (int i = start; i < end; i++) {
-        const std::string &line = s_debuglog_lines[i];
-        float r = 0.80f, g = 0.82f, b = 0.85f;
-        if (line.find("ERROR") != std::string::npos)
-            { r = 1.0f; g = 0.45f; b = 0.45f; }
-        else if (line.find("WARNING") != std::string::npos || line.find("WARN") != std::string::npos)
-            { r = 1.0f; g = 0.85f; b = 0.40f; }
-        draw_text_menu(line.c_str(), (float)(ox + DEBUGLOG_PAD), ty + DEBUGLOG_ROW_H * 0.72f,
-                       r, g, b, 1.f);
-        ty += DEBUGLOG_ROW_H;
-    }
-    s_debuglog_mutex.unlock();
-
-    gl_flush_verts();
-}
-
-bool debuglog_keydown(SDL_Keycode sym) {
-    if (!g_debuglog_visible) return false;
-    if (sym == SDLK_ESCAPE || sym == SDLK_F12) { g_debuglog_visible = false; return true; }
-    if (sym == SDLK_PAGEUP)   { s_debuglog_scroll += 10; return true; }
-    if (sym == SDLK_PAGEDOWN) { s_debuglog_scroll = SDL_max(0, s_debuglog_scroll - 10); return true; }
-    if (sym == SDLK_UP)       { s_debuglog_scroll += 1; return true; }
-    if (sym == SDLK_DOWN)     { s_debuglog_scroll = SDL_max(0, s_debuglog_scroll - 1); return true; }
-    return true;  // swallow all keys while open
-}
-
-void debuglog_scroll(int dy) {
-    if (!g_debuglog_visible) return;
-    s_debuglog_scroll = SDL_max(0, s_debuglog_scroll + dy * 3);
-}
-
-// ============================================================================
 // CUSTOM SHELL DIALOG
 // ============================================================================
 
@@ -1882,6 +1477,5 @@ bool custom_shell_dialog_keydown(SDL_Keycode sym, const char *text) {
         return true;
     }
     
-    // When dialog is open, consume all other keys too (don't let them reach terminal)
-    return true;
+    return false;
 }

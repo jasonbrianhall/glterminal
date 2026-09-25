@@ -20,6 +20,7 @@
 #include "gl_terminal.h"
 #include "kitty_graphics.h"
 #include "sixel_graphics.h"
+#include "term_ui.h"          // term_row_links
 
 #include <SDL2/SDL.h>
 #include <string>
@@ -241,21 +242,23 @@ static std::string selection_to_html_fragment(Terminal *t, int r0, int c0, int r
         std::string h;
         std::string cur_style;
         bool open = false;
-        uint16_t cur_link = 0;   // OSC 8 link currently open as <a>
+        // Links on this row — OSC 8 and URLs in the text (www.google.com,
+        // https://...) — become <a href> so Word/LibreOffice keep them clickable
+        std::vector<TermLinkSpan> links = term_row_links(t, r);
+        int cur_link = -1;       // index into links of the open <a>, or -1
         for (int c = cs; c <= last; c++) {
             Cell *cell = vcell(t, r, c);
             if (cell_is_wide_tail(cell)) continue;  // 2nd half of a wide char
 
-            // OSC 8 hyperlinks -> <a href>, so Word/LibreOffice keep them clickable
-            uint16_t lk = cell_link(cell);
-            const char *uri = lk ? term_link_uri(lk) : nullptr;
-            if (!uri) lk = 0;
+            int lk = -1;
+            for (int i = 0; i < (int)links.size(); i++)
+                if (c >= links[i].col_start && c <= links[i].col_end) { lk = i; break; }
             if (lk != cur_link) {
                 if (open) { h += "</span>"; open = false; }
-                if (cur_link) h += "</a>";
-                if (lk) {
+                if (cur_link >= 0) h += "</a>";
+                if (lk >= 0) {
                     h += "<a href=\"";
-                    for (const char *q = uri; *q; q++) {
+                    for (const char *q = links[lk].href.c_str(); *q; q++) {
                         if      (*q == '"') h += "&quot;";
                         else if (*q == '&') h += "&amp;";
                         else if (*q == '<') h += "&lt;";
@@ -320,7 +323,7 @@ static std::string selection_to_html_fragment(Terminal *t, int r0, int c0, int r
             append_escaped(h, cp);
         }
         if (open) h += "</span>";
-        if (cur_link) h += "</a>";
+        if (cur_link >= 0) h += "</a>";
         lines.push_back(std::move(h));
     }
 
