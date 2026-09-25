@@ -52,6 +52,7 @@ static int              s_sock     = -1;   // TCP socket fd
 static bool             s_active   = false;
 static bool             s_have_pty = false;
 static std::vector<std::string> s_remote_forwards;  // Store remote forwards to register later
+static Terminal        *s_term     = nullptr;  // for cell pixel size on resize
 
 // All libssh2 calls on this session must hold this mutex.
 // The SFTP transfer thread acquires it for the duration of a transfer;
@@ -1048,6 +1049,12 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
     // Store for later retrieval via ssh_get_remote_forwards()
     s_remote_forwards = cfg.remote_forwards;
 
+    // Environment hints — must be sent BEFORE the shell/exec request, or the
+    // shell has already started without them. Best-effort: sshd only
+    // accepts variables listed in its AcceptEnv (COLORTERM often is).
+    while (libssh2_channel_setenv(s_channel, "COLORTERM", "truecolor") == LIBSSH2_ERROR_EAGAIN)
+        SDL_Delay(5);
+
     // Start shell or execute command
     if (!cfg.command.empty()) {
         // Execute a specific command on the remote server
@@ -1066,13 +1073,10 @@ bool ssh_connect(const SshConfig &cfg, Terminal *t) {
         return false;
     }
 
-    // Environment hints (best-effort; server may reject setenv)
-    libssh2_channel_setenv(s_channel, "COLORTERM", "truecolor");
-    libssh2_channel_setenv(s_channel, "KITTY_WINDOW_ID", "1");
-
     // Route all term_write() calls (handle_key, term_paste, etc.) through SSH
     g_term_write_override = ssh_write_bridge;
 
+    s_term   = t;
     s_active = true;
     SDL_Log("[SSH] connected to %s@%s:%d\n", cfg.user.c_str(), cfg.host.c_str(), cfg.port);
     return true;
@@ -1154,7 +1158,18 @@ void ssh_pty_resize(int cols, int rows) {
     if (!s_active || !s_channel || !s_have_pty) return;
     int report_cols = cols > 1 ? cols - 1 : cols;
     int report_rows = rows > 1 ? rows - 1 : rows;
-    libssh2_channel_request_pty_size(s_channel, report_cols, report_rows);
+    // Include the pixel size (like the initial pty request does). The plain
+    // libssh2_channel_request_pty_size() macro sends 0x0 pixels, after which
+    // timg & co. can't see the cell size and fall back from kitty/sixel
+    // graphics to block characters.
+    int px_w = s_term ? (int)(report_cols * s_term->cell_w) : 0;
+    int px_h = s_term ? (int)(report_rows * s_term->cell_h) : 0;
+    std::lock_guard<std::recursive_mutex> lock(s_session_mutex);
+    int rc, tries = 0;
+    while ((rc = libssh2_channel_request_pty_size_ex(s_channel, report_cols, report_rows,
+                                                      px_w, px_h)) == LIBSSH2_ERROR_EAGAIN &&
+           ++tries < 200)
+        SDL_Delay(1);
 }
 
 bool ssh_channel_closed() {
@@ -1189,6 +1204,7 @@ void ssh_disconnect() {
     }
     s_active = false;
     s_have_pty = false;
+    s_term = nullptr;
     libssh2_exit();
 #ifdef _WIN32
     WSACleanup();

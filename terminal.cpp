@@ -749,6 +749,12 @@ static void dispatch_csi(Terminal *t) {
             int px_w = (int)(t->cols * t->cell_w);
             int px_h = (int)(t->rows * t->cell_h);
             len = snprintf(resp, sizeof(resp), "\x1b[4;%d;%dt", px_h, px_w);
+        } else if (op == 16) {
+            // Report character cell size in pixels. timg, chafa and others
+            // need this to use kitty/sixel graphics when the pty doesn't
+            // carry pixel sizes (built-in SSH, telnet, serial).
+            len = snprintf(resp, sizeof(resp), "\x1b[6;%d;%dt",
+                           (int)t->cell_h, (int)t->cell_w);
         }
         if (len > 0) term_write(t, resp, len);
         break;
