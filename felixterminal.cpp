@@ -1,4 +1,4 @@
-// Felix Terminal Main program
+// Felix Terminal Main program (Last updated September 26, 2026)
 // Written by Jason Brian Hall (jasonbrianhall@gmail.com)
 
 #include "gl_terminal.h"
