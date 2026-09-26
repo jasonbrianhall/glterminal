@@ -897,9 +897,55 @@ private:
         #endif
     }
 
+    wxString FindFltExecutable() {
+    #ifdef __WXMSW__
+        const wxString exeName = "flt.exe";
+    #else
+        const wxString exeName = "flt";
+    #endif
+        // 1. Same folder as the GUI executable
+        wxFileName candidate(wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath(), exeName);
+        if (candidate.FileExists()) return candidate.GetFullPath();
+
+        // 2. Current working directory
+        candidate.Assign(wxGetCwd(), exeName);
+        if (candidate.FileExists()) return candidate.GetFullPath();
+
+        // 3. Anywhere on PATH
+        wxPathList pathList;
+        pathList.AddEnvList("PATH");
+        return pathList.FindAbsoluteValidPath(exeName);  // empty if not found
+    }
+
     void OnOpen(wxCommandEvent &event) {
+        wxString fltPath = FindFltExecutable();
+        if (fltPath.empty()) {
+            wxMessageBox(wxString::Format(
+                "Could not find '%s'.\n\nPlace it in the same folder as Felix Terminal GUI or on your PATH.",
+                wxFileName(FLT_EXECUTABLE).GetFullName()),
+                "Felix Terminal Not Found", wxOK | wxICON_ERROR);
+            return;
+        }
+
+    #ifndef __WXMSW__
+        if (!wxFileName::IsFileExecutable(fltPath)) {
+            wxMessageBox("'" + fltPath + "' exists but is not executable.\n\nRun: chmod +x " + fltPath,
+                         "Permission Error", wxOK | wxICON_ERROR);
+            return;
+        }
+    #endif
+
+        // Swap the placeholder executable in the preview for the resolved, quoted path
         wxString cmdLine = m_cmdPreview->GetValue();
-        wxExecute(cmdLine, wxEXEC_ASYNC);
+        cmdLine = "\"" + fltPath + "\"" + cmdLine.Mid(wxStrlen(FLT_EXECUTABLE));
+
+        long pid = wxExecute(cmdLine, wxEXEC_ASYNC);
+        if (pid == 0) {
+            wxMessageBox("Failed to launch Felix Terminal:\n\n" + cmdLine,
+                         "Launch Failed", wxOK | wxICON_ERROR);
+            return;
+        }
+
         wxMessageBox("Felix Terminal launched!", "Success", wxOK | wxICON_INFORMATION);
     }
 
